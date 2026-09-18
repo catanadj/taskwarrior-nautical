@@ -43,6 +43,54 @@ task add "Monday or Friday, both at 09:00" anchor:"(w:mon | w:fri)@t=09:00"
 `w:wk` and `w:wd` mean weekdays, while `w:we` means weekends. Use `+` for
 an intersection and `|` for alternatives.
 
+## Daily time schedules with `@t=`
+
+The `@t=` modifier turns a date rule into one or more daily time slots. Keep
+the date rule and the time rule separate: the anchor chooses *which dates*,
+while `@t=` chooses *when on those dates*.
+
+```bash
+task add "Morning check" anchor:"w:mon..fri@t=09:00"
+task add "Hydration reminders" anchor:"w:mon..sun@t=9,12:30,18"
+task add "Different shift hand-offs" anchor:"w:mon@t=09:00,fri@t=15:00"
+task add "Monday or Friday at the same time" anchor:"(w:mon | w:fri)@t=09:00"
+```
+
+Use an interval when the schedule repeats inside a daily window. A duration
+step (`/3h`) advances from the start time, while a unitless count (`/3`)
+divides the window into that many slots, including both boundaries:
+
+```bash
+task add "Daylight routine" anchor:"w:mon..sun@t=04:30..19:30/3h30min"
+task add "Three daytime checks" anchor:"w:mon..sun@t=06..18/3"
+task add "Split work windows" anchor:"w:mon..fri@t=06..12/2h,16..20/2h,22"
+task add "Night watch" anchor:"w:mon..sun@t=22:30..06:30/2h"
+```
+
+Windows may cross midnight. Slots after midnight remain owned by the date
+that opened the window, so previews, completion, and reconcile agree about
+which recurrence produced them. For deterministic variety, choose one or
+more repeatable random times from a window:
+
+```bash
+task add "Flexible practice" anchor:"w:mon..fri@t=rand(06..18)"
+task add "Three random checks" anchor:"w:mon..fri@t=rand(06..18/3)"
+```
+
+Time slots can also follow astronomy events when an astronomy profile is
+configured. Offsets are applied to the event time:
+
+```bash
+task add "Weekdays at sunrise" anchor:"w:mon..fri@t=sunrise"
+task add "Walk after sunset" anchor:"w:fri@t=sunset@+45m"
+task add "Full moon at moonrise" anchor:"moon:full@t=moonrise"
+```
+
+For the complete grammar, interval rules, midnight ownership, random slots,
+and validation details, see [Multiple daily times](multiple-times.md) and the
+[grammar reference](../reference/grammar.md). Use `|` when you mean
+“either/or”; use `+` when the date conditions must intersect.
+
 ## Monthly anchors
 
 ### Calendar dates and business days

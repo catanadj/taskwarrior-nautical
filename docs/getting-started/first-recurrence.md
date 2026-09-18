@@ -58,6 +58,29 @@ task add "Submit records" anchor:"m:1@t=09:00" anchor_mode:all
 - `all` creates every missed match in order.
 - `flex` skips backlog once, then changes itself to `all`.
 
+## Optional short UDA aliases
+
+If descriptions are your preferred interactive input surface, enable the
+opt-in aliases in `config-nautical.toml`:
+
+```toml
+enable_uda_aliases = true
+```
+
+Then the recurrence fields can be written as a trailing description block:
+
+```bash
+task add "Weekday review a:w:mon..fri@t=09 am:skip"
+task 42 modify "a:w:mon,wed,fri@t=09 am:flex"
+```
+
+The available aliases are `a:` (`anchor`), `af:` (`anchor_file`), `am:`
+(`anchor_mode`), `o:` (`omit`), `of:` (`omit_file`), `cm:` (`chainMax`), and
+`cu:` (`chainUntil`). The value starts immediately after the colon, so write
+`a:w:mon`, not `a: w:mon`. Aliases are intended for interactive commands;
+scripts should use canonical UDA arguments. See the complete [UDA reference](../reference/udas.md)
+for clearing fields and modify-time conflict rules.
+
 ## Inspect the result
 
 ```bash

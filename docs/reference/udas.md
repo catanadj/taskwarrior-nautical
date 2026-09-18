@@ -37,7 +37,8 @@ any combination of `anchor`, `anchor_file`, `omit`, and `omit_file`.
 
 ## Description aliases
 
-Aliases are an opt-in convenience for task descriptions:
+Aliases are an opt-in convenience for interactive task descriptions. They are
+disabled by default:
 
 ```toml
 enable_uda_aliases = true
@@ -55,6 +56,7 @@ enable_uda_aliases = true
 
 ```bash
 task add 'Morning review a:w:mon@t=9 am:skip'
+task 42 modify 'a:w:mon,wed,fri@t=09 am:flex'
 ```
 
 Aliases must be a trailing description block and the value begins immediately
@@ -62,5 +64,7 @@ after the colon. Clear a field with an empty alias such as `a:`; the dash form
 is rejected. Nautical preserves an existing human description when a modify
 command contains aliases only.
 
-Use canonical UDA arguments in scripts and integrations. Aliases are intended
-for interactive entry.
+There are deliberately no short aliases for `cp`, `bc`, `chain`, or lineage
+fields (`chainID`, `link`, `prevLink`, and `nextLink`). Use canonical UDA
+arguments in scripts and integrations; aliases are intended for interactive
+entry.

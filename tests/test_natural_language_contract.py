@@ -44,6 +44,7 @@ class NaturalLanguageContractTests(unittest.TestCase):
             "y:12-31@prev-thu": "Dec 31 each year, then the previous Thursday",
             "w:mon..fri@t=06..17/3h": "Mondays through Fridays every 3h within 06:00–17:00",
             "w:mon@t=09:00,17:30": "Mondays at 09:00, 17:30",
+            "w:mon..sun@t=6,12,sunset": "Mondays through Sundays at 06:00, 12:00, sunset",
             "w:mon@t=rand(06..18/3)": (
                 "Mondays 3 deterministic random times, one per bucket, within 06:00–18:00"
             ),

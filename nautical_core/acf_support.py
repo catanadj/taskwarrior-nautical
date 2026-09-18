@@ -301,8 +301,11 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
             elif isinstance(tval, list):
                 times = [
                     f"{value[0]:02d}:{value[1]:02d}"
-                    for value in tval
                     if isinstance(value, tuple) and len(value) == 2
+                    else str(value)
+                    for value in tval
+                    if (isinstance(value, tuple) and len(value) == 2)
+                    or (isinstance(value, str) and value)
                 ]
                 if times:
                     out["t"] = ",".join(times)

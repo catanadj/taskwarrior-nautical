@@ -71,6 +71,8 @@ def fmt_hhmm_for_term(term: list, default_due_dt):
         for value in tmod:
             if isinstance(value, tuple) and len(value) == 2:
                 parts.append(f"{value[0]:02d}:{value[1]:02d}")
+            elif isinstance(value, str) and value:
+                parts.append(value)
         return ", ".join(parts) if parts else None
     if isinstance(tmod, str) and tmod:
         return tmod

@@ -243,9 +243,29 @@ class ParserOwnerApiContractTests(unittest.TestCase):
                 "(w:mon@t=06..12/2h | w:fri)@t=16..20/2h"
             )
 
+    def test_composable_time_schedule_accepts_an_astronomy_slot(self) -> None:
+        mods = core.parse_anchor_expr_to_dnf(
+            "w:mon..fri@t=06..12/2h,16..20/2h,22,dawn"
+        )[0][0]["mods"]
+
+        self.assertNotIn("time_schedule", mods)
+        self.assertEqual(
+            mods["t"],
+            [
+                (6, 0),
+                (8, 0),
+                (10, 0),
+                (12, 0),
+                (16, 0),
+                (18, 0),
+                (20, 0),
+                (22, 0),
+                "dawn",
+            ],
+        )
+
     def test_composable_schedule_parser_rejects_invalid_members(self) -> None:
         for expression, expected in (
-            ("w:mon@t=06..18/3h,sunset", "numeric"),
             ("w:mon@t=06..18/3h,", "empty"),
             ("w:mon@t=06..18/3h,,22", "empty"),
         ):

@@ -136,6 +136,32 @@ def parse_atom_mods(
             try:
                 schedule = parse_time_schedule_spec(tval)
             except ValueError as exc:
+                # A numeric composable schedule may include astronomy events
+                # as additional slots.  Keep those symbolic values in the
+                # ordinary time list; only the all-numeric form has compact
+                # schedule metadata and expanded numeric slots.
+                parts = split_csv_tokens(tval)
+                event_parts = [
+                    str(part).strip().lower()
+                    for part in parts
+                    if astronomy.is_event_name(str(part).strip().lower())
+                ]
+                numeric_parts = [
+                    str(part).strip()
+                    for part in parts
+                    if not astronomy.is_event_name(str(part).strip().lower())
+                ]
+                if event_parts and any(".." in part for part in numeric_parts):
+                    try:
+                        numeric_schedule = parse_time_schedule_spec(",".join(numeric_parts))
+                    except ValueError:
+                        raise exc from None
+                    if numeric_schedule is not None:
+                        mods["t"] = list(numeric_schedule.slots)
+                        for event in event_parts:
+                            if event not in mods["t"]:
+                                mods["t"].append(event)
+                        continue
                 raise parse_error_cls(str(exc)) from None
             if schedule is not None:
                 mods["t"] = list(schedule.slots)

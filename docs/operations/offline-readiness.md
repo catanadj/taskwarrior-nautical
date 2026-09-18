@@ -20,10 +20,10 @@ The builder does not contact Git, download packages, or modify Taskwarrior.
 It refuses to overwrite an existing destination. Verify the kit with the
 ordinary Python interpreter before taking the device offline.
 
-Runtime packages are pinned by the checked-in `requirements.txt` compatibility
-set. If a target needs a different set, qualify that set with the compatibility
-tests and build a new kit; do not install unconstrained upgrades during offline
-recovery.
+Runtime packages use lower bounds and compatibility-tested major-version caps
+in the checked-in `requirements.txt` files. If a target needs a different set,
+qualify that set with the compatibility tests and build a new kit; do not
+install unconstrained upgrades during offline recovery.
 Astronomy is optional; include `requirements-astronomy.txt` when the restored
 configuration contains `[astronomy.locations.*]` profiles.
 

@@ -112,7 +112,7 @@ def build(source: Path, destination: Path, archive: Path | None = None) -> dict[
         (staging / "kit-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         checksums = "".join(f"{record['sha256']}  {record['path']}\n" for record in records)
         (staging / "checksums.sha256").write_text(checksums, encoding="ascii")
-        (staging / "OFFLINE-README.txt").write_text("Use the included local source with: ./nautical install --source .\nVerify first with: python3 dev_tools/nautical_offline_kit.py verify .\nRuntime dependencies are pinned in requirements.txt.\nNetworking is not required.\n", encoding="utf-8")
+        (staging / "OFFLINE-README.txt").write_text("Use the included local source with: ./nautical install --source .\nVerify first with: python3 dev_tools/nautical_offline_kit.py verify .\nRuntime dependencies use bounded compatibility ranges in requirements.txt.\nNetworking is not required.\n", encoding="utf-8")
         os.replace(staging, destination)
     result: dict[str, Any] = {"status": "created", "kit": str(destination), "files": len(records), "manifest": str(destination / "kit-manifest.json")}
     if archive is not None:

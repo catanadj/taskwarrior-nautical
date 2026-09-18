@@ -1,2 +1,2 @@
 # Optional dependencies for astronomy-enabled configurations.
-astral==3.2
+astral>=3.2,<4

@@ -71,6 +71,8 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertIn("from packaging.requirements import Requirement", source)
         self.assertIn("requirement.specifier.contains(", source)
         self.assertIn("installed_version, prereleases=True", source)
+        self.assertIn("operator_match = re.fullmatch", source)
+        self.assertIn("installed_key < expected_key", source)
 
     def test_verification_is_required_after_non_dry_install(self) -> None:
         source = BOOTSTRAP.read_text(encoding="utf-8")

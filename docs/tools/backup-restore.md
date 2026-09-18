@@ -36,7 +36,7 @@ nautical backup \
 Use `--keep N --prune` when maintaining a backup directory of generations.
 Pruning happens only after a new verified generation succeeds. Dependency
 binaries are not embedded; rebuild the matching runtime from the offline kit
-or install the pinned requirements separately.
+or install the bounded compatibility requirements separately.
 
 ## Validate a generation
 

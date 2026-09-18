@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download a pinned Nautical release and delegate installation to its installer.
+# Download a Nautical release and delegate installation to its installer.
 
 set -euo pipefail
 
@@ -33,7 +33,7 @@ usage() {
     cat <<'EOF'
 Usage: bootstrap.sh [options]
 
-Download and install a pinned Nautical release.
+Download and install a Nautical release.
 
 Options:
   --version REF         Release tag or branch (default: v7.5.4)
@@ -106,9 +106,39 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
             )
         else:
             # Keep the bootstrap usable on minimal Python images without
-            # packaging while still enforcing the pinned runtime versions.
-            expected = line.split("==", 1)[1].strip() if "==" in line else ""
-            compatible = not expected or installed_version == expected
+            # packaging while still enforcing the bounded requirements.
+            import re
+
+            match = re.fullmatch(r"[A-Za-z0-9_.-]+\\s*(.*)", line)
+            specifier = match.group(1).strip() if match else ""
+
+            def version_key(value):
+                parts = re.findall(r"\\d+", str(value))
+                return tuple(int(part) for part in parts) or (0,)
+
+            installed_key = version_key(installed_version)
+            compatible = True
+            for clause in (part.strip() for part in specifier.split(",")):
+                if not clause:
+                    continue
+                operator_match = re.fullmatch(r"(==|!=|>=|<=|>|<)\\s*([0-9][0-9.]*)", clause)
+                if not operator_match:
+                    compatible = False
+                    break
+                operator, expected = operator_match.groups()
+                expected_key = version_key(expected)
+                if operator == "==" and installed_key != expected_key:
+                    compatible = False
+                elif operator == "!=" and installed_key == expected_key:
+                    compatible = False
+                elif operator == ">=" and installed_key < expected_key:
+                    compatible = False
+                elif operator == "<=" and installed_key > expected_key:
+                    compatible = False
+                elif operator == ">" and installed_key <= expected_key:
+                    compatible = False
+                elif operator == "<" and installed_key >= expected_key:
+                    compatible = False
         if not compatible:
             missing.append(line)
     except (metadata.PackageNotFoundError, ValueError):

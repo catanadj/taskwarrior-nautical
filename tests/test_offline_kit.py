@@ -9,12 +9,15 @@ from pathlib import Path
 
 
 class OfflineKitTests(unittest.TestCase):
-    def test_astronomy_dependency_is_optional_and_pinned(self):
+    def test_astronomy_dependency_is_optional_and_bounded(self):
         root = Path(__file__).parents[1]
         base = (root / "requirements.txt").read_text(encoding="utf-8")
         astronomy = (root / "requirements-astronomy.txt").read_text(encoding="utf-8")
         self.assertNotIn("astral", base)
-        self.assertIn("astral==3.2", astronomy)
+        self.assertIn("astral>=3.2,<4", astronomy)
+        self.assertIn("rich>=13.3.1,<14", base)
+        self.assertIn("prompt-toolkit>=3.0.36,<4", base)
+        self.assertIn("python-dateutil>=2.8.2,<3", base)
 
     def test_build_and_verify_is_self_contained(self):
         script = Path(__file__).parents[1] / "dev_tools" / "nautical_offline_kit.py"

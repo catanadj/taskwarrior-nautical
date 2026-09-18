@@ -99,7 +99,7 @@ and validation details, see [Multiple daily times](multiple-times.md) and the
 task add "First day of every month" anchor:"m:1"
 task add "Last calendar day of every month" anchor:"m:-1"
 task add "First, 15th, and last day of every month" anchor:"m:1,15,-1"
-task add "A day in the first week of every month" anchor:"m:1..7"
+task add "Days 1 to 7 of every month" anchor:"m:1..7"
 task add "Fifth business day of every month" anchor:"m:5bd"
 task add "Last business day of every month" anchor:"m:lbd"
 task add "First open day of every month at 09:00" anchor:"m:1@nbd@t=09:00" anchor_mode:all

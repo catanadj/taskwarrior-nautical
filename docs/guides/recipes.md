@@ -50,10 +50,10 @@ the date rule and the time rule separate: the anchor chooses *which dates*,
 while `@t=` chooses *when on those dates*.
 
 ```bash
-task add "Morning check" anchor:"w:mon..fri@t=09:00"
-task add "Hydration reminders" anchor:"w:mon..sun@t=9,12:30,18"
-task add "Different shift hand-offs" anchor:"w:mon@t=09:00,fri@t=15:00"
-task add "Monday or Friday at the same time" anchor:"(w:mon | w:fri)@t=09:00"
+task add "Every weekday at 09:00" anchor:"w:mon..fri@t=09:00"
+task add "Every day at 09:00, 12:30, and 18:00" anchor:"w:mon..sun@t=9,12:30,18"
+task add "Monday at 09:00 and Friday at 15:00" anchor:"w:mon@t=09:00,fri@t=15:00"
+task add "Monday or Friday, both at 09:00" anchor:"(w:mon | w:fri)@t=09:00"
 ```
 
 Use an interval when the schedule repeats inside a daily window. A duration
@@ -61,10 +61,10 @@ step (`/3h`) advances from the start time, while a unitless count (`/3`)
 divides the window into that many slots, including both boundaries:
 
 ```bash
-task add "Daylight routine" anchor:"w:mon..sun@t=04:30..19:30/3h30min"
-task add "Three daytime checks" anchor:"w:mon..sun@t=06..18/3"
-task add "Split work windows" anchor:"w:mon..fri@t=06..12/2h,16..20/2h,22"
-task add "Night watch" anchor:"w:mon..sun@t=22:30..06:30/2h"
+task add "Every 3h30 from 04:30 through 19:30" anchor:"w:mon..sun@t=04:30..19:30/3h30min"
+task add "Three equally spaced times from 06:00 through 18:00" anchor:"w:mon..sun@t=06..18/3"
+task add "Every 2h from 06:00-12:00 and 16:00-20:00, plus 22:00" anchor:"w:mon..fri@t=06..12/2h,16..20/2h,22"
+task add "Every 2h from 22:30 through 06:30 overnight" anchor:"w:mon..sun@t=22:30..06:30/2h"
 ```
 
 Windows may cross midnight. Slots after midnight remain owned by the date
@@ -73,17 +73,17 @@ which recurrence produced them. For deterministic variety, choose one or
 more repeatable random times from a window:
 
 ```bash
-task add "Flexible practice" anchor:"w:mon..fri@t=rand(06..18)"
-task add "Three random checks" anchor:"w:mon..fri@t=rand(06..18/3)"
+task add "One deterministic random time from 06:00-18:00 on weekdays" anchor:"w:mon..fri@t=rand(06..18)"
+task add "Three deterministic random times from 06:00-18:00 on weekdays" anchor:"w:mon..fri@t=rand(06..18/3)"
 ```
 
 Time slots can also follow astronomy events when an astronomy profile is
 configured. Offsets are applied to the event time:
 
 ```bash
-task add "Weekdays at sunrise" anchor:"w:mon..fri@t=sunrise"
-task add "Walk after sunset" anchor:"w:fri@t=sunset@+45m"
-task add "Full moon at moonrise" anchor:"moon:full@t=moonrise"
+task add "Every weekday at local sunrise" anchor:"w:mon..fri@t=sunrise"
+task add "Every Friday 45 minutes after local sunset" anchor:"w:fri@t=sunset@+45m"
+task add "At the moonrise accompanying each full moon" anchor:"moon:full@t=moonrise"
 ```
 
 For the complete grammar, interval rules, midnight ownership, random slots,

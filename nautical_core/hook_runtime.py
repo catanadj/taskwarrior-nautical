@@ -3,10 +3,112 @@ from __future__ import annotations
 import importlib
 from dataclasses import dataclass, field
 import os
+import re
+import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, Iterator, Protocol
 
-from .taskwarrior_uow import build_taskwarrior_uow
+_DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
+
+
+class DiagnosticEmitter(Protocol):
+    def __call__(self, message: str) -> None: ...
+
+
+def redact_diagnostic_message(msg: object, *, core: Any = None) -> str:
+    """Redact task text from diagnostic messages without escaping Unicode."""
+    raw = msg if isinstance(msg, str) else str(msg)
+    redactor = getattr(core, "diag_log_redact", None) if core is not None else None
+    if callable(redactor):
+        try:
+            redacted = redactor(raw)
+            return redacted if isinstance(redacted, str) else str(redacted)
+        except Exception:
+            pass
+    # Keep this boundary independent from the task/domain codec.  Redact
+    # scalar JSON values in-place while preserving the original Unicode text.
+    keys = "|".join(re.escape(key) for key in sorted(_DIAG_REDACT_KEYS))
+    scalar = r'("(?:\\.|[^"\\])*"|null|true|false|-?\d+(?:\.\d+)?)'
+    pattern = re.compile(rf'("(?:{keys})"\s*:\s*){scalar}')
+    return pattern.sub(r'\1"[redacted]"', raw)
+
+
+def emit_diagnostic(msg: object, *, hook_name: str, core: Any = None, taskdata: object = "") -> None:
+    """Send one redacted diagnostic to the core sink or opt-in stderr."""
+    safe_msg = redact_diagnostic_message(msg, core=core)
+    if core is not None:
+        event_factory = getattr(core, "DiagnosticEvent", None)
+        event = event_factory.from_message(safe_msg, hook=hook_name) if event_factory is not None else safe_msg
+        core.diag(event, hook_name, str(taskdata))
+    elif os.environ.get("NAUTICAL_DIAG") == "1":
+        try:
+            import sys
+            sys.stderr.write(f"[nautical] {safe_msg}\n")
+        except Exception:
+            pass
+
+
+def emit_diagnostic_block(
+    title: str,
+    items: Iterable[tuple[object, object]] | None,
+    *,
+    hook_name: str,
+    emit: DiagnosticEmitter,
+    enabled: bool,
+    columns: int = 3,
+) -> None:
+    """Format a bounded diagnostic block through the shared emitter."""
+    if not enabled:
+        return
+    try:
+        pairs = [f"{key}={value}" for key, value in (items or ())]
+        emit(f"{title}:")
+        step = max(1, int(columns or 1))
+        for index in range(0, len(pairs), step):
+            emit("  " + "  ".join(pairs[index:index + step]))
+    except Exception:
+        pass
+
+
+class HookProfiler:
+    """Small opt-in profiler shared by hooks; output is stderr-only."""
+
+    def __init__(self, level: int = 0, import_ms: float | None = None) -> None:
+        self.level = int(level or 0)
+        self.enabled = self.level > 0
+        self.import_ms = float(import_ms) if import_ms is not None else None
+        self._t0 = time.perf_counter()
+        self._events: list[tuple[str, float]] = []
+
+    @contextmanager
+    def section(self, name: str) -> Iterator[None]:
+        if not self.enabled:
+            yield
+            return
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._events.append((name, (time.perf_counter() - started) * 1000.0))
+
+    def add_ms(self, name: str, ms: float) -> None:
+        if self.enabled:
+            self._events.append((name, float(ms)))
+
+    def emit(self) -> None:
+        if not self.enabled:
+            return
+        lines = [f"[NAUTICAL_PROFILE] total={(time.perf_counter() - self._t0) * 1000.0:.1f}ms"]
+        if self.import_ms is not None:
+            lines.append(f"  import_core={self.import_ms:.1f}ms")
+        lines.extend(f"  {name}={ms:.1f}ms" for name, ms in self._events)
+        if self.level >= 2 and self._events:
+            lines.append("  -- slowest --")
+            lines.extend(f"  {name}={ms:.1f}ms" for name, ms in sorted(self._events, key=lambda item: item[1], reverse=True)[:8])
+        sys.stderr.write("\n".join(lines) + "\n")
 
 
 class HookIntegrationContextError(RuntimeError):
@@ -18,6 +120,24 @@ class HookIntegrationContextError(RuntimeError):
         self.stage = str(getattr(cause, "stage", "context") or "context")
         self.detail = str(getattr(cause, "detail", "") or cause or type(cause).__name__)
         super().__init__(f"{self.stage}: {self.detail}")
+
+
+@dataclass(frozen=True, slots=True)
+class HookRuntimeState:
+    """Validated core/context state shared by every executable hook."""
+
+    core: Any
+    target: Path | None
+    context: Any
+    access: str
+
+    @property
+    def taskdata(self) -> Path:
+        return Path(self.context.taskdata)
+
+    @property
+    def uses_rc_data_location(self) -> bool:
+        return len(tuple(getattr(self.context, "command_prefix", ()))) > 1
 
 
 @dataclass(slots=True)
@@ -66,6 +186,11 @@ def build_hook_runtime_context(
     import_ms: float | None = None,
     business_calendar: Any = None,
 ) -> Any:
+    # Keep hook implementation imports lightweight.  The UoW and its
+    # Taskwarrior dependencies are needed only after a validated invocation
+    # context exists.
+    from .taskwarrior_uow import build_taskwarrior_uow
+
     hook_context = module_access.module("hook_context")
     uow = build_taskwarrior_uow(integration_context, env=os.environ)
     return hook_context.build_hook_runtime_context(
@@ -87,7 +212,7 @@ def initialize_integration_context(
     argv: tuple[str, ...],
     tw_dir: str,
     access: str,
-) -> tuple[Any, Path | None, Any]:
+) -> HookRuntimeState:
     """Import core and construct the sole validated context for a full hook."""
     core, target, import_error = hook_bootstrap.import_core_package(core_base)
     if core is None:
@@ -113,4 +238,4 @@ def initialize_integration_context(
         )
     except Exception as exc:
         raise HookIntegrationContextError(core, exc) from exc
-    return core, target, context
+    return HookRuntimeState(core=core, target=target, context=context, access=access)

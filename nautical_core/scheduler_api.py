@@ -5,62 +5,68 @@ from __future__ import annotations
 from datetime import date, timedelta
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 from .api_bindings import ApiBinding, core_namespace
 
 from .core_context import CoreContext, SchedulerDependencies
+
+
+class SchedulerCallback(Protocol):
+    """Callable service port shared by scheduler dependency bundles."""
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
 class SchedulerAtomDependencies:
     """Explicit collaborators required by the scheduler-atom owner."""
 
-    expand_weekly: Callable[..., Any]
-    split_csv: Callable[..., Any]
-    expand_monthly: Callable[..., Any]
-    expand_yearly: Callable[..., Any]
-    weekly_random: Callable[..., Any]
-    week_monday: Callable[..., Any]
-    resolve_moon: Callable[..., Any]
+    expand_weekly: SchedulerCallback
+    split_csv: SchedulerCallback
+    expand_monthly: SchedulerCallback
+    expand_yearly: SchedulerCallback
+    weekly_random: SchedulerCallback
+    week_monday: SchedulerCallback
+    resolve_moon: SchedulerCallback
 
 
 @dataclass(frozen=True, slots=True)
 class SchedulerIntervalDependencies:
     """Explicit collaborators required by interval admission logic."""
 
-    weeks_between: Callable[..., Any]
-    year_index: Callable[..., Any]
+    weeks_between: SchedulerCallback
+    year_index: SchedulerCallback
 
 
 @dataclass(frozen=True, slots=True)
 class SchedulerModifierDependencies:
     """Calendar-bound collaborators for scheduler modifier evaluation."""
 
-    active_mod_keys: Callable[..., Any]
-    base_next: Callable[..., Any]
-    interval_allowed: Callable[..., Any]
-    advance_probe: Callable[..., Any]
-    monthly_align: Callable[..., Any]
-    roll_apply: Callable[..., Any]
-    day_offset: Callable[..., Any]
-    accept_roll: Callable[..., Any]
-    is_business_day: Callable[..., Any]
+    active_mod_keys: SchedulerCallback
+    base_next: SchedulerCallback
+    interval_allowed: SchedulerCallback
+    advance_probe: SchedulerCallback
+    monthly_align: SchedulerCallback
+    roll_apply: SchedulerCallback
+    day_offset: SchedulerCallback
+    accept_roll: SchedulerCallback
+    is_business_day: SchedulerCallback
     max_anchor_iter: int
-    warn_once: Callable[..., Any]
+    warn_once: SchedulerCallback
     os_mod: Any
-    resolve_moon: Callable[..., Any]
-    moon_matches: Callable[..., Any]
+    resolve_moon: SchedulerCallback
+    moon_matches: SchedulerCallback
 
 
 def _apply_day_offset_impl(
     module: Any,
-    day,
-    mods,
-    business_calendar=None,
+    day: Any,
+    mods: Any,
+    business_calendar: Any = None,
     *,
     calendar_api: Any | None = None,
     schedule_utils: Any | None = None,
-):
+) -> Any:
     calendar_api = calendar_api or module._business_calendar
     schedule_utils = schedule_utils or module._schedule_utils
     business_calendar = calendar_api.effective_business_calendar(business_calendar)
@@ -71,7 +77,7 @@ def _apply_day_offset_impl(
     )
 
 
-def _weeks_between(module: Any, d1, d2) -> int:
+def _weeks_between(module: Any, d1: Any, d2: Any) -> int:
     # This helper has no per-deps state; route directly to its owning module
     # instead of traversing the mutable compatibility facade.
     from .schedule_utils import weeks_between
@@ -82,11 +88,11 @@ def _weeks_between(module: Any, d1, d2) -> int:
 def _resolve_moon_phase_date(
     module: Any,
     phase: str,
-    reference_day,
+    reference_day: Any,
     *,
     astronomy: Any | None = None,
     astronomy_config: Any | None = None,
-):
+) -> Any:
     astronomy = astronomy or module._astronomy
     if astronomy_config is None:
         astronomy_config = module.ASTRONOMY_CONFIG
@@ -100,7 +106,7 @@ def _resolve_moon_phase_date(
 def _moon_phase_matches_date(
     module: Any,
     phase: str,
-    day,
+    day: Any,
     *,
     astronomy: Any | None = None,
     astronomy_config: Any | None = None,
@@ -117,14 +123,14 @@ def _moon_phase_matches_date(
 
 def _base_next_after_atom_impl(
     module: Any,
-    atom,
-    ref_d,
-    seed_base=None,
-    business_calendar=None,
+    atom: Any,
+    ref_d: Any,
+    seed_base: Any = None,
+    business_calendar: Any = None,
     deps: SchedulerAtomDependencies | None = None,
     *,
     owner_deps: SchedulerDependencies | None = None,
-):
+) -> Any:
     if owner_deps is not None:
         scheduler_atom = owner_deps["_scheduler_atom"]
         resolve_moon = lambda phase, reference_day: _resolve_moon_phase_date(
@@ -171,15 +177,15 @@ def _base_next_after_atom_impl(
 
 def _interval_allowed_for_atom(
     module: Any,
-    typ,
-    ival,
-    seed,
-    cand,
-    spec="",
+    typ: Any,
+    ival: Any,
+    seed: Any,
+    cand: Any,
+    spec: str = "",
     deps: SchedulerIntervalDependencies | None = None,
     *,
     owner_deps: SchedulerDependencies | None = None,
-):
+) -> Any:
     if owner_deps is not None:
         deps = deps or SchedulerIntervalDependencies(
             weeks_between=lambda d1, d2: _weeks_between(module, d1, d2),
@@ -205,14 +211,14 @@ def _interval_allowed_for_atom(
 
 def _advance_probe_for_interval_bucket(
     module: Any,
-    typ,
-    ival,
-    seed,
-    cand,
-    spec="",
+    typ: Any,
+    ival: Any,
+    seed: Any,
+    cand: Any,
+    spec: str = "",
     *,
     owner_deps: SchedulerDependencies | None = None,
-):
+) -> Any:
     scheduler_atom = owner_deps["_scheduler_atom"] if owner_deps is not None else module._scheduler_atom
     if owner_deps is not None:
         weeks_between = lambda d1, d2: _weeks_between(module, d1, d2)
@@ -233,24 +239,24 @@ def _advance_probe_for_interval_bucket(
 
 def _accept_roll_candidate(
     module: Any,
-    ref_d,
-    base,
-    cand,
-    roll_kind,
+    ref_d: Any,
+    base: Any,
+    cand: Any,
+    roll_kind: Any,
     *,
     scheduler_atom: Any | None = None,
-):
+) -> Any:
     scheduler_atom = scheduler_atom or module._scheduler_atom
     return scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
 def _next_after_atom_with_mods_impl(
     module: Any,
-    atom,
-    ref_d,
-    default_seed,
-    seed_base=None,
-    business_calendar=None,
+    atom: Any,
+    ref_d: Any,
+    default_seed: Any,
+    seed_base: Any = None,
+    business_calendar: Any = None,
     deps: SchedulerModifierDependencies | None = None,
     *,
     scheduler_atom: Any | None = None,
@@ -266,7 +272,7 @@ def _next_after_atom_with_mods_impl(
     os_mod: Any | None = None,
     resolve_moon_phase_date: Callable[..., Any] | None = None,
     moon_phase_matches_date: Callable[..., Any] | None = None,
-):
+) -> Any:
     scheduler_atom = scheduler_atom or module._scheduler_atom
     business_calendar_api = business_calendar_api or module._business_calendar
     with_business_calendar = with_business_calendar or module._with_business_calendar
@@ -327,17 +333,17 @@ def _next_after_atom_with_mods_impl(
 
 def _atom_matches_on_impl(
     module: Any,
-    atom,
-    day,
-    default_seed,
-    seed_base=None,
-    business_calendar=None,
+    atom: Any,
+    day: Any,
+    default_seed: Any,
+    seed_base: Any = None,
+    business_calendar: Any = None,
     *,
     scheduler_atom: Any | None = None,
     with_business_calendar: Callable[..., Any] | None = None,
     next_after_atom_with_mods: Callable[..., Any] | None = None,
     moon_phase_matches_date: Callable[..., Any] | None = None,
-):
+) -> Any:
     scheduler_atom = scheduler_atom or module._scheduler_atom
     with_business_calendar = with_business_calendar or module._with_business_calendar
     next_after_atom_with_mods = next_after_atom_with_mods or module.next_after_atom_with_mods
@@ -353,7 +359,7 @@ def _atom_matches_on_impl(
     )
 
 
-def _next_after_factor_impl(module: Any, factor, ref_d, default_seed, seed_base=None, business_calendar=None):
+def _next_after_factor_impl(module: Any, factor: Any, ref_d: Any, default_seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
     if not module._position_selection.is_selection_node(factor):
         next_atom = module._with_business_calendar(
             module.next_after_atom_with_mods,
@@ -372,7 +378,7 @@ def _next_after_factor_impl(module: Any, factor, ref_d, default_seed, seed_base=
     )
 
 
-def _factor_matches_on_impl(module: Any, factor, day, default_seed, seed_base=None, business_calendar=None):
+def _factor_matches_on_impl(module: Any, factor: Any, day: Any, default_seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
     if not module._position_selection.is_selection_node(factor):
         matches = module._with_business_calendar(
             module.atom_matches_on,
@@ -398,18 +404,18 @@ def _factor_matches_on_impl(module: Any, factor, day, default_seed, seed_base=No
 
 def _next_after_term_impl(
     module: Any,
-    term,
-    ref_d,
-    default_seed,
-    seed_base=None,
-    business_calendar=None,
+    term: Any,
+    ref_d: Any,
+    default_seed: Any,
+    seed_base: Any = None,
+    business_calendar: Any = None,
     *,
     scheduler_expr: Any | None = None,
     with_business_calendar: Callable[..., Any] | None = None,
     next_after_factor: Callable[..., Any] | None = None,
     factor_matches_on: Callable[..., Any] | None = None,
     intersection_guard_steps: int | None = None,
-):
+) -> Any:
     scheduler_expr = scheduler_expr or module._scheduler_expr
     with_business_calendar = with_business_calendar or module._with_business_calendar
     next_after_factor = next_after_factor or module.next_after_factor
@@ -430,12 +436,12 @@ def _next_after_term_impl(
 
 def _next_after_expr_impl(
     module: Any,
-    dnf,
-    after_date,
-    default_seed=None,
-    seed_base=None,
-    date_is_excluded=None,
-    business_calendar=None,
+    dnf: Any,
+    after_date: Any,
+    default_seed: Any = None,
+    seed_base: Any = None,
+    date_is_excluded: Any = None,
+    business_calendar: Any = None,
     *,
     scheduler_expr: Any | None = None,
     business_calendar_api: Any | None = None,
@@ -451,7 +457,7 @@ def _next_after_expr_impl(
     months_since: Callable[..., Any] | None = None,
     random_identity: Callable[..., Any] | None = None,
     random_pick_indices: Callable[..., Any] | None = None,
-):
+) -> Any:
     scheduler_expr = scheduler_expr or module._scheduler_expr
     business_calendar_api = business_calendar_api or module._business_calendar
     with_business_calendar = with_business_calendar or module._with_business_calendar
@@ -506,14 +512,14 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     ttl_lru_cache = deps["_ttl_lru_cache"]
 
     @ttl_lru_cache(maxsize=128)
-    def expand_weekly_cached_impl(spec: str):
+    def expand_weekly_cached_impl(spec: str) -> Any:
         return cached_expansion.expand_weekly(
             spec,
             weekly_spec_to_wset=deps["_weekly_spec_to_wset"],
         )
 
     @ttl_lru_cache(maxsize=128)
-    def expand_weekly_cached_mods_impl(spec: str, bd_only: bool):
+    def expand_weekly_cached_mods_impl(spec: str, bd_only: bool) -> Any:
         return cached_expansion.expand_weekly_mods(
             spec,
             bd_only,
@@ -521,7 +527,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     @ttl_lru_cache(maxsize=128)
-    def expand_yearly_cached_impl(spec: str, year: int):
+    def expand_yearly_cached_impl(spec: str, year: int) -> Any:
         return cached_expansion.expand_yearly(
             spec,
             year,
@@ -533,7 +539,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     @ttl_lru_cache(maxsize=128)
-    def expand_monthly_cached_impl(spec: str, year: int, month: int, business_calendar=None):
+    def expand_monthly_cached_impl(spec: str, year: int, month: int, business_calendar: Any = None) -> Any:
         business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return cached_expansion.expand_monthly(
             spec,
@@ -549,16 +555,16 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
-    def expand_monthly_for_month_impl(spec: str, year: int, month: int):
+    def expand_monthly_for_month_impl(spec: str, year: int, month: int) -> Any:
         return expand_monthly_cached_impl(spec, year, month)
 
-    def expand_weekly_impl(spec: str):
+    def expand_weekly_impl(spec: str) -> Any:
         return expand_weekly_cached_impl(spec)
 
-    def expand_yearly_for_year_strict_impl(spec: str, year: int):
+    def expand_yearly_for_year_strict_impl(spec: str, year: int) -> Any:
         return expand_yearly_cached_impl(spec, year)
 
-    def roll_apply_impl(dt, mods, business_calendar=None):
+    def roll_apply_impl(dt: Any, mods: Any, business_calendar: Any = None) -> Any:
         business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return deps["_schedule_utils"].roll_apply(
             dt,
@@ -567,7 +573,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
-    def month_doms_safe(spec, year, month, business_calendar=None):
+    def month_doms_safe(spec: Any, year: Any, month: Any, business_calendar: Any = None) -> Any:
         return deps["_monthly_support"].month_doms_safe(
             spec,
             year,
@@ -578,7 +584,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             ),
         )
 
-    def month_has_hit(spec, year, month, business_calendar=None):
+    def month_has_hit(spec: Any, year: Any, month: Any, business_calendar: Any = None) -> Any:
         return deps["_monthly_support"].month_has_hit(
             spec,
             year,
@@ -586,7 +592,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             month_doms_safe=deps["_with_business_calendar"](month_doms_safe, business_calendar),
         )
 
-    def first_hit_after_probe_in_month(spec, year, month, probe, business_calendar=None):
+    def first_hit_after_probe_in_month(spec: Any, year: Any, month: Any, probe: Any, business_calendar: Any = None) -> Any:
         return deps["_monthly_support"].first_hit_after_probe_in_month(
             spec,
             year,
@@ -595,7 +601,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             month_doms_safe=deps["_with_business_calendar"](month_doms_safe, business_calendar),
         )
 
-    def next_valid_month_on_or_after(spec, year, month, business_calendar=None):
+    def next_valid_month_on_or_after(spec: Any, year: Any, month: Any, business_calendar: Any = None) -> Any:
         return deps["_monthly_support"].next_valid_month_on_or_after(
             spec,
             year,
@@ -603,7 +609,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             month_has_hit=deps["_with_business_calendar"](month_has_hit, business_calendar),
         )
 
-    def advance_k_valid_months(spec, start_y, start_m, k, business_calendar=None):
+    def advance_k_valid_months(spec: Any, start_y: Any, start_m: Any, k: Any, business_calendar: Any = None) -> Any:
         return deps["_monthly_support"].advance_k_valid_months(
             spec,
             start_y,
@@ -615,7 +621,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             ),
         )
 
-    def monthly_align_base_for_interval(spec, base, probe, seed, ival, business_calendar=None):
+    def monthly_align_base_for_interval(spec: Any, base: Any, probe: Any, seed: Any, ival: Any, business_calendar: Any = None) -> Any:
         return deps["_monthly_support"].monthly_align_base_for_interval(
             spec,
             base,
@@ -639,10 +645,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     @lru_cache(maxsize=32)
-    def selection_inner_matcher(business_calendar):
+    def selection_inner_matcher(business_calendar: Any) -> Any:
         return deps["partial"](deps["atom_matches_on"], business_calendar=business_calendar)
 
-    def apply_selection_date_modifiers(base, mods, business_calendar=None):
+    def apply_selection_date_modifiers(base: Any, mods: Any, business_calendar: Any = None) -> Any:
         business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         rolled = deps["roll_apply"](base, mods, business_calendar=business_calendar)
         return deps["apply_day_offset"](rolled, mods, business_calendar=business_calendar)
@@ -650,18 +656,18 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     # Random candidate and boolean-expression scheduling stay bound to this
     # deps instance.  The callbacks are looked up through ``deps`` at call
     # time so facade monkeypatches continue to affect scheduling.
-    def week_monday(day):
+    def week_monday(day: Any) -> Any:
         return cached_expansion.week_monday(day)
 
     def weekly_rand_pick(
-        iso_year,
-        iso_week,
-        mods,
+        iso_year: Any,
+        iso_week: Any,
+        mods: Any,
         *,
-        seed_base,
-        atom_identity,
-        business_calendar=None,
-    ):
+        seed_base: Any,
+        atom_identity: Any,
+        business_calendar: Any = None,
+    ) -> Any:
         business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return cached_expansion.weekly_rand_pick(
             iso_year,
@@ -673,21 +679,21 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
-    def is_bd(day, business_calendar=None):
+    def is_bd(day: Any, business_calendar: Any = None) -> Any:
         business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return cached_expansion.is_bd(day, business_calendar)
 
-    def random_identity(value):
+    def random_identity(value: Any) -> Any:
         return cached_expansion.random_identity(value)
 
-    def random_pick_index(seq_len, **kwargs):
+    def random_pick_index(seq_len: Any, **kwargs: Any) -> Any:
         return cached_expansion.random_pick_index(
             seq_len,
             namespace=deps["WRAND_SALT"],
             **kwargs,
         )
 
-    def random_pick_indices(seq_len, count, **kwargs):
+    def random_pick_indices(seq_len: Any, count: Any, **kwargs: Any) -> Any:
         return cached_expansion.random_pick_indices(
             seq_len,
             count,
@@ -695,13 +701,13 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             **kwargs,
         )
 
-    def term_rand_info(term):
+    def term_rand_info(term: Any) -> Any:
         return cached_expansion.term_rand_info(term)
 
-    def dnf_has_counted_random(dnf):
+    def dnf_has_counted_random(dnf: Any) -> Any:
         return cached_expansion.dnf_has_counted_random(dnf)
 
-    def filter_by_w(dt_list, term):
+    def filter_by_w(dt_list: Any, term: Any) -> Any:
         return cached_expansion.filter_by_w(
             dt_list,
             term,
@@ -711,7 +717,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     @ttl_lru_cache(maxsize=128)
-    def month_tokens_for_atom_cached(year, month, spec, business_calendar=None):
+    def month_tokens_for_atom_cached(year: Any, month: Any, spec: Any, business_calendar: Any = None) -> Any:
         business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return cached_expansion.month_tokens_for_atom_values(
             year,
@@ -726,7 +732,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
-    def month_tokens_for_atom(atom, year, month, business_calendar=None):
+    def month_tokens_for_atom(atom: Any, year: Any, month: Any, business_calendar: Any = None) -> Any:
         return cached_expansion.month_tokens_for_atom(
             atom,
             year,
@@ -738,13 +744,13 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     def term_candidates_in_month(
-        term,
-        year,
-        month,
-        rand_atom_idx,
-        bd_only,
-        business_calendar=None,
-    ):
+        term: Any,
+        year: Any,
+        month: Any,
+        rand_atom_idx: Any,
+        bd_only: Any,
+        business_calendar: Any = None,
+    ) -> Any:
         return cached_expansion.term_candidates_in_month(
             term,
             year,
@@ -763,7 +769,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             doms_allowed_by_year=deps["_doms_allowed_by_year"],
         )
 
-    def next_for_and_rand_yearly(term, ref_d, y_specs, seed_base=None):
+    def next_for_and_rand_yearly(term: Any, ref_d: Any, y_specs: Any, seed_base: Any = None) -> Any:
         return scheduler_expr.next_for_and_rand_yearly(
             term,
             ref_d,
@@ -778,7 +784,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             date_cls=date,
         )
 
-    def next_for_and_fast_path(term, ref_d, seed, seed_base=None, business_calendar=None):
+    def next_for_and_fast_path(term: Any, ref_d: Any, seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
         next_atom = deps["_with_business_calendar"](deps["next_after_factor"], business_calendar)
         matches = deps["_with_business_calendar"](deps["factor_matches_on"], business_calendar)
         return scheduler_expr.next_for_and_fast_path(
@@ -794,7 +800,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             os_mod=deps["os"],
         )
 
-    def next_for_and(term, ref_d, seed, seed_base=None, business_calendar=None):
+    def next_for_and(term: Any, ref_d: Any, seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
         next_atom = deps["_with_business_calendar"](deps["next_after_factor"], business_calendar)
         matches = deps["_with_business_calendar"](deps["factor_matches_on"], business_calendar)
         return scheduler_expr.next_for_and(
@@ -817,7 +823,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             date_cls=date,
         )
 
-    def next_for_or(dnf, ref_d, seed, seed_base=None, business_calendar=None):
+    def next_for_or(dnf: Any, ref_d: Any, seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
         next_for_and_fn = deps["_with_business_calendar"](next_for_and, business_calendar)
         return scheduler_expr.next_for_or(
             dnf,
@@ -827,7 +833,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             next_for_and=next_for_and_fn,
         )
 
-    def next_after_atom_with_mods(atom, ref_d, default_seed, seed_base=None, business_calendar=None):
+    def next_after_atom_with_mods(atom: Any, ref_d: Any, default_seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
         return _next_after_atom_with_mods_impl(
             module,
             atom,
@@ -850,7 +856,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             moon_phase_matches_date=moon_phase_matches_date,
         )
 
-    def base_next_after_atom(atom, ref_d, seed_base=None, business_calendar=None):
+    def base_next_after_atom(atom: Any, ref_d: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
         return _base_next_after_atom_impl(
             module,
             atom,
@@ -860,7 +866,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
-    def apply_day_offset(day, mods, business_calendar=None):
+    def apply_day_offset(day: Any, mods: Any, business_calendar: Any = None) -> Any:
         return _apply_day_offset_impl(
             module,
             day,
@@ -870,18 +876,18 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             schedule_utils=deps["_schedule_utils"],
         )
 
-    def interval_allowed_for_atom(typ, ival, seed, cand, spec=""):
+    def interval_allowed_for_atom(typ: Any, ival: Any, seed: Any, cand: Any, spec: str = "") -> Any:
         return _interval_allowed_for_atom(module, typ, ival, seed, cand, spec=spec, owner_deps=deps)
 
-    def advance_probe_for_interval_bucket(typ, ival, seed, cand, spec=""):
+    def advance_probe_for_interval_bucket(typ: Any, ival: Any, seed: Any, cand: Any, spec: str = "") -> Any:
         return _advance_probe_for_interval_bucket(module, typ, ival, seed, cand, spec=spec, owner_deps=deps)
 
-    def accept_roll_candidate(ref_d, base, cand, roll_kind):
+    def accept_roll_candidate(ref_d: Any, base: Any, cand: Any, roll_kind: Any) -> Any:
         return _accept_roll_candidate(
             module, ref_d, base, cand, roll_kind, scheduler_atom=deps["_scheduler_atom"]
         )
 
-    def atom_matches_on(atom, d, default_seed, seed_base=None, business_calendar=None):
+    def atom_matches_on(atom: Any, d: Any, default_seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
         return _atom_matches_on_impl(
             module,
             atom,
@@ -895,7 +901,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             moon_phase_matches_date=moon_phase_matches_date,
         )
 
-    def next_after_factor(factor, ref_d, default_seed, seed_base=None, business_calendar=None):
+    def next_after_factor(factor: Any, ref_d: Any, default_seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
         return _next_after_factor_impl(
             module,
             factor,
@@ -905,7 +911,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
-    def factor_matches_on(factor, d, default_seed, seed_base=None, business_calendar=None):
+    def factor_matches_on(factor: Any, d: Any, default_seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
         return _factor_matches_on_impl(
             module,
             factor,
@@ -915,7 +921,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
-    def next_after_term(term, ref_d, default_seed, seed_base=None, business_calendar=None):
+    def next_after_term(term: Any, ref_d: Any, default_seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
         return _next_after_term_impl(
             module,
             term,
@@ -931,13 +937,13 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     def next_after_expr(
-        dnf,
-        after_date,
-        default_seed=None,
-        seed_base=None,
-        date_is_excluded=None,
-        business_calendar=None,
-    ):
+        dnf: Any,
+        after_date: Any,
+        default_seed: Any = None,
+        seed_base: Any = None,
+        date_is_excluded: Any = None,
+        business_calendar: Any = None,
+    ) -> Any:
         return _next_after_expr_impl(
             module,
             dnf,
@@ -962,10 +968,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             random_pick_indices=random_pick_indices,
         )
 
-    def weeks_between(d1, d2) -> int:
+    def weeks_between(d1: Any, d2: Any) -> int:
         return _weeks_between(module, d1, d2)
 
-    def resolve_moon_phase_date(phase: str, reference_day):
+    def resolve_moon_phase_date(phase: str, reference_day: Any) -> Any:
         return _resolve_moon_phase_date(
             module,
             phase,
@@ -974,7 +980,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             astronomy_config=deps["ASTRONOMY_CONFIG"],
         )
 
-    def moon_phase_matches_date(phase: str, day) -> bool:
+    def moon_phase_matches_date(phase: str, day: Any) -> bool:
         return _moon_phase_matches_date(
             module,
             phase,

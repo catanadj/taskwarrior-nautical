@@ -5,8 +5,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from contextlib import nullcontext
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 from .task_datetime import datetime_value, parser_for_core
+
+
+class ModifyCallback(Protocol):
+    """Callable service port used by modify-route composition services."""
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 class _HookHost:
@@ -219,31 +225,31 @@ class ModifyRuntimeServices:
     non_completion: NonCompletionRouteCapabilities
     completion: CompletionRouteCapabilities
     deletion: DeletionRouteCapabilities
-    runtime_state: Callable[..., Any]
-    import_module: Callable[..., Any]
-    diag_summary: Callable[..., Any]
-    diagnostic: Callable[..., Any]
+    runtime_state: ModifyCallback
+    import_module: ModifyCallback
+    diag_summary: ModifyCallback
+    diagnostic: ModifyCallback
     show_analytics: bool
     check_integrity: bool
     analytics_style: str
-    seed_runtime_lookup_tasks: Callable[..., Any]
+    seed_runtime_lookup_tasks: ModifyCallback
     lifecycle_read_service: Callable[[], Any]
-    chain_health_advice: Callable[..., Any]
-    chain_integrity_warnings: Callable[..., Any]
-    render_anchor_completion_feedback: Callable[..., Any]
-    render_cp_completion_feedback: Callable[..., Any]
-    render_lifecycle_result: Callable[..., Any]
-    print_task: Callable[..., Any]
-    prepare_recurrence: Callable[..., Any]
-    preserve_cp_relative_offsets: Callable[..., Any]
-    preserve_native_until: Callable[..., Any]
-    validate_native_until: Callable[..., Any]
-    validate_native_until_slots: Callable[..., Any]
+    chain_health_advice: ModifyCallback
+    chain_integrity_warnings: ModifyCallback
+    render_anchor_completion_feedback: ModifyCallback
+    render_cp_completion_feedback: ModifyCallback
+    render_lifecycle_result: ModifyCallback
+    print_task: ModifyCallback
+    prepare_recurrence: ModifyCallback
+    preserve_cp_relative_offsets: ModifyCallback
+    preserve_native_until: ModifyCallback
+    validate_native_until: ModifyCallback
+    validate_native_until_slots: ModifyCallback
     now_utc: Callable[[], Any]
-    compute_next_and_limits: Callable[..., Any]
+    compute_next_and_limits: ModifyCallback
 
     @classmethod
-    def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None):
+    def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None) -> "ModifyRuntimeServices":
         capabilities = capabilities or capabilities_for(host)
         cp_carry_ports = _cp_carry_ports(host, capabilities)
         native_preserve_ports = _native_preserve_ports(host, capabilities)
@@ -347,7 +353,7 @@ def capabilities_for(host: Any) -> ModifyHookCapabilities:
     return cached
 
 
-def lifecycle_read_service_for(host: Any):
+def lifecycle_read_service_for(host: Any) -> Any:
     """Construct and retain the invocation's lifecycle read service."""
     state = host._modify_runtime_state()
     existing = getattr(state, "lifecycle_read_service", None)
@@ -403,36 +409,36 @@ class ModifyCompositionServices:
         self._capabilities = capabilities_for(host)
         self._runtime = ModifyRuntimeServices.from_host(host, self._capabilities)
 
-    def result(self, task, *, sanitize: bool):
+    def result(self, task: Any, *, sanitize: bool) -> Any:
         return self._result_cls(task=task, sanitize=sanitize)
 
-    def has_nautical_fields(self, task):
+    def has_nautical_fields(self, task: Any) -> bool:
         return self._capabilities.modify_lifecycle.task_has_nautical_fields(task)
 
-    def load_core(self):
+    def load_core(self) -> None:
         self._host._load_core()
 
-    def diag(self, message: str):
+    def diag(self, message: str) -> None:
         self._host._diag(message)
 
-    def fail_and_exit(self, title: str, message: str):
+    def fail_and_exit(self, title: str, message: str) -> None:
         self._host._fail_and_exit(title, message)
 
-    def handle_non_completion(self, old, new, unit_of_work, transition=None):
+    def handle_non_completion(self, old: Any, new: Any, unit_of_work: Any, transition: Any = None) -> Any:
         self._capabilities.modify_composition_adapters.handle_non_completion(
             self._host, old, new, unit_of_work, transition=transition,
             runtime=self._runtime,
         )
 
-    def handle_completion(self, old, new, unit_of_work, transition=None):
+    def handle_completion(self, old: Any, new: Any, unit_of_work: Any, transition: Any = None) -> Any:
         return self._capabilities.modify_composition_adapters.handle_completion(
             self._host, old, new, unit_of_work, transition=transition,
             runtime=self._runtime,
         )
 
     def handle_deleted(
-        self, old, new, unit_of_work, transition=None, terminal_decision=None
-    ):
+        self, old: Any, new: Any, unit_of_work: Any, transition: Any = None, terminal_decision: Any = None
+    ) -> Any:
         return self._capabilities.modify_composition_adapters.handle_deleted(
             self._host,
             old,

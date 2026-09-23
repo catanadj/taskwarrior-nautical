@@ -36,6 +36,12 @@ class CompletionComputeService(Protocol):
     def attach_lifecycle_plan(self, task: TaskPayload, computed: Any, next_no: int, now_utc: datetime, **kwargs: Any) -> Any: ...
 
 
+class CompletionSpawnService(Protocol):
+    """Validated child-spawn service used by completion effects."""
+
+    def completion_build_and_spawn_child(self, task: TaskPayload, *, services: Any, **kwargs: Any) -> Any: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SnapshotPorts:
     repository: Any
@@ -153,7 +159,7 @@ class CompletionPreflightContextPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionSpawnPorts:
-    spawn: Any
+    spawn: CompletionSpawnService
     services_type: Any
     build_child_draft: Any
     spawn_child_atomic: Any

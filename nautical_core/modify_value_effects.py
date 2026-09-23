@@ -6,12 +6,14 @@ from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
 
+from .callback_ports import CallbackPort
+
 @dataclass(frozen=True, slots=True)
 class DatetimePorts:
-    compare: Any
+    compare: CallbackPort
 
 
-def compare_datetimes(ports: DatetimePorts, left, right) -> int:
+def compare_datetimes(ports: DatetimePorts, left: Any, right: Any) -> int:
     return ports.compare(left, right)
 
 

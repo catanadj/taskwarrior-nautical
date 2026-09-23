@@ -72,8 +72,22 @@ def _compare_workload_contract(base: dict, head: dict) -> dict[str, object]:
     contract is the extraction gate that proves the same workloads ran and
     reached the same budget decisions before timing noise is considered.
     """
-    base_results = base.get("results") if isinstance(base.get("results"), dict) else {}
-    head_results = head.get("results") if isinstance(head.get("results"), dict) else {}
+    def _results(report: object, side: str) -> tuple[dict[str, object], list[str]]:
+        raw = report.get("results") if isinstance(report, dict) else None
+        if not isinstance(raw, dict):
+            return {}, [f"{side}:results"]
+        invalid = []
+        results: dict[str, object] = {}
+        for name, result in raw.items():
+            key = str(name)
+            if not isinstance(result, dict) or not isinstance(result.get("pass"), bool):
+                invalid.append(key)
+            else:
+                results[key] = result
+        return results, sorted(invalid)
+
+    base_results, invalid_base = _results(base, "base")
+    head_results, invalid_head = _results(head, "head")
     base_names = {str(name) for name in base_results}
     head_names = {str(name) for name in head_results}
     missing = sorted(base_names - head_names)
@@ -90,7 +104,9 @@ def _compare_workload_contract(base: dict, head: dict) -> dict[str, object]:
         "missing": missing,
         "added": added,
         "decision_changes": decision_changes,
-        "ok": not missing and not added and not decision_changes,
+        "invalid_base": invalid_base,
+        "invalid_head": invalid_head,
+        "ok": not missing and not added and not decision_changes and not invalid_base and not invalid_head,
     }
 
 

@@ -76,6 +76,23 @@ class PerformanceBudgetContractTests(unittest.TestCase):
                 label="corrupted",
             )
 
+    def test_workflow_context_allocates_isolated_taskdata(self) -> None:
+        from dev_tools.perf.workflow_workloads import WorkflowContext
+
+        with tempfile.TemporaryDirectory(prefix="nautical-context-") as td:
+            context = WorkflowContext(
+                root=Path(td), real_task="task", task_wrapper=Path(td) / "wrapper",
+                config_path=Path(td) / "config", taskrc_path=Path(td) / "taskrc",
+                base_env={}, config_fingerprint="config", schedule_fingerprint="schedule",
+            )
+            first = context.taskdata("first")
+            second = context.taskdata("second")
+            self.assertTrue(first.is_dir())
+            self.assertTrue(second.is_dir())
+            self.assertNotEqual(first, second)
+            with self.assertRaises(FileExistsError):
+                context.taskdata("first")
+
     def test_budget_cli_help_is_a_stable_subprocess_contract(self) -> None:
         budget_script = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_budget.py"
         proc = subprocess.run(

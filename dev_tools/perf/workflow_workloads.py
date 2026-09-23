@@ -48,6 +48,12 @@ class WorkflowContext:
     config_fingerprint: str
     schedule_fingerprint: str
 
+    def taskdata(self, label: str) -> Path:
+        """Allocate one uniquely named disposable Taskdata directory."""
+        path = self.root / str(label)
+        path.mkdir()
+        return path
+
 
 def validate_reconcile_report(
     report: object,
@@ -638,8 +644,7 @@ def run_scenarios(
         apply_scale_reports: list[dict] = []
         apply_scale_rows: list[dict] = []
         for scale_count in ():
-            scale_data = root / f"reconcile-candidates-apply-{scale_count}"
-            scale_data.mkdir()
+            scale_data = fixture.taskdata(f"reconcile-candidates-apply-{scale_count}")
             scale_env = dict(base_env, TASKDATA=str(scale_data))
             scale_tasks = deps._reconcile_candidate_tasks(f"apply-{scale_count}", scale_count)
             scale_import = subprocess.run(
@@ -680,8 +685,7 @@ def run_scenarios(
             apply_scale_reports.append(compact)
             apply_scale_rows.append({"candidate_count": scale_count, "elapsed_s": round(elapsed, 6), **compact})
 
-        long_data = root / "reconcile-long-history"
-        long_data.mkdir()
+        long_data = fixture.taskdata("reconcile-long-history")
         long_env = dict(base_env, TASKDATA=str(long_data))
         long_count = max(history_rows, int(workflow_cfg.get("reconcile_long_history_rows", 2048)))
         long_tasks = []
@@ -728,8 +732,7 @@ def run_scenarios(
         long_reports: list[dict] = []
         results["workflow_reconcile_long_history"] = long_result
 
-        corrupt_data = root / "reconcile-corrupted"
-        corrupt_data.mkdir()
+        corrupt_data = fixture.taskdata("reconcile-corrupted")
         corrupt_env = dict(base_env, TASKDATA=str(corrupt_data))
         corrupt_tasks = []
         corrupt_count = max(1, int(workflow_cfg.get("reconcile_corrupted_chains", 16)))
@@ -777,8 +780,7 @@ def run_scenarios(
         corrupt_reports: list[dict] = []
         results["workflow_reconcile_corrupted"] = corrupt_result
 
-        mixed_data = root / "reconcile-mixed"
-        mixed_data.mkdir()
+        mixed_data = fixture.taskdata("reconcile-mixed")
         mixed_env = dict(base_env, TASKDATA=str(mixed_data))
         mixed_tasks = []
         mixed_healthy_count = max(2, int(workflow_cfg.get("reconcile_mixed_healthy_rows", 8)))

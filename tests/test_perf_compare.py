@@ -22,6 +22,15 @@ class PerformanceCompareTests(unittest.TestCase):
         self.assertEqual(contract["decision_changes"], ["stable"])
         self.assertFalse(contract["ok"])
 
+    def test_workload_contract_rejects_malformed_results(self) -> None:
+        report = {"results": {"broken": {"median_s": 0.1}}}
+
+        contract = _compare_workload_contract(report, report)
+
+        self.assertFalse(contract["ok"])
+        self.assertEqual(contract["invalid_base"], ["broken"])
+        self.assertEqual(contract["invalid_head"], ["broken"])
+
     def test_help_is_a_valid_argparse_contract(self) -> None:
         compare = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_compare.py"
         proc = subprocess.run(

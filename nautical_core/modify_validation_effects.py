@@ -6,6 +6,7 @@ import re
 from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
+from .callback_ports import CallbackPort
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
 
@@ -13,19 +14,19 @@ from .timeutil import compare_datetimes
 @dataclass(frozen=True, slots=True)
 class DurationPorts:
     min_future_warn: int
-    format_local: Any
+    format_local: CallbackPort
 
 
 @dataclass(frozen=True, slots=True)
 class UntilPorts:
-    minute_delta: Any
-    compare: Any
-    humanize: Any
+    minute_delta: CallbackPort
+    compare: CallbackPort
+    humanize: CallbackPort
 
 
 @dataclass(frozen=True, slots=True)
 class AnchorModePorts:
-    panel: Any
+    panel: CallbackPort
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,7 +342,7 @@ def native_until_slot_ports_for(host: Any) -> NativeUntilSlotPorts:
     )
 
 
-def until_not_past(ports: UntilPorts, until_dt, now_utc) -> tuple[bool, str | None]:
+def until_not_past(ports: UntilPorts, until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
     grace = ports.minute_delta(now_utc)
@@ -351,7 +352,7 @@ def until_not_past(ports: UntilPorts, until_dt, now_utc) -> tuple[bool, str | No
     return True, None
 
 
-def chain_duration_reasonable(ports: DurationPorts, child_due, until_dt, now_utc) -> tuple[bool, str | None]:
+def chain_duration_reasonable(ports: DurationPorts, child_due: Any, until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
     days = (until_dt - now_utc).days

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 from dataclasses import dataclass
+from .callback_ports import CallbackPort
 
 
 @dataclass(frozen=True, slots=True)
 class TimeSlotPorts:
-    resolve_time_slots: Any
+    resolve_time_slots: CallbackPort
 
 
 def time_slot_ports_for(host: Any) -> TimeSlotPorts:
@@ -20,7 +21,7 @@ def time_slot_ports_for(host: Any) -> TimeSlotPorts:
     )
 
 
-def normalize_hhmm_list(ports: TimeSlotPorts, value: Any, target_date=None) -> list[tuple[int, int]]:
+def normalize_hhmm_list(ports: TimeSlotPorts, value: Any, target_date: Any = None) -> list[tuple[int, int]]:
     if value is None:
         return []
     return ports.resolve_time_slots(value, target_date)

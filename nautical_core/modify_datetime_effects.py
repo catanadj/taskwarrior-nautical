@@ -6,13 +6,14 @@ from datetime import datetime
 from typing import Any
 from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
+from .callback_ports import CallbackPort
 
 
 @dataclass(frozen=True, slots=True)
 class DatetimeEffectPorts:
-    parse_datetime: Any
-    utc_to_local: Any
-    local_to_utc: Any
+    parse_datetime: CallbackPort
+    utc_to_local: CallbackPort
+    local_to_utc: CallbackPort
 
 
 def safe_dt(ports: DatetimeEffectPorts, value: Any) -> datetime | None:

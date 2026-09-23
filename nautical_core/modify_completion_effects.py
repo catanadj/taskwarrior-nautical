@@ -22,6 +22,20 @@ class CompletionPreflightService(Protocol):
     def completion_preflight_context(self, task: TaskPayload, now_utc: datetime, *, services: Any) -> Any: ...
 
 
+class CompletionComputeService(Protocol):
+    """Validated compute service used by completion effects."""
+
+    def completion_compute_child_due(self, task: TaskPayload, kind: str, **kwargs: Any) -> Any: ...
+    def completion_until_or_fail(self, task: TaskPayload, now_utc: datetime, **kwargs: Any) -> Any: ...
+    def completion_until_guard_or_stop(self, task: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime, **kwargs: Any) -> bool: ...
+    def completion_require_child_due_or_fail(self, task: TaskPayload, child_due: Any, **kwargs: Any) -> bool: ...
+    def completion_warn_unreasonable_duration(self, task: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime, **kwargs: Any) -> None: ...
+    def completion_caps(self, kind: str, task: TaskPayload, child_due: Any, dnf: Any, **kwargs: Any) -> Any: ...
+    def completion_cap_guard_or_stop(self, task: TaskPayload, next_no: int, cap_no: int | None, now_utc: datetime, **kwargs: Any) -> bool: ...
+    def completion_compute_next_and_limits(self, task: TaskPayload, kind: str, next_no: int, now_utc: datetime, *, services: Any) -> Any: ...
+    def attach_lifecycle_plan(self, task: TaskPayload, computed: Any, next_no: int, now_utc: datetime, **kwargs: Any) -> Any: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SnapshotPorts:
     repository: Any
@@ -44,7 +58,7 @@ class CompletionPreflightPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionFeedbackPorts:
-    compute: Any
+    compute: CompletionComputeService
     panel: Any
     print_task: Any
     end_chain_summary: Any
@@ -52,7 +66,7 @@ class CompletionFeedbackPorts:
 
 @dataclass(frozen=True, slots=True)
 class UntilCompletionPorts:
-    compute: Any
+    compute: CompletionComputeService
     parse_datetime: Any
     validate_until_not_past: Any
     panel: Any
@@ -61,7 +75,7 @@ class UntilCompletionPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionCapsPorts:
-    compute: Any
+    compute: CompletionComputeService
     coerce_int: Any
     parse_datetime: Any
     estimate_cp: Any
@@ -72,7 +86,7 @@ class CompletionCapsPorts:
 
 @dataclass(frozen=True, slots=True)
 class ChildDuePorts:
-    compute: Any
+    compute: CompletionComputeService
     generation: Any
     decode_task: Any
     task_model: Any
@@ -87,7 +101,7 @@ class ChildDuePorts:
 
 @dataclass(frozen=True, slots=True)
 class DurationWarningPorts:
-    compute: Any
+    compute: CompletionComputeService
     validate_duration: Any
     panel: Any
 
@@ -110,7 +124,7 @@ class CompletionLifecyclePlanPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionComputePorts:
-    compute: Any
+    compute: CompletionComputeService
     services_type: Any
     compute_child_due: Any
     until_or_fail: Any

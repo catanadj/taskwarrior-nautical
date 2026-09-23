@@ -7,10 +7,21 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from dev_tools.nautical_perf_compare import _metric_value
+from dev_tools.nautical_perf_compare import _compare_workload_contract, _metric_value
 
 
 class PerformanceCompareTests(unittest.TestCase):
+    def test_workload_contract_comparison_detects_coverage_and_decision_changes(self) -> None:
+        base = {"results": {"stable": {"pass": True}, "removed": {"pass": False}}}
+        head = {"results": {"stable": {"pass": False}, "added": {"pass": True}}}
+
+        contract = _compare_workload_contract(base, head)
+
+        self.assertEqual(contract["missing"], ["removed"])
+        self.assertEqual(contract["added"], ["added"])
+        self.assertEqual(contract["decision_changes"], ["stable"])
+        self.assertFalse(contract["ok"])
+
     def test_help_is_a_valid_argparse_contract(self) -> None:
         compare = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_compare.py"
         proc = subprocess.run(
@@ -22,6 +33,7 @@ class PerformanceCompareTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("usage:", proc.stdout)
         self.assertIn("15%", proc.stdout)
+        self.assertIn("--contract-only", proc.stdout)
         self.assertNotIn("Traceback", proc.stderr)
 
     def test_extended_metrics_extract_from_stage_and_workflow_reports(self) -> None:

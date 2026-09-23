@@ -65,6 +65,35 @@ def _mapping_list(value: object) -> list[dict]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def _compare_workload_contract(base: dict, head: dict) -> dict[str, object]:
+    """Compare stable workload coverage and pass/fail decisions.
+
+    Timing and extended metrics intentionally do not participate here; this
+    contract is the extraction gate that proves the same workloads ran and
+    reached the same budget decisions before timing noise is considered.
+    """
+    base_results = base.get("results") if isinstance(base.get("results"), dict) else {}
+    head_results = head.get("results") if isinstance(head.get("results"), dict) else {}
+    base_names = {str(name) for name in base_results}
+    head_names = {str(name) for name in head_results}
+    missing = sorted(base_names - head_names)
+    added = sorted(head_names - base_names)
+    decision_changes = []
+    for name in sorted(base_names & head_names):
+        base_result = base_results.get(name)
+        head_result = head_results.get(name)
+        base_pass = base_result.get("pass") if isinstance(base_result, dict) else None
+        head_pass = head_result.get("pass") if isinstance(head_result, dict) else None
+        if base_pass != head_pass:
+            decision_changes.append(name)
+    return {
+        "missing": missing,
+        "added": added,
+        "decision_changes": decision_changes,
+        "ok": not missing and not added and not decision_changes,
+    }
+
+
 def _metric_value(result: dict, metric: str) -> float | None:
     """Extract one invocation-level metric without treating absent data as zero.
 
@@ -145,6 +174,11 @@ def main() -> int:
     ap.add_argument("--base", required=True, help="baseline perf report JSON path")
     ap.add_argument("--head", required=True, help="current perf report JSON path")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of markdown table")
+    ap.add_argument(
+        "--contract-only",
+        action="store_true",
+        help="check workload coverage and pass/fail parity without timing metrics",
+    )
     ap.add_argument("--enforce", action="store_true", help="exit non-zero on regressions")
     ap.add_argument("--abs-floor-s", type=float, default=0.003, help="absolute regression floor in seconds")
     ap.add_argument(
@@ -158,6 +192,25 @@ def main() -> int:
 
     base = _load(args.base)
     head = _load(args.head)
+    if args.contract_only:
+        contract = _compare_workload_contract(base, head)
+        summary = {
+            "base_report": str(Path(args.base).resolve()),
+            "head_report": str(Path(args.head).resolve()),
+            "contract": contract,
+            "ok": bool(contract["ok"]),
+            "enforced": bool(args.enforce),
+        }
+        if args.json:
+            print(json.dumps(summary, ensure_ascii=False, separators=(",", ":"), indent=2))
+        else:
+            print("Nautical Perf Workload Contract")
+            print(f"Missing: {', '.join(contract['missing']) or 'none'}")
+            print(f"Added: {', '.join(contract['added']) or 'none'}")
+            print(f"Decision changes: {', '.join(contract['decision_changes']) or 'none'}")
+        if args.enforce and not contract["ok"]:
+            return 1
+        return 0
     bres = base.get("results") if isinstance(base.get("results"), dict) else {}
     hres = head.get("results") if isinstance(head.get("results"), dict) else {}
     names = sorted(set(bres.keys()) | set(hres.keys()))

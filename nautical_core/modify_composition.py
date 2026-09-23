@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from contextlib import nullcontext
 from typing import Any, Callable, Protocol
+from .callback_ports import CallbackPort
 from .task_datetime import datetime_value, parser_for_core
 
 
@@ -403,7 +404,7 @@ def lifecycle_read_service_for(host: Any) -> Any:
 class ModifyCompositionServices:
     """Bind on-modify effects to the hook's validated composition root."""
 
-    def __init__(self, host: Any, result_cls: Callable[..., Any]) -> None:
+    def __init__(self, host: Any, result_cls: CallbackPort) -> None:
         self._host = host
         self._result_cls = result_cls
         self._capabilities = capabilities_for(host)

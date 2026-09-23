@@ -3,26 +3,28 @@ from __future__ import annotations
 import json
 import re
 from datetime import timedelta
+from typing import Any
 
+from .callback_ports import CallbackPort
 from .business_calendar import is_business_day as default_is_business_day
 from .scheduler_models import OccurrenceSearchExhausted
 from .scheduler_trace import SchedulerTrace, active_trace
 
 
 def base_next_after_atom(
-    atom,
-    ref_d,
-    seed_base=None,
+    atom: Any,
+    ref_d: Any,
+    seed_base: Any = None,
     *,
-    expand_weekly_cached_mods,
-    split_csv_tokens,
-    expand_monthly_cached,
-    expand_yearly_cached,
-    weekly_rand_pick,
-    week_monday,
-    date_cls,
-    resolve_moon_phase_date=None,
-) -> object:
+    expand_weekly_cached_mods: CallbackPort,
+    split_csv_tokens: CallbackPort,
+    expand_monthly_cached: CallbackPort,
+    expand_yearly_cached: CallbackPort,
+    weekly_rand_pick: CallbackPort,
+    week_monday: CallbackPort,
+    date_cls: Any,
+    resolve_moon_phase_date: CallbackPort | None = None,
+) -> Any:
     typ = (atom.get("typ") or "").lower()
     spec = (atom.get("spec") or "").lower()
     mods = atom.get("mods") or {}
@@ -153,11 +155,11 @@ def _is_pure_iso_week_spec(spec: str) -> bool:
 def interval_allowed_for_atom(
     typ: str,
     ival: int,
-    seed,
-    cand,
+    seed: Any,
+    cand: Any,
     *,
-    weeks_between,
-    year_index,
+    weeks_between: CallbackPort,
+    year_index: CallbackPort,
     spec: str = "",
 ) -> bool:
     if ival <= 1:
@@ -175,14 +177,14 @@ def interval_allowed_for_atom(
 def advance_probe_for_interval_bucket(
     typ: str,
     ival: int,
-    seed,
-    cand,
+    seed: Any,
+    cand: Any,
     *,
-    weeks_between,
-    year_index,
-    date_cls,
+    weeks_between: CallbackPort,
+    year_index: CallbackPort,
+    date_cls: Any,
     spec: str = "",
-):
+) -> Any:
     if ival <= 1:
         return cand
     if typ == "w":
@@ -222,13 +224,13 @@ def advance_probe_for_interval_bucket(
     return cand
 
 
-def accept_roll_candidate(ref_d, base, cand, roll_kind: str | None) -> bool:
+def accept_roll_candidate(ref_d: Any, base: Any, cand: Any, roll_kind: str | None) -> bool:
     if roll_kind in ("pbd", "nbd", "nw"):
         return base > ref_d and cand >= ref_d
     return cand > ref_d
 
 
-def _atom_match_lookback_days(atom) -> int:
+def _atom_match_lookback_days(atom: Any) -> int:
     mods = atom.get("mods") or {}
     roll_kind = mods.get("roll")
     day_offset = int(mods.get("day_offset", 0) or 0)
@@ -242,26 +244,26 @@ def _atom_match_lookback_days(atom) -> int:
 
 
 def next_after_atom_with_mods(
-    atom,
-    ref_d,
-    default_seed,
-    seed_base=None,
+    atom: Any,
+    ref_d: Any,
+    default_seed: Any,
+    seed_base: Any = None,
     *,
-    active_mod_keys,
-    base_next_after_atom,
-    interval_allowed_for_atom,
-    advance_probe_for_interval_bucket,
-    monthly_align_base_for_interval,
-    roll_apply,
-    apply_day_offset,
-    accept_roll_candidate,
-    is_business_day=default_is_business_day,
+    active_mod_keys: CallbackPort,
+    base_next_after_atom: CallbackPort,
+    interval_allowed_for_atom: CallbackPort,
+    advance_probe_for_interval_bucket: CallbackPort,
+    monthly_align_base_for_interval: CallbackPort,
+    roll_apply: CallbackPort,
+    apply_day_offset: CallbackPort,
+    accept_roll_candidate: CallbackPort,
+    is_business_day: CallbackPort = default_is_business_day,
     max_anchor_iter: int,
-    warn_once_per_day,
-    os_mod,
-    resolve_moon_phase_date=None,
-    moon_phase_matches_date=None,
-) -> object:
+    warn_once_per_day: CallbackPort,
+    os_mod: Any,
+    resolve_moon_phase_date: CallbackPort | None = None,
+    moon_phase_matches_date: CallbackPort | None = None,
+) -> Any:
     ival = int(atom.get("ival", 1) or 1)
 
     seed = default_seed or ref_d
@@ -354,13 +356,13 @@ def next_after_atom_with_mods(
 
 
 def atom_matches_on(
-    atom,
-    d,
-    default_seed,
-    seed_base=None,
+    atom: Any,
+    d: Any,
+    default_seed: Any,
+    seed_base: Any = None,
     *,
-    next_after_atom_with_mods,
-    moon_phase_matches_date=None,
+    next_after_atom_with_mods: CallbackPort,
+    moon_phase_matches_date: CallbackPort | None = None,
 ) -> bool:
     typ = (atom.get("typ") or atom.get("type") or "").lower()
     if typ == "moon":

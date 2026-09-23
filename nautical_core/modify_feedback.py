@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
+from .callback_ports import CallbackPort
 from .task_models import TaskPayload
 from .modify_models import CompletionLifecycleResult, TaskView
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
@@ -79,7 +80,7 @@ def render_cp_schedule_adjusted_panel(
     format_local: Callable[[Any], str],
     semantic_diff_value: Callable[[str, str], str],
     format_offset: Callable[[timedelta], str],
-    panel: Callable[..., Any],
+    panel: CallbackPort,
 ) -> None:
     """Render the relative schedule changes applied after a CP due edit."""
     old_due = getattr(adjustment, "target_old", None)
@@ -112,7 +113,7 @@ def render_explicit_timing_order_warning(
     changed_fields: tuple[str, ...],
     *,
     format_offset: Callable[[timedelta], str],
-    panel: Callable[..., Any],
+    panel: CallbackPort,
 ) -> None:
     """Warn when an explicit timing edit leaves an invalid field ordering."""
     if not changed_fields:
@@ -238,7 +239,7 @@ def render_recurrence_updated_panel(
     *,
     parse_datetime: Callable[[Any], Any],
     format_local: Callable[[Any], str],
-    describe_native_until_carry: Callable[..., Any],
+    describe_native_until_carry: CallbackPort,
     to_local: Callable[[Any], Any],
     coerce_int: Callable[[Any, Any], int | None],
     describe_anchor: Callable[[str], str],
@@ -246,7 +247,7 @@ def render_recurrence_updated_panel(
     first_recurrence_target: Callable[[TaskPayload, str], Any],
     panel_mode: str,
     strip_markup: Callable[[str], str],
-    panel: Callable[..., Any],
+    panel: CallbackPort,
 ) -> None:
     if not changes:
         return

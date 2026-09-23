@@ -7,6 +7,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any
 
+from .callback_ports import CallbackPort
 from .task_models import TaskObservation, TaskPayload
 
 
@@ -25,7 +26,7 @@ class ChainSummaryRenderServices:
     coerce_int: Callable[[Any, Any], int | None]
     format_local: Callable[[Any], str]
     max_chain_walk: int
-    panel: Callable[..., Any]
+    panel: CallbackPort
     diagnostic: Callable[[str], None]
 
 

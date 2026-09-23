@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from .callback_ports import CallbackPort
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskObservation, TaskPayload
@@ -12,25 +13,25 @@ from .task_models import TaskObservation, TaskPayload
 @dataclass(frozen=True, slots=True)
 class TimelineProjectionServices:
     max_iterations: int
-    collect_prev_two: Callable[..., Any]
-    dtparse: Callable[..., Any]
-    to_local_cached: Callable[..., Any]
-    safe_parse_datetime: Callable[..., Any]
-    omit_dnf_from_parent: Callable[..., Any]
+    collect_prev_two: CallbackPort
+    dtparse: CallbackPort
+    to_local_cached: CallbackPort
+    safe_parse_datetime: CallbackPort
+    omit_dnf_from_parent: CallbackPort
     omit_description_for_date: Callable[[Any, Any], str | None] | None
-    recurrence_evaluator_for_task: Callable[..., Any]
-    scheduler_service_for_task: Callable[..., Any]
+    recurrence_evaluator_for_task: CallbackPort
+    scheduler_service_for_task: CallbackPort
 
 
 @dataclass(frozen=True, slots=True)
 class TimelineFormattingServices:
-    future_style_for_chain: Callable[..., Any]
-    coerce_int: Callable[..., Any]
-    fmt_on_time_delta: Callable[..., Any]
-    fmtlocal: Callable[..., Any]
-    fmt_dt_local: Callable[..., Any]
-    short: Callable[..., Any]
-    format_gap: Callable[..., Any]
+    future_style_for_chain: CallbackPort
+    coerce_int: CallbackPort
+    fmt_on_time_delta: CallbackPort
+    fmtlocal: CallbackPort
+    fmt_dt_local: CallbackPort
+    short: CallbackPort
+    format_gap: CallbackPort
 
 
 TimelineItem = tuple[object, Any, TaskPayload, str]
@@ -134,7 +135,7 @@ def _timeline_initial_items(
     child_due_utc: Any,
     child_short: str,
     *,
-    coerce_int: Callable[..., Any],
+    coerce_int: CallbackPort,
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
 ) -> list[TimelineItem]:
@@ -469,7 +470,7 @@ def anchor_file_timeline_lines(
     cur_no: int | None,
     show_gaps: bool,
     round_anchor_gaps: bool,
-    coerce_int: Callable[..., Any],
+    coerce_int: CallbackPort,
     fmt_dt_local: Callable[[Any], str],
     max_iterations: int,
     future_style_for_chain: Callable[[TaskPayload, str], str],

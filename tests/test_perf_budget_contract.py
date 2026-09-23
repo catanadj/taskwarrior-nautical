@@ -55,6 +55,26 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertTrue(callable(workflow_workloads.run_scenarios))
         self.assertTrue(callable(workflow_workloads.workflow_fixture))
         self.assertTrue(hasattr(workflow_workloads, "WorkflowContext"))
+        self.assertTrue(callable(workflow_workloads.validate_reconcile_report))
+
+    def test_reconcile_report_validation_is_centralized(self) -> None:
+        from dev_tools.perf import workflow_workloads
+
+        workflow_workloads.validate_reconcile_report(
+            {
+                "schema": "nautical.reconcile",
+                "export_calls": 1,
+                "export_rows": 4,
+                "integrity_seconds": 0.01,
+            },
+            max_export_rows=4,
+        )
+        with self.assertRaisesRegex(RuntimeError, "corrupted"):
+            workflow_workloads.validate_reconcile_report(
+                {"schema": "nautical.reconcile", "integrity_audit": {"findings": []}},
+                require_findings=True,
+                label="corrupted",
+            )
 
     def test_budget_cli_help_is_a_stable_subprocess_contract(self) -> None:
         budget_script = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_budget.py"

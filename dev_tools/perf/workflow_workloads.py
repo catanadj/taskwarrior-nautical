@@ -49,6 +49,39 @@ class WorkflowContext:
     schedule_fingerprint: str
 
 
+def validate_reconcile_report(
+    report: object,
+    *,
+    max_export_rows: int | None = None,
+    require_findings: bool = False,
+    require_candidates: bool = False,
+    require_snapshot_metrics: bool = False,
+    label: str = "reconcile",
+) -> None:
+    """Validate the stable safety contract shared by reconcile workloads."""
+    if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
+        raise RuntimeError(f"{label} workflow returned an invalid reconcile report")
+    if require_snapshot_metrics or max_export_rows is not None:
+        try:
+            export_calls = int(report.get("export_calls", 0))
+            export_rows = int(report.get("export_rows", 0))
+            integrity_seconds = float(report.get("integrity_seconds", -1.0))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"{label} workflow returned malformed reconcile metrics") from exc
+        if not 1 <= export_calls <= 2:
+            raise RuntimeError(f"{label} reconcile workflow exceeded its snapshot-call budget")
+        if max_export_rows is not None and not 1 <= export_rows <= max_export_rows:
+            raise RuntimeError(f"{label} reconcile workflow exceeded its single-snapshot row budget")
+        if integrity_seconds < 0.0:
+            raise RuntimeError(f"{label} reconcile workflow returned an invalid integrity duration")
+    if require_findings:
+        audit = report.get("integrity_audit")
+        if not isinstance(audit, dict) or not audit.get("findings"):
+            raise RuntimeError(f"{label} reconcile workflow hid its integrity findings")
+    if require_candidates and int(report.get("candidates", 0) or 0) <= 0:
+        raise RuntimeError(f"{label} reconcile workflow produced no candidates")
+
+
 @contextmanager
 def workflow_fixture(
     deps: WorkflowDependencies,
@@ -681,14 +714,14 @@ def run_scenarios(
                 "long reconcile fixture import failed: "
                 f"{(long_import.stderr or long_import.stdout or '').strip()}"
             )
-        def _validate_long(report: dict) -> None:
-            if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile" or not 1 <= int(report.get("export_calls", 0)) <= 2 or not 1 <= int(report.get("export_rows", 0)) <= long_count or float(report.get("integrity_seconds", -1.0)) < 0.0:
-                raise RuntimeError("long reconcile workflow exceeded its single-snapshot row budget")
         long_result = deps.workloads.reconcile_report_loop(
             name="workflow_reconcile_long_history", command=reconcile_cmd, env=long_env,
             repeats=repeats, timeout=300.0 if slow_device else 60.0,
             budget=float(budgets.get("workflow_reconcile_long_history", budgets.get("workflow_reconcile", 3.0))),
-            validate=_validate_long, compact_report=deps._compact_reconcile_report,
+            validate=lambda report: validate_reconcile_report(
+                report, max_export_rows=long_count, label="long"
+            ),
+            compact_report=deps._compact_reconcile_report,
             measure_workflow=deps._measure_workflow, attach_reports=deps._attach_reconcile_reports,
         )
         long_samples = []
@@ -730,15 +763,14 @@ def run_scenarios(
                 "corrupted reconcile fixture import failed: "
                 f"{(corrupt_import.stderr or corrupt_import.stdout or '').strip()}"
             )
-        def _validate_corrupt(report: dict) -> None:
-            audit = report.get("integrity_audit") if isinstance(report, dict) else None
-            if not isinstance(audit, dict) or not audit.get("findings"):
-                raise RuntimeError("corrupted reconcile workflow hid its integrity findings")
         corrupt_result = deps.workloads.reconcile_report_loop(
             name="workflow_reconcile_corrupted", command=reconcile_cmd, env=corrupt_env,
             repeats=repeats, timeout=30.0,
             budget=float(budgets.get("workflow_reconcile_corrupted", budgets.get("workflow_reconcile", 3.0))),
-            validate=_validate_corrupt, compact_report=deps._compact_reconcile_report,
+            validate=lambda report: validate_reconcile_report(
+                report, require_findings=True, label="corrupted"
+            ),
+            compact_report=deps._compact_reconcile_report,
             measure_workflow=deps._measure_workflow, attach_reports=deps._attach_reconcile_reports,
         )
         corrupt_samples = []
@@ -810,15 +842,14 @@ def run_scenarios(
                 "mixed reconcile fixture import failed: "
                 f"{(mixed_import.stderr or mixed_import.stdout or '').strip()}"
             )
-        def _validate_mixed(report: dict) -> None:
-            audit = report.get("integrity_audit") if isinstance(report, dict) else None
-            if not isinstance(audit, dict) or not audit.get("findings") or int(report.get("candidates", 0)) <= 0:
-                raise RuntimeError("mixed reconcile workflow did not preserve both candidate and integrity evidence")
         mixed_result = deps.workloads.reconcile_report_loop(
             name="workflow_reconcile_mixed", command=reconcile_cmd, env=mixed_env,
             repeats=repeats, timeout=30.0,
             budget=float(budgets.get("workflow_reconcile_mixed", budgets.get("workflow_reconcile", 3.0))),
-            validate=_validate_mixed, compact_report=deps._compact_reconcile_report,
+            validate=lambda report: validate_reconcile_report(
+                report, require_findings=True, require_candidates=True, label="mixed"
+            ),
+            compact_report=deps._compact_reconcile_report,
             measure_workflow=deps._measure_workflow, attach_reports=deps._attach_reconcile_reports,
         )
         mixed_samples = []

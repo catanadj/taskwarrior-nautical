@@ -821,10 +821,13 @@ workflow-only 24/24 passing, normal enforced budget 78/78 passing, full suite
 
 ### Post-WP7 typing hardening follow-up
 
-- [ ] Replace the highest-value callback-boundary `Any` annotations with small
+- [x] Replace the highest-value callback-boundary `Any` annotations with small
   `Protocol` interfaces, starting with cache, scheduler, hook, and modify
-  service ports. Defer this until WP7 is complete so performance-harness work
-  is not coupled to the type-boundary refinement.
+  service ports. WP7 is complete; the cache locking, scheduler callback, hook
+  diagnostic, modify callback, and completion preflight/compute/spawn service
+  boundaries now use focused protocols or shared callback ports. Focused
+  boundary tests pass. The configured repository-wide mypy run still reports
+  the pre-existing untyped-definition backlog outside these slices.
 
 ---
 

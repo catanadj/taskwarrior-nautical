@@ -819,6 +819,12 @@ enforces workload coverage and pass/fail parity. Fresh acceptance evidence:
 workflow-only 24/24 passing, normal enforced budget 78/78 passing, full suite
 1316 passed with 3 skipped, and `git diff --check` clean.
 
+WP7 hardening also adds an import-safety contract for every extracted workload
+module and fail-closed validation for malformed comparison reports, including
+invalid result shapes, pass flags, negative metrics, and non-finite metrics.
+The focused performance contract suite passes 43 tests; the full suite passes
+1318 tests with 3 skipped.
+
 ### Post-WP7 typing hardening follow-up
 
 - [x] Replace the highest-value callback-boundary `Any` annotations with small

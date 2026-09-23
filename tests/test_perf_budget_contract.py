@@ -57,6 +57,20 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertTrue(hasattr(workflow_workloads, "WorkflowContext"))
         self.assertTrue(callable(workflow_workloads.validate_reconcile_report))
 
+    def test_all_extracted_workload_modules_import_without_side_effects(self) -> None:
+        perf_dir = Path(__file__).parents[1] / "dev_tools" / "perf"
+        modules = sorted(
+            path.stem for path in perf_dir.glob("*.py") if path.name != "__init__.py"
+        )
+        for module in modules:
+            proc = subprocess.run(
+                [sys.executable, "-c", f"import dev_tools.perf.{module}"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, f"{module}: {proc.stderr}")
+            self.assertEqual(proc.stdout, "", f"{module} wrote to stdout on import")
+            self.assertEqual(proc.stderr, "", f"{module} wrote to stderr on import")
+
     def test_reconcile_report_validation_is_centralized(self) -> None:
         from dev_tools.perf import workflow_workloads
 

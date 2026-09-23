@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
+import sys
 from pathlib import Path
 
 
@@ -26,6 +28,39 @@ def _load(path: str) -> dict:
     if not isinstance(data, dict):
         raise RuntimeError(f"Invalid report format in '{p}': expected JSON object")
     return data
+
+
+_METRIC_KEY_MARKERS = ("_s", "_seconds", "_ms", "_bytes", "_rows", "_calls", "_count")
+
+
+def _validate_report(report: dict, label: str, *, require_pass: bool = False) -> None:
+    """Reject malformed benchmark data before it can affect comparisons."""
+    results = report.get("results")
+    if not isinstance(results, dict):
+        raise RuntimeError(f"invalid {label} report: results must be an object")
+    for name, result in results.items():
+        if not isinstance(result, dict):
+            raise RuntimeError(f"invalid {label} report: result {name!r} must be an object")
+        if require_pass and not isinstance(result.get("pass"), bool):
+            raise RuntimeError(f"invalid {label} report: result {name!r} has non-boolean pass")
+        for key, value in _walk_report_values(result):
+            if key == "pass" or not any(marker in key for marker in _METRIC_KEY_MARKERS):
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if not math.isfinite(float(value)) or float(value) < 0.0:
+                raise RuntimeError(f"invalid {label} report: result {name!r} has invalid {key}")
+
+
+def _walk_report_values(value: object, key: str = ""):
+    if isinstance(value, dict):
+        for child_key, child_value in value.items():
+            yield from _walk_report_values(child_value, str(child_key))
+    elif isinstance(value, list):
+        for child_value in value:
+            yield from _walk_report_values(child_value, key)
+    else:
+        yield key, value
 
 
 def _as_float(v, default: float = 0.0) -> float:
@@ -206,8 +241,14 @@ def main() -> int:
     ap.add_argument("--pct-floor", type=float, default=0.15, help="relative regression floor ratio (0.15 = 15%%)")
     args = ap.parse_args()
 
-    base = _load(args.base)
-    head = _load(args.head)
+    try:
+        base = _load(args.base)
+        head = _load(args.head)
+        _validate_report(base, "base", require_pass=args.contract_only)
+        _validate_report(head, "head", require_pass=args.contract_only)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if args.contract_only:
         contract = _compare_workload_contract(base, head)
         summary = {

@@ -16,9 +16,11 @@ import statistics
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 class WorkflowDependencies:
@@ -33,37 +35,27 @@ class WorkflowDependencies:
         self.__dict__.update(services)
 
 
-def expensive_workflows(
-    runner: Callable[..., dict[str, dict]],
-    cfg: dict,
-    *,
-    slow_device: bool = False,
-    panel_mode: str = "minimal",
-) -> dict[str, dict]:
-    """Run the workflow group through its injected implementation boundary."""
-    return runner(cfg, slow_device=slow_device, panel_mode=panel_mode)
+@dataclass(frozen=True)
+class WorkflowContext:
+    """Disposable Taskwarrior fixture and immutable runtime inputs."""
+
+    root: Path
+    real_task: str
+    task_wrapper: Path
+    config_path: Path
+    taskrc_path: Path
+    base_env: dict[str, str]
+    config_fingerprint: str
+    schedule_fingerprint: str
 
 
-def run_scenarios(
+@contextmanager
+def workflow_fixture(
     deps: WorkflowDependencies,
-    cfg: dict,
     *,
-    slow_device: bool = False,
     panel_mode: str = "minimal",
-) -> dict[str, dict]:
-    """Exercise completion, queue-drain, and reconcile paths in isolation."""
-    workflow_cfg = cfg.get("workflow_perf")
-    if not isinstance(workflow_cfg, dict) or not workflow_cfg.get("enabled", True):
-        return {}
-    workflow_cfg = dict(workflow_cfg)
-    budgets_override = workflow_cfg.get("slow_device_budgets_seconds") if slow_device else None
-    if isinstance(budgets_override, dict):
-        budgets = dict(workflow_cfg.get("budgets_seconds") or {})
-        budgets.update(budgets_override)
-        workflow_cfg["budgets_seconds"] = budgets
-    repeats = max(1, int(workflow_cfg.get("repeats", 3)))
-    budgets = workflow_cfg.get("budgets_seconds") if isinstance(workflow_cfg.get("budgets_seconds"), dict) else {}
-    reconcile_call_purposes: dict[str, int] = {}
+) -> Iterator[WorkflowContext]:
+    """Create and tear down the disposable fixture used by workflow scenarios."""
     with tempfile.TemporaryDirectory(prefix="nautical-workflow-perf-") as td:
         root = Path(td)
         real_task = shutil.which("task")
@@ -153,6 +145,56 @@ def run_scenarios(
             raise RuntimeError("workflow fingerprint probe returned invalid JSON") from exc
         for key in ("NAUTICAL_DIAG", "NAUTICAL_DIAG_LOG", "NAUTICAL_PROFILE"):
             base_env.pop(key, None)
+        yield WorkflowContext(
+            root=root,
+            real_task=real_task,
+            task_wrapper=task_wrapper,
+            config_path=config_path,
+            taskrc_path=taskrc_path,
+            base_env=base_env,
+            config_fingerprint=config_fingerprint,
+            schedule_fingerprint=schedule_fingerprint,
+        )
+
+
+def expensive_workflows(
+    runner: Callable[..., dict[str, dict]],
+    cfg: dict,
+    *,
+    slow_device: bool = False,
+    panel_mode: str = "minimal",
+) -> dict[str, dict]:
+    """Run the workflow group through its injected implementation boundary."""
+    return runner(cfg, slow_device=slow_device, panel_mode=panel_mode)
+
+
+def run_scenarios(
+    deps: WorkflowDependencies,
+    cfg: dict,
+    *,
+    slow_device: bool = False,
+    panel_mode: str = "minimal",
+) -> dict[str, dict]:
+    """Exercise completion, queue-drain, and reconcile paths in isolation."""
+    workflow_cfg = cfg.get("workflow_perf")
+    if not isinstance(workflow_cfg, dict) or not workflow_cfg.get("enabled", True):
+        return {}
+    workflow_cfg = dict(workflow_cfg)
+    budgets_override = workflow_cfg.get("slow_device_budgets_seconds") if slow_device else None
+    if isinstance(budgets_override, dict):
+        budgets = dict(workflow_cfg.get("budgets_seconds") or {})
+        budgets.update(budgets_override)
+        workflow_cfg["budgets_seconds"] = budgets
+    repeats = max(1, int(workflow_cfg.get("repeats", 3)))
+    budgets = workflow_cfg.get("budgets_seconds") if isinstance(workflow_cfg.get("budgets_seconds"), dict) else {}
+    reconcile_call_purposes: dict[str, int] = {}
+    with workflow_fixture(deps, panel_mode=panel_mode) as fixture:
+        root = fixture.root
+        real_task = fixture.real_task
+        task_wrapper = fixture.task_wrapper
+        base_env = fixture.base_env
+        config_fingerprint = fixture.config_fingerprint
+        schedule_fingerprint = fixture.schedule_fingerprint
 
         completion_cases = (
             ("workflow_cp_completion", "cp", False),

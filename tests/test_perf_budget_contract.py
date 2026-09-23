@@ -53,6 +53,8 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertTrue(callable(workflow_workloads.reconcile_candidates_apply_scale))
         self.assertTrue(callable(workflow_workloads.reconcile_report_loop))
         self.assertTrue(callable(workflow_workloads.run_scenarios))
+        self.assertTrue(callable(workflow_workloads.workflow_fixture))
+        self.assertTrue(hasattr(workflow_workloads, "WorkflowContext"))
 
     def test_budget_cli_help_is_a_stable_subprocess_contract(self) -> None:
         budget_script = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_budget.py"

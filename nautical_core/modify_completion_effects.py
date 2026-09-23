@@ -4,11 +4,22 @@ from __future__ import annotations
 
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
+from .callback_ports import CallbackPort
+
+
+class CompletionPreflightService(Protocol):
+    """Validated preflight service used by completion effects."""
+
+    def completion_link_numbers_or_fail(self, task: TaskPayload, **kwargs: Any) -> Any: ...
+    def completion_kind_or_stop(self, task: TaskPayload, now_utc: datetime, **kwargs: Any) -> Any: ...
+    def completion_chain_id_or_fail(self, task: TaskPayload, **kwargs: Any) -> str | None: ...
+    def completion_existing_next_or_fail(self, task: TaskPayload, next_no: int, **kwargs: Any) -> bool: ...
+    def completion_preflight_context(self, task: TaskPayload, now_utc: datetime, *, services: Any) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,8 +32,8 @@ class SnapshotPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionPreflightPorts:
-    preflight: Any
-    coerce_int: Any
+    preflight: CompletionPreflightService
+    coerce_int: CallbackPort
     max_link_number: int
     short_uuid: Any
     panel: Any
@@ -114,7 +125,7 @@ class CompletionComputePorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionPreflightContextPorts:
-    preflight: Any
+    preflight: CompletionPreflightService
     models: Any
     task_observation: Any
     snapshot_mode: Any

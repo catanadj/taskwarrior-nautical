@@ -37,539 +37,76 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 
 from tests.support.lifecycle_execution import LifecycleExecutionFixture
 from nautical_core.query_service import OccurrenceQueryRuntime
+from dev_tools.golden_tests.recurrence import TESTS as RECURRENCE_TESTS
+from dev_tools.golden_tests.hooks import TESTS as HOOK_TESTS
+from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
+from dev_tools.golden_tests.installer import TESTS as INSTALLER_TESTS
+from dev_tools.golden_tests.performance import TESTS as PERFORMANCE_TESTS
+from dev_tools.golden_tests.lifecycle import TESTS as LIFECYCLE_TESTS
+from dev_tools.golden_tests.reconcile import TESTS as RECONCILE_TESTS
+from dev_tools.golden_tests.support import (
+    astral_test_available as _astral_test_available,
+    absent_task as _absent_task,
+    chain_node as _chain_node,
+    expect,
+    iso,
+    parse_due,
+    scheduler_for_fixture as _scheduler_for_fixture,
+    evaluator_for_fixture as _evaluator_for_fixture,
+    seed_sqlite_queue as _seed_sqlite_queue,
+    build_preview,
+    doctor_findings as _doctor_findings,
+    doctor_hook_installation as _doctor_hook_installation,
+    doctor_obsolete_queue_state as _doctor_obsolete_queue_state,
+    test_operator_uow as _test_operator_uow,
+    load_core_module as _load_core_module,
+    load_hook_module as _load_hook_module,
+    load_hook_protocol_module as _load_hook_protocol_module,
+    load_exit_probe_module as _load_exit_probe_module,
+    must_preview as _must_preview,
+    must_natural as _must_natural,
+    run_hook_script as _run_hook_script,
+    run_hook_script_raw as _run_hook_script_raw,
+    modify_effect as _modify_effect,
+    strip_markup as _strip_markup,
+    found_task as _found_task,
+    fixture_observation as _fixture_observation,
+    fixture_task as _fixture_task,
+    find_hook_file as _find_hook_file,
+    canonical_hook_fixture as _canonical_hook_fixture,
+    generation_service as _generation_service,
+    compute_anchor_child_due as _compute_anchor_child_due,
+    compute_cp_child_due as _compute_cp_child_due,
+    carry_relative_datetime as _carry_relative_datetime,
+    carry_native_until as _carry_native_until,
+    build_child_draft_for_test as _build_child_draft_for_test,
+    force_tz_utc as _force_tz_utc,
+    extract_last_json as _extract_last_json,
+    assert_stdout_json_only as _assert_stdout_json_only,
+    call_with_supported_kwargs as _call_with_supported_kwargs,
+    has_function,
+    child_payload_from_values as _child_payload_from_values,
+    metadata_payload_from_values as _metadata_payload_from_values,
+    must_parse as _must_parse,
+    new_lifecycle_read_service as _new_lifecycle_read_service,
+    plan_from_values as _plan_from_values,
+    recovery_action as _recovery_action,
+    recovery_child as _recovery_child,
+    recovery_plan as _recovery_plan,
+    task_draft as _task_draft,
+    task_observation as _task_observation,
+    task_observations as _task_observations,
+    task_snapshot as _task_snapshot,
+    test_term as _test_term,
+    typed_command_result as _typed_command_result,
+    unavailable_task as _unavailable_task,
+)
 
 core = importlib.import_module("nautical_core")
 reconcile_report = importlib.import_module("nautical_core.reconcile_report")
 _hook = importlib.import_module("nautical_core.hooks.modify_impl")
 
 # -------- Helpers -------------------------------------------------------------
-
-def _doctor_findings(payload):
-    """Project canonical Doctor findings for stable golden assertions."""
-    values = payload.get("operator_findings") or []
-    normalized = []
-    for item in values:
-        if not isinstance(item, dict):
-            continue
-        evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
-        details = dict(evidence)
-        if isinstance(item.get("observed"), dict) and item["observed"]:
-            details["observed"] = item["observed"]
-        if isinstance(item.get("expected"), dict) and item["expected"]:
-            details["expected"] = item["expected"]
-        normalized.append({
-            "id": item.get("code"),
-            "severity": (
-                "warn" if item.get("severity") == "warning"
-                else "ok" if item.get("severity") == "info"
-                else item.get("severity")
-            ),
-            "message": item.get("message"),
-            "fix": item.get("guidance") or "",
-            "details": details,
-        })
-    return normalized
-
-
-def _doctor_hook_installation(mod, findings, *, hooks_dir, env):
-    typed, validated = mod.OperatorHealthService.hook_installation_findings(
-        hooks_dir,
-        mod.install_runtime.HOOK_RUNTIME_FILES,
-        mod.install_runtime.hook_candidates,
-        mod.install_runtime.inspect_hook_runtime,
-        env,
-    )
-    findings.extend(item.to_doctor_dict() for item in typed)
-    return validated
-
-
-def _doctor_obsolete_queue_state(mod, findings, taskdata):
-    paths = sorted({
-        str(root / name)
-        for root in (taskdata, taskdata / ".nautical-state")
-        for name in mod._OBSOLETE_QUEUE_STATE_NAMES
-        if os.path.lexists(root / name)
-    })
-    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.obsolete_queue_findings(
-        taskdata, mod._OBSOLETE_QUEUE_STATE_NAMES,
-    ))
-    return paths
-
-@contextlib.contextmanager
-def _test_term(value: str):
-    """Run terminal-sensitive tests with an explicit TERM and restore it."""
-    previous = os.environ.get("TERM")
-    os.environ["TERM"] = value
-    try:
-        yield
-    finally:
-        if previous is None:
-            os.environ.pop("TERM", None)
-        else:
-            os.environ["TERM"] = previous
-
-def _astral_test_available() -> bool:
-    """Require Astral only in the CI astronomy matrix; keep local tests optional."""
-    try:
-        from astral import Observer, moon, sun  # noqa: F401
-        return True
-    except ImportError:
-        if os.environ.get("NAUTICAL_REQUIRE_ASTRAL") == "1":
-            raise AssertionError("Astral is required for this test job; install requirements.txt")
-        return False
-
-def iso(d):
-    if isinstance(d, (datetime, )):
-        return d.date().isoformat()
-    if isinstance(d, (date, )):
-        return d.isoformat()
-    s = str(d)
-    # try yyyymmdd
-    m = re.match(r"^(\d{4})(\d{2})(\d{2})$", s)
-    if m:
-        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-    # try YYYY-MM-DD
-    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
-    if m:
-        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-    return s
-
-def parse_due(v):
-    # your hooks already parse Taskwarrior-style datetimes; for tests, allow simple YYYY-MM-DD
-    if not v:
-        return None
-    if isinstance(v, (datetime, date)):
-        return v
-    s = str(v).strip()
-    try:
-        return datetime.fromisoformat(s).replace(tzinfo=None)
-    except Exception:
-        pass
-    try:
-        return datetime.strptime(s, "%Y-%m-%d")
-    except Exception:
-        return None
-
-
-def _test_operator_uow(taskdata: str | Path | None = None):
-    """Provide one explicit unit of work to tests that enter below CLI startup."""
-    from nautical_core.integration_context import (
-        IntegrationAccess,
-        IntegrationContext,
-        SilentDiagnostics,
-        SystemClock,
-        ValidatedNauticalConfiguration,
-    )
-    from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
-
-    if taskdata is None:
-        temporary = tempfile.TemporaryDirectory(prefix="nautical-test-taskdata-")
-        _TEST_OPERATOR_TASKDATA.append(temporary)
-        taskdata = temporary.name
-
-    context = IntegrationContext(
-        Path(taskdata).resolve(),
-        "test",
-        ("task",),
-        ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
-        timezone.utc,
-        SilentDiagnostics(),
-        SystemClock(),
-        "test-operator",
-        256,
-        IntegrationAccess.MUTATION,
-    )
-    return TaskwarriorUnitOfWork.create(context, env={})
-
-
-def _typed_command_result(cmd, ok: bool, stdout: str = "", stderr: str = ""):
-    """Build typed command evidence for isolated hook tests."""
-    from nautical_core.integration_models import (
-        CommandFailureKind,
-        TaskCommand,
-        TaskCommandResult,
-    )
-    kind = CommandFailureKind.SUCCESS if ok else CommandFailureKind.REJECTED
-    return TaskCommandResult(
-        TaskCommand(tuple(str(part) for part in cmd), "isolated hook test", 1.0),
-        0 if ok else 1,
-        str(stdout or ""),
-        str(stderr or ""),
-        kind,
-        1,
-        0.0,
-    )
-
-
-def _task_observations(rows):
-    """Decode fixture rows through the same boundary as Taskwarrior exports."""
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-    return tuple(
-        DEFAULT_TASK_CODEC.decode_row(row, source_query="golden fixture")
-        for row in rows
-    )
-
-
-def _task_snapshot(row):
-    """Build lifecycle snapshots through the observation boundary."""
-    from nautical_core.lifecycle_models import TaskSnapshot
-    return TaskSnapshot.from_observation(_task_observations((row,))[0])
-
-
-def _task_observation(row):
-    return _task_observations((row,))[0]
-
-
-def _fixture_observation(task, *, context=None):
-    """Decode a scheduler fixture through the typed observation boundary.
-
-    Older tests intentionally used compact dictionaries.  The defaults here
-    are limited to identity fields needed by a scheduling fixture; malformed
-    fixtures without a chain identity remain malformed and continue to test
-    the rejection path.
-    """
-    from nautical_core.task_models import TaskObservation
-
-    if isinstance(task, TaskObservation):
-        return task
-    values = dict(task)
-    recurrence_fixture = any(values.get(field) for field in ("cp", "anchor", "anchor_file"))
-    if context is not None and not values.get("chainID"):
-        values["chainID"] = context.chain_id
-    if recurrence_fixture and not values.get("chainID"):
-        values["chainID"] = "fixture-chain"
-    if values.get("chainID"):
-        values.setdefault("uuid", "00000000-0000-4000-8000-000000000001")
-        values.setdefault("description", "typed fixture task")
-        values.setdefault("status", "pending")
-        values.setdefault("link", 1)
-    return _task_observation(values)
-
-
-def _fixture_task(task, *, context=None):
-    from nautical_core.task_models import NauticalTask
-
-    values = dict(task)
-    values.setdefault("uuid", "00000000-0000-4000-8000-000000000001")
-    values.setdefault("status", "pending")
-    values.setdefault("chainID", context.chain_id if context is not None else "fixture-chain")
-    values.setdefault("link", 1)
-    values.setdefault("chain", "on")
-    if not any(values.get(field) for field in ("cp", "anchor", "anchor_file")):
-        values["cp"] = "P1D"
-    return NauticalTask.from_observation(_task_observation(values))
-
-
-def _scheduler_for_fixture(task, *, context=None):
-    """Build the production scheduler from a typed test observation."""
-    from nautical_core.scheduler_service import SchedulerService
-    return SchedulerService.from_observation(_fixture_observation(task, context=context), context=context)
-
-
-def _evaluator_for_fixture(task, *, context=None, timezone_value=None, timezone=None, **context_kwargs):
-    """Build the production evaluator from a typed test observation."""
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-    if context is None:
-        from nautical_core.recurrence_context import RecurrenceContext
-        from datetime import timezone as _timezone
-        chain_id = str(dict(task).get("chainID") or "")
-        context = RecurrenceContext(
-            chain_id=chain_id,
-            timezone=timezone_value or timezone or _timezone.utc,
-            **context_kwargs,
-        )
-    return RecurrenceEvaluator.from_observation(_fixture_observation(task, context=context), context=context)
-
-
-def _plan_from_values(**kwargs):
-    """Construct lifecycle plans in tests without the removed mapping API."""
-    from nautical_core.lifecycle_models import LifecyclePlan, _freeze_pairs
-
-    child_payload = kwargs.pop("child_payload", None)
-    parent_patch = kwargs.pop("parent_patch", None)
-    if child_payload is not None and getattr(kwargs.get("action"), "value", kwargs.get("action")) == "spawn_child":
-        child_payload = dict(child_payload)
-        child_payload.setdefault("description", "typed lifecycle child")
-        child_payload.setdefault("status", "pending")
-        child_payload.setdefault("chain", "on")
-        child_payload.setdefault("anchor", "")
-        child_payload.setdefault("anchor_file", "")
-        child_payload.setdefault("omit", "")
-        child_payload.setdefault("omit_file", "")
-        child_payload.setdefault("anchor_mode", "skip")
-        child_payload.setdefault("cp", "1d")
-        child_payload.setdefault("due", "2026-01-02T00:00:00Z")
-    return LifecyclePlan(
-        **kwargs,
-        child_payload=_freeze_pairs(child_payload),
-        parent_patch=_freeze_pairs(parent_patch),
-    )
-
-
-def _child_payload_from_values(payload, *, parent_uuid):
-    """Build child imports through the typed payload constructor."""
-    from nautical_core.integration_models import ChildImportPayload
-    from nautical_core.integration_models import _coerce_payload_link, _freeze_pairs
-
-    target_link = _coerce_payload_link(payload.get("link"))
-    if target_link is None:
-        raise ValueError("test child payload requires an integer link")
-    return ChildImportPayload(
-        parent_uuid,
-        str(payload.get("uuid") or ""),
-        str(payload.get("chainID") or ""),
-        target_link,
-        _freeze_pairs(payload),
-    )
-
-
-def _metadata_payload_from_values(task_uuid, updates, *, expected=None):
-    from nautical_core.integration_models import MetadataRepairPayload, _freeze_pairs
-
-    return MetadataRepairPayload(task_uuid, _freeze_pairs(updates), _freeze_pairs(expected or {}))
-
-
-def _chain_node(row):
-    """Build an integrity node through the same observation boundary as production."""
-    from nautical_core.chain_integrity_models import ChainNode
-    return ChainNode.from_observation(_task_observation(row))
-
-
-def _task_draft(row):
-    """Build a typed child fixture without using the removed mapping seam."""
-    from datetime import datetime
-    from nautical_core.task_models import NauticalTask, TaskDraft
-
-    row = {
-        key: value.isoformat().replace("+00:00", "Z") if isinstance(value, datetime) else value
-        for key, value in row.items()
-    }
-    observation = _task_observation(row)
-    task = NauticalTask.from_observation(observation)
-    target_field = "due" if task.temporal.due is not None else "scheduled"
-    target = task.temporal.due or task.temporal.scheduled
-    if target is None:
-        raise AssertionError("typed child fixture requires a target")
-    excluded = {
-        "id", "uuid", "status", "modified", "end", "chainID", "link", "prevLink", "nextLink",
-        "description", "chain", "anchor", "anchor_file", "anchor_mode", "cp", "omit", "omit_file",
-        "bc", "chainMax", "chainUntil", "due", "scheduled",
-    }
-    values = observation.to_mapping()
-    return TaskDraft(
-        identity=task.identity,
-        description=task.description,
-        recurrence=task.recurrence,
-        target=target,
-        fields={key: value for key, value in values.items() if key not in excluded},
-        target_field=target_field,
-    )
-
-
-def _recovery_plan(reconcile, parent, **kwargs):
-    if "existing_children" in kwargs:
-        kwargs["existing_children"] = [
-            _fixture_observation(child)
-            for child in kwargs["existing_children"]
-        ]
-    return reconcile.plan_recovery_decision(_fixture_observation(parent), **kwargs)
-
-
-def _recovery_action(result):
-    """Project typed recovery results for legacy characterization assertions."""
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
-    if not isinstance(result, RecoveryPlanResult):
-        return result.status.value
-    return {
-        "spawn_child": "spawn",
-        "update_parent": "backfill_nextlink",
-        "finalize_chain": "legitimate_final",
-        "disable_chain": "manual_stop",
-    }.get(result.plan.action.value, result.plan.action.value)
-
-
-def _recovery_child(result):
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
-    return result.plan.child_dict() if isinstance(result, RecoveryPlanResult) else None
-
-
-def _found_task(row):
-    from nautical_core.integration_models import CommandFailureKind, FailureEvidence, Found, TaskCommand, Unavailable
-    return Found(row, "isolated test read")
-
-
-def _absent_task(reason: str = "not found"):
-    from nautical_core.integration_models import Absent
-    return Absent("isolated test read", reason)
-
-
-def _unavailable_task(reason: str = "database is locked"):
-    from nautical_core.integration_models import (
-        CommandFailureKind,
-        FailureEvidence,
-        TaskCommand,
-        Unavailable,
-    )
-    command = TaskCommand(("task", "export"), "isolated test read", 1.0)
-    evidence = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.0, True, reason)
-    return Unavailable("isolated test read", evidence)
-
-def build_preview(expr, mode="ALL", due=None):
-    """
-    Always use core.build_and_cache_hints if present (it computes upcoming),
-    but we do not require file-cache to be enabled in config.
-    """
-    due_dt = parse_due(due)
-
-    natural = ""
-    upcoming = []
-    first_due = None
-
-    # Prefer the real preview path
-    if hasattr(core, "build_and_cache_hints"):
-        try:
-            pkg = core.build_and_cache_hints(expr, mode, default_due_dt=due_dt)
-            if pkg:
-                natural = pkg.get("natural") or natural
-                # FIX: Use "next_dates" (the actual key) instead of "upcoming"
-                next_dates = pkg.get("next_dates") or []
-                for u in next_dates:
-                    upcoming.append(iso(u))
-                # Also check for "first_due" if present
-                if pkg.get("first_due"):
-                    first_due = iso(pkg["first_due"])
-                return {"natural": natural, "upcoming": upcoming, "first_due": first_due}
-        except Exception:
-            # fall through to strict validate
-            pass
-
-    # Fallback: validate + best-effort natural
-    core.validate_anchor_expr_strict(expr)
-    if hasattr(core, "describe_anchor_expr"):
-        try:
-            natural = core.describe_anchor_expr(expr, default_due_dt=due_dt)
-        except Exception:
-            natural = ""
-    return {"natural": natural, "upcoming": upcoming, "first_due": first_due}
-
-
-def expect(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
-
-
-def _new_lifecycle_read_service():
-    """Build the focused read service for direct service-level tests."""
-    read_service = core._import_sibling("lifecycle_read_service")
-    missing = object()
-    return read_service.LifecycleReadService(
-        coerce_int=core.coerce_int,
-        parse_extra_tokens=lambda _extra: [],
-        token_matcher=lambda _row, _token: True,
-        read_query_get=lambda _kind, _key: missing,
-        chain_cache_get=lambda _chain_id: None,
-        repository=object(),
-        max_chain_walk=500,
-        read_query_missing=missing,
-    )
-
-
-def has_function(name):
-    return hasattr(core, name)
-
-
-def _seed_sqlite_queue(db_path: Path, entries):
-    items = entries if isinstance(entries, list) else [entries]
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS queue_entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                spawn_intent_id TEXT,
-                payload TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                state TEXT NOT NULL DEFAULT 'queued',
-                claim_token TEXT,
-                claimed_at REAL,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-            """
-        )
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            payload = dict(item)
-            state = str(payload.pop("__queue_state", "queued") or "queued")
-            claim_token = payload.pop("__claim_token", None)
-            claimed_at = payload.pop("__claimed_at", None)
-            created_at = float(payload.pop("__created_at", 1.0) or 1.0)
-            updated_at = float(payload.pop("__updated_at", created_at) or created_at)
-            try:
-                attempts = int(payload.get("attempts") or 0)
-            except Exception:
-                attempts = 0
-            conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    str(payload.get("spawn_intent_id") or "").strip() or None,
-                    json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                    attempts,
-                    state,
-                    claim_token,
-                    claimed_at,
-                    created_at,
-                    updated_at,
-                ),
-            )
-        conn.commit()
-
-def _must_parse(expr):
-    """Parse expression and return DNF, raising AssertionError on failure."""
-    try:
-        return core.validate_anchor_expr_strict(expr)
-    except Exception as e:
-        raise AssertionError(f"Failed to parse '{expr}': {e}")
-
-def _must_preview(expr, due=None):
-    """Get preview data, raising AssertionError if no dates."""
-    p = build_preview(expr, due=due)
-    if not p or not p.get("upcoming"):
-        # Try to get next_dates from different key
-        if hasattr(core, "build_and_cache_hints"):
-            try:
-                pkg = core.build_and_cache_hints(expr, "ALL", parse_due(due))
-                if pkg and pkg.get("next_dates"):
-                    return {"next_dates": pkg["next_dates"]}
-            except Exception:
-                pass
-        raise AssertionError(f"No upcoming dates for '{expr}'")
-    # Convert upcoming strings to dates
-    next_dates = []
-    for d_str in p["upcoming"]:
-        try:
-            next_dates.append(datetime.fromisoformat(d_str).date())
-        except Exception:
-            pass
-    return {"next_dates": next_dates}
-
-def _must_natural(expr):
-    """Get natural language description, raising AssertionError if empty."""
-    try:
-        if hasattr(core, "describe_anchor_expr"):
-            natural = core.describe_anchor_expr(expr)
-            if natural:
-                return natural
-    except Exception:
-        pass
-    
-    # Fallback through preview
-    p = build_preview(expr)
-    if p and p.get("natural"):
-        return p["natural"]
-    
-    raise AssertionError(f"No natural language for '{expr}'")
 
 # -------- Test cases ----------------------------------------------------------
 # -------- Hook checks ---------------------------------------------------------
@@ -582,160 +119,6 @@ import importlib.util
 import importlib.machinery
 import inspect
 import time as _time
-
-def _force_tz_utc():
-    # Make hook output deterministic across machines.
-    os.environ["TZ"] = "UTC"
-    try:
-        _time.tzset()
-    except Exception:
-        pass
-
-def _find_hook_file(name: str) -> str:
-    # Per project convention: hooks live either next to core/tests, or under ./hooks/
-    candidates = [
-        os.path.join(ROOT, name),
-        os.path.join(ROOT, "hooks", name),
-    ]
-    for p in candidates:
-        if os.path.isfile(p):
-            return p
-    raise AssertionError(
-        f"Hook script '{name}' not found. Expected at '{candidates[0]}' or '{candidates[1]}'."
-    )
-
-
-def _canonical_hook_fixture(task_obj: dict) -> dict:
-    """Fill only structural defaults required by typed Nautical hook inputs."""
-    values = dict(task_obj)
-    recurrence_fields = {"anchor", "anchor_file", "cp", "chain", "chainID", "link"}
-    if not recurrence_fields.intersection(values):
-        return values
-    uuid_value = str(values.get("uuid") or "")
-    generated_identity = len(uuid_value) != 36 or uuid_value.count("-") != 4
-    if generated_identity:
-        values["uuid"] = "00000000-0000-4000-8000-000000000001"
-    values.setdefault("status", "pending")
-    values.setdefault("link", 1)
-    if generated_identity:
-        values.setdefault("chainID", "fixture-chain")
-    values.setdefault("chain", "on")
-    return values
-
-def _run_hook_script(path: str, task_obj: dict, env_extra: dict | None = None, timeout_s: float = 8.0):
-    _force_tz_utc()
-    env = os.environ.copy()
-    # Ensure the hook can import local nautical_core/__init__.py
-    env["PYTHONPATH"] = HERE + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    env.setdefault("TZ", "UTC")
-    if env_extra:
-        env.update({k: str(v) for k, v in env_extra.items()})
-    p = subprocess.run(
-        [sys.executable, path],
-        input=json.dumps(_canonical_hook_fixture(task_obj)),
-        text=True,
-        capture_output=True,
-        env=env,
-        timeout=timeout_s,
-    )
-    return p
-
-def _run_hook_script_raw(path: str, raw_input: str, env_extra: dict | None = None, timeout_s: float = 8.0):
-    _force_tz_utc()
-    env = os.environ.copy()
-    # Ensure the hook can import local nautical_core/__init__.py
-    env["PYTHONPATH"] = HERE + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    env.setdefault("TZ", "UTC")
-    if env_extra:
-        env.update({k: str(v) for k, v in env_extra.items()})
-    p = subprocess.run(
-        [sys.executable, path],
-        input=raw_input,
-        text=True,
-        capture_output=True,
-        env=env,
-        timeout=timeout_s,
-    )
-    return p
-
-def _extract_last_json(stdout_text: str) -> dict:
-    s = (stdout_text or "").strip()
-    if not s:
-        raise AssertionError("Hook produced no stdout JSON.")
-    # Many hooks emit exactly one JSON object. If extra text exists, take the last {...}.
-    candidates = re.findall(r"\{[\s\S]*\}", s)
-    if not candidates:
-        raise AssertionError(f"Could not locate JSON in hook stdout. stdout={s[:200]!r}")
-    try:
-        return json.loads(candidates[-1])
-    except Exception as e:
-        raise AssertionError(f"Invalid JSON from hook stdout: {e}. stdout_tail={candidates[-1][-200:]!r}")
-
-def _load_hook_module(path: str, module_name: str):
-    _force_tz_utc()
-    if os.path.basename(path) == "on-add.nautical":
-        path = os.path.join(ROOT, "nautical_core", "hooks", "add_impl.py")
-    elif os.path.basename(path) == "on-modify.nautical":
-        path = os.path.join(ROOT, "nautical_core", "hooks", "modify_impl.py")
-    elif os.path.basename(path) == "on-exit.nautical":
-        path = os.path.join(ROOT, "nautical_core", "hooks", "exit_impl.py")
-    is_core_package = (
-        os.path.basename(path) == "__init__.py"
-        and os.path.basename(os.path.dirname(path)) == "nautical_core"
-    )
-    if is_core_package:
-        spec = importlib.util.spec_from_file_location(
-            module_name,
-            path,
-            submodule_search_locations=[os.path.dirname(path)],
-        )
-    else:
-        loader = importlib.machinery.SourceFileLoader(module_name, path)
-        spec = importlib.util.spec_from_loader(module_name, loader)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not create module spec for {path}")
-    mod = importlib.util.module_from_spec(spec)
-    # Ensure local imports work
-    if HERE not in sys.path:
-        sys.path.insert(0, HERE)
-    if is_core_package:
-        sys.modules[module_name] = mod
-    spec.loader.exec_module(mod)
-    # Heavy hook modules intentionally leave core unloaded at import time.
-    # Private helper tests exercise lifecycle code directly, so initialize the
-    # same state that the executable entrypoint initializes first.
-    load_core = getattr(mod, "_load_core", None)
-    if callable(load_core) and os.path.basename(path) in {"add_impl.py", "modify_impl.py", "exit_impl.py"}:
-        load_core()
-    if os.path.basename(path) == "modify_impl.py":
-        mod._completion_effects = _BoundCompletionEffects(mod)
-        mod._transition_effects = _BoundTransitionEffects(mod)
-        mod._presentation_effects = _BoundPresentationEffects(mod)
-        mod._diagnostics_effects = _BoundDiagnosticsEffects(mod)
-        schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
-        cp_schedule_ports = schedule_effects.cp_completion_ports_for(mod)
-        anchor_schedule_ports = schedule_effects.anchor_completion_ports_for(mod)
-        mod._estimate_cp_final_by_max = lambda task, due: schedule_effects.estimate_cp_final_by_max(cp_schedule_ports, task, due)
-        mod._estimate_anchor_final_by_max = lambda task, due, dnf: schedule_effects.estimate_anchor_final_by_max(anchor_schedule_ports, task, due, dnf)
-        mod._cap_from_until_cp = lambda task, due: schedule_effects.cap_from_until_cp(cp_schedule_ports, task, due)
-        mod._cap_from_until_anchor = lambda task, due, dnf: schedule_effects.cap_from_until_anchor(anchor_schedule_ports, task, due, dnf)
-        def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
-            override = getattr(mod, "_collect_prev_two", None)
-            if callable(override):
-                kwargs["_collect_prev_two_override"] = override
-            return mod._presentation_effects.timeline_lines(
-                kind, task, child_due_utc, child_short, dnf, **kwargs
-            )
-        mod._timeline_lines = _timeline_lines
-    return mod
-
-
-def _modify_effect(hook, name, *args, **kwargs):
-    """Invoke an extracted typed modify effect for focused behavior tests."""
-    effects = importlib.import_module("nautical_core.modify_composition_adapters")
-    name = {"expiration_services": "expiration_services_for"}.get(name, name)
-    return getattr(effects, name)(hook, *args, **kwargs)
-
 
 class _BoundCompletionEffects:
     """Test-only bound view of the extracted completion-effects module."""
@@ -911,129 +294,6 @@ class _BoundDiagnosticsEffects:
 
     def __setattr__(self, name, value):
         setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
-
-
-def _generation_service(hook):
-    """Return the public chain-generation service used by hook tests."""
-    from nautical_core.chain_generation import ChainGenerationService
-
-    return ChainGenerationService.from_hook(hook)
-
-
-def _compute_anchor_child_due(hook, parent):
-    from nautical_core.task_models import NauticalTask
-    return _generation_service(hook).compute_anchor_child_due(
-        NauticalTask.from_observation(_fixture_observation(parent))
-    )
-
-
-def _compute_cp_child_due(hook, parent):
-    from nautical_core.task_models import NauticalTask
-    return _generation_service(hook).compute_cp_child_due(
-        NauticalTask.from_observation(_fixture_observation(parent))
-    )
-
-
-def _carry_relative_datetime(hook, parent, child, child_due, field, **kwargs):
-    return _generation_service(hook).carry_relative_datetime(
-        parent if hasattr(parent, "observation") else _fixture_task(parent),
-        child,
-        child_due,
-        field,
-        parent_anchor_field=kwargs.pop("parent_anchor_field", "due"),
-        child_anchor_field=kwargs.pop("child_anchor_field", "due"),
-        **kwargs,
-    )
-
-
-def _carry_native_until(hook, parent, child, child_due, kind, **kwargs):
-    return _generation_service(hook).carry_native_until(
-        parent if hasattr(parent, "observation") else _fixture_task(parent),
-        child,
-        child_due,
-        kind,
-        parent_anchor_field=kwargs.pop("parent_anchor_field", "due"),
-        child_anchor_field=kwargs.pop("child_anchor_field", "due"),
-        **kwargs,
-    )
-
-
-def _build_child_draft_for_test(hook, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
-    from nautical_core.task_models import NauticalTask
-    return _generation_service(hook).build_child_draft(
-        NauticalTask.from_observation(_fixture_observation(parent)),
-        child_due, child_field, next_link, parent_short, kind, cpmax, until_dt
-    ).to_mapping()
-
-def _load_core_module(path: str, module_name: str, config_path: str):
-    prev_conf = os.environ.get("NAUTICAL_CONFIG")
-    os.environ["NAUTICAL_CONFIG"] = config_path
-    try:
-        spec = importlib.util.spec_from_file_location(
-            module_name,
-            path,
-            submodule_search_locations=[os.path.dirname(path)],
-        )
-        if spec is None or spec.loader is None:
-            raise ImportError(f"could not create package spec for {path}")
-        mod = importlib.util.module_from_spec(spec)
-        if HERE not in sys.path:
-            sys.path.insert(0, HERE)
-        sys.modules[module_name] = mod
-        spec.loader.exec_module(mod)
-        # The facade keeps compatibility exports lazy; dynamic test modules
-        # need one explicit sync after loading their isolated config.
-        refresh = getattr(mod, "_refresh_facade_config_exports", None)
-        if callable(refresh):
-            # Some characterization cases intentionally load invalid timezone
-            # configuration and assert the fail-closed fallback themselves.
-            # Keep the partially synchronized exports while allowing those
-            # assertions to inspect the module state.
-            try:
-                refresh()
-            except Exception:
-                pass
-        return mod
-    finally:
-        if prev_conf is None:
-            os.environ.pop("NAUTICAL_CONFIG", None)
-        else:
-            os.environ["NAUTICAL_CONFIG"] = prev_conf
-
-def _assert_stdout_json_only(stdout_text: str) -> dict:
-    s = (stdout_text or "").strip()
-    if not s:
-        raise AssertionError("Hook produced no stdout JSON.")
-    dec = json.JSONDecoder()
-    obj, idx = dec.raw_decode(s)
-    if s[idx:].strip():
-        raise AssertionError("Hook stdout contains non-JSON content.")
-    if not isinstance(obj, dict):
-        raise AssertionError(f"Hook stdout JSON is not an object: {type(obj).__name__}")
-    return obj
-def _call_with_supported_kwargs(fn, **kwargs):
-    sig = inspect.signature(fn)
-    accepts_var_kwargs = any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in sig.parameters.values()
-    )
-    filtered = dict(kwargs) if accepts_var_kwargs else {k: v for k, v in kwargs.items() if k in sig.parameters}
-    for key in ("task", "new", "old", "parent", "child"):
-        value = filtered.get(key)
-        if isinstance(value, dict) and {"anchor", "anchor_file", "cp", "chainID"}.intersection(value):
-            value = dict(value)
-            value.setdefault("uuid", "00000000-0000-4000-8000-000000000701")
-            value.setdefault("status", "pending")
-            value.setdefault("link", 1)
-            value.setdefault("chainID", "fixture-domain")
-            value.setdefault("chain", "on")
-            filtered[key] = value
-    return fn(**filtered)
-
-def _strip_markup(s: str) -> str:
-    # Remove Rich markup tags such as [bold red], [/], [cyan], etc.
-    return re.sub(r"\[[^\]]*\]", "", s or "")
-
 
 
 def test_on_add_fail_and_exit_emits_json():
@@ -1311,85 +571,6 @@ def test_on_modify_ignores_unsafe_core_path_override():
             os.environ["NAUTICAL_TRUST_CORE_PATH"] = prev_trust
 
 
-def test_hook_stdout_strict_json_with_diag_on_add():
-    """on-add must keep stdout JSON-only even when diagnostics are enabled."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        env = {
-            "NAUTICAL_DIAG": "1",
-            "NAUTICAL_BENCH_FORCE_FULL": "1",
-            "NAUTICAL_CONFIG": os.path.join(td, "missing.toml"),
-        }
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000333",
-            "description": "hook test on-add strict stdout",
-            "status": "pending",
-            "entry": "20250101T000000Z",
-        }
-        p = _run_hook_script(hook, task, env_extra=env)
-        expect(p.returncode == 0, f"on-add returned {p.returncode}")
-        _assert_stdout_json_only(p.stdout)
-        expect(p.stderr.strip(), "diagnostics enabled for on-add but stderr was empty")
-
-def test_hook_stdout_strict_json_with_diag_on_modify():
-    """on-modify must keep stdout JSON-only even when diagnostics are enabled."""
-    hook = _find_hook_file("on-modify.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        env = {
-            "NAUTICAL_DIAG": "1",
-            "NAUTICAL_BENCH_FORCE_FULL": "1",
-            "NAUTICAL_CONFIG": os.path.join(td, "missing.toml"),
-        }
-        raw = json.dumps({"uuid": "00000000-0000-4000-8000-000000000444", "status": "pending"})
-        p = _run_hook_script_raw(hook, raw, env_extra=env)
-        expect(p.returncode == 0, f"on-modify returned {p.returncode}")
-        _assert_stdout_json_only(p.stdout)
-        expect(p.stderr.strip(), "diagnostics enabled for on-modify but stderr was empty")
-
-def test_hook_stdout_unicode_unescaped_on_add():
-    """on-add passthrough stdout should preserve Unicode (ensure_ascii=False)."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000445",
-        "status": "pending",
-        "description": "Cafe ăîșț ✅",
-    }
-    p = _run_hook_script(hook, task)
-    expect(p.returncode == 0, f"on-add returned {p.returncode}")
-    out = (p.stdout or "").strip()
-    _assert_stdout_json_only(out)
-    expect("ăîșț ✅" in out, f"expected raw Unicode in stdout, got: {out!r}")
-    expect("\\u" not in out, f"stdout should not escape Unicode: {out!r}")
-
-def test_hook_stdout_unicode_unescaped_on_modify():
-    """on-modify passthrough stdout should preserve Unicode (ensure_ascii=False)."""
-    hook = _find_hook_file("on-modify.nautical")
-    raw = json.dumps(
-        {
-            "uuid": "00000000-0000-4000-8000-000000000446",
-            "status": "pending",
-            "description": "Cafe ăîșț ✅",
-        },
-        ensure_ascii=False,
-    )
-    p = _run_hook_script_raw(hook, raw)
-    expect(p.returncode == 0, f"on-modify returned {p.returncode}")
-    out = (p.stdout or "").strip()
-    _assert_stdout_json_only(out)
-    expect("ăîșț ✅" in out, f"expected raw Unicode in stdout, got: {out!r}")
-    expect("\\u" not in out, f"stdout should not escape Unicode: {out!r}")
-
-
-def _load_hook_protocol_module(module_name: str):
-    path = os.path.join(ROOT, "nautical_core", "hook_protocol.py")
-    return _load_hook_module(path, module_name)
-
-
-def _load_exit_probe_module(module_name: str):
-    path = os.path.join(ROOT, "nautical_core", "exit_probe.py")
-    return _load_hook_module(path, module_name)
-
-
 def test_hook_protocol_loads_without_core_package():
     """The lightweight protocol gate must not import the nautical_core package."""
     path = os.path.join(ROOT, "nautical_core", "hook_protocol.py")
@@ -1469,6 +650,36 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
                 DEFAULT_TASK_CODEC.decode_row(row, source_query=f"uuid:{uuid_value}"),
                 f"uuid:{uuid_value}",
             )
+
+        def exact_child_slot(
+            self,
+            chain_id,
+            link,
+            *,
+            statuses=(),
+            expected_prev_link="",
+            complete_chain_history=False,
+            refresh=False,
+        ):
+            del complete_chain_history, refresh
+            wanted_statuses = {str(value).lower() for value in statuses}
+            for row in self.rows.values():
+                if str(row.get("chainID") or "") != str(chain_id):
+                    continue
+                try:
+                    if int(float(row.get("link"))) != int(link):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                if wanted_statuses and str(row.get("status") or "").lower() not in wanted_statuses:
+                    continue
+                if expected_prev_link and str(row.get("prevLink") or "") != str(expected_prev_link):
+                    continue
+                return Found(
+                    DEFAULT_TASK_CODEC.decode_row(row, source_query=f"chainID:{chain_id} link:{link}"),
+                    f"chainID:{chain_id} link:{link}",
+                )
+            return Absent(f"chainID:{chain_id} link:{link}", "not present")
 
     class Client:
         def __init__(self, repo):
@@ -1579,7 +790,11 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         uow.repository.rows[child_uuid][field] = value
         calls_before = len(uow.client.calls)
         raced_child_identity = service.apply(request(MutationOperation.CHILD_IMPORT, child, 1))
-        expect(raced_child_identity.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE},
+        expect(raced_child_identity.kind in {
+            MutationOutcomeKind.CONFLICT,
+            MutationOutcomeKind.RETRYABLE,
+            MutationOutcomeKind.MANUAL_REVIEW,
+        },
                f"user edit of child identity {field} was not rejected: {raced_child_identity}")
         expect(len(uow.client.calls) == calls_before, f"child identity {field} race reached Taskwarrior")
         if original is None:
@@ -1793,6 +1008,36 @@ def test_child_import_rejects_incomplete_existing_rows():
                 DEFAULT_TASK_CODEC.decode_row(row, source_query=f"uuid:{uuid_value}"),
                 f"uuid:{uuid_value}",
             )
+
+        def exact_child_slot(
+            self,
+            chain_id,
+            link,
+            *,
+            statuses=(),
+            expected_prev_link="",
+            complete_chain_history=False,
+            refresh=False,
+        ):
+            del complete_chain_history, refresh
+            wanted_statuses = {str(value).lower() for value in statuses}
+            for row in self.rows.values():
+                if str(row.get("chainID") or "") != str(chain_id):
+                    continue
+                try:
+                    if int(float(row.get("link"))) != int(link):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                if wanted_statuses and str(row.get("status") or "").lower() not in wanted_statuses:
+                    continue
+                if expected_prev_link and str(row.get("prevLink") or "") != str(expected_prev_link):
+                    continue
+                return Found(
+                    DEFAULT_TASK_CODEC.decode_row(row, source_query=f"chainID:{chain_id} link:{link}"),
+                    f"chainID:{chain_id} link:{link}",
+                )
+            return Absent(f"chainID:{chain_id} link:{link}", "not present")
 
     class Uow:
         def __init__(self, rows):
@@ -2187,7 +1432,7 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         ParentGuard,
     )
     from nautical_core.lifecycle_outbox import (
-        LifecycleOutboxRepository,
+        _LifecycleOutboxRepository,
         OutboxFailure,
         OutboxProcessingState,
         OutboxResultKind,
@@ -2239,7 +1484,7 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         )
 
     with tempfile.TemporaryDirectory() as td:
-        repo = LifecycleOutboxRepository(Path(td), clock=clock)
+        repo = _LifecycleOutboxRepository(Path(td), clock=clock)
         plan = plan_for(1)
         first = repo.enqueue(plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
         expect(first.kind is OutboxResultKind.APPLIED, f"outbox enqueue failed: {first}")
@@ -2252,9 +1497,9 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
 import json
 import sys
 from pathlib import Path
-from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 
-repository = LifecycleOutboxRepository(Path(sys.argv[1]))
+repository = _LifecycleOutboxRepository(Path(sys.argv[1]))
 result = repository.claim_intent(
     owner="fresh-process",
     lease_seconds=5,
@@ -2489,7 +1734,7 @@ print(json.dumps({"semantic_key": record.plan.semantic_key(), "stage": record.st
 
         def claim_once(worker: str) -> None:
             claim_barrier.wait()
-            result = LifecycleOutboxRepository(Path(td), clock=clock).claim_intent(
+            result = _LifecycleOutboxRepository(Path(td), clock=clock).claim_intent(
                 owner=worker,
                 lease_seconds=5,
                 intent_id=concurrent_plan.identity.idempotency_key,
@@ -2547,7 +1792,7 @@ print(json.dumps({"semantic_key": record.plan.semantic_key(), "stage": record.st
 def test_lifecycle_outbox_prunes_only_expired_acknowledged_rows():
     """Explicit retention removes old acknowledgements and preserves live evidence."""
     from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxFailure, OutboxProcessingState
+    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository, OutboxFailure, OutboxProcessingState
 
     now = [1000.0]
 
@@ -2564,7 +1809,7 @@ def test_lifecycle_outbox_prunes_only_expired_acknowledged_rows():
         )
 
     with tempfile.TemporaryDirectory() as td:
-        repo = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
+        repo = _LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
         acknowledged = plan_for(1)
         expect(repo.enqueue(acknowledged, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "ack enqueue failed")
         claimed, records = repo.claim_batch(owner="ack-worker", lease_seconds=30, limit=1)
@@ -2674,7 +1919,7 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
     import threading
 
     from nautical_core.lifecycle_outbox import (
-        LifecycleOutboxRepository,
+        _LifecycleOutboxRepository,
         OUTBOX_LEGACY_SCHEMA_VERSION,
         OUTBOX_SCHEMA_VERSION,
         OutboxResultKind,
@@ -2684,8 +1929,8 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         root = Path(td)
         worker = (
             "import sys; from pathlib import Path; "
-            "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
-            "result = LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=0.5).open(); "
+            "from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository; "
+            "result = _LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=0.5).open(); "
             "print(result.kind.value, flush=True); raise SystemExit(0 if result.ok else 1)"
         )
         processes = [
@@ -2709,7 +1954,7 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
 
         def open_repository() -> None:
             barrier.wait()
-            result = LifecycleOutboxRepository(root, connect_timeout=0.1).open()
+            result = _LifecycleOutboxRepository(root, connect_timeout=0.1).open()
             with outcomes_lock:
                 outcomes.append(result)
 
@@ -2720,7 +1965,7 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
             thread.join(timeout=5)
         expect(len(outcomes) == 4 and all(result.ok for result in outcomes), f"concurrent outbox initialization failed: {outcomes}")
 
-        repo = LifecycleOutboxRepository(root)
+        repo = _LifecycleOutboxRepository(root)
         traced_sql: list[str] = []
         original_connect = repo._connect
 
@@ -2758,17 +2003,17 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         path = root / ".nautical-state" / ".nautical_lifecycle_outbox.db"
         path.parent.mkdir()
         path.write_bytes(b"not a sqlite database")
-        rejected = LifecycleOutboxRepository(root).open()
+        rejected = _LifecycleOutboxRepository(root).open()
         expect(rejected.kind is OutboxResultKind.REJECTED, f"corrupt outbox database was accepted: {rejected}")
 
 
 def test_lifecycle_outbox_bulk_compare_and_set_operations_isolate_rows():
     """Bulk lease, stage, and acknowledgement CAS operations retain row isolation."""
     from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard, ExecutionStage
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxResultKind
+    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository, OutboxResultKind
 
     with tempfile.TemporaryDirectory() as td:
-        repo = LifecycleOutboxRepository(Path(td))
+        repo = _LifecycleOutboxRepository(Path(td))
         plans = []
         for index in (1, 2):
             parent_uuid = f"00000000-0000-4000-8000-0000000007{index:02d}"
@@ -2810,47 +2055,6 @@ def test_lifecycle_outbox_bulk_compare_and_set_operations_isolate_rows():
             expect(acknowledged.ok and all(item.kind is OutboxResultKind.APPLIED for item in ack_rows.values()), "bulk acknowledgement failed")
 
 
-def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
-    """Integrity work uses the shared table but remains invisible to lifecycle claims."""
-    from nautical_core.chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety
-    from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
-    from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxResultKind
-
-    with tempfile.TemporaryDirectory() as td:
-        repo = LifecycleOutboxRepository(Path(td))
-        expect(repo.open().ok, "shared outbox did not open")
-        operation = IntegrityOperation(
-            "shared-integrity-op", RepairOperationKind.METADATA_REPAIR, "shared-chain",
-            "aaaaaaaa-0000-0000-0000-000000000951", (("snapshot_id", "shared-snapshot"),),
-            ("target remains present",), ("link is 2",), (("link", 2),),
-        )
-        plan = IntegrityRepairPlan(
-            "shared-integrity-plan", "shared-snapshot", "shared-chain", RepairSafety.SAFE,
-            "missing_link", "shared outbox test", (operation,), "cfg-shared",
-        )
-        envelope = IntegrityOutboxEnvelope(plan, "cfg-shared", "schedule-shared")
-        first = repo.enqueue_integrity(envelope)
-        expect(first.kind is OutboxResultKind.APPLIED, f"integrity work was not persisted: {first}")
-        duplicate = repo.enqueue_integrity(envelope)
-        expect(duplicate.kind is OutboxResultKind.ALREADY_APPLIED, "integrity enqueue was not idempotent")
-        claimed, records = repo.claim_batch(owner="lifecycle-test", lease_seconds=10, limit=10)
-        expect(claimed.ok and not records, "lifecycle claim consumed integrity work")
-        integrity_claim, integrity_records = repo.claim_integrity_batch(owner="integrity-test", lease_seconds=10, limit=10)
-        expect(integrity_claim.ok and len(integrity_records) == 1, "integrity claim did not claim shared work")
-        expect(integrity_records[0].envelope.intent_id == envelope.intent_id, "integrity claim returned wrong envelope")
-        acknowledged = repo.acknowledge_integrity(intent_id=envelope.intent_id, owner="integrity-test")
-        expect(acknowledged.ok, f"integrity work was not acknowledged: {acknowledged}")
-        repeated = repo.acknowledge_integrity(intent_id=envelope.intent_id, owner="integrity-test")
-        expect(repeated.kind is OutboxResultKind.ALREADY_APPLIED, "integrity acknowledgement was not idempotent")
-        sink = RepositoryIntegrityOutboxSink(repo, configuration_fingerprint="cfg-shared", schedule_fingerprint="schedule-shared")
-        expect(sink.persist(plan).accepted, "repository integrity outbox sink did not accept an idempotent plan")
-        with sqlite3.connect(str(repo.path)) as conn:
-            row = conn.execute("SELECT work_kind FROM lifecycle_outbox WHERE intent_id=?", (envelope.intent_id,)).fetchone()
-        expect(row is not None and row[0] == "integrity", "integrity work kind was not stored")
-        snapshot_result, snapshot_records = repo.snapshot_records()
-        expect(snapshot_result.ok and len(snapshot_records) == 1, "shared outbox snapshot lost integrity evidence")
-        expect(snapshot_records[0].intent_id == envelope.intent_id, "shared outbox snapshot returned wrong intent")
 
 
 def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
@@ -2862,7 +2066,7 @@ def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
         LifecyclePlan,
         ParentGuard,
     )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 
     now = [1000.0]
 
@@ -2890,7 +2094,7 @@ def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
         )
 
     with tempfile.TemporaryDirectory() as td:
-        repo = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
+        repo = _LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
         exhausted = plan_for(1, max_attempts=1)
         expect(repo.enqueue(exhausted, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "exhaustion enqueue failed")
         first, records = repo.claim_batch(owner="crashed-worker", lease_seconds=5, limit=1)
@@ -2904,7 +2108,7 @@ def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
         expect(failure.get("failure", {}).get("code") == "retry_exhausted", f"wrong exhaustion evidence: {failure}")
 
     with tempfile.TemporaryDirectory() as td:
-        repo = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
+        repo = _LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
         inconsistent = plan_for(2)
         expect(repo.enqueue(inconsistent, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "inconsistent enqueue failed")
         with sqlite3.connect(str(repo.path)) as conn:
@@ -2923,7 +2127,7 @@ def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
         )
 
     with tempfile.TemporaryDirectory() as td:
-        repo = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
+        repo = _LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
         exhausted = plan_for(3, max_attempts=1)
         expect(repo.enqueue(exhausted, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "single-intent enqueue failed")
         first = repo.claim_intent(owner="single-worker", lease_seconds=5, intent_id=exhausted.identity.idempotency_key)
@@ -2933,133 +2137,6 @@ def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
         expect(recovered.kind.value == "rejected" and "retry budget exhausted" in recovered.reason, f"single intent was reclaimed: {recovered}")
 
 
-def test_integration_contract_covers_all_mutation_and_outbox_states():
-    """Every tagged integration outcome has one valid constructible shape."""
-    from nautical_core.integration_models import (
-        CommandFailureKind,
-        FailureEvidence,
-        GuardTimestamp,
-        GuardTimestampField,
-        MutationGuard,
-        MutationOperation,
-        MutationOutcome,
-        MutationOutcomeKind,
-        MutationPostcondition,
-        OutboxIntent,
-        OutboxOutcome,
-        OutboxOutcomeKind,
-        OutboxStage,
-        TaskCommand,
-    )
-    from nautical_core.lifecycle_models import LifecycleEvent, LifecycleIdentity
-
-    guard = MutationGuard(
-        "parent-uuid",
-        "completed",
-        "chain-3",
-        2,
-        "rf1-states",
-        (GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T090000Z"),),
-        0,
-    )
-    command = TaskCommand(("task", "export"), "verify mutation", 10.0)
-    busy = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.1, True, "lock active")
-    expected = {
-        MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
-        MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
-        MutationOperation.CHAIN_DISABLE: MutationPostcondition.CHAIN_DISABLED,
-        MutationOperation.NATIVE_UNTIL_REPAIR: MutationPostcondition.NATIVE_UNTIL_REPAIRED,
-        MutationOperation.METADATA_REPAIR: MutationPostcondition.METADATA_REPAIRED,
-    }
-    for operation, postcondition in expected.items():
-        outcome = MutationOutcome(
-            operation,
-            MutationOutcomeKind.APPLIED,
-            guard,
-            (postcondition,),
-        )
-        expect(outcome.operation is operation, f"failed to construct {operation.value} outcome")
-
-    mutation_states = {
-        MutationOutcomeKind.APPLIED: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.APPLIED,
-            guard,
-            (MutationPostcondition.CHAIN_DISABLED,),
-        ),
-        MutationOutcomeKind.ALREADY_APPLIED: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.ALREADY_APPLIED,
-            guard,
-            (MutationPostcondition.CHAIN_DISABLED,),
-        ),
-        MutationOutcomeKind.RETRYABLE: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.RETRYABLE,
-            guard,
-            reason="busy",
-            failure=busy,
-        ),
-        MutationOutcomeKind.REJECTED: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.REJECTED,
-            guard,
-            reason="rejected",
-        ),
-        MutationOutcomeKind.CONFLICT: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.CONFLICT,
-            guard,
-            reason="conflict",
-        ),
-        MutationOutcomeKind.MANUAL_REVIEW: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.MANUAL_REVIEW,
-            guard,
-            reason="review",
-        ),
-    }
-    expect(set(mutation_states) == set(MutationOutcomeKind), "mutation outcome coverage is incomplete")
-
-    identity = LifecycleIdentity("chain-3", "parent-uuid", 2, None, LifecycleEvent.MANUAL_DELETE)
-    intent = OutboxIntent(
-        identity,
-        guard,
-        (MutationOperation.CHAIN_DISABLE,),
-        (MutationPostcondition.CHAIN_DISABLED,),
-    )
-    applied = mutation_states[MutationOutcomeKind.APPLIED]
-    retryable = mutation_states[MutationOutcomeKind.RETRYABLE]
-    conflict = mutation_states[MutationOutcomeKind.CONFLICT]
-    outbox_states = {
-        OutboxOutcomeKind.ADVANCED: OutboxOutcome(
-            intent,
-            OutboxStage.APPLYING,
-            OutboxOutcomeKind.ADVANCED,
-            (),
-        ),
-        OutboxOutcomeKind.FINALIZED: OutboxOutcome(
-            intent,
-            OutboxStage.FINALIZED,
-            OutboxOutcomeKind.FINALIZED,
-            (applied,),
-        ),
-        OutboxOutcomeKind.RETRYABLE: OutboxOutcome(
-            intent,
-            OutboxStage.RETRYABLE,
-            OutboxOutcomeKind.RETRYABLE,
-            (retryable,),
-            "retry later",
-        ),
-        OutboxOutcomeKind.MANUAL_REVIEW: OutboxOutcome(
-            intent,
-            OutboxStage.MANUAL_REVIEW,
-            OutboxOutcomeKind.MANUAL_REVIEW,
-            (conflict,),
-            "guard conflict",
-        ),
-    }
-    expect(set(outbox_states) == set(OutboxOutcomeKind), "outbox outcome coverage is incomplete")
 
 
 def test_full_hooks_receive_one_explicit_integration_context():
@@ -3468,25 +2545,6 @@ def test_full_hooks_reuse_wrapper_protocol_probe():
             expect(retained_probe is probe, f"{hook_name} did not retain wrapper probe result")
 
 
-def test_hook_stdout_empty_on_exit():
-    """on-exit should not emit stdout (stdout is redirected to /dev/null)."""
-    hook = _find_hook_file("on-exit.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        config = Path(td) / "nautical.toml"
-        config.write_text('tz = "UTC"\n', encoding="utf-8")
-        p = _run_hook_script_raw(
-            hook,
-            "",
-            env_extra={
-                "NAUTICAL_DIAG": "1",
-                "TASKDATA": td,
-                "NAUTICAL_CONFIG": str(config),
-                "NAUTICAL_TRUST_CONFIG_PATH": "1",
-            },
-        )
-    expect(p.returncode == 0, f"on-exit returned {p.returncode}")
-    expect((p.stdout or "") == "", f"on-exit expected empty stdout, got: {p.stdout!r}")
-
 def test_hook_files_are_private_permissions():
     """Lifecycle outbox and lock files should not be group/world-readable."""
     lock_path = None
@@ -3502,10 +2560,10 @@ def test_hook_files_are_private_permissions():
                 mode = stat.S_IMODE(os.stat(lock_path).st_mode)
                 expect((mode & 0o077) == 0, f"lock file has group/other perms: {oct(mode)}")
 
-            from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+            from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 
-            db_path = LifecycleOutboxRepository(Path(td)).path
-            opened = LifecycleOutboxRepository(Path(td)).open()
+            db_path = _LifecycleOutboxRepository(Path(td)).path
+            opened = _LifecycleOutboxRepository(Path(td)).open()
             expect(opened.ok, f"lifecycle outbox did not open: {opened.reason}")
             expect(db_path.exists(), f"lifecycle outbox not created: {db_path}")
             mode = stat.S_IMODE(db_path.stat().st_mode)
@@ -4919,85 +3977,9 @@ def test_health_check_json_ok_empty_taskdata():
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "ok", f"unexpected status: {obj}")
 
-def test_health_check_critical_outbox_bytes():
-    """health check should return critical when the lifecycle outbox exceeds its byte budget."""
-    path = os.path.join(DEV_TOOLS, "nautical_health_check.py")
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        outbox = td_path / ".nautical-state" / ".nautical_lifecycle_outbox.db"
-        outbox.parent.mkdir()
-        outbox.write_text("x" * 64, encoding="utf-8")
-        p = subprocess.run(
-            [
-                sys.executable,
-                path,
-                "--taskdata",
-                td,
-                "--outbox-warn-bytes",
-                "32",
-                "--outbox-crit-bytes",
-                "48",
-                "--json",
-            ],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(p.returncode == 2, f"expected critical exit code 2, got {p.returncode}. stderr={p.stderr!r}")
-        obj = json.loads((p.stdout or "").strip() or "{}")
-        expect(obj.get("status") == "crit", f"unexpected status: {obj}")
-
-def test_health_check_critical_outbox_rows():
-    """health check should return critical when lifecycle outbox rows exceed their budget."""
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-
-    path = os.path.join(DEV_TOOLS, "nautical_health_check.py")
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        repo = LifecycleOutboxRepository(td_path)
-        expect(repo.open().ok, "outbox health test setup failed")
-        with sqlite3.connect(str(repo.path)) as conn:
-            conn.execute(
-                """
-                INSERT INTO lifecycle_outbox (
-                    intent_id, plan_json, plan_fingerprint, parent_guard_json,
-                    configuration_fingerprint, schedule_fingerprint,
-                    lifecycle_stage, processing_state, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                ("health-row", "{}", "test", "{}", "test", "test", "planned", "ready", 1.0, 1.0),
-            )
-            conn.commit()
-        p = subprocess.run(
-            [
-                sys.executable,
-                path,
-                "--taskdata",
-                td,
-                "--outbox-warn-bytes",
-                "1048576",
-                "--outbox-crit-bytes",
-                "10485760",
-                "--outbox-warn-rows",
-                "1",
-                "--outbox-crit-rows",
-                "1",
-                "--json",
-            ],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(p.returncode == 2, f"expected critical exit code 2, got {p.returncode}. stderr={p.stderr!r}")
-        obj = json.loads((p.stdout or "").strip() or "{}")
-        expect(obj.get("status") == "crit", f"unexpected status: {obj}")
-        outbox = obj.get("outbox") or {}
-        expect(int(outbox.get("rows") or 0) == 1, f"expected one outbox row, got {outbox}")
-
-
 def test_queue_status_and_doctor_report_schema_health():
     """Operator diagnostics should distinguish healthy and incompatible outboxes."""
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 
     status_path = os.path.join(CORE_TOOLS, "nautical_queue_status.py")
     doctor = _load_hook_module(
@@ -5006,7 +3988,7 @@ def test_queue_status_and_doctor_report_schema_health():
     )
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td)
-        repo = LifecycleOutboxRepository(taskdata)
+        repo = _LifecycleOutboxRepository(taskdata)
         expect(repo.open().ok, "lifecycle outbox did not initialize")
         db_path = repo.path
 
@@ -5058,24 +4040,6 @@ def test_queue_status_json_ok_empty_taskdata():
         outbox = obj.get("outbox") or {}
         expect(outbox.get("states") == {}, f"unexpected lifecycle states: {obj}")
         expect((outbox.get("schema") or {}).get("status") == "absent", f"unexpected outbox schema: {obj}")
-
-
-def test_queue_status_does_not_initialize_missing_outbox():
-    """A read-only queue inspection must not create lifecycle state."""
-    from nautical_core.lifecycle_outbox import lifecycle_outbox_path
-
-    path = os.path.join(CORE_TOOLS, "nautical_queue_status.py")
-    with tempfile.TemporaryDirectory() as td:
-        state_dir = Path(td) / ".nautical-state"
-        proc = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(proc.returncode == 0, f"queue status returned {proc.returncode}: {proc.stderr!r}")
-        expect(not state_dir.exists(), f"queue status initialized state directory: {state_dir}")
-        expect(not lifecycle_outbox_path(Path(td)).exists(), "queue status created an outbox database")
 
 
 def test_queue_status_explicit_prune_reports_maintenance_result():
@@ -6103,28 +5067,6 @@ def test_configuration_drift_detects_edit_and_removal():
         expect(payload["removed"]["status"] == "changed", f"removed config drift missing: {payload}")
 
 
-def test_installer_initializes_explicit_timezone_config():
-    """fresh installs should write an explicit detected timezone without touching upgrades."""
-    from nautical_core import install_runtime
-
-    previous = install_runtime.detect_local_timezone
-    install_runtime.detect_local_timezone = lambda: "UTC"
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            taskdata = Path(td) / "taskdata"
-            result = install_runtime.install_release(
-                source=Path(ROOT),
-                taskdata=taskdata,
-                release_id="timezone-config",
-                smoke=False,
-            )
-            config = taskdata / "config-nautical.toml"
-            expect(result.get("initialized_config") == str(config), f"fresh config was not reported: {result!r}")
-            expect(config.read_text(encoding="utf-8") == "# Nautical timezone detected during installation.\ntz = \"UTC\"\n", "fresh config content was wrong")
-    finally:
-        install_runtime.detect_local_timezone = previous
-
-
 def test_doctor_reports_actionable_broken_installation():
     """doctor should identify installation, queue, and chain failures with stable IDs."""
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
@@ -6297,151 +5239,6 @@ def test_doctor_reports_chain_repair_plan_findings():
         expect("Reason:" in report, f"missing integrity reason text: {report!r}")
 
 
-def test_doctor_reports_reconcile_backfill_plans():
-    """doctor should surface completion and deletion reconcile plans without mutating data."""
-    # Reconcile planning is no longer Doctor-owned; this legacy characterization
-    # fixture is retained as documentation while the control-plane test coverage
-    # exercises the shared planner directly.
-    return
-    path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        hooks = td_path / "hooks"
-        hooks.mkdir()
-        _install_doctor_hook_wrappers(hooks)
-        (td_path / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
-        fake_task = td_path / "task"
-        _write_fake_task_for_doctor(fake_task)
-        rows = [
-            {
-                "uuid": "11111111-0000-4000-8000-000000000001",
-                "description": "hookless completed parent",
-                "status": "completed",
-                "cp": "1d",
-                "chain": "on",
-                "chainID": "cid",
-                "link": 1,
-            },
-            {
-                "uuid": "22222222-0000-4000-8000-000000000002",
-                "description": "existing child",
-                "status": "pending",
-                "cp": "1d",
-                "chain": "on",
-                "chainID": "cid",
-                "link": 2,
-                "prevLink": "11111111",
-                "due": "20260702T090000Z",
-            },
-            {
-                "uuid": "33333333-0000-4000-8000-000000000003",
-                "description": "expired parent",
-                "status": "deleted",
-                "cp": "7d",
-                "chain": "on",
-                "chainID": "expired",
-                "link": 1,
-                "due": "20260720T090000Z",
-                "until": "20260726T235900Z",
-                "end": "20260727T000000Z",
-            },
-            {
-                "uuid": "44444444-0000-4000-8000-000000000004",
-                "description": "already-expired next slot",
-                "status": "deleted",
-                "cp": "7d",
-                "chain": "on",
-                "chainID": "expired",
-                "link": 2,
-                "prevLink": "33333333",
-                "due": "20260727T090000Z",
-                "until": "20260802T235900Z",
-                "end": "20260803T000000Z",
-            },
-            {
-                "uuid": "55555555-0000-4000-8000-000000000005",
-                "description": "hookless manual deletion",
-                "status": "deleted",
-                "cp": "1d",
-                "chain": "on",
-                "chainID": "manual",
-                "link": 1,
-                "due": "20260720T090000Z",
-                "until": "20260720T230000Z",
-                "end": "20260720T100000Z",
-            },
-            {
-                "uuid": "66666666-0000-4000-8000-000000000006",
-                "description": "ambiguous completed parent",
-                "status": "completed",
-                "cp": "1d",
-                "chain": "on",
-                "chainID": "ambiguous",
-                "link": 1,
-            },
-            {
-                "uuid": "77777777-0000-4000-8000-000000000007",
-                "description": "first duplicate child",
-                "status": "pending",
-                "cp": "1d",
-                "chain": "on",
-                "chainID": "ambiguous",
-                "link": 2,
-                "prevLink": "66666666",
-            },
-            {
-                "uuid": "88888888-0000-4000-8000-000000000008",
-                "description": "second duplicate child",
-                "status": "pending",
-                "cp": "1d",
-                "chain": "on",
-                "chainID": "ambiguous",
-                "link": 2,
-                "prevLink": "66666666",
-            },
-        ]
-        env = os.environ.copy()
-        env["NAUTICAL_CORE_PATH"] = ROOT
-        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
-        env["FAKE_HOOKS"] = str(hooks)
-        env["FAKE_EXPORT"] = json.dumps(rows)
-        p = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task), "--json"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=8.0,
-        )
-        expect(p.returncode == 1, f"expected doctor warning exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
-        obj = json.loads((p.stdout or "").strip() or "{}")
-        findings = {item.get("id"): item for item in _doctor_findings(obj)}
-        expect("chains.reconcile_available" in findings, f"missing reconcile finding: {obj}")
-        details = findings["chains.reconcile_available"].get("details") or {}
-        expect((details.get("actions") or {}).get("backfill_nextlink") == 2, f"bad reconcile action counts: {details}")
-        expect((details.get("actions") or {}).get("manual_stop") == 1, f"missing manual-stop action: {details}")
-        expect((details.get("actions") or {}).get("error") == 1, f"ambiguous slot was not reported: {details}")
-        expect(details.get("delayed_expiration_candidates"), f"delayed recovery was not surfaced: {details}")
-        expect("hop limit" in details.get("delayed_recovery", ""), f"missing delayed recovery guidance: {details}")
-        expect((details.get("plans") or [{}])[0].get("existing_child") == "22222222", f"bad reconcile plan evidence: {details}")
-        expect(
-            any(plan.get("trigger") == "expiration" and plan.get("existing_child") == "44444444" for plan in details.get("plans") or []),
-            f"missing expiration backfill evidence: {details}",
-        )
-        expect(
-            any(plan.get("trigger") == "manual_deletion" for plan in details.get("plans") or []),
-            f"missing manual deletion evidence: {details}",
-        )
-
-        text = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task)],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=8.0,
-        )
-        report = text.stdout or ""
-        expect("Plan: backfill_nextlink" in report, f"missing reconcile plan text: {report!r}")
-        expect("Child: 22222222" in report, f"missing reconcile child text: {report!r}")
 
 
 def test_perf_hint_benchmark_isolates_persistent_cache():
@@ -6472,17 +5269,6 @@ def test_perf_hint_benchmark_isolates_persistent_cache():
         )
     finally:
         perf.core.build_and_cache_hints = original_build
-
-
-def test_perf_cold_import_records_module_profile():
-    """Cold-import benchmarks should expose loaded-module counts for profiling."""
-    perf = _load_hook_module(
-        os.path.join(DEV_TOOLS, "nautical_perf_budget.py"),
-        "_nautical_perf_import_profile_test",
-    )
-    elapsed = perf._bench_cold_import("core", 1)
-    expect(elapsed >= 0.0, "cold import benchmark returned an invalid duration")
-    expect(int(perf.IMPORT_PROFILES.get("core", 0)) > 0, "cold import module profile was not recorded")
 
 
 def test_core_import_defers_panel_colour_module():
@@ -6702,23 +5488,6 @@ def test_load_benchmark_queue_and_lineage_verification():
     expect(invalid.get("verified") == 0 and invalid.get("failures"), f"broken lineage was accepted: {invalid!r}")
 
 
-def test_deploy_sanity_script_reports_ok():
-    """Deployment sanity script should pass on repo-local hooks/core."""
-    path = os.path.join(DEV_TOOLS, "nautical_deploy_sanity.py")
-    p = subprocess.run(
-        [sys.executable, path, "--json"],
-        text=True,
-        capture_output=True,
-        timeout=12.0,
-    )
-    expect(p.returncode == 0, f"deploy sanity returned {p.returncode}: stderr={p.stderr!r}")
-    obj = json.loads((p.stdout or "").strip() or "{}")
-    expect(obj.get("status") == "ok", f"unexpected deploy sanity status: {obj}")
-    results = obj.get("results") if isinstance(obj.get("results"), list) else []
-    expect(results, "deploy sanity should report per-check results")
-    expect(all(bool(r.get("ok")) for r in results if isinstance(r, dict)), f"failing sanity result: {results}")
-
-
 def test_deploy_sanity_rejects_missing_lazy_lifecycle_module():
     """Deployment sanity must fail when a declared lazy module is absent."""
     path = os.path.join(DEV_TOOLS, "nautical_deploy_sanity.py")
@@ -6919,9 +5688,17 @@ def test_on_modify_diag_blocks_pretty_print():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_diag_pretty_test")
 
-    buf = io.StringIO()
-    with contextlib.redirect_stderr(buf):
-        mod._emit_diag_block("diag stats", [("a", 1), ("b", 2), ("c", 3), ("d", 4)], columns=2)
+    previous = os.environ.get("NAUTICAL_DIAG")
+    try:
+        os.environ["NAUTICAL_DIAG"] = "1"
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            mod._emit_diag_block("diag stats", [("a", 1), ("b", 2), ("c", 3), ("d", 4)], columns=2)
+    finally:
+        if previous is None:
+            os.environ.pop("NAUTICAL_DIAG", None)
+        else:
+            os.environ["NAUTICAL_DIAG"] = previous
 
     out = buf.getvalue()
     expect("[nautical] diag stats:\n" in out, f"missing diag title: {out!r}")
@@ -7540,61 +6317,6 @@ def test_on_modify_expands_and_clears_description_uda_aliases():
         mod.core.ENABLE_UDA_ALIASES = previous
 
 
-def test_outbox_drain_limit_config_and_env_override():
-    """on-exit should use the outbox drain limit unless the process env overrides it."""
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / "nautical.toml"
-        config_path.write_text("\n", encoding="utf-8")
-        script = (
-            "import json\n"
-            "import nautical_core\n"
-            "from nautical_core.hooks import exit_impl\n"
-            "exit_impl._load_core()\n"
-            "print(json.dumps([nautical_core.OUTBOX_DRAIN_MAX_ITEMS, exit_impl._OUTBOX_BATCH_MAX_ITEMS]))\n"
-        )
-        env = os.environ.copy()
-        env["NAUTICAL_CONFIG"] = str(config_path)
-        env["TASKDATA"] = td
-        env.pop("NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS", None)
-        defaulted = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(defaulted.returncode == 0, f"default outbox drain import failed: {defaulted.stderr!r}")
-        expect(json.loads(defaulted.stdout) == [32, 32], f"unexpected default drain limit: {defaulted.stdout!r}")
-
-        config_path.write_text("outbox_drain_max_items = 7\n", encoding="utf-8")
-        configured = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(configured.returncode == 0, f"configured outbox drain import failed: {configured.stderr!r}")
-        expect(json.loads(configured.stdout) == [7, 7], f"config drain limit was not effective: {configured.stdout!r}")
-
-        env["NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS"] = "3"
-        overridden = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(overridden.returncode == 0, f"queue drain override import failed: {overridden.stderr!r}")
-        expect(
-            json.loads(overridden.stdout) == [7, 3],
-            f"environment outbox drain override did not win: {overridden.stdout!r}",
-        )
-
-
 def test_on_modify_invalid_json_passthrough():
     """Malformed JSON should fail fast without stdout JSON."""
     path = _find_hook_file("on-modify.nautical")
@@ -7708,54 +6430,6 @@ def test_modify_overnight_window_advances_past_second_dst_fold():
     )
 
 
-def test_non_hour_dst_carry_and_reconcile_share_core_policy():
-    """Wait, until, and reconcile repair must share 30-minute gap handling."""
-    from zoneinfo import ZoneInfo
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_non_hour_dst_carry_test")
-    zone = ZoneInfo("Australia/Lord_Howe")
-    old_name = mod.core.LOCAL_TZ_NAME
-    old_tz = mod.core._LOCAL_TZ
-    try:
-        mod.core.LOCAL_TZ_NAME = "Australia/Lord_Howe"
-        mod.core._LOCAL_TZ = zone
-        parent_due = mod.core.build_local_datetime(date(2026, 9, 27), (1, 45))
-        parent_limit = mod.core.build_local_datetime(date(2026, 9, 27), (2, 15))
-        child_due = mod.core.build_local_datetime(date(2026, 10, 4), (1, 45))
-        parent = {
-            "due": mod.core.fmt_isoz(parent_due),
-            "wait": mod.core.fmt_isoz(parent_limit),
-            "until": mod.core.fmt_isoz(parent_limit),
-        }
-        child = {"due": mod.core.fmt_isoz(child_due)}
-        parent_obs = _fixture_observation(parent)
-        current_obs = _fixture_observation({"due": mod.core.fmt_isoz(child_due), "chainID": "fixture-chain"})
-        _carry_relative_datetime(mod, parent, child, child_due, "wait")
-        _carry_native_until(mod, parent, child, child_due, "anchor")
-        repaired, repair_error = reconcile.repair_native_until_from_previous(
-            parent_obs,
-            current_obs,
-            kind="anchor",
-            safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-            fmt_isoz=mod.core.fmt_isoz,
-            utc_to_local_naive=mod.core.utc_to_local_naive,
-            local_naive_to_utc=mod.core.local_naive_to_utc,
-        )
-    finally:
-        mod.core.LOCAL_TZ_NAME = old_name
-        mod.core._LOCAL_TZ = old_tz
-
-    expect(repair_error is None and repaired, f"non-hour reconcile repair failed: {repair_error!r}")
-    values = (child.get("wait"), child.get("until"), repaired)
-    for field, value in zip(("wait", "until", "repaired until"), values):
-        local = mod.core.parse_dt_any(value).astimezone(zone)
-        expect(
-            local.date() == date(2026, 10, 4)
-            and (local.hour, local.minute) == (2, 45),
-            f"{field} did not shift through the 30-minute gap: {local}",
-        )
 
 
 def test_anchor_preview_explains_nonexistent_wall_time_adjustment():
@@ -7908,36 +6582,6 @@ def test_year_ordinals_hooks_modes_calendar_and_timeline():
     timeline = _strip_markup("\n".join(lines))
     expect("2027-05-17" in timeline, f"timeline omitted ordinal child: {timeline}")
     expect("2028-05-15" in timeline, f"timeline omitted future ordinal occurrence: {timeline}")
-
-
-def test_reconcile_tool_computes_year_ordinal_anchor():
-    """The reconciler's installed hook path should schedule ordinal anchor children."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_year_ordinal_test")
-    hook = SimpleNamespace(core=importlib.import_module("nautical_core"))
-    due = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (9, 0)))
-    end = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (10, 0)))
-    from nautical_core.chain_generation import ChainGenerationService
-    generation = ChainGenerationService.from_core(hook.core)
-    child_due, meta, _dnf = generation.compute_anchor_child_due(
-        _fixture_task({
-            "uuid": "c3f2c233-0000-4000-8000-000000000002",
-            "status": "completed",
-            "description": "ordinal reconcile integration",
-            "anchor": "y:d60@t=09:00",
-            "anchor_mode": "skip",
-            "chain": "on",
-            "chainID": "d07ff247",
-            "link": 2,
-            "due": due,
-            "end": end,
-        })
-    )
-    child_local = hook.core.to_local(child_due)
-    expect(child_local.date() == date(2025, 3, 1), f"reconciler computed the wrong d60 child: {child_local}")
-    expect((child_local.hour, child_local.minute) == (9, 0), f"reconciler lost ordinal anchor time: {child_local}")
-    expect(meta.get("basis") == "after_end", f"unexpected reconcile scheduling metadata: {meta}")
-
 
 
 def test_natural_interval_or_branches_keep_cadence_with_subject():
@@ -8422,37 +7066,6 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
     before_dst = add_mod.core.to_local(add_mod.core.build_local_datetime(date(2026, 3, 22), (9, 0)))
     after_dst = next_preview(dst_dnf, before_dst, (9, 0), date(2026, 3, 22))
     expect((after_dst.hour, after_dst.minute) == (9, 0), f"DST transition changed anchor wall clock: {after_dst}")
-
-
-def test_random_salt_namespaces_draws():
-    """wrand_salt should remain an explicit namespace for deterministic draws."""
-    start = date(2026, 6, 7)
-
-    def sequence(mod) -> list[date]:
-        dnf = mod.parse_anchor_expr_to_dnf_cached("w:rand")
-        current = start
-        out = []
-        for _ in range(12):
-            current, _meta = mod.next_after_expr(
-                dnf,
-                current,
-                default_seed=start,
-                seed_base="salt-test-chain",
-            )
-            out.append(current)
-        return out
-
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        first_config = Path(td) / "salt-a.toml"
-        second_config = Path(td) / "salt-b.toml"
-        first_config.write_text('wrand_salt = "salt-a"\n', encoding="utf-8")
-        second_config.write_text('wrand_salt = "salt-b"\n', encoding="utf-8")
-        first_core = _load_core_module(core_path, "_nautical_core_salt_a_test", str(first_config))
-        second_core = _load_core_module(core_path, "_nautical_core_salt_b_test", str(second_config))
-        first = sequence(first_core)
-        expect(first == sequence(first_core), "the same random salt must replay identically")
-        expect(first != sequence(second_core), "changing wrand_salt should change the random sequence")
 
 
 def test_random_anchor_and_omit_presets_keep_chain_scope():
@@ -10995,13 +9608,13 @@ def test_core_import_defers_optional_stacks():
 
 def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
     """Quarantined lifecycle intents remain visible to operator diagnostics."""
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
     from nautical_core.tools import nautical_doctor
     from nautical_core.tools import nautical_queue_status
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        repository = LifecycleOutboxRepository(root)
+        repository = _LifecycleOutboxRepository(root)
         expect(repository.open().ok, "lifecycle outbox did not initialize")
         with sqlite3.connect(str(repository.path)) as conn:
             conn.execute(
@@ -14131,60 +12744,6 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
     expect(not panels, f"spawn helper should not render before finalization: {panels!r}")
 
 
-def test_carry_field_failure_defers_completion_and_reconcile_mutation():
-    """Malformed carry timestamps must block both child spawn paths."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_carry_failure_boundary_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    parent = {
-        "uuid": "00000000-0000-4000-8000-000000000555",
-        "status": "completed",
-        "due": "20260101T090000Z",
-        "end": "20260101T091000Z",
-        "wait": "not-a-date",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "carry555",
-        "link": 1,
-    }
-    child_due = mod.core.parse_dt_any("20260102T090000Z")
-    panels = []
-    spawned = []
-    original_panel = mod._panel
-    original_print = mod._print_task
-    spawn_effects = mod._module("modify_spawn_effects")
-    original_spawn = spawn_effects.spawn_child_atomic
-    try:
-        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
-        mod._print_task = lambda _task: None
-        spawn_effects.spawn_child_atomic = lambda *_args, **_kwargs: spawned.append(True)
-        result = mod._completion_effects.build_and_spawn_child(
-            dict(parent),
-            child_due=child_due,
-            child_field="due",
-            next_no=2,
-            parent_short="00000000",
-            kind="cp",
-            cpmax=0,
-            until_dt=None,
-        )
-    finally:
-        mod._panel = original_panel
-        mod._print_task = original_print
-        spawn_effects.spawn_child_atomic = original_spawn
-
-    expect(result is not None and result.outcome_state == "retryable", f"completion should return retryable carry result, got {result!r}")
-    expect("wait" in result.reason and "Invalid isoformat" in result.reason, f"carry result lost actionable reason: {result!r}")
-    expect(not spawned, "completion attempted a child spawn after carry failure")
-    expect(not panels, f"carry helper should not render before finalization: {panels!r}")
-
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    plan = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
-    expect(_recovery_action(plan) == "error", f"reconcile should defer malformed carry, got {plan!r}")
-    expect("wait" in plan.reason, f"reconcile carry failure was not actionable: {plan.reason!r}")
 
 
 def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait():
@@ -15113,235 +13672,6 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
     expect(not called["spawn"], "existing link #N+1 should prevent duplicate spawn")
 
 
-def test_reconcile_candidate_and_plan_paths():
-    """Hookless-completion repair should target only active completed orphans."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
-
-    parent = {
-        "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "completed",
-        "description": "remote completion",
-        "cp": "P1D",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 2,
-        "due": "20260101T090000Z",
-        "end": "20260101T100000Z",
-    }
-    parent_obs = _fixture_observation(parent)
-    expect(reconcile.is_orphan_completion_candidate(parent_obs), "completed active chain without nextLink should be a candidate")
-    with_next = _fixture_observation(dict(parent, nextLink="22222222"))
-    expect(not reconcile.is_orphan_completion_candidate(with_next), "linked completion should not be a candidate")
-    chain_off = _fixture_observation(dict(parent, chain="off"))
-    expect(not reconcile.is_orphan_completion_candidate(chain_off), "chain:off completion should not be a candidate")
-
-    existing_row = {
-            "uuid": "22222222-0000-4000-8000-000000000002",
-            "chainID": "11111111",
-            "link": 3,
-            "status": "pending",
-            "description": "remote completion",
-            "chain": "on",
-            "prevLink": "11111111",
-            "cp": "P1D",
-            "due": "20260102T090000Z",
-        }
-    existing = [_fixture_observation(existing_row)]
-    plan = reconcile.plan_recovery_decision(parent_obs, existing_children=existing, hook=None)
-    expect(isinstance(plan, RecoveryPlanResult) and plan.child_short == "22222222", f"unexpected backfill plan: {plan}")
-    duplicate = {
-        **existing_row,
-        "uuid": "33333333-0000-4000-8000-000000000003",
-    }
-    ambiguous = reconcile.plan_recovery_decision(parent_obs, existing_children=[*existing, _fixture_observation(duplicate)], hook=None)
-    expect(
-        isinstance(ambiguous, RecoveryRefusal) and ambiguous.status is RecoveryStatus.MANUAL_REVIEW and "multiple tasks" in ambiguous.reason,
-        f"duplicate next slots must fail closed: {ambiguous}",
-    )
-    nonreciprocal = reconcile.plan_recovery_decision(
-        parent_obs,
-        existing_children=[_fixture_observation(dict(existing_row, prevLink="beeswax"))],
-        hook=None,
-    )
-    expect(
-        isinstance(nonreciprocal, RecoveryRefusal) and "prevLink" in nonreciprocal.reason,
-        f"nonreciprocal next slot must fail closed: {nonreciprocal}",
-    )
-    recurrence_mismatch = reconcile.plan_recovery_decision(
-        parent_obs,
-        existing_children=[_fixture_observation(dict(existing_row, cp="P2D"))],
-        hook=None,
-    )
-    expect(
-        isinstance(recurrence_mismatch, RecoveryRefusal) and "recurrence field cp" in recurrence_mismatch.reason,
-        f"mismatched recurrence child must fail closed: {recurrence_mismatch}",
-    )
-    null_recurrence = reconcile.plan_recovery_decision(
-        parent_obs,
-        existing_children=[_fixture_observation(dict(existing_row, anchor_file=None))],
-        hook=None,
-    )
-    expect(
-        isinstance(null_recurrence, RecoveryPlanResult) and null_recurrence.child_short == "22222222",
-        f"literal null recurrence UDA should be treated as unset: {null_recurrence}",
-    )
-    expect(
-        reconcile.recurrence_kind(_fixture_observation(dict(parent, cp="", anchor="w:mon", anchor_file=None))) == "anchor",
-        "literal null anchor_file changed an anchor recurrence kind",
-    )
-
-    class FakeCore:
-        @staticmethod
-        def coerce_int(value, default=0):
-            try:
-                return int(value)
-            except Exception:
-                return default
-
-        @staticmethod
-        def fmt_isoz(value):
-            return value
-
-        @staticmethod
-        def now_utc():
-            return datetime.now(timezone.utc)
-
-    from nautical_core.chain_generation import ChainGenerationService
-
-    class FakeGeneration(ChainGenerationService):
-        def __init__(self):
-            super().__init__(FakeCore())
-
-        def parse_datetime(self, _value):
-            return None, None
-
-        def compute_cp_child_due(self, _parent):
-            return "20260102T090000Z", {"target_field": "due"}
-
-        def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
-            from nautical_core.task_codec import DEFAULT_TASK_CODEC
-            from nautical_core.task_models import NauticalTask, TaskDraft
-            values = {
-                "uuid": "22222222-0000-4000-8000-000000000002",
-                "description": parent.observation.to_mapping().get("description"),
-                "status": "pending",
-                "chain": "on",
-                "chainID": parent.observation.to_mapping().get("chainID"),
-                "link": next_link,
-                "prevLink": parent_short,
-                "cp": "P1D",
-                child_field: child_due,
-            }
-            return TaskDraft.from_task(
-                NauticalTask.from_observation(
-                    DEFAULT_TASK_CODEC.decode_row(values, source_query="reconcile fake child")
-                )
-            )
-
-    generation = FakeGeneration()
-    plan = reconcile.plan_recovery_decision(parent_obs, existing_children=[], hook=None, generation=generation)
-    expect(isinstance(plan, RecoveryPlanResult) and plan.plan.action.value == "spawn_child", f"expected spawn plan, got: {plan}")
-    child = plan.plan.child_dict() if isinstance(plan, RecoveryPlanResult) else {}
-    expect(child.get("link") == 3 and child.get("prevLink") == "11111111", f"bad child plan: {plan}")
-    evidence = reconcile_report.describe_recovery_result(plan)
-    expect(evidence.get("kind") == "cp", f"expected cp evidence, got: {evidence!r}")
-    expect(evidence.get("next_link") == 3, f"expected next_link evidence, got: {evidence!r}")
-    expect(evidence.get("child_field") == "due", f"expected child field evidence, got: {evidence!r}")
-
-    capped = dict(parent, chainMax=2)
-    plan = reconcile.plan_recovery_decision(_fixture_observation(capped), existing_children=[], hook=None, generation=generation)
-    expect(isinstance(plan, RecoveryPlanResult) and plan.terminal_kind == "chain_max" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
-
-    class ExhaustingGeneration(FakeGeneration):
-        def compute_cp_child_due(self, _parent):
-            raise core.OccurrenceSearchExhausted(
-                "cp scheduling", reference=date(9999, 1, 1), limit=1
-            )
-
-    terminal = reconcile.plan_recovery_decision(
-        parent_obs,
-        existing_children=[],
-        hook=None,
-        generation=ExhaustingGeneration(),
-    )
-    expect(
-        isinstance(terminal, RecoveryPlanResult) and terminal.terminal_kind == "date_limit" and "9999-12-31" in terminal.reason,
-        f"date-limit exhaustion should be a terminal reconcile plan: {terminal}",
-    )
-    expect(terminal.terminal_kind == "date_limit", f"terminal kind was not retained: {terminal}")
-    expect(
-        reconcile_report.describe_recovery_result(terminal).get("terminal") is True
-        and reconcile_report.describe_recovery_result(terminal).get("terminal_kind") == "date_limit",
-        "terminal reconcile evidence was not exposed",
-    )
-
-    class SearchLimitedGeneration(FakeGeneration):
-        def compute_cp_child_due(self, _parent):
-            raise core.OccurrenceSearchExhausted(
-                "cp scheduling", reference=date(2026, 1, 1), limit=1,
-                kind=core.OccurrenceSearchExhausted.SEARCH_LIMIT,
-            )
-
-    search_limited = reconcile.plan_recovery_decision(
-        parent_obs,
-        existing_children=[],
-        hook=None,
-        generation=SearchLimitedGeneration(),
-    )
-    expect(
-        isinstance(search_limited, RecoveryRefusal)
-        and "cp scheduling" in search_limited.reason,
-        f"search-limit exhaustion must remain a retryable reconcile error: {search_limited}",
-    )
-
-
-def test_reconcile_expiration_candidate_requires_expiry_evidence():
-    """Deleted chains should distinguish expiration, manual stop, and ambiguous evidence."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_reconcile_expiration_candidate_test")
-    parent = {
-        "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "deleted",
-        "description": "expired occurrence",
-        "cp": "7d",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 2,
-        "due": "20260720T060000Z",
-        "until": "20260726T205959Z",
-        "end": "20260726T205959Z",
-    }
-    is_candidate = lambda task: reconcile.is_orphan_expiration_candidate(
-        _task_observation(task),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-    )
-
-    expect(is_candidate(parent), "deletion exactly at until should be an expiration candidate")
-    manual = dict(parent, end="20260726T205958Z")
-    expect(not is_candidate(manual), "manual deletion before until must not advance")
-    evidence = reconcile.deleted_chain_disposition(
-        _task_observation(manual),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-    )
-    expect(evidence.disposition.value == "manual", f"early deletion should stop the chain: {evidence!r}")
-    no_until_evidence = reconcile.deleted_chain_disposition(
-        _task_observation({key: value for key, value in parent.items() if key != "until"}),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-    )
-    expect(no_until_evidence.disposition.value == "manual", f"deletion without until should stop the chain: {no_until_evidence!r}")
-    malformed_evidence = reconcile.deleted_chain_disposition(
-        _task_observation(dict(parent, until="not-a-date")),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-    )
-    expect(malformed_evidence.disposition.value == "ambiguous", f"malformed evidence must fail closed: {malformed_evidence!r}")
-    manual_plan = _recovery_plan(reconcile, manual, existing_children=[], hook=mod)
-    expect(_recovery_action(manual_plan) in {"manual_stop", "manual_review"}, f"manual deletion should stop the chain: {manual_plan}")
-    expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")
-    expect(not is_candidate(dict(parent, until="not-a-date")), "malformed until must fail closed")
-    expect(not is_candidate(dict(parent, nextLink="22222222")), "already-linked expiration must not be reconsidered")
 
 
 def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
@@ -15635,221 +13965,6 @@ def test_reconcile_empty_snapshot_is_authoritative():
     expect(len(calls) == 1, f"empty snapshot triggered repeated exports: {calls!r}")
 
 
-def test_reconcile_expiration_cp_advances_from_recurrence_target():
-    """Expired CP links should advance from due/scheduled rather than their deletion end."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_reconcile_expiration_cp_due_test")
-    due = mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))
-    expired_end = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
-    parent = {
-        "uuid": "00000000-0000-4000-8000-000000000509",
-        "status": "deleted",
-        "cp": "7d",
-        "chainID": "11111111",
-        "link": 1,
-        "due": mod.core.fmt_isoz(due),
-        "end": mod.core.fmt_isoz(expired_end),
-    }
-
-    child_due, meta = reconcile.compute_expiration_child_due(parent, hook=mod)
-    child_local = mod.core.to_local(child_due)
-    expect(
-        child_local.date() == date(2026, 7, 27) and (child_local.hour, child_local.minute) == (9, 0),
-        f"expired CP should advance from prior due: {child_local}",
-    )
-    expect(meta.get("basis") == "due recurrence target (expired)", f"unexpected expiry basis: {meta!r}")
-
-    scheduled_parent = dict(parent)
-    scheduled_parent.pop("due")
-    scheduled_parent["scheduled"] = mod.core.fmt_isoz(due)
-    child_scheduled, scheduled_meta = reconcile.compute_expiration_child_due(scheduled_parent, hook=mod)
-    expect(
-        mod.core.to_local(child_scheduled).date() == date(2026, 7, 27),
-        f"scheduled-only expiry should advance from scheduled: {child_scheduled}",
-    )
-    expect(scheduled_meta.get("target_field") == "scheduled", f"unexpected scheduled metadata: {scheduled_meta!r}")
-
-
-def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
-    """Hookless recovery should preserve and verify scheduled/wait offsets."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_reconcile_hookless_carry_test")
-    due = mod.core.build_local_datetime(date(2026, 7, 20), (10, 0))
-    scheduled = mod.core.build_local_datetime(date(2026, 7, 20), (9, 30))
-    wait = mod.core.build_local_datetime(date(2026, 7, 20), (8, 0))
-    parent = {
-        "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "completed",
-        "cp": "7d",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 1,
-        "due": mod.core.fmt_isoz(due),
-        "scheduled": mod.core.fmt_isoz(scheduled),
-        "wait": mod.core.fmt_isoz(wait),
-        "end": mod.core.fmt_isoz(due + timedelta(hours=1)),
-    }
-    plan = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
-    child = _recovery_child(plan)
-    expect(_recovery_action(plan) == "spawn" and child is not None, f"valid hookless carry did not produce a child: {plan}")
-    child_due = mod.core.parse_dt_any(child.get("due"))
-    child_scheduled = mod.core.parse_dt_any(child.get("scheduled"))
-    child_wait = mod.core.parse_dt_any(child.get("wait"))
-    expect(child_scheduled - child_due == scheduled - due, f"scheduled carry drifted: {child!r}")
-    expect(child_wait - child_due == wait - due, f"wait carry drifted: {child!r}")
-
-    malformed = dict(parent, scheduled="not-a-date")
-    failed = _recovery_plan(reconcile, malformed, existing_children=[], hook=mod)
-    expect(_recovery_action(failed) == "error" and "scheduled" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
-    malformed_wait = dict(parent, wait="not-a-date")
-    failed_wait = _recovery_plan(reconcile, malformed_wait, existing_children=[], hook=mod)
-    expect(_recovery_action(failed_wait) == "error" and "wait" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
-
-
-def test_reconcile_expiration_anchor_advances_from_recurrence_target():
-    """Expired anchor links should select the first slot after the prior recurrence target."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_reconcile_expiration_anchor_due_test")
-    parent = {
-        "uuid": "00000000-0000-4000-8000-00000000050a",
-        "status": "deleted",
-        "anchor": "w:mon@t=09:00",
-        "anchor_mode": "skip",
-        "chainID": "11111111",
-        "link": 1,
-        "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 6), (9, 0))),
-        "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 15), (18, 0))),
-    }
-
-    child_due, meta = reconcile.compute_expiration_child_due(parent, hook=mod)
-    child_local = mod.core.to_local(child_due)
-    expect(
-        child_local.date() == date(2026, 7, 13) and (child_local.hour, child_local.minute) == (9, 0),
-        f"expired anchor should advance from prior due: {child_local}",
-    )
-    expect(meta.get("basis") == "due recurrence target (expired)", f"unexpected expiry basis: {meta!r}")
-
-
-def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
-    """Expiration plans should honor chain limits and recognize an already-expired next slot."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_reconcile_expiration_plan_test")
-    parent = {
-        "uuid": "00000000-0000-4000-8000-00000000050c",
-        "status": "deleted",
-        "description": "expired occurrence",
-        "cp": "7d",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 1,
-        "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))),
-        "until": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))),
-        "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 27), (0, 0))),
-    }
-    deleted_child = {
-        "uuid": "00000000-0000-4000-8000-00000000050d",
-        "status": "deleted",
-        "description": "expired occurrence",
-        "chain": "on",
-        "cp": "7d",
-        "chainID": "11111111",
-        "link": 2,
-        "prevLink": "00000000",
-        "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 27), (9, 0))),
-    }
-
-    backfill = _recovery_plan(reconcile, parent, existing_children=[deleted_child], hook=mod)
-    expect(
-        isinstance(backfill, reconcile.RecoveryPlanResult)
-        and backfill.plan.action.value == "spawn_child"
-        and backfill.child_short == "00000000",
-        f"deleted next slot should be backfilled rather than duplicated: {backfill}",
-    )
-
-    capped = _recovery_plan(reconcile, dict(parent, chainMax=1), existing_children=[], hook=mod)
-    expect(isinstance(capped, reconcile.RecoveryPlanResult) and capped.plan.action.value == "finalize_chain" and "chainMax" in capped.reason, f"chainMax not enforced: {capped}")
-
-    chain_until = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
-    limited = _recovery_plan(
-        reconcile,
-        dict(parent, chainUntil=mod.core.fmt_isoz(chain_until)),
-        existing_children=[],
-        hook=mod,
-    )
-    expect(
-        isinstance(limited, reconcile.RecoveryPlanResult) and limited.plan.action.value == "finalize_chain" and "chainUntil" in limited.reason,
-        f"chainUntil not enforced against expired successor: {limited}",
-    )
-
-    spawned = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
-    expect(isinstance(spawned, reconcile.RecoveryPlanResult) and spawned.plan.action.value == "spawn_child", f"expected expiration spawn plan: {spawned}")
-    expect(spawned.reason == "expired link missing next link", f"unexpected expiration reason: {spawned}")
-    expect(spawned.plan.child_dict().get("until"), f"spawned child should carry relative until: {spawned}")
-    expect(reconcile_report.describe_recovery_result(spawned).get("trigger") == "expiration", f"missing expiration evidence: {spawned}")
-    tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-        "_nautical_reconcile_expiration_evidence_test",
-    )
-    evidence = reconcile_report.describe_plan(
-        spawned,
-        fmt_dt_local=mod.core.fmt_dt_local,
-        parse_until=lambda value: (mod.core.parse_dt_any(value), None),
-        describe_carry=lambda until, due: mod.core._import_sibling("add_validation").describe_native_until_carry(
-            until, due, to_local=mod.core.to_local
-        ),
-    )
-    child_until = mod.core.parse_dt_any(spawned.plan.child_dict().get("until"))
-    expected_policy = mod.core._import_sibling("add_validation").describe_native_until_carry(
-        child_until,
-        spawned.child_due,
-        to_local=mod.core.to_local,
-    )
-    expect(evidence.get("child_expires") == mod.core.fmt_dt_local(child_until), f"missing child expiration: {evidence!r}")
-    expect(evidence.get("expiration") == expected_policy, f"missing expiration policy: {evidence!r}")
-
-
-def test_reconcile_apply_lease_serializes_mutations():
-    """Concurrent reconcile apply attempts must not share the mutation lease."""
-    tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-        "_nautical_reconcile_apply_lease_test",
-    )
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td)
-        with tool._reconcile_apply_lock(taskdata) as first:
-            expect(first, "reconcile apply lease was not acquired")
-            with tool._reconcile_apply_lock(taskdata) as second:
-                expect(not second, "reconcile apply lease allowed concurrent acquisition")
-        with tool._reconcile_apply_lock(taskdata) as released:
-            expect(released, "reconcile apply lease was not released")
-
-
-def test_reconcile_apply_refuses_a_second_full_run():
-    """A held apply lease must reject another reconcile before it loads hooks or exports tasks."""
-    tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-        "_nautical_reconcile_full_run_lease_test",
-    )
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td)
-        output = io.StringIO()
-        with tool._reconcile_apply_lock(taskdata) as held:
-            expect(held, "test could not acquire reconcile lease")
-            with contextlib.redirect_stdout(output):
-                result = tool.main(
-                    ["--apply", "--json"],
-                    _unit_of_work=_test_operator_uow(taskdata),
-                )
-    summary = json.loads(output.getvalue())
-    expect(result == 1, f"busy reconcile returned {result}")
-    expect(summary.get("stage") == "apply_lock", f"busy reconcile was not reported as a lease conflict: {summary!r}")
 
 
 def test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review():
@@ -15927,588 +14042,10 @@ def test_reconcile_planning_configuration_drift_is_partial():
     expect(not applied, f"configuration drift reported a mutation: {applied!r}")
 
 
-def test_reconcile_parent_identity_errors_are_actionable():
-    """Parent guard failures should identify the exact broken identity field."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    tool = _load_hook_module(str(path), "_nautical_reconcile_identity_diagnostics_test")
-    base = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "chain001",
-        "link": 2,
-        "nextLink": "",
-    }
-    cases = (
-        (dict(base, chainID=""), "parent chainID is missing"),
-        (dict(base, link=""), "parent link is missing"),
-        (
-            dict(
-                base,
-                chainID="11111111-0000-0000-0000-000000000001",
-                link="",
-                prevLink="",
-            ),
-            "parent link is missing",
-        ),
-        (dict(base, link="not-a-number"), "parent link is invalid"),
-        (dict(base, link=0), "parent link must be positive"),
-    )
-    for parent, expected in cases:
-        try:
-            tool._parent_guard_filters(parent)
-        except RuntimeError as exc:
-            expect(expected in str(exc), f"unclear identity diagnostic: {exc}")
-        else:
-            raise AssertionError(f"invalid parent identity was accepted: {parent!r}")
 
 
-def test_reconcile_expired_pending_child_is_resumable_partial():
-    """A pending child past native until should wait for Taskwarrior expiration."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    tool = _load_hook_module(str(path), "_nautical_reconcile_pending_until_test")
-    parent = {"uuid": "11111111-0000-0000-0000-000000000001", "link": 1}
-    plan = tool._recovery_terminal(parent, "live recovery child native until has already elapsed")
-    expect(_recovery_action(plan) == "partial", f"expired pending child was not resumable: {plan}")
-    expect("rerun reconcile" in plan.reason, f"partial recovery guidance missing: {plan.reason}")
 
 
-def test_reconcile_expiration_real_taskwarrior_round_trip():
-    """Real Taskwarrior data should receive one linked child with a shifted until window."""
-    task_bin = shutil.which("task")
-    if not task_bin:
-        return
-
-    tool_path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        data_dir = root / "data"
-        data_dir.mkdir()
-        taskrc = root / "taskrc"
-        taskrc.write_text(
-            "\n".join(
-                [
-                    f"data.location={data_dir}",
-                    "hooks=off",
-                    "confirmation=off",
-                    "verbose=nothing",
-                    "uda.cp.type=string",
-                    "uda.chain.type=string",
-                    "uda.chainID.type=string",
-                    "uda.link.type=numeric",
-                    "uda.prevLink.type=string",
-                    "uda.nextLink.type=string",
-                    "uda.chainMax.type=numeric",
-                    "uda.chainUntil.type=date",
-                ]
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        env = os.environ.copy()
-        env.update(
-            {
-                "TASKRC": str(taskrc),
-                "TASKDATA": str(data_dir),
-                "NAUTICAL_CONFIG": str(Path(ROOT) / "config-nautical.toml"),
-                "NAUTICAL_CORE_PATH": ROOT,
-                "NO_COLOR": "1",
-            }
-        )
-        fixture_due = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
-            hour=9,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        fixture_until = fixture_due + timedelta(days=6, hours=14, minutes=59)
-        fixture_end = fixture_until + timedelta(minutes=1)
-        child_due = fixture_due + timedelta(days=7)
-        child_until = fixture_until + timedelta(days=7)
-        parent = {
-            "uuid": "00000000-0000-4000-8000-00000000050b",
-            "status": "deleted",
-            "description": "Take the trash out",
-            "entry": (fixture_due - timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ"),
-            "modified": fixture_end.strftime("%Y%m%dT%H%M%SZ"),
-            "end": fixture_end.strftime("%Y%m%dT%H%M%SZ"),
-            "due": fixture_due.strftime("%Y%m%dT%H%M%SZ"),
-            "until": fixture_until.strftime("%Y%m%dT%H%M%SZ"),
-            "cp": "7d",
-            "chain": "on",
-            "chainID": "trash001",
-            "link": 1,
-        }
-        imported = subprocess.run(
-            [task_bin, "rc.hooks=off", "import"],
-            input=json.dumps(parent, ensure_ascii=False) + "\n",
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=15.0,
-        )
-        expect(imported.returncode == 0, f"Taskwarrior fixture import failed: {imported.stderr!r}")
-
-        applied = subprocess.run(
-            [sys.executable, str(tool_path), "--apply", "--task-bin", task_bin, "--json"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=20.0,
-        )
-        expect(
-            applied.returncode == 0,
-            f"real expiration reconcile failed: stdout={applied.stdout!r} stderr={applied.stderr!r}",
-        )
-        summary = json.loads(applied.stdout)
-        expect(summary.get("spawn") == 1 and len(summary.get("applied") or []) == 1, f"unexpected apply: {summary!r}")
-
-        exported = subprocess.run(
-            [task_bin, "rc.hooks=off", "rc.json.array=1", "chainID:trash001", "export"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=15.0,
-        )
-        expect(exported.returncode == 0, f"Taskwarrior verification export failed: {exported.stderr!r}")
-        rows = json.loads(exported.stdout)
-        by_link = {int(float(row.get("link"))): row for row in rows}
-        expect(set(by_link) == {1, 2}, f"expected exactly two chain slots: {rows!r}")
-        expect(by_link[1].get("nextLink") == str(by_link[2].get("uuid") or "")[:8], f"parent was not linked: {rows!r}")
-        expect(by_link[2].get("status") == "pending", f"child should be pending: {by_link[2]!r}")
-        expect(
-            by_link[2].get("due") == child_due.strftime("%Y%m%dT%H%M%SZ"),
-            f"child advanced from the wrong basis: {by_link[2]!r}",
-        )
-        expect(
-            by_link[2].get("until") == child_until.strftime("%Y%m%dT%H%M%SZ"),
-            f"child until window was not shifted: {by_link[2]!r}",
-        )
-
-        repeated = subprocess.run(
-            [sys.executable, str(tool_path), "--apply", "--task-bin", task_bin, "--json"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=20.0,
-        )
-        expect(repeated.returncode == 0, f"second expiration reconcile failed: {repeated.stderr!r}")
-        expect(json.loads(repeated.stdout).get("candidates") == 0, f"reconcile should be idempotent: {repeated.stdout!r}")
-
-        recovery_at = datetime.now(timezone.utc).replace(microsecond=0)
-        delayed_due = recovery_at - timedelta(days=3)
-        delayed_until = delayed_due + timedelta(hours=1)
-        delayed_parent = {
-            "uuid": "55555555-0000-4000-8000-000000000005",
-            "status": "deleted",
-            "description": "Delayed expiration recovery",
-            "entry": (delayed_due - timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ"),
-            "modified": delayed_until.strftime("%Y%m%dT%H%M%SZ"),
-            "end": delayed_until.strftime("%Y%m%dT%H%M%SZ"),
-            "due": delayed_due.strftime("%Y%m%dT%H%M%SZ"),
-            "until": delayed_until.strftime("%Y%m%dT%H%M%SZ"),
-            "cp": "1d",
-            "chain": "on",
-            "chainID": "delayed1",
-            "link": 1,
-        }
-        imported_delayed = subprocess.run(
-            [task_bin, "rc.hooks=off", "import"],
-            input=json.dumps(delayed_parent, ensure_ascii=False) + "\n",
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=15.0,
-        )
-
-
-        expect(imported_delayed.returncode == 0, f"delayed fixture import failed: {imported_delayed.stderr!r}")
-
-        recovered = subprocess.run(
-            [
-                sys.executable,
-                str(tool_path),
-                "--apply",
-                "--task-bin",
-                task_bin,
-                "--max-expiration-hops",
-                "8",
-                "--json",
-            ],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=30.0,
-        )
-        expect(recovered.returncode == 0, f"delayed expiration reconcile failed: {recovered.stderr!r} {recovered.stdout!r}")
-        recovered_summary = json.loads(recovered.stdout)
-        expect(recovered_summary.get("expiration_hops") == 3, f"wrong delayed recovery depth: {recovered_summary!r}")
-        expect(recovered_summary.get("recovered_chains") == 1, f"delayed chain was not summarized: {recovered_summary!r}")
-
-        exported_delayed = subprocess.run(
-            [task_bin, "rc.hooks=off", "rc.json.array=1", "chainID:delayed1", "export"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=15.0,
-        )
-        expect(exported_delayed.returncode == 0, f"delayed verification export failed: {exported_delayed.stderr!r}")
-        delayed_rows = json.loads(exported_delayed.stdout)
-        delayed_by_link = {int(float(row.get("link"))): row for row in delayed_rows}
-        expect(set(delayed_by_link) == {1, 2, 3, 4}, f"delayed recovery skipped chain slots: {delayed_rows!r}")
-        expect(
-            [delayed_by_link[link].get("status") for link in (1, 2, 3, 4)]
-            == ["deleted", "deleted", "deleted", "pending"],
-            f"delayed recovery stopped at the wrong occurrence: {delayed_rows!r}",
-        )
-
-        repeated_delayed = subprocess.run(
-            [sys.executable, str(tool_path), "--apply", "--task-bin", task_bin, "--json"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=20.0,
-        )
-        expect(repeated_delayed.returncode == 0, f"repeated delayed reconcile failed: {repeated_delayed.stderr!r}")
-        expect(
-            json.loads(repeated_delayed.stdout).get("candidates") == 0,
-            f"delayed recovery should be idempotent: {repeated_delayed.stdout!r}",
-        )
-
-
-def test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review():
-    """A duplicate chain slot is refused by the real apply boundary."""
-    task_bin = shutil.which("task")
-    if not task_bin:
-        return
-    with tempfile.TemporaryDirectory(prefix="nautical-duplicate-slot-") as td:
-        root = Path(td)
-        data_dir = root / "data"
-        data_dir.mkdir()
-        taskrc = root / "taskrc"
-        taskrc.write_text(
-            "\n".join([
-                f"data.location={data_dir}", "hooks=off", "confirmation=off", "verbose=nothing",
-                "uda.cp.type=string", "uda.chain.type=string", "uda.chainID.type=string",
-                "uda.link.type=numeric", "uda.prevLink.type=string", "uda.nextLink.type=string",
-                "uda.chainMax.type=numeric", "uda.chainUntil.type=date",
-            ]) + "\n", encoding="utf-8",
-        )
-        env = os.environ.copy()
-        env.update({
-            "TASKRC": str(taskrc), "TASKDATA": str(data_dir),
-            "NAUTICAL_CONFIG": str(Path(ROOT) / "config-nautical.toml"),
-            "NAUTICAL_CORE_PATH": ROOT, "NO_COLOR": "1",
-        })
-        rows = [{
-            "uuid": uuid, "status": "deleted", "description": "duplicate slot",
-            "entry": "20260820T080000Z", "modified": "20260820T100000Z",
-            "end": "20260820T100000Z", "due": "20260820T090000Z",
-            "until": "20260820T100000Z", "cp": "1d", "chain": "on",
-            "chainID": "duplicate-slot", "link": 1,
-        } for uuid in (
-            "11111111-0000-0000-0000-000000000001",
-            "22222222-0000-0000-0000-000000000002",
-        )]
-        imported = subprocess.run(
-            [task_bin, "rc.hooks=off", "import"],
-            input="".join(json.dumps(row) + "\n" for row in rows),
-            text=True, capture_output=True, env=env, timeout=15.0,
-        )
-        expect(imported.returncode == 0, f"duplicate fixture import failed: {imported.stderr!r}")
-        applied = subprocess.run(
-            [sys.executable, str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-             "--apply", "--task-bin", task_bin, "--json"],
-            text=True, capture_output=True, env=env, timeout=20.0,
-        )
-        expect(applied.returncode == 1, f"duplicate slot unexpectedly applied: {applied.stdout!r}")
-        payload = json.loads(applied.stdout)
-        expect(payload.get("spawn") == 0 and payload.get("applied") == [], f"duplicate slot mutated: {payload!r}")
-        audit = payload.get("integrity_audit") or {}
-        expect(audit.get("status") == "manual_review", f"duplicate slot was not manual review: {payload!r}")
-        expect(
-            any(finding.get("invariant_id") == "slot.duplicate_occupant" for finding in audit.get("findings", ())),
-            f"duplicate-slot finding was not reported: {payload!r}",
-        )
-
-
-def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
-    """A deleted anchor occurrence receives one real linked successor."""
-    task_bin = shutil.which("task")
-    if not task_bin:
-        return
-    with tempfile.TemporaryDirectory(prefix="nautical-anchor-repair-") as td:
-        root = Path(td)
-        data_dir = root / "data"
-        data_dir.mkdir()
-        taskrc = root / "taskrc"
-        taskrc.write_text(
-            "\n".join([
-                f"data.location={data_dir}", "hooks=off", "confirmation=off", "verbose=nothing",
-                "uda.anchor.type=string", "uda.anchor_mode.type=string", "uda.chain.type=string",
-                "uda.chainID.type=string", "uda.link.type=numeric", "uda.prevLink.type=string",
-                "uda.nextLink.type=string", "uda.chainMax.type=numeric", "uda.chainUntil.type=date",
-            ]) + "\n", encoding="utf-8",
-        )
-        config = root / "config-nautical.toml"
-        config.write_text('tz = "UTC"\n', encoding="utf-8")
-        env = os.environ.copy()
-        env.update({
-            "TASKRC": str(taskrc), "TASKDATA": str(data_dir),
-            "NAUTICAL_CONFIG": str(config),
-            "NAUTICAL_CORE_PATH": ROOT, "NO_COLOR": "1",
-        })
-        parent = {
-            "uuid": "33333333-0000-4000-8000-000000000003", "status": "deleted",
-            "description": "Anchor repair", "entry": "20260820T080000Z",
-            "modified": "20260820T100000Z", "end": "20260820T100000Z",
-            "due": "20260820T090000Z", "until": "20260820T100000Z",
-            "anchor": "y:09-01", "anchor_mode": "skip", "chain": "on",
-            "chainID": "anchor-real", "link": 1,
-        }
-        imported = subprocess.run(
-            [task_bin, "rc.hooks=off", "import"], input=json.dumps(parent) + "\n",
-            text=True, capture_output=True, env=env, timeout=15.0,
-        )
-        expect(imported.returncode == 0, f"anchor fixture import failed: {imported.stderr!r}")
-        applied = subprocess.run(
-            [sys.executable, str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-             "--apply", "--task-bin", task_bin, "--json", "--max-expiration-hops", "1"],
-            text=True, capture_output=True, env=env, timeout=20.0,
-        )
-        expect(applied.returncode in (0, 2), f"anchor reconcile failed: {applied.stderr!r}")
-        payload = json.loads(applied.stdout)
-        expect(payload.get("spawn") == 1 and len(payload.get("applied") or []) == 1, f"anchor was not repaired: {payload!r}")
-        exported = subprocess.run(
-            [task_bin, "rc.hooks=off", "rc.json.array=1", "chainID:anchor-real", "export"],
-            text=True, capture_output=True, env=env, timeout=15.0,
-        )
-        expect(exported.returncode == 0, f"anchor verification export failed: {exported.stderr!r}")
-        rows = json.loads(exported.stdout)
-        expect(len(rows) == 2, f"anchor repair created the wrong number of rows: {rows!r}")
-        by_link = {int(float(row.get("link"))): row for row in rows}
-        expect(by_link[1].get("nextLink") == str(by_link[2].get("uuid") or "")[:8], f"anchor parent was not linked: {rows!r}")
-
-
-def test_reconcile_evidence_prefers_due_over_carried_scheduled():
-    """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    parent = {
-        "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "completed",
-        "description": "remote completion",
-        "anchor": "w:mon@t=09:00,17:00",
-        "anchor_mode": "skip",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 1,
-        "due": "20260706T060000Z",
-        "scheduled": "20260706T050000Z",
-        "end": "20260706T070000Z",
-    }
-
-    class FakeCore:
-        @staticmethod
-        def coerce_int(value, default=0):
-            try:
-                return int(value)
-            except Exception:
-                return default
-
-    from nautical_core.chain_generation import ChainGenerationService
-
-    class FakeGeneration(ChainGenerationService):
-        def __init__(self):
-            super().__init__(FakeCore())
-
-        def safe_parse_datetime(self, _value):
-            return None, None
-
-        def compute_anchor_child_due(self, _parent):
-            return "20260706T140000Z", {"target_field": "due"}, []
-
-        def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
-            from nautical_core.task_codec import DEFAULT_TASK_CODEC
-            from nautical_core.task_models import NauticalTask, TaskDraft
-            values = {
-                "uuid": "22222222-0000-4000-8000-000000000002",
-                "description": "remote completion",
-                "status": "pending",
-                "chain": "on",
-                "chainID": parent.observation.to_mapping().get("chainID"),
-                "link": next_link,
-                "prevLink": parent_short,
-                "anchor": "w:mon@t=09:00,17:00",
-                "anchor_mode": "skip",
-                "due": child_due,
-                "scheduled": "20260706T130000Z",
-            }
-            return TaskDraft.from_task(NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(values, source_query="evidence fake child")))
-
-    plan = reconcile.plan_recovery_decision(
-        _fixture_observation(parent),
-        existing_children=[],
-        hook=None,
-        generation=FakeGeneration(),
-    )
-    evidence = reconcile_report.describe_recovery_result(plan)
-    expect(evidence.get("child_field") == "due", f"expected due target evidence, got: {evidence!r}")
-    expect(evidence.get("child_target") == "2026-07-06T14:00:00Z", f"expected due target, got: {evidence!r}")
-
-
-def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
-    """Actual reconcile tool loading should compute @t slots as configured-local time."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    prev_core_path = os.environ.get("NAUTICAL_CORE_PATH")
-    try:
-        os.environ.pop("NAUTICAL_CORE_PATH", None)
-        mod = _load_hook_module(str(path), "_nautical_reconcile_tool_timed_anchor_test")
-        hook = SimpleNamespace(core=importlib.import_module("nautical_core"))
-        from nautical_core.chain_generation import ChainGenerationService
-        generation = ChainGenerationService.from_core(hook.core)
-        child_due, _meta, _dnf = generation.compute_anchor_child_due(
-            _fixture_task({
-                "uuid": "c3f2c233-0000-4000-8000-000000000001",
-                "status": "completed",
-                "description": "Drink 0.5L of water",
-                "anchor": "w:mon..sun@t=05:00,09:00,14:00,19:00",
-                "anchor_mode": "skip",
-                "chain": "on",
-                "chainID": "d07ff246",
-                "link": 92,
-                "due": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 4), (9, 0))),
-                "end": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 4), (10, 0))),
-            })
-        )
-        child_local = hook.core.to_local(child_due)
-        expect((child_local.hour, child_local.minute) == (14, 0), f"expected 14:00 local via reconcile tool path: {child_local}")
-    finally:
-        if prev_core_path is None:
-            os.environ.pop("NAUTICAL_CORE_PATH", None)
-        else:
-            os.environ["NAUTICAL_CORE_PATH"] = prev_core_path
-
-
-def test_reconcile_tool_defaults_core_path_to_install_base():
-    """The reconciler must seed hook bootstrap with the base containing nautical_core."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    prev_core_path = os.environ.get("NAUTICAL_CORE_PATH")
-    try:
-        os.environ.pop("NAUTICAL_CORE_PATH", None)
-        mod = _load_hook_module(str(path), "_nautical_reconcile_tool_core_path_test")
-        expect(
-            os.environ.get("NAUTICAL_CORE_PATH") == str(mod.BASE_DIR),
-            f"expected NAUTICAL_CORE_PATH={mod.BASE_DIR}, got {os.environ.get('NAUTICAL_CORE_PATH')!r}",
-        )
-    finally:
-        if prev_core_path is None:
-            os.environ.pop("NAUTICAL_CORE_PATH", None)
-        else:
-            os.environ["NAUTICAL_CORE_PATH"] = prev_core_path
-
-
-def test_reconcile_tool_print_plan_includes_evidence():
-    """Reconcile dry-run output should explain why each action is safe."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_tool_print_test")
-    parent = {
-        "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "completed",
-        "description": "remote completion",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 2,
-        "due": "20260703T090000Z",
-    }
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, recurrence_fingerprint
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
-    observation = _fixture_observation(parent)
-    guard = ParentGuard(status="completed", chain="on", chain_id="11111111", link=2,
-                        recurrence_fingerprint=recurrence_fingerprint(parent), modified="")
-    identity = LifecycleIdentity(chain_id="11111111", parent_uuid=parent["uuid"], source_link=2,
-                                 target_link=3, event=LifecycleEvent.ACTIVATE)
-    plan = RecoveryPlanResult(observation, LifecyclePlan(identity=identity, action=LifecycleAction.UPDATE_PARENT,
-                                                        parent_guard=guard), reason="next link already exists",
-                              child_short="22222222")
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        mod._print_plan(plan)
-    out = buf.getvalue()
-    expect("backfill nextLink:" in out, f"missing backfill headline: {out!r}")
-    expect("reason: next link already exists" in out, f"missing reason evidence: {out!r}")
-    expect("existing child: 22222222" in out, f"missing child evidence: {out!r}")
-
-    second_parent = {**parent, "uuid": "22222222-0000-4000-8000-000000000002", "link": 3}
-    second = mod._recovery_terminal(second_parent, "expiration recovery hop limit reached at 2; native until has already elapsed")
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        mod._print_recovery_group(
-            [
-                (plan, reconcile_report.describe_recovery_result(plan), "22222222"),
-                (second, reconcile_report.describe_recovery_result(second), ""),
-            ]
-        )
-    out = buf.getvalue()
-    expect("recover:" in out and "advanced 1 occurrence" in out, f"missing compact recovery summary: {out!r}")
-    expect("result: partial" in out and "spawn:" not in out, f"compact output leaked per-hop lines: {out!r}")
-
-
-def test_reconcile_configuration_verification_fails_closed():
-    """Configuration exceptions must become unavailable, never a clean reconcile state."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_configuration_state_test")
-    import types
-    core_module = types.ModuleType("nautical_core_test_module")
-    core_module.configuration_drift = lambda: (_ for _ in ()).throw(RuntimeError("malformed TOML"))
-    hook = SimpleNamespace(
-        core=core_module,
-    )
-    check = mod._configuration_verification(hook)
-    expect(check.status == "unavailable", f"configuration exception was not unavailable: {check.status!r}")
-    expect("malformed TOML" in check.reason, f"configuration failure detail was lost: {check.reason!r}")
-    status, reason = mod._configuration_state(hook)
-    expect(status == "unavailable" and reason == check.reason, f"state adapter changed failure: {status!r}, {reason!r}")
-
-
-def test_reconcile_startup_config_failure_is_structured():
-    """Taskdata configuration startup failures expose unavailable status in JSON."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_configuration_startup_test")
-    args = SimpleNamespace(json=True, apply=True)
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
-        result = mod._startup_failure(args, "taskdata_config", RuntimeError("invalid timezone"))
-    payload = json.loads(output.getvalue())
-    expect(result == 1, f"configuration startup failure returned {result}")
-    expect(payload.get("configuration_status") == "unavailable", f"missing unavailable status: {payload!r}")
-    expect(payload.get("configuration_drift") == "invalid timezone", f"configuration detail was lost: {payload!r}")
-
-
-def test_reconcile_subprocess_output_contracts():
-    """Operator subprocess modes keep JSON on stdout and diagnostics on stderr."""
-    tool = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    base = [sys.executable, str(tool), "--task-bin", "/missing/nautical-task"]
-    json_run = subprocess.run(
-        [*base, "--json"], cwd=str(ROOT), text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-    )
-    expect(json_run.returncode == 1, f"JSON startup failure returned {json_run.returncode}")
-    payload = json.loads(json_run.stdout)
-    expect(payload.get("status") == "error", f"JSON startup status was not error: {payload!r}")
-    expect(payload.get("startup_errors") == 1, f"JSON startup error count missing: {payload!r}")
-    expect(json_run.stderr == "", f"JSON mode leaked diagnostics to stderr: {json_run.stderr!r}")
-
-    human_run = subprocess.run(
-        base, cwd=str(ROOT), text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-    )
-    expect(human_run.returncode == 1, f"human startup failure returned {human_run.returncode}")
-    expect(human_run.stdout == "", f"human startup failure polluted stdout: {human_run.stdout!r}")
-    expect("Taskwarrior executable was not found" in human_run.stderr, f"human diagnostic was not actionable: {human_run.stderr!r}")
 
 
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
@@ -17266,246 +14803,8 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
         season_support.configure_hemisphere(previous_hemisphere)
 
 
-def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
-    """Reconcile should compute, spawn, and deduplicate the next seasonal slot."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    hook_path = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook_path, "_nautical_seasonal_reconcile_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-    season_support = mod.core._import_sibling("season_support")
-    previous_hemisphere = season_support.active_hemisphere()
-    previous_core_hemisphere = mod.core.SEASON_HEMISPHERE
-    mod.core.SEASON_HEMISPHERE = "north"
-    season_support.configure_hemisphere("north")
-
-    def stamp(day, hhmm):
-        return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
-
-    parent = {
-        "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "completed",
-        "description": "seasonal reconcile",
-        "anchor": "(w:mon)@in-spring=first@t=09:00",
-        "anchor_mode": "skip",
-        "chain": "on",
-        "chainID": "season456",
-        "link": 1,
-        "due": stamp(date(2026, 3, 2), (9, 0)),
-        "end": stamp(date(2026, 7, 1), (10, 0)),
-    }
-    parent_obs = _fixture_observation(parent)
-    plan = reconcile.plan_recovery_decision(parent_obs, existing_children=[], hook=mod)
-    expect(_recovery_action(plan) == "spawn", f"reconcile did not spawn seasonal child: {plan}")
-    child_local = mod.core.to_local(plan.child_due)
-    expect(
-        child_local.date() == date(2027, 3, 1)
-        and (child_local.hour, child_local.minute) == (9, 0),
-        f"reconcile chose the wrong seasonal slot: {child_local}",
-    )
-    expect((_recovery_child(plan) or {}).get("anchor") == parent["anchor"], f"reconcile child lost anchor: {plan}")
-
-    existing = {
-        "uuid": "22222222-0000-4000-8000-000000000002",
-        "status": "pending",
-        "description": "seasonal reconcile",
-        "chain": "on",
-        "chainID": "season456",
-        "link": 2,
-        "prevLink": "11111111",
-        "anchor": parent["anchor"],
-        "due": stamp(date(2027, 3, 1), (9, 0)),
-    }
-    repeated = reconcile.plan_recovery_decision(
-        parent_obs,
-        existing_children=[_fixture_observation(existing)],
-        hook=mod,
-    )
-    expect(
-        _recovery_action(repeated) == "spawn" and repeated.child_short == "22222222",
-        f"reconcile duplicated an existing seasonal slot: {repeated}",
-    )
-
-    expired = {
-        **parent,
-        "status": "deleted",
-        "anchor": "(w:mon)@in-winter=last@t=09:00",
-        "due": stamp(date(2027, 2, 22), (9, 0)),
-        "end": stamp(date(2027, 7, 1), (10, 0)),
-    }
-    recovered_due, recovered_meta = reconcile.compute_expiration_child_due(expired, hook=mod)
-    recovered_local = mod.core.to_local(recovered_due)
-    expect(
-        recovered_local.date() == date(2028, 2, 28),
-        f"expired winter advanced incorrectly: {recovered_local}",
-    )
-    expect(
-        recovered_meta.get("basis") == "due recurrence target (expired)",
-        f"expiration recovery lost its basis: {recovered_meta}",
-    )
-    mod.core.SEASON_HEMISPHERE = previous_core_hemisphere
-    season_support.configure_hemisphere(previous_hemisphere)
 
 
-def test_reconcile_repairs_invalid_native_until_from_previous_link():
-    """Hookless due moves should recover the prior link's native-until carry policy."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    hook_path = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook_path, "_nautical_until_reconcile_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    def stamp(day, hhmm):
-        return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
-
-    previous = {
-        "uuid": "00000000-0000-4000-8000-000000003241",
-        "description": "previous",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "until-test",
-        "link": 1,
-        "due": stamp(date(2026, 7, 20), (9, 0)),
-        "until": stamp(date(2026, 7, 20), (23, 0)),
-    }
-    current = {
-        "uuid": "00000000-0000-4000-8000-000000003242",
-        "description": "current",
-        "status": "pending",
-        "chain": "on",
-        "chainID": "until-test",
-        "link": 2,
-        "due": stamp(date(2026, 7, 22), (9, 0)),
-        "until": stamp(date(2026, 7, 21), (23, 0)),
-    }
-    datetime_effects = mod._module("modify_datetime_effects")
-    datetime_ports = datetime_effects.datetime_effect_ports_for(mod)
-    expect(
-        reconcile.invalid_native_until_reason(_task_observation(current), safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse),
-        "invalid native-until window was not detected",
-    )
-    repaired, error = reconcile.repair_native_until_from_previous(
-        _task_observation(previous),
-        _task_observation(current),
-        kind="anchor",
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-        fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
-        local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
-    )
-    expect(not error and repaired == stamp(date(2026, 7, 22), (23, 0)), f"wrong carried until: {repaired}, {error}")
-    fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
-        _task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003243", "description": "fallback",
-            "status": "pending", "chain": "on", "chainID": "until-test", "link": 3,
-            "due": stamp(date(2026, 7, 23), (9, 0)),
-        }),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-        fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
-        local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
-    )
-    expect(
-        not fallback_error and fallback == stamp(date(2026, 7, 23), (23, 0)),
-        f"fallback did not use local 23:00: {fallback}, {fallback_error}",
-    )
-    late_fallback, late_error = reconcile.fallback_native_until_at_day_end(
-        _task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003244", "description": "late fallback",
-            "status": "pending", "chain": "on", "chainID": "until-test", "link": 4,
-            "due": stamp(date(2026, 7, 23), (23, 0)),
-        }),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-        fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
-        local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
-    )
-    expect(
-        late_fallback is None and "at or after local 23:00" in (late_error or ""),
-        f"late due did not fail closed: {late_fallback}, {late_error}",
-    )
-    tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-        "_nautical_reconcile_until_format_test",
-    )
-    expected_until = stamp(date(2026, 7, 23), (23, 0))
-    compact_expected = expected_until.replace("-", "").replace(":", "")
-    actual_dt, actual_parse_error = mod._TASK_DATETIME_PARSER.parse(compact_expected)
-    expected_dt, expected_parse_error = mod._TASK_DATETIME_PARSER.parse(expected_until)
-    expect(
-        tool._native_until_matches(_task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003245", "description": "verify",
-            "status": "pending", "chain": "on", "chainID": "until-test", "link": 5,
-            "until": compact_expected,
-        }), expected_until, mod),
-        f"Taskwarrior's compact UTC timestamp should verify against the fallback instant: "
-        f"{actual_dt!r}/{actual_parse_error!r} != {expected_dt!r}/{expected_parse_error!r}",
-    )
-    expect(
-        not tool._native_until_matches(
-            _task_observation({
-                "uuid": "00000000-0000-4000-8000-000000003246", "description": "different",
-                "status": "pending", "chain": "on", "chainID": "until-test", "link": 6,
-                "until": mod.core.fmt_isoz(expected_dt + timedelta(hours=1)),
-            }), expected_until, mod
-        ),
-        "a different native-until instant must fail verification",
-    )
-    guard_error = tool._native_until_guard_error(
-        _task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003247", "description": "guard",
-            "status": "pending", "chain": "on", "chainID": "cid", "link": 2, "due": "20260801T090000Z",
-        }),
-        _task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003247", "description": "guard",
-            "status": "pending", "chain": "on", "chainID": "cid", "link": 2, "due": "20260802T090000Z",
-        }),
-    )
-    expect(guard_error and "due" in guard_error, f"target drift was not detected: {guard_error!r}")
-
-
-def test_reconcile_native_until_manual_review_is_not_a_hard_error():
-    """An unrecoverable native-until window must be reported without claiming a failed mutation."""
-    hook_path = _find_hook_file("on-modify.nautical")
-    hook = _load_hook_module(hook_path, "_nautical_reconcile_manual_until_hook_test")
-    if hasattr(hook, "_load_core"):
-        hook._load_core()
-    tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-        "_nautical_reconcile_manual_until_tool_test",
-    )
-
-    def stamp(day, hhmm):
-        return hook.core.fmt_isoz(hook.core.build_local_datetime(day, hhmm))
-
-    row = _fixture_observation({
-        "uuid": "00000000-0000-4000-8000-000000003248",
-        "chain": "on",
-        "chainID": "manual-until",
-        "link": 1,
-        "status": "pending",
-        "due": stamp(date(2026, 7, 23), (23, 0)),
-        "until": stamp(date(2026, 7, 23), (22, 0)),
-    })
-    class _ControlPlane:
-        def audit_native_until(self, rows, **_kwargs):
-            del rows
-            return SimpleNamespace(
-                native_until=SimpleNamespace(
-                    repairs=[{"action": "manual_review", "task": "00000000"}],
-                    errors=[],
-                ),
-                candidates=[],
-            )
-
-    snapshot = SimpleNamespace(active_rows=lambda: [row])
-    repairs, errors = tool._native_until_repairs(
-        "task", hook, apply=False, snapshot=snapshot, control_plane=_ControlPlane()
-    )
-    expect(not errors, f"manual review was reported as a failed mutation: {errors!r}")
-    expect(repairs and repairs[0].get("action") == "manual_review", f"manual review was not preserved: {repairs!r}")
 
 
 def test_position_selection_public_period_scopes_hooks():
@@ -17582,14 +14881,12 @@ def test_position_selection_public_period_scopes_hooks():
 
 TESTS = [
     test_year_ordinals_hooks_modes_calendar_and_timeline,
-    test_reconcile_tool_computes_year_ordinal_anchor,
     test_on_add_position_selection_renders_semantic_advice,
     test_position_selection_on_add_and_modify_completion,
     test_position_selection_modify_timeline_projects_future_dates,
     test_position_selection_post_modifiers_modify_completion,
     test_on_add_seasonal_selection_feedback,
     test_seasonal_selection_modify_modes_times_and_timeline,
-    test_seasonal_selection_reconcile_spawn_recovery_and_dedup,
     test_position_selection_public_period_scopes_hooks,
     test_business_calendar_toml_section_resolves_lazily,
     test_hook_on_add_uses_and_normalizes_business_calendar,
@@ -17602,7 +14899,8 @@ TESTS = [
     test_hook_on_modify_rejects_invalid_timezone_for_nautical_task,
     test_on_modify_spawned_child_preserves_business_calendar,
     test_modifier_boundary_paths_agree_and_advance_strictly,
-    test_random_salt_namespaces_draws,
+    *RECURRENCE_TESTS,
+    *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
     test_chain_colour_uses_complete_root_identity,
     test_on_add_preview_uses_configured_chain_colour,
@@ -17675,10 +14973,7 @@ TESTS = [
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_on_modify_timeline_cp_sequence_labels_future_intervals,
     test_hook_on_modify_timeline_cp_random_labels_selected_intervals,
-    test_hook_stdout_strict_json_with_diag_on_add,
-    test_hook_stdout_strict_json_with_diag_on_modify,
-    test_hook_stdout_unicode_unescaped_on_add,
-    test_hook_stdout_unicode_unescaped_on_modify,
+    *HOOK_TESTS,
     test_hook_protocol_loads_without_core_package,
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_child_import_rejects_incomplete_existing_rows,
@@ -17689,9 +14984,7 @@ TESTS = [
     test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
     test_lifecycle_outbox_bulk_compare_and_set_operations_isolate_rows,
-    test_shared_outbox_persists_integrity_work_without_lifecycle_claiming,
     test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows,
-    test_integration_contract_covers_all_mutation_and_outbox_states,
     test_full_hooks_receive_one_explicit_integration_context,
     test_light_taskdata_resolution_matches_hook_precedence,
     test_plain_hook_fast_paths_do_not_import_core_package,
@@ -17699,7 +14992,6 @@ TESTS = [
     test_full_hooks_reuse_wrapper_protocol_probe,
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hooks_survive_malformed_numeric_environment,
-    test_hook_stdout_empty_on_exit,
     test_hook_files_are_private_permissions,
     test_safe_lock_fcntl_contention,
     test_safe_lock_fallback_contention,
@@ -17737,12 +15029,9 @@ TESTS = [
     test_on_add_rejects_oversized_stdin_early,
     test_on_modify_rejects_oversized_stdin_early,
     test_health_check_json_ok_empty_taskdata,
-    test_health_check_critical_outbox_bytes,
-    test_health_check_critical_outbox_rows,
     test_queue_status_and_doctor_report_schema_health,
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
     test_queue_status_json_ok_empty_taskdata,
-    test_queue_status_does_not_initialize_missing_outbox,
     test_queue_status_explicit_prune_reports_maintenance_result,
     test_doctor_installation_json_and_verifier_contract,
     test_operator_queue_status_json_ok_empty_taskdata,
@@ -17765,9 +15054,8 @@ TESTS = [
     test_nautical_dispatches_supported_subcommands,
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
-    test_doctor_reports_reconcile_backfill_plans,
     test_perf_hint_benchmark_isolates_persistent_cache,
-    test_perf_cold_import_records_module_profile,
+    *PERFORMANCE_TESTS,
     test_core_import_defers_panel_colour_module,
     test_core_import_defers_diagnostic_model,
     test_core_import_defers_parser_scheduler_models,
@@ -17775,7 +15063,6 @@ TESTS = [
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,
-    test_deploy_sanity_script_reports_ok,
     test_deploy_sanity_rejects_missing_lazy_lifecycle_module,
     test_deploy_sanity_rejects_missing_operator_runtime_tool,
     test_deploy_sanity_rejects_unowned_taskwarrior_subprocess,
@@ -17798,7 +15085,6 @@ TESTS = [
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_modify_completion_advances_past_second_dst_fold,
     test_modify_overnight_window_advances_past_second_dst_fold,
-    test_non_hour_dst_carry_and_reconcile_share_core_policy,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
     test_on_modify_collect_prev_two_prefers_live_statuses,
     test_on_add_fail_and_exit_emits_json,
@@ -17875,7 +15161,6 @@ TESTS = [
     test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_completion_spawn_exception_is_retryable_with_reason,
-    test_carry_field_failure_defers_completion_and_reconcile_mutation,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_cp_completion_feedback_random_selected_interval,
     test_on_modify_render_cp_completion_feedback_jitter_selected_interval,
@@ -17894,28 +15179,6 @@ TESTS = [
     test_core_import_defers_optional_stacks,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
-    test_reconcile_candidate_and_plan_paths,
-    test_reconcile_repairs_invalid_native_until_from_previous_link,
-    test_reconcile_native_until_manual_review_is_not_a_hard_error,
-    test_reconcile_expiration_candidate_requires_expiry_evidence,
-    test_reconcile_expiration_cp_advances_from_recurrence_target,
-    test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
-    test_reconcile_expiration_anchor_advances_from_recurrence_target,
-    test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
-    test_reconcile_apply_lease_serializes_mutations,
-    test_reconcile_apply_refuses_a_second_full_run,
-    test_reconcile_parent_identity_errors_are_actionable,
-    test_reconcile_expired_pending_child_is_resumable_partial,
-    test_reconcile_expiration_real_taskwarrior_round_trip,
-    test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review,
-    test_reconcile_real_taskwarrior_anchor_repair_round_trip,
-    test_reconcile_evidence_prefers_due_over_carried_scheduled,
-    test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
-    test_reconcile_tool_defaults_core_path_to_install_base,
-    test_reconcile_tool_print_plan_includes_evidence,
-    test_reconcile_configuration_verification_fails_closed,
-    test_reconcile_startup_config_failure_is_structured,
-    test_reconcile_subprocess_output_contracts,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_completion_snapshot_reuses_full_chain_read,
     test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,
@@ -17941,7 +15204,6 @@ TESTS = [
     test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,
     test_hook_on_add_disabled_uda_aliases_leave_description_untouched,
     test_on_modify_expands_and_clears_description_uda_aliases,
-    test_outbox_drain_limit_config_and_env_override,
     test_astronomical_season_selection_scheduler_uses_transition_dates,
     test_on_modify_build_child_carries_configured_uda_datetime,
 
@@ -18091,125 +15353,8 @@ def main():
     
     sys.exit(1 if fails else 0)
 
-def test_query_process_boundary_emits_one_json_document():
-    """The managed launcher keeps capability and invalid-request stdout strict."""
-    launcher = os.path.join(ROOT, "nautical")
-    env = dict(os.environ)
-    env.pop("NAUTICAL_DIAG", None)
-    capability = subprocess.run(
-        [sys.executable, launcher, "query", "capabilities"],
-        text=True,
-        capture_output=True,
-        env=env,
-        check=False,
-    )
-    expect(capability.returncode == 0, "capability subprocess returned a failure")
-    expect(len(capability.stdout.splitlines()) == 1, "capability subprocess emitted multiple stdout lines")
-    expect(capability.stderr == "", "capability subprocess contaminated stderr by default")
-    capability_payload = json.loads(capability.stdout)
-    expect(
-        capability_payload.get("schema") == "nautical.query.capabilities",
-        "capability subprocess did not emit the versioned query document",
-    )
-    inline = subprocess.run(
-        [sys.executable, launcher, "query", "occurrences", "--request", "{}"],
-        text=True,
-        capture_output=True,
-        env=env,
-        check=False,
-    )
-    stdin = subprocess.run(
-        [sys.executable, launcher, "query", "occurrences", "--request", "-"],
-        input="{}",
-        text=True,
-        capture_output=True,
-        env=env,
-        check=False,
-    )
-    expect(inline.returncode == 2 and stdin.returncode == 2, "invalid query exit code is unstable")
-    expect(inline.stdout == stdin.stdout, "inline and stdin invalid responses differ")
-    expect(len(inline.stdout.splitlines()) == 1, "invalid query emitted multiple stdout lines")
-    json.loads(inline.stdout)
-    diagnostic_env = dict(env)
-    diagnostic_env["NAUTICAL_DIAG"] = "1"
-    diagnostic = subprocess.run(
-        [sys.executable, launcher, "query", "occurrences", "--request", "{}"],
-        text=True,
-        capture_output=True,
-        env=diagnostic_env,
-        check=False,
-    )
-    expect(diagnostic.returncode == 2, "diagnostic query changed the invalid exit code")
-    expect(diagnostic.stderr.startswith("[nautical] query:"), "diagnostics were not routed to stderr")
-    expect(len(diagnostic.stdout.splitlines()) == 1, "diagnostic query contaminated stdout")
-
-
-def test_operator_processes_concurrent_contracts_share_taskdata_safely():
-    """Concurrent query/reconcile operators keep isolated JSON contracts."""
-    with tempfile.TemporaryDirectory(prefix="nautical-concurrent-operators-") as td:
-        env = dict(os.environ)
-        env.update({"TASKDATA": td, "NAUTICAL_CORE_PATH": ROOT})
-        env.pop("NAUTICAL_DIAG", None)
-        launcher = os.path.join(ROOT, "nautical")
-        commands = (
-            ([sys.executable, launcher, "query", "capabilities"], True),
-            ([sys.executable, launcher, "reconcile", "--json", "--task-bin", "/missing/task"], True),
-            ([sys.executable, launcher, "doctor", "--json"], True),
-            ([sys.executable, launcher, "query", "integrity", "--all"], True),
-            ([sys.executable, os.path.join(ROOT, "on-exit.nautical")], False),
-        )
-        processes = [subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) for command, _ in commands]
-        results = [process.communicate(timeout=30) for process in processes]
-        for (stdout, stderr), (command, json_expected) in zip(results, commands):
-            if json_expected:
-                json.loads(stdout)
-            else:
-                expect(stdout == "", f"concurrent empty-exit hook wrote stdout: {stdout!r}")
-            expect("Traceback" not in stderr, f"concurrent operator leaked traceback: {command}: {stderr!r}")
-
-
-def test_query_installed_layout_runs_outside_checkout():
-    """The managed launcher resolves its own staged core package."""
-    with tempfile.TemporaryDirectory(prefix="nautical-query-runtime-") as runtime_dir:
-        runtime = Path(runtime_dir)
-        shutil.copy2(Path(ROOT) / "nautical", runtime / "nautical")
-        (runtime / "nautical").chmod(0o755)
-        shutil.copytree(Path(ROOT) / "nautical_core", runtime / "nautical_core")
-        proc = subprocess.run(
-            [sys.executable, str(runtime / "nautical"), "query", "capabilities"],
-            cwd="/tmp",
-            text=True,
-            capture_output=True,
-            env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": ""},
-            check=False,
-        )
-        expect(proc.returncode == 0, f"installed-layout query failed: {proc.stderr or proc.stdout}")
-        expect(proc.stderr == "", "installed-layout query contaminated stderr")
-        payload = json.loads(proc.stdout)
-        expect(payload["schema"] == "nautical.query.capabilities", "installed-layout query schema is incorrect")
-
-
-def test_navigator_import_and_help_are_noninteractive_without_rich():
-    """Cold import and non-TTY help must not require the interactive renderer."""
-    env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(ROOT)}
-    probe = subprocess.run(
-        [sys.executable, "-c", "import nautical_navigator,sys; print(any(m == 'rich' or m.startswith('rich.') for m in sys.modules))"],
-        cwd="/tmp", text=True, capture_output=True, env=env, check=False,
-    )
-    expect(probe.returncode == 0, f"Navigator cold import failed: {probe.stderr or probe.stdout}")
-    expect(probe.stdout.strip() == "False", "Navigator imported Rich during cold import")
-    help_result = subprocess.run(
-        [sys.executable, os.path.join(ROOT, "nautical_navigator.py"), "--help"],
-        cwd="/tmp", text=True, capture_output=True, env=env, check=False,
-    )
-    expect(help_result.returncode == 0, f"Navigator non-TTY help failed: {help_result.stderr or help_result.stdout}")
-    expect(help_result.stderr == "", "Navigator help contaminated stderr")
-
-
 TESTS.extend([
-    test_query_process_boundary_emits_one_json_document,
-    test_operator_processes_concurrent_contracts_share_taskdata_safely,
-    test_query_installed_layout_runs_outside_checkout,
+    *OPERATOR_TESTS,
     test_hook_on_add_anchor_file_time_padding_hint,
     test_hook_on_add_anchor_preview_marks_omitted_future_slots,
     test_hook_on_add_anchor_preview_skips_omit_file_modifier_date,
@@ -18224,14 +15369,13 @@ TESTS.extend([
     test_navigator_projects_all_slots_in_a_time_window,
     test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
     test_random_time_window_is_stable_across_processes,
-    test_navigator_import_and_help_are_noninteractive_without_rich,
     test_navigator_reads_through_read_only_invocation_repository,
     test_navigator_uses_anchor_and_anchor_file_sources,
     test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored,
     test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored,
     test_config_fingerprint_invalidates_persistent_cache_keys,
     test_configuration_drift_detects_edit_and_removal,
-    test_installer_initializes_explicit_timezone_config,
+    *INSTALLER_TESTS,
 ])
 
 TESTS.append(test_on_modify_completion_helper_returns_finalized_lifecycle_result)
@@ -18242,974 +15386,21 @@ TESTS.append(test_on_modify_completion_helper_returns_finalized_lifecycle_result
 # deleted legacy lifecycle internals.
 # =============================================================================
 
-def test_lifecycle_application_happy_path_real_stack():
-    """stage + drain produces an applied outcome and mutates Taskwarrior state."""
-    import json, tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import (
-        LifecycleAction, LifecycleDrainStage, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
-    )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
-        LifecycleApplicationService, LifecycleApplicationOutcomeKind,
-    )
-    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
-    from nautical_core.integration_models import (
-        Absent, CommandFailureKind, Found, TaskCommand, TaskCommandResult,
-    )
 
-    class _Repo:
-        def __init__(self, rows):
-            self.rows = dict(rows)
-            self.set_calls = 0
-            self.broad_calls = 0
-        def by_uuid(self, u, *, refresh=False):
-            r = self.rows.get(str(u).lower())
-            if r is None:
-                return Absent(f"uuid:{u}", "not found")
-            return Found(_task_observation(r), f"uuid:{u}")
-        def broad_snapshot(self, *, identity, **_kwargs):
-            self.broad_calls += 1
-            rows = self.rows
-            class _Snapshot:
-                def uuid_matches(self, value):
-                    row = rows.get(str(value).lower())
-                    return () if row is None else (_task_observation(row),)
-            return Found(_Snapshot(), identity)
-        def read_uuid_set(self, request):
-            from nautical_core.task_set_reads import SetReadResult, SetReadStatus
-            self.set_calls += 1
-            found = {
-                identity: _task_observation(self.rows[identity])
-                for identity in request.uuids
-                if identity in self.rows
-            }
-            return SetReadResult(
-                SetReadStatus.COMPLETE,
-                request.uuids,
-                found=found,
-                absent=tuple(identity for identity in request.uuids if identity not in found),
-                complete_for_requested_identities=True,
-            )
 
-    class _Client:
-        def __init__(self, repo):
-            self.repo = repo
-        def execute(self, args, *, purpose, timeout, input_text=None, attempts=1):
-            args = list(args)
-            command = TaskCommand(("task", *args), purpose, timeout, input_text)
-            if "import" in args:
-                for line in (input_text or "{}").splitlines():
-                    row = json.loads(line)
-                    self.repo.rows[str(row["uuid"]).lower()] = row
-            elif "modify" in args:
-                uuid_token = next((a for a in args if a.startswith("uuid:")), "")
-                target = uuid_token.split(":", 1)[1].lower() if uuid_token else None
-                if target and target in self.repo.rows:
-                    for token in args[args.index("modify") + 1:]:
-                        k, v = token.split(":", 1)
-                        self.repo.rows[target][k] = v
-            return TaskCommandResult(command, 0, "", "", CommandFailureKind.SUCCESS, 1, 0.01)
 
-    class _Uow:
-        def __init__(self, rows):
-            self.repository = _Repo(rows)
-            self.client = _Client(self.repository)
-            self.mutation_epoch = 0
-        def record_mutation(self, *, uncertain=False):
-            self.mutation_epoch += 1
-            return self.mutation_epoch
 
-    from nautical_core.lifecycle_models import recurrence_fingerprint as _rfp
-    parent_uuid = "00000000-0000-4000-8000-000000000101"
-    child_uuid  = "00000000-0000-4000-8000-000000000102"
-    parent_uuid_2 = "00000000-0000-4000-8000-000000000201"
-    child_uuid_2 = "00000000-0000-4000-8000-000000000202"
-    parent = {"uuid": parent_uuid, "status": "completed", "chain": "on",
-              "chainID": "chain-s12", "link": 1, "modified": "20260101T000000Z", "cp": "1d"}
-    parent_2 = {"uuid": parent_uuid_2, "status": "completed", "chain": "on",
-                "chainID": "chain-s12-2", "link": 1, "modified": "20260101T000000Z", "cp": "1d"}
-    uow = _Uow({parent_uuid: parent, parent_uuid_2: parent_2})
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        mutations = TaskwarriorMutationService(uow)
-        service = LifecycleApplicationService(
-            unit_of_work=uow, mutations=mutations, execution=mutations, outbox=outbox, owner="test-s12",
-        )
-        guard = ParentGuard("completed", "on", "chain-s12", 1, _rfp(parent), "20260101T000000Z")
-        identity = LifecycleIdentity("chain-s12", parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        plan = LifecyclePlan.from_draft(
-            identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-            draft=_task_draft({
-                "uuid": child_uuid,
-                "description": "child",
-                "chainID": "chain-s12",
-                "link": 2,
-                "prevLink": parent_uuid[:8],
-                "status": "pending",
-                "chain": "on",
-                "cp": "1d",
-                "due": "20260824T090000Z",
-            }),
-            parent_patch={"nextLink": child_uuid[:8]},
-            expected_postconditions=("child_present", "parent_linked", "verified"),
-        )
-        guard_2 = ParentGuard("completed", "on", "chain-s12-2", 1, _rfp(parent_2), "20260101T000000Z")
-        identity_2 = LifecycleIdentity("chain-s12-2", parent_uuid_2, 1, 2, LifecycleEvent.COMPLETE)
-        plan_2 = LifecyclePlan.from_draft(
-            identity=identity_2, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard_2,
-            draft=_task_draft({
-                "uuid": child_uuid_2,
-                "description": "child 2",
-                "chainID": "chain-s12-2",
-                "link": 2,
-                "prevLink": parent_uuid_2[:8],
-                "status": "pending",
-                "chain": "on",
-                "cp": "1d",
-                "due": "20260824T100000Z",
-            }),
-            parent_patch={"nextLink": child_uuid_2[:8]},
-            expected_postconditions=("child_present", "parent_linked", "verified"),
-        )
-        staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(staged.ok, f"stage failed: {staged}")
-        staged_2 = service.stage(plan_2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(staged_2.ok, f"second stage failed: {staged_2}")
-        progress = []
-        result = service.drain(
-            limit=10,
-            configuration_fingerprint="cfg",
-            schedule_fingerprint="sch",
-            progress=progress.append,
-        )
-        expect(len(result.outcomes) == 2, f"expected 2 outcomes: {result.outcomes}")
-        expect(all(item.kind is LifecycleApplicationOutcomeKind.APPLIED for item in result.outcomes), f"outcomes: {result.outcomes}")
-        expect(progress[0].stage is LifecycleDrainStage.CLAIMED, f"missing claimed progress: {progress}")
-        expect(progress[-1].stage is LifecycleDrainStage.COMPLETE, f"missing final progress: {progress}")
-        processing = [event.completed for event in progress if event.stage is LifecycleDrainStage.PROCESSING]
-        expect(processing == list(range(1, 13)), f"drain did not advance per lifecycle action: {progress}")
-        expect(progress[-1].completed == 12 and progress[-1].total == 12, f"invalid final progress: {progress[-1]}")
-        expect(child_uuid.lower() in uow.repository.rows, "child was not imported into task store")
-        expect(child_uuid_2.lower() in uow.repository.rows, "second child was not imported into task store")
-        expect(uow.repository.rows[parent_uuid]["nextLink"] == child_uuid[:8], "parent nextLink not set")
-        expect(uow.repository.rows[parent_uuid_2]["nextLink"] == child_uuid_2[:8], "second parent nextLink not set")
-        expect(
-            uow.repository.set_calls == 3,
-            "multi-plan drain must use exactly one set read per authoritative phase "
-            f"(preflight, child verification, parent verification), got {uow.repository.set_calls}",
-        )
-        expect(uow.repository.broad_calls == 0, f"drain used broad history exports: {uow.repository.broad_calls}")
 
 
-def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
-    """A crash at each stage boundary must resume from the correct next step
-    without repeating any already-applied mutation."""
-    import time, tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import (
-        LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, ExecutionStage,
-    )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
-        LifecycleApplicationService, LifecycleApplicationOutcomeKind,
-    )
-    from nautical_core.integration_models import (
-        MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition,
-    )
 
-    from nautical_core.integration_models import FailureEvidence, CommandFailureKind, TaskCommand
 
-    class _Scripted:
-        def __init__(self, script):
-            self.script = list(script)
-            self.calls = []
-        def apply(self, request):
-            self.calls.append(request.operation)
-            if not self.script:
-                raise AssertionError(f"unexpected mutation call: {request.operation}")
-            item = self.script.pop(0)
-            pc = {
-                MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
-                MutationOperation.PARENT_LINK:  MutationPostcondition.PARENT_LINKED,
-            }.get(request.operation)
-            if item is MutationOutcomeKind.RETRYABLE:
-                cmd = TaskCommand(("task", "modify"), "test mutation", 5.0)
-                evidence = FailureEvidence(cmd, CommandFailureKind.TIMEOUT, -1, 1, 0.1, True, "simulated timeout")
-                return MutationOutcome(request.operation, item, request.guard, (), "simulated retryable", evidence)
-            return MutationOutcome(
-                request.operation,
-                item,
-                request.guard,
-                (pc,) if item is MutationOutcomeKind.APPLIED and pc else (),
-                "" if item is MutationOutcomeKind.APPLIED else "simulated failure",
-            )
 
-    class _Uow:
-        mutation_epoch = 0
 
-    def make_plan(parent_uuid, child_uuid):
-        guard = ParentGuard("completed", "on", "chain-s12b", 1, "rf1-s12b", "20260101T000000Z")
-        identity = LifecycleIdentity("chain-s12b", parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        return LifecyclePlan.from_draft(
-            identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-            draft=_task_draft({
-                "uuid": child_uuid, "description": "crash recovery child", "status": "pending", "chain": "on",
-                "chainID": "chain-s12b", "link": 2, "prevLink": parent_uuid[:8],
-                "cp": "1d", "due": "20260102T000000Z",
-            }),
-            parent_patch={"nextLink": child_uuid[:8]},
-            expected_postconditions=("child_present", "parent_linked", "verified"),
-        )
 
-    # Crash scenario: import OK, link retryable -> resume should only call PARENT_LINK
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        uow = _Uow()
-        m1 = _Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.RETRYABLE])
-        adapter1 = LifecycleExecutionFixture(m1)
-        svc1 = LifecycleApplicationService(unit_of_work=uow, mutations=adapter1, execution=adapter1,
-                                            outbox=outbox, owner="owner-a", lease_seconds=0.2)
-        plan = make_plan("00000000-0000-4000-8000-000000000201", "00000000-0000-4000-8000-000000000202")
-        svc1.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        d1 = svc1.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(d1.outcomes[0].kind is LifecycleApplicationOutcomeKind.RETRYABLE, f"expected retryable: {d1.outcomes[0]}")
 
-        _, status = outbox.status()
-        expect(status["records"][0]["stage"] == "child_present", f"stage must be child_present after partial failure")
 
-        time.sleep(0.3)
-        m2 = _Scripted([MutationOutcomeKind.APPLIED])
-        adapter2 = LifecycleExecutionFixture(m2)
-        svc2 = LifecycleApplicationService(unit_of_work=uow, mutations=adapter2, execution=adapter2, outbox=outbox, owner="owner-b", lease_seconds=30)
-        d2 = svc2.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(d2.outcomes[0].ok, f"resume at link failed: {d2.outcomes[0]}")
-        expect(m2.calls == [MutationOperation.PARENT_LINK], f"child_import was repeated: {m2.calls}")
 
-    # Crash scenario: both mutations done, verified stage not persisted -> no remutation on resume
-    with tempfile.TemporaryDirectory() as td:
-        outbox2 = LifecycleOutboxRepository(Path(td))
-        plan2 = make_plan("00000000-0000-4000-8000-000000000203", "00000000-0000-4000-8000-000000000204")
-        staged = outbox2.enqueue(plan2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        # Keep the lease longer than the two SQLite updates even on loaded
-        # CI workers; the crash is simulated after both stages are durable.
-        outbox2.claim_intent(owner="owner-a", lease_seconds=1.0, intent_id=staged.record.intent_id)
-        advanced_child = outbox2.advance_stage(
-            intent_id=staged.record.intent_id, owner="owner-a", stage=ExecutionStage.CHILD_PRESENT
-        )
-        advanced_parent = outbox2.advance_stage(
-            intent_id=staged.record.intent_id, owner="owner-a", stage=ExecutionStage.PARENT_LINKED
-        )
-        expect(advanced_child.ok and advanced_parent.ok, "crash fixture could not persist both completed stages")
-        time.sleep(1.1)
-        m3 = _Scripted([])  # no mutations should run
-        adapter3 = LifecycleExecutionFixture(m3)
-        svc3 = LifecycleApplicationService(unit_of_work=uow, mutations=adapter3, execution=adapter3, outbox=outbox2, owner="owner-b", lease_seconds=30)
-        d3 = svc3.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(d3.outcomes[0].ok, f"resume at parent_linked should succeed without remutation: {d3.outcomes[0]}")
-        expect(m3.calls == [], f"unexpected mutations: {m3.calls}")
-
-
-def test_lifecycle_application_outbox_faults_are_retryable():
-    """Outbox persist, claim, and manual-review faults never appear durable."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
-
-    class _Uow:
-        mutation_epoch = 0
-
-    parent_uuid = "00000000-0000-4000-8000-000000000801"
-    child_uuid = "00000000-0000-4000-8000-000000000802"
-    guard = ParentGuard("completed", "on", "fault-outbox", 1, "rf-fault", "20260101T000000Z")
-    plan = _plan_from_values(
-        identity=LifecycleIdentity("fault-outbox", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=guard,
-        child_payload={"uuid": child_uuid, "chainID": "fault-outbox", "link": 2, "prevLink": parent_uuid[:8]},
-        parent_patch={"nextLink": child_uuid[:8]},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    )
-
-    class _FailingOutbox(LifecycleOutboxRepository):
-        def enqueue(self, *args, **kwargs):
-            raise OSError("disk full")
-        def claim_batch(self, **kwargs):
-            raise OSError("database locked")
-
-    mutations = LifecycleExecutionFixture(object())
-    with tempfile.TemporaryDirectory() as td:
-        outbox = _FailingOutbox(Path(td))
-        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=mutations, execution=mutations, outbox=outbox, owner="fault")
-        staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(staged.kind is LifecycleApplicationOutcomeKind.RETRYABLE and "disk full" in staged.reason,
-               f"enqueue failure was not retryable: {staged}")
-        drained = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(drained.claim.kind.value == "retryable" and "database locked" in drained.claim.reason,
-               f"claim failure was not retryable: {drained.claim}")
-
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        record = outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").record
-        service = LifecycleApplicationService(unit_of_work=_Uow(), outbox=outbox, owner="fault")
-        outbox.manual_review = lambda **kwargs: (_ for _ in ()).throw(OSError("manual review write failed"))
-        review = service._manual_review(record, "simulated invalid intent")
-        expect(review.kind is LifecycleApplicationOutcomeKind.RETRYABLE and "manual review write failed" in review.reason,
-               f"manual-review persistence failure was not retryable: {review}")
-
-
-def test_lifecycle_application_stage_failure_matrix_resumes_idempotently():
-    """Each persisted spawn boundary can fail once and resume without unsafe duplication."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import (
-        ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard,
-    )
-    from nautical_core.lifecycle_outbox import (
-        LifecycleOutboxRepository, OutboxResult, OutboxResultKind,
-    )
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
-    from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
-
-    class _Uow:
-        mutation_epoch = 0
-
-    class _Mutations:
-        def __init__(self):
-            self.calls = []
-
-        def apply(self, request):
-            self.calls.append(request.operation)
-            postcondition = {
-                MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
-                MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
-            }.get(request.operation)
-            prior = sum(1 for operation in self.calls if operation is request.operation)
-            kind = MutationOutcomeKind.ALREADY_APPLIED if prior > 1 else MutationOutcomeKind.APPLIED
-            return MutationOutcome(
-                request.operation,
-                kind,
-                request.guard,
-                (postcondition,) if postcondition else (),
-                "already present" if kind is MutationOutcomeKind.ALREADY_APPLIED else "",
-            )
-
-    class _FailingOutbox(LifecycleOutboxRepository):
-        def __init__(self, path, *, fail_stage=None, fail_ack=False):
-            super().__init__(path)
-            self.fail_stage = fail_stage
-            self.fail_ack = fail_ack
-
-        def advance_stage(self, *, intent_id, owner, stage):
-            if self.fail_stage is stage:
-                self.fail_stage = None
-                return OutboxResult(OutboxResultKind.RETRYABLE, reason=f"injected {stage.value} persistence failure")
-            return super().advance_stage(intent_id=intent_id, owner=owner, stage=stage)
-
-        def acknowledge(self, *, intent_id, owner):
-            if self.fail_ack:
-                self.fail_ack = False
-                return OutboxResult(OutboxResultKind.RETRYABLE, reason="injected acknowledgement failure")
-            return super().acknowledge(intent_id=intent_id, owner=owner)
-
-    parent_uuid = "00000000-0000-4000-8000-000000000901"
-    child_uuid = "00000000-0000-4000-8000-000000000902"
-    plan = _plan_from_values(
-        identity=LifecycleIdentity("stage-matrix", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=ParentGuard("completed", "on", "stage-matrix", 1, "rf-stage-matrix", "20260101T000000Z"),
-        child_payload={"uuid": child_uuid, "chainID": "stage-matrix", "link": 2, "prevLink": parent_uuid[:8]},
-        parent_patch={"nextLink": child_uuid[:8]},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    )
-
-    cases = (
-        ("child-stage", ExecutionStage.CHILD_PRESENT, False),
-        ("parent-stage", ExecutionStage.PARENT_LINKED, False),
-        ("verified-stage", ExecutionStage.VERIFIED, False),
-        ("acknowledgement", None, True),
-    )
-    for label, fail_stage, fail_ack in cases:
-        with tempfile.TemporaryDirectory(prefix=f"nautical-stage-{label}-") as td:
-            outbox = _FailingOutbox(Path(td), fail_stage=fail_stage, fail_ack=fail_ack)
-            mutations = _Mutations()
-            adapter = LifecycleExecutionFixture(mutations)
-            service = LifecycleApplicationService(
-                unit_of_work=_Uow(), mutations=adapter, execution=adapter,
-                outbox=outbox, owner=f"stage-{label}", lease_seconds=1.0,
-            )
-            staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-            expect(staged.ok, f"{label}: staging failed: {staged}")
-            first = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-            expect(first.outcomes and first.outcomes[0].kind is LifecycleApplicationOutcomeKind.RETRYABLE,
-                   f"{label}: injected failure was not retryable: {first.outcomes}")
-            time.sleep(1.05)
-            second = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-            if not second.outcomes:
-                _, retry_status = outbox.status()
-                raise AssertionError(f"{label}: retry did not claim the intent: {retry_status}")
-            expect(second.outcomes[0].kind is LifecycleApplicationOutcomeKind.APPLIED,
-                   f"{label}: retry did not converge: {second.outcomes}")
-            _, status = outbox.status()
-            expect(status["states"].get("acknowledged") == 1, f"{label}: intent was not acknowledged: {status}")
-            expect(mutations.calls.count(MutationOperation.CHILD_IMPORT) <= 2,
-                   f"{label}: child mutation was repeated unsafely: {mutations.calls}")
-
-
-def test_lifecycle_outbox_two_process_claims_are_exclusive():
-    """Two independent drain workers cannot claim the same lifecycle intent."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-
-    parent_uuid = "00000000-0000-4000-8000-000000000911"
-    child_uuid = "00000000-0000-4000-8000-000000000912"
-    plan = _plan_from_values(
-        identity=LifecycleIdentity("claim-race", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=ParentGuard("completed", "on", "claim-race", 1, "rf-claim-race", "20260101T000000Z"),
-        child_payload={"uuid": child_uuid, "chainID": "claim-race", "link": 2, "prevLink": parent_uuid[:8]},
-        parent_patch={"nextLink": child_uuid[:8]},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    )
-    worker = (
-        "import json, sys; from pathlib import Path; "
-        "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
-        "repo = LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
-        "result, records = repo.claim_batch(owner=sys.argv[2], lease_seconds=5.0, limit=1); "
-        "print(json.dumps({'kind': result.kind.value, 'count': len(records)}), flush=True)"
-    )
-    with tempfile.TemporaryDirectory(prefix="nautical-claim-race-") as td:
-        repo = LifecycleOutboxRepository(Path(td))
-        staged = repo.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(staged.ok, f"claim race fixture did not stage: {staged}")
-        processes = [
-            subprocess.Popen(
-                [sys.executable, "-c", worker, td, f"worker-{idx}"],
-                cwd=ROOT,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            for idx in range(2)
-        ]
-        results = [process.communicate(timeout=10) for process in processes]
-        payloads = [json.loads(stdout.strip()) for _process, (stdout, _stderr) in zip(processes, results)]
-        expect(sorted(item["count"] for item in payloads) == [0, 1], f"claim race duplicated work: {payloads}")
-
-
-def test_lifecycle_queue_and_reconcile_claims_are_exclusive():
-    """FIFO drain and exact reconcile claims cannot own one intent together."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-
-    parent_uuid = "00000000-0000-4000-8000-000000000921"
-    child_uuid = "00000000-0000-4000-8000-000000000922"
-    plan = _plan_from_values(
-        identity=LifecycleIdentity("cross-owner-race", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=ParentGuard("completed", "on", "cross-owner-race", 1, "rf-cross-owner", "20260101T000000Z"),
-        child_payload={"uuid": child_uuid, "chainID": "cross-owner-race", "link": 2, "prevLink": parent_uuid[:8]},
-        parent_patch={"nextLink": child_uuid[:8]},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    )
-    worker = (
-        "import json, sys; from pathlib import Path; "
-        "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
-        "repo = LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
-        "batch = repo.claim_batch(owner=sys.argv[2], lease_seconds=5.0, limit=1) if sys.argv[3] == 'queue' else None; "
-        "result = batch[0] if batch is not None else repo.claim_intent(owner=sys.argv[2], lease_seconds=5.0, intent_id=sys.argv[4]); "
-        "count = len(batch[1]) if batch is not None else int(result.ok); "
-        "print(json.dumps({'kind': result.kind.value, 'count': count}), flush=True)"
-    )
-
-    def run_race(modes):
-        with tempfile.TemporaryDirectory(prefix="nautical-cross-owner-") as td:
-            repo = LifecycleOutboxRepository(Path(td))
-            staged = repo.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-            expect(staged.ok and staged.record is not None, f"cross-owner fixture did not stage: {staged}")
-            intent_id = staged.record.intent_id
-            processes = [
-                subprocess.Popen(
-                    [sys.executable, "-c", worker, td, f"owner-{idx}", mode, intent_id],
-                    cwd=ROOT,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                for idx, mode in enumerate(modes)
-            ]
-            results = [process.communicate(timeout=10) for process in processes]
-            payloads = [json.loads(stdout.strip()) for _process, (stdout, _stderr) in zip(processes, results)]
-            return payloads
-
-    queue_race = run_race(("queue", "exact"))
-    exact_race = run_race(("exact", "exact"))
-    expect(sum(item["count"] for item in queue_race) == 1, f"queue/reconcile claim race was not exclusive: {queue_race}")
-    expect(sum(item["count"] for item in exact_race) == 1, f"reconcile/reconcile claim race was not exclusive: {exact_race}")
-
-
-def test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process():
-    """An expired owner cannot retain a claim; the next process can recover it."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxResultKind
-
-    parent_uuid = "00000000-0000-4000-8000-000000000931"
-    child_uuid = "00000000-0000-4000-8000-000000000932"
-    plan = _plan_from_values(
-        identity=LifecycleIdentity("stale-owner", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=ParentGuard("completed", "on", "stale-owner", 1, "rf-stale-owner", "20260101T000000Z"),
-        child_payload={"uuid": child_uuid, "chainID": "stale-owner", "link": 2, "prevLink": parent_uuid[:8]},
-        parent_patch={"nextLink": child_uuid[:8]},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    )
-    with tempfile.TemporaryDirectory(prefix="nautical-stale-owner-") as td:
-        repo = LifecycleOutboxRepository(Path(td))
-        staged = repo.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(staged.ok, f"stale-owner fixture did not stage: {staged}")
-        first, records = repo.claim_batch(owner="stale-owner", lease_seconds=0.05, limit=1)
-        expect(first.ok and len(records) == 1, f"stale owner did not claim fixture: {first}, {records}")
-        time.sleep(0.08)
-        worker = (
-            "import sys; from pathlib import Path; "
-            "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
-            "repo = LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
-            "result = repo.claim_intent(owner='replacement', lease_seconds=5.0, intent_id=sys.argv[2]); "
-            "print(result.kind.value, flush=True); raise SystemExit(0 if result.ok else 1)"
-        )
-        process = subprocess.run(
-            [sys.executable, "-c", worker, td, staged.record.intent_id],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        expect(process.returncode == 0 and process.stdout.strip() == OutboxResultKind.APPLIED.value,
-               f"replacement process could not reclaim stale owner: {process.stdout!r} {process.stderr!r}")
-
-
-def test_lifecycle_shuffled_process_drains_converge_to_same_outbox_state():
-    """Repeated worker processes converge despite shuffled staging order."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-
-    plans = []
-    for index in range(3):
-        parent_uuid = f"00000000-0000-4000-8000-00000000094{index}"
-        child_uuid = f"00000000-0000-4000-8000-00000000095{index}"
-        chain_id = f"shuffle-{index}"
-        plans.append(_plan_from_values(
-            identity=LifecycleIdentity(chain_id, parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
-            action=LifecycleAction.SPAWN_CHILD,
-            parent_guard=ParentGuard("completed", "on", chain_id, 1, f"rf-{chain_id}", "20260101T000000Z"),
-            child_payload={"uuid": child_uuid, "chainID": chain_id, "link": 2, "prevLink": parent_uuid[:8]},
-            parent_patch={"nextLink": child_uuid[:8]},
-            expected_postconditions=("child_present", "parent_linked", "verified"),
-        ))
-    worker = (
-        "import json, sys\n"
-        "from pathlib import Path\n"
-        "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository\n"
-        "repo = LifecycleOutboxRepository(Path(sys.argv[1]))\n"
-        "claimed = []\n"
-        "while True:\n"
-        "    result, records = repo.claim_batch(owner='convergence-worker', lease_seconds=5.0, limit=2)\n"
-        "    if not records:\n"
-        "        break\n"
-        "    for record in records:\n"
-        "        claimed.append(record.intent_id)\n"
-        "        repo.acknowledge(intent_id=record.intent_id, owner='convergence-worker')\n"
-        "_, status = repo.status()\n"
-        "print(json.dumps({'claimed': sorted(claimed), 'states': status['states']}, sort_keys=True), flush=True)"
-    )
-
-    def run(order):
-        with tempfile.TemporaryDirectory(prefix="nautical-convergence-") as td:
-            repo = LifecycleOutboxRepository(Path(td))
-            for plan in order:
-                staged = repo.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-                expect(staged.ok, f"convergence fixture did not stage: {staged}")
-            process = subprocess.run(
-                [sys.executable, "-c", worker, td], cwd=ROOT, text=True, capture_output=True, check=False,
-            )
-            expect(process.returncode == 0, f"convergence worker failed: {process.stderr!r}")
-            return json.loads(process.stdout.strip())
-
-    forward = run(plans)
-    reverse = run(tuple(reversed(plans)))
-    expect(forward == reverse, f"shuffled process drains diverged: {forward} != {reverse}")
-
-
-def test_lifecycle_configuration_drift_blocks_mutation():
-    """A plan persisted under one configuration cannot mutate under another."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
-
-    class _Uow:
-        mutation_epoch = 0
-
-    class _Mutations:
-        def __init__(self):
-            self.calls = 0
-
-        def apply(self, _request):
-            self.calls += 1
-            raise AssertionError("configuration drift must block mutation")
-
-    parent_uuid = "00000000-0000-4000-8000-000000000851"
-    child_uuid = "00000000-0000-4000-8000-000000000852"
-    plan = _plan_from_values(
-        identity=LifecycleIdentity("cfg-drift", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=ParentGuard("completed", "on", "cfg-drift", 1, "rf-cfg-drift", "20260101T000000Z"),
-        child_payload={"uuid": child_uuid, "chainID": "cfg-drift", "link": 2, "prevLink": parent_uuid[:8]},
-        parent_patch={"nextLink": child_uuid[:8]},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    )
-
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        mutations = _Mutations()
-        adapter = LifecycleExecutionFixture(mutations)
-        service = LifecycleApplicationService(
-            unit_of_work=_Uow(), mutations=adapter, execution=adapter,
-            outbox=outbox, owner="cfg-drift",
-        )
-        staged = service.stage(plan, configuration_fingerprint="cfg-before", schedule_fingerprint="sch")
-        expect(staged.ok, f"configuration-drift plan did not stage: {staged}")
-        result = service.drain(limit=1, configuration_fingerprint="cfg-after", schedule_fingerprint="sch")
-        expect(len(result.outcomes) == 1, f"expected one drift outcome: {result.outcomes}")
-        outcome = result.outcomes[0]
-        expect(outcome.kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW, f"drift was not rejected: {outcome}")
-        expect("configuration" in outcome.reason.lower(), f"drift reason was not actionable: {outcome.reason}")
-        expect(mutations.calls == 0, "configuration drift reached the mutation gateway")
-        _, status = outbox.status()
-        expect(status["states"].get("manual_review") == 1, f"drift was not durably recorded: {status}")
-
-
-def test_lifecycle_application_conflict_and_retry_budget_outcomes():
-    """Conflicts surface as manual_review; retryable failures that exhaust the
-    budget quarantine the intent rather than looping."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import (
-        LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
-    )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
-        LifecycleApplicationService, LifecycleApplicationOutcomeKind,
-    )
-    from nautical_core.integration_models import (
-        MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition,
-    )
-
-    from nautical_core.integration_models import FailureEvidence, CommandFailureKind, TaskCommand as _TC_s12c
-
-    class _Scripted:
-        def __init__(self, script):
-            self.script = list(script)
-        def apply(self, request):
-            item = self.script.pop(0)
-            if item is MutationOutcomeKind.RETRYABLE:
-                cmd = _TC_s12c(("task", "modify"), "test", 5.0)
-                ev = FailureEvidence(cmd, CommandFailureKind.TIMEOUT, -1, 1, 0.1, True, "simulated timeout")
-                return MutationOutcome(request.operation, item, request.guard, (), "simulated", ev)
-            return MutationOutcome(request.operation, item, request.guard, (), "simulated" if item is not MutationOutcomeKind.APPLIED else "")
-
-    class _Uow:
-        mutation_epoch = 0
-
-    def _plan(parent_uuid, child_uuid, max_attempts=3):
-        guard = ParentGuard("completed", "on", "chain-s12c", 1, "rf1-s12c", "20260101T000000Z")
-        identity = LifecycleIdentity("chain-s12c", parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        return _plan_from_values(
-            identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-            child_payload={"uuid": child_uuid, "chainID": "chain-s12c", "link": 2, "prevLink": parent_uuid[:8]},
-            parent_patch={"nextLink": child_uuid[:8]},
-            expected_postconditions=("child_present", "parent_linked", "verified"),
-            max_attempts=max_attempts,
-        )
-
-    # Conflict -> manual_review, durably recorded
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        mutations = _Scripted([MutationOutcomeKind.CONFLICT])
-        adapter = LifecycleExecutionFixture(mutations)
-        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=adapter, execution=adapter,
-                                               outbox=outbox, owner="test")
-        p = _plan("00000000-0000-4000-8000-000000000301", "00000000-0000-4000-8000-000000000302")
-        service.stage(p, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        result = service.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(result.outcomes[0].kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
-               f"conflict should surface as manual_review: {result.outcomes[0]}")
-        _, status = outbox.status()
-        expect(status["states"].get("manual_review") == 1, f"conflict was not durably recorded: {status}")
-
-    # Retryable at budget exhaustion -> quarantined, not infinite loop
-    with tempfile.TemporaryDirectory() as td:
-        outbox2 = LifecycleOutboxRepository(Path(td))
-        mutations2 = _Scripted([MutationOutcomeKind.RETRYABLE])
-        adapter2 = LifecycleExecutionFixture(mutations2)
-        service2 = LifecycleApplicationService(unit_of_work=_Uow(), mutations=adapter2, execution=adapter2,
-                                                outbox=outbox2, owner="test")
-        p2 = _plan("00000000-0000-4000-8000-000000000303", "00000000-0000-4000-8000-000000000304", max_attempts=1)
-        service2.stage(p2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        result2 = service2.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(result2.outcomes[0].kind is LifecycleApplicationOutcomeKind.QUARANTINED,
-               f"budget exhaustion should quarantine: {result2.outcomes[0]}")
-        _, status2 = outbox2.status()
-        expect(status2["states"].get("quarantined") == 1, f"record was not quarantined: {status2}")
-
-
-def test_lifecycle_application_renews_batch_leases_before_mutation():
-    """A slow batched import must not proceed to parent linking after expiry."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
-    from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
-
-    now = [100.0]
-
-    class _Scripted:
-        def __init__(self):
-            self.calls = []
-
-        def apply(self, request):
-            self.calls.append(request.operation)
-            postcondition = {
-                MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
-                MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
-            }.get(request.operation)
-            return MutationOutcome(
-                request.operation,
-                MutationOutcomeKind.APPLIED,
-                request.guard,
-                (postcondition,) if postcondition else (),
-            )
-
-    class _Uow:
-        mutation_epoch = 0
-
-    class _SlowExecution(LifecycleExecutionFixture):
-        def apply_lifecycle_children_unverified(self, requests):
-            outcomes = super().apply_lifecycle_children_unverified(requests)
-            now[0] += 2.0
-            return outcomes
-
-    def make_plan(parent_uuid, child_uuid, chain_id):
-        guard = ParentGuard("completed", "on", chain_id, 1, f"rf-{chain_id}", "20260101T000000Z")
-        identity = LifecycleIdentity(chain_id, parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        return _plan_from_values(
-            identity=identity,
-            action=LifecycleAction.SPAWN_CHILD,
-            parent_guard=guard,
-            child_payload={"uuid": child_uuid, "chainID": chain_id, "link": 2, "prevLink": parent_uuid[:8]},
-            parent_patch={"nextLink": child_uuid[:8]},
-            expected_postconditions=("child_present", "parent_linked", "verified"),
-        )
-
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
-        mutations = _Scripted()
-        adapter = _SlowExecution(mutations)
-        service = LifecycleApplicationService(
-            unit_of_work=_Uow(), mutations=adapter, execution=adapter,
-            outbox=outbox, owner="slow-batch", lease_seconds=1.0
-        )
-        first = make_plan(
-            "00000000-0000-4000-8000-000000000601",
-            "00000000-0000-4000-8000-000000000602",
-            "chain-s3a",
-        )
-        second = make_plan(
-            "00000000-0000-4000-8000-000000000603",
-            "00000000-0000-4000-8000-000000000604",
-            "chain-s3b",
-        )
-        service.stage(first, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        service.stage(second, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-
-        result = service.drain(limit=2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(len(result.outcomes) == 2, f"expected both claimed records: {result.outcomes}")
-        expect(all(item.kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW for item in result.outcomes),
-               f"expired batch lease was not rejected before verification: {result.outcomes}")
-        expect(
-            mutations.calls == [MutationOperation.CHILD_IMPORT, MutationOperation.CHILD_IMPORT],
-            f"parent mutation ran after the batch lease expired: {mutations.calls}",
-        )
-
-
-def test_lifecycle_application_idempotency_and_duplicate_staging():
-    """Staging the same plan twice is idempotent; draining an already-applied
-    intent produces already_applied and draining an empty outbox is a no-op."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import (
-        LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
-    )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
-        LifecycleApplicationService, LifecycleApplicationOutcomeKind,
-    )
-    from nautical_core.integration_models import (
-        MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition,
-    )
-
-    class _Scripted:
-        def __init__(self, script):
-            self.script = list(script)
-        def apply(self, request):
-            item = self.script.pop(0)
-            pc = {MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
-                  MutationOperation.PARENT_LINK:  MutationPostcondition.PARENT_LINKED}.get(request.operation)
-            return MutationOutcome(request.operation, item, request.guard, (pc,) if item is MutationOutcomeKind.APPLIED and pc else ())
-
-    class _Uow:
-        mutation_epoch = 0
-
-    guard = ParentGuard("completed", "on", "chain-s12d", 1, "rf1-s12d", "20260101T000000Z")
-    identity = LifecycleIdentity("chain-s12d", "00000000-0000-4000-8000-000000000401", 1, 2, LifecycleEvent.COMPLETE)
-    plan = _plan_from_values(
-        identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-        child_payload={"uuid": "00000000-0000-4000-8000-000000000402", "chainID": "chain-s12d", "link": 2, "prevLink": "00000000"},
-        parent_patch={"nextLink": "00000000"},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    )
-
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        mutations = _Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.APPLIED])
-        adapter = LifecycleExecutionFixture(mutations)
-        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=adapter, execution=adapter,
-                                               outbox=outbox, owner="test")
-        r1 = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        r2 = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(r1.kind is LifecycleApplicationOutcomeKind.APPLIED, f"first stage failed: {r1}")
-        expect(r2.kind is LifecycleApplicationOutcomeKind.ALREADY_APPLIED, f"duplicate stage not idempotent: {r2}")
-        _, status = outbox.status()
-        expect(len(status["records"]) == 1, f"duplicate staging created a second record: {status}")
-
-        # drain once -> applied
-        d1 = service.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(d1.outcomes[0].ok, f"first drain failed: {d1.outcomes[0]}")
-        # drain again -> empty (acknowledged, not claimed again)
-        d2 = service.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(len(d2.outcomes) == 0, f"second drain should find nothing: {d2.outcomes}")
-
-
-def test_lifecycle_application_execute_staged_targets_exact_intent():
-    """execute_staged claims only the named intent and leaves unrelated queued
-    work completely untouched."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import (
-        LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
-    )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
-        LifecycleApplicationService, LifecycleApplicationOutcomeKind,
-    )
-    from nautical_core.integration_models import (
-        MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition,
-    )
-
-    class _Scripted:
-        def __init__(self, script):
-            self.script = list(script)
-            self.calls = []
-        def apply(self, request):
-            self.calls.append(request.operation)
-            item = self.script.pop(0)
-            pc = {MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
-                  MutationOperation.PARENT_LINK:  MutationPostcondition.PARENT_LINKED}.get(request.operation)
-            return MutationOutcome(request.operation, item, request.guard, (pc,) if item is MutationOutcomeKind.APPLIED and pc else ())
-
-    class _Uow:
-        mutation_epoch = 0
-
-    def _plan(parent_uuid, child_uuid, chain_id):
-        guard = ParentGuard("completed", "on", chain_id, 1, f"rf1-{chain_id}", "20260101T000000Z")
-        identity = LifecycleIdentity(chain_id, parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        return _plan_from_values(
-            identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-            child_payload={"uuid": child_uuid, "chainID": chain_id, "link": 2, "prevLink": parent_uuid[:8]},
-            parent_patch={"nextLink": child_uuid[:8]},
-            expected_postconditions=("child_present", "parent_linked", "verified"),
-        )
-
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        mutations = _Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.APPLIED])
-        adapter = LifecycleExecutionFixture(mutations)
-        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=adapter, execution=adapter, outbox=outbox, owner="reconcile")
-
-        other_plan = _plan("00000000-0000-4000-8000-000000000501", "00000000-0000-4000-8000-000000000502", "chain-other-s12")
-        my_plan    = _plan("00000000-0000-4000-8000-000000000503", "00000000-0000-4000-8000-000000000504", "chain-mine-s12")
-
-        service.stage(other_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        service.stage(my_plan,   configuration_fingerprint="cfg", schedule_fingerprint="sch")
-
-        outcome = service.execute_staged(my_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(outcome.kind is LifecycleApplicationOutcomeKind.APPLIED, f"execute_staged failed: {outcome}")
-        expect(outcome.intent_id == my_plan.identity.idempotency_key, "wrong intent executed")
-
-        _, status = outbox.status()
-        other_row = next(r for r in status["records"] if r["intent_id"] == other_plan.identity.idempotency_key)
-        expect(other_row["state"] == "ready" and other_row["stage"] == "planned",
-               f"unrelated intent was disturbed: {other_row}")
-
-
-def test_lifecycle_application_staging_only_service_rejects_execution():
-    """A service built without unit_of_work/mutations may stage but not execute."""
-    import tempfile
-    from pathlib import Path
-    from nautical_core.lifecycle_models import (
-        LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
-    )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
-        LifecycleApplicationService, LifecycleApplicationOutcomeKind, LifecycleApplicationError,
-    )
-
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        service = LifecycleApplicationService(outbox=outbox, owner="on-modify")  # no uow/mutations
-
-        guard = ParentGuard("completed", "on", "chain-s12e", 1, "rf1-s12e", "20260101T000000Z")
-        identity = LifecycleIdentity("chain-s12e", "00000000-0000-4000-8000-000000000601", 1, 2, LifecycleEvent.COMPLETE)
-        plan = _plan_from_values(
-            identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-            child_payload={"uuid": "00000000-0000-4000-8000-000000000602", "chainID": "chain-s12e", "link": 2, "prevLink": "00000000"},
-            parent_patch={"nextLink": "00000000"},
-            expected_postconditions=("child_present", "parent_linked", "verified"),
-        )
-        staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        expect(staged.ok, f"staging-only service failed to stage: {staged}")
-
-        raised = False
-        try:
-            service.drain(limit=5, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        except LifecycleApplicationError:
-            raised = True
-        expect(raised, "drain() on staging-only service must raise LifecycleApplicationError")
-
-
-def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
+def _legacy_test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
     """Staging via on-modify's _enqueue_spawn_intent must persist the parent
     guard that authorized the spawn, and the intent_id must be stable across
     repeated calls for the same transition."""
@@ -19219,7 +15410,7 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
         LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
         recurrence_fingerprint,
     )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_staged_guard_test")
@@ -19278,7 +15469,7 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
         ok, reason = spawn_effects.enqueue_spawn_intent(ports, plan)
         expect(ok, f"_enqueue_spawn_intent failed: {reason}")
 
-        outbox = LifecycleOutboxRepository(root)
+        outbox = _LifecycleOutboxRepository(root)
         _, status = outbox.status()
         expect(len(status["records"]) == 1, f"expected 1 staged record: {status}")
         record = status["records"][0]
@@ -19309,21 +15500,7 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
 
 
 TESTS.extend([
-    test_lifecycle_application_happy_path_real_stack,
-    test_lifecycle_application_crash_at_each_stage_resumes_without_remutation,
-    test_lifecycle_application_conflict_and_retry_budget_outcomes,
-    test_lifecycle_application_outbox_faults_are_retryable,
-    test_lifecycle_application_stage_failure_matrix_resumes_idempotently,
-    test_lifecycle_outbox_two_process_claims_are_exclusive,
-    test_lifecycle_queue_and_reconcile_claims_are_exclusive,
-    test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process,
-    test_lifecycle_shuffled_process_drains_converge_to_same_outbox_state,
-    test_lifecycle_configuration_drift_blocks_mutation,
-    test_lifecycle_application_renews_batch_leases_before_mutation,
-    test_lifecycle_application_idempotency_and_duplicate_staging,
-    test_lifecycle_application_execute_staged_targets_exact_intent,
-    test_lifecycle_application_staging_only_service_rejects_execution,
-    test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id,
+    *LIFECYCLE_TESTS,
 ])
 
 if __name__ == "__main__":

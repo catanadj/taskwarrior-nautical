@@ -182,8 +182,10 @@ def workflow_fixture(
             schedule_fingerprint = str(workflow_fingerprints["schedule"])
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise RuntimeError("workflow fingerprint probe returned invalid JSON") from exc
-        for key in ("NAUTICAL_DIAG", "NAUTICAL_DIAG_LOG", "NAUTICAL_PROFILE"):
+        for key in ("NAUTICAL_DIAG_LOG", "NAUTICAL_PROFILE"):
             base_env.pop(key, None)
+        if os.environ.get("NAUTICAL_DIAG") != "1":
+            base_env.pop("NAUTICAL_DIAG", None)
         yield WorkflowContext(
             root=root,
             real_task=real_task,

@@ -146,7 +146,7 @@ def _read_toml(path: str) -> dict:
     return _read_toml_result(path).data
 
 
-def _read_toml_result(path: str):
+def _read_toml_result(path: str) -> Any:
     return _load_support_module("config_support").read_toml_result(
         path,
         tomllib_mod=_load_tomllib(),
@@ -385,7 +385,26 @@ def ensure_loaded() -> None:
     _LOADED_CONFIG_FINGERPRINT = effective_config_fingerprint()
 
 
-def conf_raw(key: str):
+def loaded_config_value(key: str, default: Any = None) -> Any:
+    """Read a validated setting through the canonical loaded configuration.
+
+    Module-level names such as ``LOCAL_TZ_NAME`` are compatibility snapshots.
+    Internal consumers should use this accessor so a read cannot observe the
+    import-time defaults before configuration initialization has run.
+    """
+    ensure_loaded()
+    return _CONF.get(str(key), default)
+
+
+def loaded_config_snapshot() -> dict[str, Any]:
+    """Return an isolated copy of the validated configuration values."""
+    import copy
+
+    ensure_loaded()
+    return copy.deepcopy(dict(_CONF))
+
+
+def conf_raw(key: str) -> Any:
     return _load_support_module("config_support").conf_raw(_CONF, key)
 
 
@@ -459,7 +478,7 @@ def conf_schema_bool(
     )
 
 
-def trueish(v, default=False):
+def trueish(v: Any, default: bool = False) -> bool:
     return _load_support_module("config_support").trueish(v, default=default)
 
 
@@ -623,18 +642,18 @@ def reload_for_taskdata(taskdata: str | os.PathLike[str]) -> ConfigReloadResult:
     }
 
 
-def ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
+def ttl_lru_cache(maxsize: int = 128, ttl: float | None = None) -> Any:
     import time
     from functools import lru_cache, wraps
 
     ttl_val = CACHE_TTL_SECS if ttl is None else ttl
 
-    def _decorator(fn):
+    def _decorator(fn: Any) -> Any:
         cached = lru_cache(maxsize=maxsize)(fn)
         last = {"t": time.time()}
 
         @wraps(fn)
-        def _wrapper(*args, **kwargs):
+        def _wrapper(*args: Any, **kwargs: Any) -> Any:
             if ttl_val and (time.time() - last["t"] > ttl_val):
                 cached.cache_clear()
                 last["t"] = time.time()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import re
+from typing import Any
 
 
 def _is_random_spec(spec: str) -> bool:
@@ -13,11 +14,11 @@ def doms_for_monthly_token(
     y: int,
     m: int,
     *,
-    monthly_alias,
-    days_in_month,
-    re_mod,
-    nth_re,
-    wd_idx,
+    monthly_alias: Any,
+    days_in_month: Any,
+    re_mod: Any,
+    nth_re: Any,
+    wd_idx: Any,
 ) -> set[int]:
     tok = (tok or "").strip().lower()
     if tok in monthly_alias:
@@ -63,8 +64,8 @@ def month_allowed_doms_for_monthly_atom(
     m: int,
     dim: int,
     *,
-    split_csv_lower,
-    doms_for_monthly_token,
+    split_csv_lower: Any,
+    doms_for_monthly_token: Any,
 ) -> set[int]:
     spec = str(atom.get("spec") or "")
     toks = split_csv_lower(spec)
@@ -86,7 +87,7 @@ def intersect_monthly_atoms_allowed(
     m: int,
     dim: int,
     allowed: set[int],
-    month_allowed_doms_for_monthly_atom,
+    month_allowed_doms_for_monthly_atom: Any,
 ) -> set[int]:
     out = set(allowed)
     for atom in term:
@@ -99,18 +100,18 @@ def intersect_monthly_atoms_allowed(
     return out
 
 
-def month_doms_safe(spec: str, y: int, m: int, *, expand_monthly_cached) -> list[int]:
+def month_doms_safe(spec: str, y: int, m: int, *, expand_monthly_cached: Any) -> list[int]:
     try:
         return sorted(expand_monthly_cached(spec, y, m))
     except Exception:
         return []
 
 
-def month_has_hit(spec: str, y: int, m: int, *, month_doms_safe) -> bool:
+def month_has_hit(spec: str, y: int, m: int, *, month_doms_safe: Any) -> bool:
     return bool(month_doms_safe(spec, y, m))
 
 
-def first_hit_after_probe_in_month(spec: str, y: int, m: int, probe: date, *, month_doms_safe) -> date | None:
+def first_hit_after_probe_in_month(spec: str, y: int, m: int, probe: date, *, month_doms_safe: Any) -> date | None:
     for d0 in month_doms_safe(spec, y, m):
         dt = date(y, m, d0)
         if dt > probe:
@@ -118,7 +119,7 @@ def first_hit_after_probe_in_month(spec: str, y: int, m: int, probe: date, *, mo
     return None
 
 
-def next_valid_month_on_or_after(spec: str, y: int, m: int, *, month_has_hit) -> tuple[int, int]:
+def next_valid_month_on_or_after(spec: str, y: int, m: int, *, month_has_hit: Any) -> tuple[int, int]:
     yy, mm = y, m
     for _ in range(480):
         if month_has_hit(spec, yy, mm):
@@ -130,7 +131,7 @@ def next_valid_month_on_or_after(spec: str, y: int, m: int, *, month_has_hit) ->
     return y, m
 
 
-def advance_k_valid_months(spec: str, start_y: int, start_m: int, k: int, *, next_valid_month_on_or_after) -> tuple[int, int]:
+def advance_k_valid_months(spec: str, start_y: int, start_m: int, k: int, *, next_valid_month_on_or_after: Any) -> tuple[int, int]:
     yy, mm = start_y, start_m
     steps = max(k, 0)
     while steps >= 0:
@@ -150,11 +151,11 @@ def monthly_align_base_for_interval(
     seed: date,
     ival: int,
     *,
-    month_has_hit,
-    next_valid_month_on_or_after,
-    first_hit_after_probe_in_month,
-    advance_k_valid_months,
-    month_doms_safe,
+    month_has_hit: Any,
+    next_valid_month_on_or_after: Any,
+    first_hit_after_probe_in_month: Any,
+    advance_k_valid_months: Any,
+    month_doms_safe: Any,
 ) -> date:
     by, bm = base.year, base.month
     sy, sm = next_valid_month_on_or_after(spec, seed.year, seed.month)

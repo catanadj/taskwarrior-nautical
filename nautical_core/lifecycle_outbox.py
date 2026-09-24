@@ -18,7 +18,6 @@ import sqlite3
 import stat
 import time
 from typing import Any, Callable, Iterator, Mapping, Sequence
-import uuid
 
 from nautical_core.lifecycle_models import ExecutionStage, LifecyclePlan
 from nautical_core.lifecycle_outbox_codec import (
@@ -28,8 +27,8 @@ from nautical_core.lifecycle_outbox_codec import (
     transition_allowed,
 )
 from nautical_core.lifecycle_outbox_schema import (
-    OUTBOX_LEGACY_SCHEMA_VERSION,
     OUTBOX_SCHEMA_VERSION,
+    OUTBOX_LEGACY_SCHEMA_VERSION,
     _INIT_BACKOFF_S,
     _INIT_RETRIES,
     _MAX_INIT_BACKOFF_S,

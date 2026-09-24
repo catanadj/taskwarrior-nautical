@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from datetime import date, timedelta
+from typing import Any
 
 from .business_calendar import (
     DEFAULT_BUSINESS_CALENDAR,
@@ -31,7 +32,7 @@ def week_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def random_identity(value) -> str:
+def random_identity(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
 
 
@@ -70,7 +71,7 @@ def random_count_from_spec(spec: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def dnf_has_counted_random(dnf) -> bool:
+def dnf_has_counted_random(dnf: Any) -> bool:
     for term in dnf or []:
         for atom in term or []:
             count = random_count_from_spec(atom.get("spec") or atom.get("value") or "")
@@ -142,7 +143,7 @@ def is_bd(
     return business_calendar.is_business_day(dt)
 
 
-def term_rand_info(term):
+def term_rand_info(term: Any) -> Any:
     for i, atom in enumerate(term):
         typ = (atom.get("typ") or atom.get("type") or "").lower()
         spec = str(atom.get("spec") or atom.get("value") or "").lower()
@@ -194,7 +195,7 @@ def term_rand_info(term):
     return (None, None)
 
 
-def filter_by_w(dt_list, term, *, atype, aspec, weekly_spec_to_wset):
+def filter_by_w(dt_list: Any, term: Any, *, atype: Any, aspec: Any, weekly_spec_to_wset: Any) -> Any:
     allowed = None
     for atom in term:
         if atype(atom) != "w":
@@ -214,12 +215,12 @@ def month_tokens_for_atom_values(
     m: int,
     spec: str,
     *,
-    expand_monthly_aliases,
-    days_in_month,
-    bd_re,
-    nth_weekday_re,
-    weekday_map,
-    re_mod,
+    expand_monthly_aliases: Any,
+    days_in_month: Any,
+    bd_re: Any,
+    nth_weekday_re: Any,
+    weekday_map: Any,
+    re_mod: Any,
     business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
 ) -> set[int]:
     spec = expand_monthly_aliases(spec)
@@ -265,7 +266,7 @@ def month_tokens_for_atom_values(
         except Exception:
             return out
 
-        def norm(n):
+        def norm(n: Any) -> int:
             return ndays + n + 1 if n < 0 else n
 
         lo, hi = norm(a_i), norm(b_i)
@@ -286,7 +287,7 @@ def month_tokens_for_atom_values(
     return out
 
 
-def month_tokens_for_atom(atom: dict, y: int, m: int, *, month_tokens_for_atom_cached) -> set[int]:
+def month_tokens_for_atom(atom: dict, y: int, m: int, *, month_tokens_for_atom_cached: Any) -> set[int]:
     spec = str(atom.get("spec")).lower().strip()
     return month_tokens_for_atom_cached(y, m, spec)
 
@@ -298,14 +299,14 @@ def term_candidates_in_month(
     rand_atom_idx: int,
     bd_only: bool,
     *,
-    days_in_month,
-    is_bd,
-    filter_by_w,
-    atype,
-    aspec,
-    month_tokens_for_atom,
-    doms_allowed_by_year,
-):
+    days_in_month: Any,
+    is_bd: Any,
+    filter_by_w: Any,
+    atype: Any,
+    aspec: Any,
+    month_tokens_for_atom: Any,
+    doms_allowed_by_year: Any,
+) -> Any:
     days = list(range(1, days_in_month(y, m) + 1))
     dates = [date(y, m, d) for d in days]
 
@@ -343,11 +344,11 @@ def term_candidates_in_month(
     return dates
 
 
-def expand_weekly(spec: str, *, weekly_spec_to_wset):
+def expand_weekly(spec: str, *, weekly_spec_to_wset: Any) -> Any:
     return sorted(weekly_spec_to_wset(spec, mods=None))
 
 
-def expand_weekly_mods(spec: str, bd_only: bool, *, expand_weekly_cached):
+def expand_weekly_mods(spec: str, bd_only: bool, *, expand_weekly_cached: Any) -> Any:
     days = expand_weekly_cached(spec)
     if bd_only:
         days = [d for d in days if d in WEEKDAY_BUSINESS_DAYS]
@@ -358,11 +359,11 @@ def expand_yearly(
     spec: str,
     y: int,
     *,
-    rewrite_month_names_to_ranges,
-    split_csv_lower,
-    re_mod,
-    month_len,
-    yearfmt,
+    rewrite_month_names_to_ranges: Any,
+    split_csv_lower: Any,
+    re_mod: Any,
+    month_len: Any,
+    yearfmt: Any,
 ) -> list[date]:
     spec = rewrite_month_names_to_ranges(spec)
     if not spec:
@@ -509,26 +510,26 @@ def expand_monthly(
     y: int,
     m: int,
     *,
-    month_len,
-    expand_monthly_aliases,
-    split_csv_lower,
-    nth_weekday_re,
-    bd_re,
-    weekday_map,
-    re_mod,
+    month_len: Any,
+    expand_monthly_aliases: Any,
+    split_csv_lower: Any,
+    nth_weekday_re: Any,
+    bd_re: Any,
+    weekday_map: Any,
+    re_mod: Any,
     business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
 ) -> list[int]:
     out = set()
     last = month_len(y, m)
     spec = expand_monthly_aliases(spec)
 
-    def resolve_num(n):
+    def resolve_num(n: Any) -> Any:
         if n < 0:
             k = last + 1 + n
             return k if 1 <= k <= last else None
         return n if 1 <= n <= last else None
 
-    def nth_weekday(n: int, wd: int):
+    def nth_weekday(n: int, wd: int) -> Any:
         if n == 0:
             return None
         if n > 0:

@@ -9,7 +9,7 @@ from nautical_core.operator_inspectors import (ChainIntegrityInspector, Configur
     classify_historical, inspect_component_availability, inspect_component_validity, inspect_snapshot,
     inspect_snapshot_consistency, inspect_snapshot_coverage, inspect_snapshot_limits, inspect_standard_components,
     inspect_integrity_findings, inspect_lifecycle_outcomes, inspect_occurrence_collection,
-    inspect_operator_snapshot, prioritize_findings, run_inspectors, standard_inspector_bundle)
+    prioritize_findings, run_inspectors, standard_inspector_bundle)
 from nautical_core.operator_findings import FindingSeverity, OperatorFinding
 from nautical_core.operator_models import CoverageKind, CoverageRequirement, OperatorLimits, OperatorScope, OperatorScopeKind
 from nautical_core.operator_snapshot import OperatorSnapshot, SnapshotComponent, SnapshotIndexes

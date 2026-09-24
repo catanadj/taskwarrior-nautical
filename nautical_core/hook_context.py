@@ -162,7 +162,7 @@ def build_on_add_context(
 
 
 def build_on_add_request(
-    *, runtime: HookRuntimeContext, task: TaskPayload, observation: TaskObservation | None = None, prof=None,
+    *, runtime: HookRuntimeContext, task: TaskPayload, observation: TaskObservation | None = None, prof: Any = None,
 ) -> OnAddRequest:
     return OnAddRequest(runtime=runtime, task=task, observation=observation, prof=prof)
 

@@ -39,7 +39,7 @@ from nautical_core.integration_models import (
     MutationOutcomeKind,
     Unavailable,
 )
-from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
 from nautical_core.lifecycle_models import (
     LifecycleAction,
@@ -365,7 +365,7 @@ class ChainIntegrityEngineTests(unittest.TestCase):
                 )
 
         with TemporaryDirectory() as directory:
-            outbox = LifecycleOutboxRepository(Path(directory))
+            outbox = _LifecycleOutboxRepository(Path(directory))
             self.assertTrue(outbox.open().ok)
             engine = ChainIntegrityEngine(Provider(), configuration_fingerprint="cfg-engine")
             audited = engine.audit(IntegritySnapshotRequest.chain("engine-chain"), outbox_repository=outbox)
@@ -398,7 +398,7 @@ class ChainIntegrityEngineTests(unittest.TestCase):
                 )
 
         with TemporaryDirectory() as directory:
-            outbox = LifecycleOutboxRepository(Path(directory))
+            outbox = _LifecycleOutboxRepository(Path(directory))
             self.assertTrue(outbox.open().ok)
             engine = ChainIntegrityEngine(Provider(), configuration_fingerprint="cfg-parity")
             first = engine.audit(IntegritySnapshotRequest.chain("parity-chain"), outbox_repository=outbox)
@@ -445,7 +445,7 @@ class ChainIntegrityEngineTests(unittest.TestCase):
         provider = Provider()
         engine = ChainIntegrityEngine(provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=1)
         with TemporaryDirectory() as directory:
-            outbox = LifecycleOutboxRepository(Path(directory))
+            outbox = _LifecycleOutboxRepository(Path(directory))
             self.assertTrue(outbox.open().ok)
             result = engine.audit(IntegritySnapshotRequest.candidates(), outbox_repository=outbox)
         self.assertNotEqual(result.status.value, "unavailable")
@@ -469,7 +469,7 @@ class ChainIntegrityEngineTests(unittest.TestCase):
             busy_provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=1
         )
         with TemporaryDirectory() as directory:
-            outbox = LifecycleOutboxRepository(Path(directory))
+            outbox = _LifecycleOutboxRepository(Path(directory))
             self.assertTrue(outbox.open().ok)
             unavailable = busy_engine.audit(
                 IntegritySnapshotRequest.candidates(), outbox_repository=outbox

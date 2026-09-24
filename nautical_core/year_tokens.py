@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+from typing import Any
 from . import common as _common
 from . import tokenutil as _tokenutil
 
 
-def year_full_months_span_token(m1: int, m2: int, *, tok_range) -> str:
+def year_full_months_span_token(m1: int, m2: int, *, tok_range: Any) -> str:
     """Full span across months [m1..m2], respecting the caller's year format."""
     return tok_range(1, int(m1), 31, int(m2))
 
 
-def rewrite_month_names_to_ranges(spec: str, *, tok_range) -> str:
+def rewrite_month_names_to_ranges(spec: str, *, tok_range: Any) -> str:
     if not spec:
         return spec
 
@@ -39,11 +40,11 @@ def rewrite_month_names_to_ranges(spec: str, *, tok_range) -> str:
     return ",".join(dedup)
 
 
-def year_full_month_range_token(mm: int, *, tok_range) -> str:
+def year_full_month_range_token(mm: int, *, tok_range: Any) -> str:
     return tok_range(1, int(mm), 31, int(mm))
 
 
-def rewrite_year_month_aliases_in_context(dnf: list[list[dict]], *, tok_range) -> list[list[dict]]:
+def rewrite_year_month_aliases_in_context(dnf: list[list[dict]], *, tok_range: Any) -> list[list[dict]]:
     """
     In-place normalize yearly specs that are pure month references into
     full-month numeric ranges that the yearly gate understands.

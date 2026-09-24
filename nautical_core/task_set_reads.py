@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Mapping, Protocol, Sequence, cast
 from uuid import UUID
 
-from .integration_models import Absent, FailureEvidence, Found, TaskCommandResult, TaskRead, Unavailable
+from .integration_models import Absent, FailureEvidence, TaskCommandResult, TaskRead, Unavailable
 from .task_models import ALL_TASK_STATUSES, FieldPresence, TaskObservation
 
 

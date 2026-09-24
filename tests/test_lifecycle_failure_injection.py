@@ -26,7 +26,7 @@ from nautical_core.lifecycle_models import ExecutionStage, LifecycleDrainProgres
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 from nautical_core.lifecycle_outbox import (
     LifecycleOutboxRecord,
-    LifecycleOutboxRepository,
+    _LifecycleOutboxRepository,
     OutboxFailure,
     OutboxResult,
     OutboxResultKind,
@@ -35,7 +35,7 @@ from nautical_core.operator_context import OperatorInvocationBudget
 from nautical_core.operator_models import OperatorLimits
 from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
 
-from dev_tools.nautical_golden_tests import (
+from dev_tools.golden_tests.lifecycle import (
     test_lifecycle_application_conflict_and_retry_budget_outcomes,
     test_lifecycle_application_crash_at_each_stage_resumes_without_remutation,
     test_lifecycle_application_outbox_faults_are_retryable,
@@ -48,7 +48,7 @@ from tests.support.lifecycle_execution import LifecycleExecutionFixture
 class LifecycleFailureInjectionTests(unittest.TestCase):
     def test_outbox_session_reuses_one_connection_and_closes_at_boundary(self) -> None:
         with TemporaryDirectory() as directory:
-            repo = LifecycleOutboxRepository(Path(directory))
+            repo = _LifecycleOutboxRepository(Path(directory))
             connects = 0
             original_connect = repo._connect
 
@@ -72,7 +72,7 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
 
     def test_sqlite_busy_timeout_uses_configured_seconds_as_milliseconds(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td), connect_timeout=0.1)
+            outbox = _LifecycleOutboxRepository(Path(td), connect_timeout=0.1)
             connection = outbox._connect()
             try:
                 self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 100)
@@ -82,7 +82,7 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
     def test_lease_renewal_samples_clock_after_transaction_acquisition(self) -> None:
         with TemporaryDirectory() as td:
             clock = [100.0]
-            outbox = LifecycleOutboxRepository(Path(td), clock=lambda: clock[0])
+            outbox = _LifecycleOutboxRepository(Path(td), clock=lambda: clock[0])
             plan = self._bulk_plan(
                 "lease-clock", "00000000-0000-4000-8000-000000000901",
                 "00000000-0000-4000-8000-000000000902", 1,
@@ -110,7 +110,7 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
     def test_lease_renewal_refuses_expired_lease_after_transaction_acquisition(self) -> None:
         with TemporaryDirectory() as td:
             clock = [100.0]
-            outbox = LifecycleOutboxRepository(Path(td), clock=lambda: clock[0])
+            outbox = _LifecycleOutboxRepository(Path(td), clock=lambda: clock[0])
             plan = self._bulk_plan(
                 "lease-expired", "00000000-0000-4000-8000-000000000911",
                 "00000000-0000-4000-8000-000000000912", 1,
@@ -132,7 +132,7 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
 
     def test_wal_writer_contention_returns_bounded_retryable_claim(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td), connect_timeout=0.1)
+            outbox = _LifecycleOutboxRepository(Path(td), connect_timeout=0.1)
             plan = self._bulk_plan(
                 "lease-contention", "00000000-0000-4000-8000-000000000921",
                 "00000000-0000-4000-8000-000000000922", 1,
@@ -162,7 +162,7 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
 
     def test_renewal_ownership_matrix_is_explicit(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             plan = self._bulk_plan(
                 "lease-matrix", "00000000-0000-4000-8000-000000000931",
                 "00000000-0000-4000-8000-000000000932", 1,
@@ -184,9 +184,9 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
 import json
 import sys
 from pathlib import Path
-from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 
-repo = LifecycleOutboxRepository(Path(sys.argv[1]))
+repo = _LifecycleOutboxRepository(Path(sys.argv[1]))
 ids = tuple(json.loads(sys.argv[3]))
 if sys.argv[2] == "batch":
     overall, records = repo.claim_batch(owner=sys.argv[4], lease_seconds=30, limit=len(ids))
@@ -209,7 +209,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def _assert_process_race(self, mode_a: str, mode_b: str) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             plans = tuple(
                 self._bulk_plan(
                     f"process-race-{idx}",
@@ -278,7 +278,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def test_same_plan_reopens_manual_review_after_configuration_drift(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             plan = self._bulk_plan(
                 "config-drift", "00000000-0000-4000-8000-000000000701",
                 "00000000-0000-4000-8000-000000000702", 1,
@@ -300,7 +300,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def test_bulk_enqueue_and_exact_claim_are_scoped_and_idempotent(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             plans = tuple(
                 self._bulk_plan(
                     f"bulk-{idx}",
@@ -334,7 +334,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def test_bulk_enqueue_commits_before_a_fresh_repository_claims(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             plan = self._bulk_plan(
                 "durable-chain",
                 "00000000-0000-4000-8000-000000000601",
@@ -349,7 +349,7 @@ print(json.dumps(payload, sort_keys=True))
 
             # A separate repository/connection must see the committed intent,
             # which is the recovery boundary after a process interruption.
-            recovered = LifecycleOutboxRepository(Path(td))
+            recovered = _LifecycleOutboxRepository(Path(td))
             claim, claimed = recovered.claim_intents(
                 intent_ids=(plan.identity.idempotency_key,), owner="recovery", lease_seconds=30
             )
@@ -358,7 +358,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def test_stage_lock_is_retryable_and_does_not_duplicate_intent(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             plan = self._bulk_plan(
                 "stage-interrupt",
                 "00000000-0000-4000-8000-000000000611",
@@ -382,7 +382,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def test_acknowledgement_lock_is_retryable_and_duplicate_enqueue_is_idempotent(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             plan = self._bulk_plan(
                 "ack-interrupt",
                 "00000000-0000-4000-8000-000000000621",
@@ -405,7 +405,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def test_poisoned_intent_does_not_block_healthy_chain_claim(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             poisoned = self._bulk_plan(
                 "poison-chain", "00000000-0000-4000-8000-000000000631",
                 "00000000-0000-4000-8000-000000000632", 1,
@@ -428,7 +428,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def test_bulk_enqueue_rollback_leaves_no_phantom_intents(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             plans = tuple(
                 self._bulk_plan(
                     f"rollback-{idx}",
@@ -455,13 +455,13 @@ print(json.dumps(payload, sort_keys=True))
             self.assertEqual(overall.kind.value, "rejected")
             self.assertEqual(results, {})
 
-            fresh = LifecycleOutboxRepository(Path(td))
+            fresh = _LifecycleOutboxRepository(Path(td))
             _, status = fresh.status()
             self.assertEqual(status["records"], [])
 
     def test_exact_claim_rollback_leaves_staged_intents_recoverable(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             plans = tuple(
                 self._bulk_plan(
                     f"claim-rollback-{idx}",
@@ -493,7 +493,7 @@ print(json.dumps(payload, sort_keys=True))
 
             # The transaction rollback must return both rows to READY so a
             # later process can claim the complete staged wave.
-            recovered = LifecycleOutboxRepository(Path(td))
+            recovered = _LifecycleOutboxRepository(Path(td))
             claim, claimed = recovered.claim_intents(
                 intent_ids=tuple(plan.identity.idempotency_key for plan in plans),
                 owner="recovery",
@@ -504,7 +504,7 @@ print(json.dumps(payload, sort_keys=True))
 
     def test_execute_wave_claims_only_its_staged_intents(self) -> None:
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             transaction_metrics: list[str] = []
             original_metric = outbox._metric
 
@@ -612,7 +612,7 @@ print(json.dumps(payload, sort_keys=True))
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
         with TemporaryDirectory() as td:
-            outbox = LifecycleOutboxRepository(Path(td))
+            outbox = _LifecycleOutboxRepository(Path(td))
             first_gateway = Gateway()
             first_adapter = LifecycleExecutionFixture(first_gateway)
             first = LifecycleApplicationService(

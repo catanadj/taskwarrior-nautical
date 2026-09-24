@@ -121,7 +121,7 @@ class HintBuilder:
         start_dt: datetime | date | None,
         k_next: int,
         sample_days_for_year: int,
-        now_local,
+        now_local: Any,
         include_per_year: bool = True,
     ) -> dict[str, Any]:
         today = now_local().date()

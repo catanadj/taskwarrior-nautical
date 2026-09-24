@@ -502,6 +502,9 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
         "nautical_core/tools/nautical_install_verify.py",
         "nautical_core/install_runtime.py",
         "nautical_core/lifecycle_outbox.py",
+        # Lifecycle outbox codec owns durable plan JSON, not Taskwarrior/domain
+        # payload parsing; keep it with the repository persistence boundary.
+        "nautical_core/lifecycle_outbox_codec.py",
         "nautical_core/position_selection.py",
         # Operator persistence boundaries decode their own on-disk JSON;
         # these are not Taskwarrior/domain payload re-parsing paths.

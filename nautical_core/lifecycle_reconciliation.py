@@ -9,7 +9,7 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterator, Protocol
 
 from . import chain_integrity_lifecycle as lifecycle
 from .chain_generation import ChainGenerationService
@@ -78,13 +78,13 @@ class CallbackLifecycleApplyOperations:
     terminal_callback: Callable[..., str]
     lock_callback: Callable[..., None]
 
-    def configuration_state(self, hook):
+    def configuration_state(self, hook: Any) -> tuple[str, str]:
         return self.configuration_callback(hook)
 
-    def refresh_plan(self, parent, *, generation):
+    def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any:
         return self.refresh_callback(parent, generation=generation)
 
-    def execute_plan(self, plan, *, parent, child_observation, verified_children, label, strict_uuid):
+    def execute_plan(self, plan: LifecyclePlan, *, parent: TaskObservation, child_observation: TaskObservation | None, verified_children: dict[str, dict[str, Any]] | None, label: str, strict_uuid: bool) -> str:
         return self.execute_callback(
             plan,
             parent=parent,
@@ -94,10 +94,10 @@ class CallbackLifecycleApplyOperations:
             strict_uuid=strict_uuid,
         )
 
-    def terminal_plan(self, plan):
+    def terminal_plan(self, plan: LifecyclePlan) -> str:
         return self.terminal_callback(plan)
 
-    def lock_busy(self, kind):
+    def lock_busy(self, kind: str) -> None:
         self.lock_callback(kind)
 
 
@@ -122,37 +122,37 @@ class CallbackLifecycleRecoveryOperations:
     recovery_terminal_callback: Callable[..., Any]
     recovery_exception_callback: Callable[..., Any]
 
-    def apply_parent(self, parent, **kwargs):
+    def apply_parent(self, parent: TaskPayload, **kwargs: Any) -> tuple[RecoveryResult, str]:
         return self.apply_parent_callback(parent, **kwargs)
 
-    def plan_parent(self, parent, **kwargs):
+    def plan_parent(self, parent: TaskPayload, **kwargs: Any) -> Any:
         return self.plan_parent_callback(parent, **kwargs)
 
-    def next_child(self, parent, child_short):
+    def next_child(self, parent: TaskObservation, child_short: str) -> TaskObservation:
         return self.next_child_callback(parent, child_short)
 
-    def virtual_child(self, plan, **kwargs):
+    def virtual_child(self, plan: LifecyclePlan, **kwargs: Any) -> tuple[VirtualExpiredChild | None, str]:
         return self.virtual_child_callback(plan, **kwargs)
 
-    def terminal_error(self, child, recovery_at):
+    def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str:
         return self.terminal_error_callback(child, recovery_at)
 
-    def is_orphan_deleted(self, child):
+    def is_orphan_deleted(self, child: TaskObservation) -> bool:
         return self.is_orphan_deleted_callback(child)
 
-    def recovery_error(self, parent, reason):
+    def recovery_error(self, parent: TaskPayload, reason: str) -> Any:
         return self.recovery_error_callback(parent, reason)
 
-    def recovery_partial(self, parent, reason):
+    def recovery_partial(self, parent: TaskPayload, reason: str) -> Any:
         return self.recovery_partial_callback(parent, reason)
 
-    def recovery_manual_review(self, parent, reason):
+    def recovery_manual_review(self, parent: TaskPayload, reason: str) -> Any:
         return self.recovery_manual_review_callback(parent, reason)
 
-    def recovery_terminal(self, parent, reason):
+    def recovery_terminal(self, parent: TaskPayload, reason: str) -> Any:
         return self.recovery_terminal_callback(parent, reason)
 
-    def recovery_from_exception(self, parent, exc):
+    def recovery_from_exception(self, parent: TaskPayload, exc: Exception) -> Any:
         return self.recovery_exception_callback(parent, exc)
 
 
@@ -305,7 +305,7 @@ class LifecycleReconciliationService:
             self._wave_children[(slot.chain_id, slot.link)] = () if child is None else (child,)
 
     @contextmanager
-    def reconcile_lock(self, taskdata: Path):
+    def reconcile_lock(self, taskdata: Path) -> Iterator[bool]:
         with safe_lock(
             reconcile_lock_path(taskdata), retries=1, sleep_base=0.0,
             stale_after=_RECONCILE_LOCK_STALE_SECONDS,
@@ -314,7 +314,7 @@ class LifecycleReconciliationService:
             yield acquired
 
     @contextmanager
-    def parent_lock(self, taskdata: Path, parent_uuid: str):
+    def parent_lock(self, taskdata: Path, parent_uuid: str) -> Iterator[bool]:
         with safe_lock(
             parent_nextlink_lock_path(taskdata, parent_uuid),
             retries=_PARENT_LOCK_RETRIES,

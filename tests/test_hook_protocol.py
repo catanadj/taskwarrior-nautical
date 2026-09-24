@@ -8,6 +8,14 @@ from nautical_core import hook_protocol
 
 
 class HookProtocolTests(unittest.TestCase):
+    def test_hook_failure_carries_boundary_message_and_exit_code(self) -> None:
+        from nautical_core.hook_results import HookFailure
+
+        failure = HookFailure("Invalid input", "bad payload")
+        self.assertEqual(failure.title, "Invalid input")
+        self.assertEqual(failure.message, "bad payload")
+        self.assertEqual(failure.code, 1)
+
     """Direct contracts for the lightweight hook-input protocol."""
 
     def test_on_add_classifies_the_complete_nautical_field_matrix_and_rejects_bad_input(self) -> None:

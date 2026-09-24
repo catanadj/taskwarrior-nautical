@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import Any
 
 from .business_calendar import (
     DEFAULT_BUSINESS_CALENDAR,
@@ -16,7 +17,7 @@ def roll_apply(
     dt: date,
     mods: dict,
     *,
-    parse_error_cls,
+    parse_error_cls: Any,
     business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
 ) -> date:
     roll = mods.get("roll")
@@ -105,7 +106,7 @@ def apply_day_offset(
     return adjusted
 
 
-def expr_has_m_or_y(dnf) -> bool:
+def expr_has_m_or_y(dnf: Any) -> bool:
     for term in dnf or []:
         for atom in term:
             if atom.get("kind") == "select":
@@ -120,13 +121,13 @@ def expr_has_m_or_y(dnf) -> bool:
 
 
 def pick_hhmm_from_dnf_for_date(
-    dnf,
+    dnf: Any,
     target: date,
     default_seed: date,
-    seed_base=None,
+    seed_base: Any = None,
     *,
-    atom_matches_on,
-):
+    atom_matches_on: Any,
+) -> Any:
     for term in dnf:
         if all(atom_matches_on(atom, target, default_seed, seed_base=seed_base) for atom in term):
             for atom in term:

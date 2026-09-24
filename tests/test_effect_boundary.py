@@ -28,7 +28,7 @@ from nautical_core.hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from nautical_core.feedback_renderer import PanelView, panel_view_from_facts, render_panel_view
 from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 from nautical_core.task_models import TaskObservation
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 from nautical_core.lifecycle_models import recurrence_fingerprint
@@ -219,7 +219,7 @@ class EffectBoundaryTests(unittest.TestCase):
                 unit_of_work=UnitOfWork(),
                 mutations=lifecycle_gateway,
                 execution=lifecycle_gateway,
-                outbox=LifecycleOutboxRepository(Path(td)),
+                outbox=_LifecycleOutboxRepository(Path(td)),
             ).apply_immediate(plan)
         self.assertEqual(outcome.kind, LifecycleApplicationOutcomeKind.MANUAL_REVIEW)
         self.assertFalse(outcome.ok)

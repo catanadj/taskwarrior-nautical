@@ -1,5 +1,4 @@
 import json
-import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -9,7 +8,7 @@ from pathlib import Path
 from nautical_core.backup_service import StorageIO, create_manifest, publish_manifest
 from nautical_core.restore_service import restore_backup, validate_backup
 from nautical_core.lifecycle_models import ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 from dev_tools.nautical_golden_tests import _task_draft
 
 
@@ -142,7 +141,7 @@ class RestoreServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             live = root / "live"
-            repository = LifecycleOutboxRepository(live)
+            repository = _LifecycleOutboxRepository(live)
             plan = LifecyclePlan.from_draft(
                 identity=LifecycleIdentity("restore-chain", "00000000-0000-4000-8000-000000000801", 1, 2, LifecycleEvent.COMPLETE),
                 action=LifecycleAction.SPAWN_CHILD,
@@ -167,7 +166,7 @@ class RestoreServiceTests(unittest.TestCase):
             target = root / "restored"
             result = restore_backup(backup, target, apply=True)
             self.assertEqual(result.status, "restored")
-            restored = LifecycleOutboxRepository(target)
+            restored = _LifecycleOutboxRepository(target)
             status = restored.status(limit=5)[1]
             self.assertEqual(status["records"][0]["stage"], "child_present")
             resumed = restored.advance_stage(intent_id=intent_id, owner="before-backup", stage=ExecutionStage.PARENT_LINKED)

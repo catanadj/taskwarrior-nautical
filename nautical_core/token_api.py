@@ -10,7 +10,7 @@ from .core_context import CoreContext
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     core = core_namespace(module, namespace, context, "token_api")
 
-    def yearfmt():
+    def yearfmt() -> str:
         fmt = (core.get("ANCHOR_YEAR_FMT") or "MD").upper()
         return "DM" if fmt == "DM" else "MD"
 
@@ -22,7 +22,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             return f"{d1:02d}-{m1:02d}..{d2:02d}-{m2:02d}"
         return f"{m1:02d}-{d1:02d}..{m2:02d}-{d2:02d}"
 
-    def safe_match(pattern, text: str, max_len: int = 256):
+    def safe_match(pattern: Any, text: str, max_len: int = 256) -> Any:
         if text is None:
             return None
         if len(text) > max_len:
@@ -35,14 +35,14 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def split_csv_lower(spec: str) -> list[str]:
         return core["_common"].split_csv_lower(spec)
 
-    def iso_week_index(d) -> int:
+    def iso_week_index(d: Any) -> int:
         iso = d.isocalendar()
         return iso.year * 53 + iso.week
 
-    def month_index(d) -> int:
+    def month_index(d: Any) -> int:
         return d.year * 12 + d.month
 
-    def year_index(d) -> int:
+    def year_index(d: Any) -> int:
         return d.year
 
     def static_month_last_day(mm: int) -> int:

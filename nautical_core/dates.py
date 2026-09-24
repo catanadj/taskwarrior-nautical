@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 
-def month_len(y, m):
+def month_len(y: int, m: int) -> int:
     """Get number of days in month."""
     import calendar
 
@@ -18,7 +18,7 @@ def add_months(d: date, months: int) -> date:
     return date(y, m, min(d.day, last))
 
 
-def months_days_between(d1: date, d2: date):
+def months_days_between(d1: date, d2: date) -> tuple[int, int]:
     """Calculate months and days between two dates."""
     sign = 1
     if d2 < d1:
@@ -32,7 +32,7 @@ def months_days_between(d1: date, d2: date):
     return sign * months, sign * days
 
 
-def humanize_delta(from_dt: datetime, to_dt: datetime, use_months_days: bool):
+def humanize_delta(from_dt: datetime, to_dt: datetime, use_months_days: bool) -> str:
     """Human-readable time difference between datetimes."""
     td = to_dt - from_dt
     if use_months_days:

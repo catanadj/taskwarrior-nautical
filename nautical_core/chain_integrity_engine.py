@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Protocol
+from typing import Any, Protocol
 
 from .chain_graph import ChainGraph
 from .chain_integrity_application import (
@@ -38,7 +38,8 @@ from .integration_models import (
     TaskRead,
     Unavailable,
 )
-from .lifecycle_outbox import LifecycleOutboxRepository, OutboxFailure
+from .lifecycle_outbox import OutboxFailure
+from .lifecycle_outbox_operations import LifecycleExecutionOutboxPort
 from .task_models import TaskObservation
 from .chain_generation import ChainGenerationService
 from .lifecycle_models import LifecyclePlan
@@ -71,7 +72,7 @@ class IntegrityEngineResult:
 
 
 class _AlreadyPersistedSink:
-    def persist(self, _plan) -> IntegrityOutboxPersistResult:
+    def persist(self, _plan: Any) -> IntegrityOutboxPersistResult:
         return IntegrityOutboxPersistResult(True)
 
 
@@ -150,7 +151,16 @@ class ChainIntegrityEngine:
             raise ValueError(f"recovery planning did not produce a lifecycle plan: {result.reason}")
         return result.plan
 
-    def audit_native_until(self, rows, *, predecessor, safe_parse_datetime, fmt_isoz, utc_to_local_naive, local_naive_to_utc) -> RecoveryAudit:
+    def audit_native_until(
+        self,
+        rows: Any,
+        *,
+        predecessor: Any,
+        safe_parse_datetime: Any,
+        fmt_isoz: Any,
+        utc_to_local_naive: Any,
+        local_naive_to_utc: Any,
+    ) -> RecoveryAudit:
         """Delegate recovery evidence through the single integrity owner."""
         return self._recovery.audit_native_until(
             rows,
@@ -161,7 +171,7 @@ class ChainIntegrityEngine:
             local_naive_to_utc=local_naive_to_utc,
         )
 
-    def apply_native_until_candidate(self, row, previous, item, **kwargs):
+    def apply_native_until_candidate(self, row: Any, previous: Any, item: Any, **kwargs: Any) -> Any:
         """Apply one guarded recovery candidate through the recovery owner."""
         return self._recovery.apply_native_until_candidate(row, previous, item, **kwargs)
 
@@ -169,7 +179,7 @@ class ChainIntegrityEngine:
         self,
         request: IntegritySnapshotRequest,
         *,
-        outbox_repository: LifecycleOutboxRepository,
+        outbox_repository: LifecycleExecutionOutboxPort,
         mutation_epoch: int = 0,
     ) -> IntegrityEngineResult:
         read = self._snapshots.collect(request)
@@ -261,7 +271,7 @@ class ChainIntegrityEngine:
         self,
         snapshot: ChainSnapshot,
         *,
-        outbox_repository: LifecycleOutboxRepository,
+        outbox_repository: LifecycleExecutionOutboxPort,
         mutation_epoch: int = 0,
         hydrated_chains: frozenset[str] = frozenset(),
     ) -> IntegrityEngineResult:
@@ -346,7 +356,7 @@ class ChainIntegrityEngine:
         *,
         executor: _MutationExecutor,
         request_factory: IntegrityMutationRequestFactory,
-        outbox_repository: LifecycleOutboxRepository,
+        outbox_repository: LifecycleExecutionOutboxPort,
         owner: str,
         drain: bool = True,
     ) -> IntegrityEngineResult:
@@ -381,7 +391,7 @@ class ChainIntegrityEngine:
 
     def drain(
         self,
-        repository: LifecycleOutboxRepository,
+        repository: LifecycleExecutionOutboxPort,
         *,
         owner: str,
         executor: _MutationExecutor,

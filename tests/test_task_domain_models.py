@@ -158,7 +158,6 @@ class TaskDomainModelTests(unittest.TestCase):
             GuardTimestamp,
             GuardTimestampField,
             IntegrationContractError,
-            MetadataRepairPayload,
             MutationGuard,
             MutationOperation,
             MutationRequest,

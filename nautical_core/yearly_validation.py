@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 
 YEARLY_MONTH_MAX = {
@@ -35,12 +36,12 @@ YEARLY_PADDED_DM_RE = re.compile(
 def validate_year_ordinal_token(
     tok: str,
     *,
-    single_re,
-    range_re,
+    single_re: Any,
+    range_re: Any,
     label: str,
     prefix: str,
     limit: int,
-    error_cls,
+    error_cls: Any,
 ) -> bool:
     single = single_re.fullmatch(tok)
     ordinal_range = range_re.fullmatch(tok)
@@ -70,7 +71,7 @@ def validate_year_ordinal_token(
     return True
 
 
-def validate_year_day_token(tok: str, *, error_cls) -> bool:
+def validate_year_day_token(tok: str, *, error_cls: Any) -> bool:
     return validate_year_ordinal_token(
         tok,
         single_re=YEARLY_DAY_RE,
@@ -82,7 +83,7 @@ def validate_year_day_token(tok: str, *, error_cls) -> bool:
     )
 
 
-def validate_year_week_token(tok: str, *, error_cls) -> bool:
+def validate_year_week_token(tok: str, *, error_cls: Any) -> bool:
     return validate_year_ordinal_token(
         tok,
         single_re=YEARLY_WEEK_RE,
@@ -110,8 +111,8 @@ def validate_yearly_token_allowlist(
     tok: str,
     fmt: str,
     *,
-    year_token_format_error_cls,
-    month_from_alias=None,
+    year_token_format_error_cls: Any,
+    month_from_alias: Any = None,
 ) -> None:
     s = tok
 
@@ -167,7 +168,7 @@ def validate_yearly_token_allowlist(
     )
 
 
-def validate_yearly_token_detailed(tok: str, fmt: str, *, year_token_format_error_cls) -> tuple[str, str] | None:
+def validate_yearly_token_detailed(tok: str, fmt: str, *, year_token_format_error_cls: Any) -> tuple[str, str] | None:
     s = tok.strip().lower()
 
     if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", s):
@@ -242,10 +243,10 @@ def validate_yearly_token_detailed(tok: str, fmt: str, *, year_token_format_erro
 def validate_yearly_token_format(
     spec: str,
     *,
-    yearfmt,
-    split_csv_lower,
-    year_token_format_error_cls,
-    month_from_alias=None,
+    yearfmt: Any,
+    split_csv_lower: Any,
+    year_token_format_error_cls: Any,
+    month_from_alias: Any = None,
 ) -> None:
     fmt = yearfmt()
     if not spec:
@@ -279,9 +280,9 @@ def validate_yearly_token_format(
 
 
 def validate_year_tokens_in_dnf(
-    dnf,
+    dnf: Any,
     *,
-    validate_yearly_token_format,
+    validate_yearly_token_format: Any,
 ) -> None:
     for term in dnf:
         for atom in term:
@@ -299,9 +300,9 @@ def validate_year_tokens_in_dnf(
 def validate_yearly_token(
     tok: str,
     *,
-    quarters,
-    parse_y_token,
-    parse_error_cls,
+    quarters: Any,
+    parse_y_token: Any,
+    parse_error_cls: Any,
 ) -> None:
     tok = tok.strip().lower()
     if tok in quarters or re.fullmatch(r"q[1-4][sme]", tok):
@@ -332,8 +333,8 @@ def yearly_check_day_month(
     label: str,
     tok: str,
     *,
-    parse_error_cls,
-    month_full,
+    parse_error_cls: Any,
+    month_full: Any,
 ) -> None:
     if mm < 1 or mm > 12:
         raise parse_error_cls(
@@ -354,8 +355,8 @@ def yearly_check_day_month(
 def validate_yearly_spec_token(
     tok: str,
     *,
-    parse_error_cls,
-    month_full,
+    parse_error_cls: Any,
+    month_full: Any,
 ) -> None:
     if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand|rand-\d{2})", tok):
         return
@@ -464,9 +465,9 @@ def validate_yearly_spec_token(
 def validate_yearly_spec(
     spec: str,
     *,
-    split_csv_lower,
-    validate_yearly_spec_token,
-    parse_error_cls,
+    split_csv_lower: Any,
+    validate_yearly_spec_token: Any,
+    parse_error_cls: Any,
 ) -> None:
     toks = split_csv_lower(spec)
     if not toks:

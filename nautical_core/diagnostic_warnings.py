@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from datetime import date
+from typing import Any
 
 
 def warn_once_per_day(key: str, message: str, *, cache_dir: str, require_diag: bool) -> None:
@@ -64,8 +65,8 @@ def warn_rate_limited_any(key: str, message: str, *, cache_dir: str, min_interva
 def warn_missing_toml_parser(
     config_path: str,
     *,
-    warn_once_per_day,
-    warn_once_per_day_any,
+    warn_once_per_day: Any,
+    warn_once_per_day_any: Any,
 ) -> None:
     pyver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     warn_once_per_day_any(
@@ -87,8 +88,8 @@ def warn_toml_parse_error(
     config_path: str,
     err: Exception,
     *,
-    warn_once_per_day,
-    warn_once_per_day_any,
+    warn_once_per_day: Any,
+    warn_once_per_day_any: Any,
 ) -> None:
     warn_once_per_day_any(
         "toml_parse_error_min",

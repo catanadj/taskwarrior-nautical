@@ -11,17 +11,17 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     core = core_namespace(module, namespace, context, "parser_support_api")
     ttl_lru_cache = core["_ttl_lru_cache"]
 
-    def parse_hhmm(value: str):
+    def parse_hhmm(value: str) -> Any:
         return core["_parser_atoms"].parse_hhmm(value, hhmm_re=core["_hhmm_re"])
 
-    def parse_atom_head(head: str):
+    def parse_atom_head(head: str) -> Any:
         return core["_parser_atoms"].parse_atom_head(
             head,
             re_mod=core["re"],
             parse_error_cls=core["ParseError"],
         )
 
-    def parse_atom_mods(mods_str: str):
+    def parse_atom_mods(mods_str: str) -> Any:
         return core["_parser_atoms"].parse_atom_mods(
             mods_str,
             split_csv_tokens=core["_split_csv_tokens"],
@@ -33,7 +33,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     @ttl_lru_cache(maxsize=512)
-    def parse_y_token_cached(tok: str, fmt: str):
+    def parse_y_token_cached(tok: str, fmt: str) -> Any:
         return core["_yearly_parse"].parse_y_token(
             tok,
             fmt,
@@ -43,16 +43,16 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             re_mod=core["re"],
         )
 
-    def parse_y_token(tok: str):
+    def parse_y_token(tok: str) -> Any:
         return parse_y_token_cached(tok, core["_yearfmt"]())
 
-    def rewrite_year_month_aliases_in_context(dnf):
+    def rewrite_year_month_aliases_in_context(dnf: Any) -> Any:
         return core["_year_tokens"].rewrite_year_month_aliases_in_context(
             dnf,
             tok_range=core["_tok_range"],
         )
 
-    def fatal_bad_colon_in_year_tail(tail: str):
+    def fatal_bad_colon_in_year_tail(tail: str) -> Any:
         return core["_parser_frontend"].fatal_bad_colon_in_year_tail(
             tail,
             split_csv_tokens=core["_split_csv_tokens"],
@@ -79,10 +79,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     @ttl_lru_cache(maxsize=256)
-    def parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str):
+    def parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str) -> Any:
         return core["parse_anchor_expr_to_dnf"](s)
 
-    def parse_anchor_expr_to_dnf_cached_impl(s: str):
+    def parse_anchor_expr_to_dnf_cached_impl(s: str) -> Any:
         if not s:
             return []
         key = core["_unwrap_quotes"](s or "").strip()
@@ -96,7 +96,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             core["_clear_all_caches"]()
         return result
 
-    def validate_weekly_spec(spec: str):
+    def validate_weekly_spec(spec: str) -> Any:
         value = core["_expand_weekly_aliases"](spec)
         tokens = core["_split_csv_lower"](value)
         if not tokens:
@@ -133,7 +133,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             elif token not in core["_WEEKDAYS"]:
                 raise core["ParseError"](f"Unknown weekday token '{token}'.")
 
-    def validate_monthly_spec(spec: str):
+    def validate_monthly_spec(spec: str) -> Any:
         value = core["_expand_monthly_aliases"](spec)
         tokens = core["_split_csv_lower"](value)
         if not tokens:
@@ -255,7 +255,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         flush()
         return out
 
-    def parse_group_with_inline_mods(typ: str, ival: int, spec: str, outer_mods_str: str):
+    def parse_group_with_inline_mods(typ: str, ival: int, spec: str, outer_mods_str: str) -> Any:
         tokens = [
             token.strip()
             for token in split_inline_items_respecting_t_lists(str(spec or ""))

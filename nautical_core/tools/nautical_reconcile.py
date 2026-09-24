@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack, contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import partial
-import json
 import os
 import random
 import sys
@@ -45,10 +44,8 @@ from nautical_core.operator_application import DomainApplicationRegistry  # noqa
 from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
 from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.lifecycle_models import (  # noqa: E402
-    DeletionDisposition,
     LifecycleAction,
     LifecyclePlan,
-    recurrence_fingerprint,
 )
 from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult, RecoveryStatus  # noqa: E402
 from nautical_core.integration_models import (  # noqa: E402

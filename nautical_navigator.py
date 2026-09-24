@@ -14,7 +14,6 @@ Original base (ref): Enhanced Taskwarrior Chain Analyzer.  # Cited in chat
 
 from __future__ import annotations
 
-import json
 import sys
 import datetime
 import argparse
@@ -32,7 +31,7 @@ from typing import Dict, List, Optional, Tuple, Any, Set, Mapping
 from dataclasses import dataclass
 from dateutil import parser as date_parser, tz
 from datetime import date, timedelta
-from collections import defaultdict, deque
+from collections import defaultdict
 
 try:
     import asciichartpy as asciichart  
@@ -900,10 +899,8 @@ def _anchor_preview_details(
 
     if dnf:
         from nautical_core.occurrence_outcomes import ExhaustedOccurrence
-        from nautical_core.recurrence_context import RecurrenceContext
         from nautical_core.scheduler_cursor import OccurrenceCursor
         from nautical_core.scheduler_cursor import OccurrenceRangeRequest
-        from nautical_core.scheduler_service import SchedulerService
         from nautical_core.task_codec import DEFAULT_TASK_CODEC
         from nautical_core.operator_context import OperatorInvocationBudget
         from nautical_core.operator_models import OperatorLimits
@@ -1811,7 +1808,7 @@ class TaskAnalyzer:
                     return int(td.total_seconds())
         except Exception:
             pass
-        import re, datetime as _dt
+        import re
         m = re.match(r"^\s*(\d+)\s*([dwmyh])\s*$", cp, re.I)
         if not m:
             return None

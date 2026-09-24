@@ -7,7 +7,7 @@ import os
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypeAlias, TypedDict
 
 fcntl: Any
 try:
@@ -18,6 +18,23 @@ except Exception:
 
 class InstallError(RuntimeError):
     """Raised when an installation transaction cannot be completed safely."""
+
+
+class MissingSnapshot(TypedDict):
+    kind: Literal["missing"]
+
+
+class SymlinkSnapshot(TypedDict):
+    kind: Literal["symlink"]
+    target: str
+
+
+class FileSnapshot(TypedDict):
+    kind: Literal["file"]
+    backup: str
+
+
+FileSystemSnapshot: TypeAlias = MissingSnapshot | SymlinkSnapshot | FileSnapshot
 
 
 class InstallLock:
@@ -104,42 +121,45 @@ def atomic_write_text(text: str, target: Path) -> None:
             temp.unlink()
 
 
-def snapshot_file(path: Path, backup_dir: Path) -> dict[str, Any]:
+def snapshot_file(path: Path, backup_dir: Path) -> FileSystemSnapshot:
     if not lexists(path):
-        return {"kind": "missing"}
+        return MissingSnapshot(kind="missing")
     if path.is_symlink():
-        return {"kind": "symlink", "target": os.readlink(path)}
+        return SymlinkSnapshot(kind="symlink", target=os.readlink(path))
     if not path.is_file():
         raise InstallError(f"managed install path is not a file or symlink: {path}")
+    if backup_dir.is_symlink() or (backup_dir.exists() and not backup_dir.is_dir()):
+        raise InstallError(f"install backup path is not a directory: {backup_dir}")
+    backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    backup_dir.chmod(0o700)
     backup = backup_dir / f"{hashlib.sha256(str(path).encode('utf-8')).hexdigest()[:12]}-{path.name}"
     shutil.copy2(path, backup)
-    return {"kind": "file", "backup": str(backup)}
+    backup.chmod(0o600)
+    return FileSnapshot(kind="file", backup=str(backup))
 
 
-def restore_file(path: Path, snapshot: dict[str, Any]) -> None:
-    kind = snapshot["kind"]
-    if kind == "missing":
+def restore_file(path: Path, snapshot: FileSystemSnapshot) -> None:
+    if snapshot["kind"] == "missing":
         if lexists(path):
             path.unlink()
-    elif kind == "symlink":
-        atomic_symlink(str(snapshot["target"]), path)
+    elif snapshot["kind"] == "symlink":
+        atomic_symlink(snapshot["target"], path)
     else:
-        backup = Path(str(snapshot["backup"]))
+        backup = Path(snapshot["backup"])
         atomic_copy(backup, path, executable=os.access(str(backup), os.X_OK))
 
 
-def pointer_snapshot(path: Path) -> dict[str, Any]:
+def pointer_snapshot(path: Path) -> MissingSnapshot | SymlinkSnapshot:
     if not lexists(path):
-        return {"kind": "missing"}
+        return MissingSnapshot(kind="missing")
     if not path.is_symlink():
         raise InstallError(f"managed runtime pointer is not a symlink: {path}")
-    return {"kind": "symlink", "target": os.readlink(path)}
+    return SymlinkSnapshot(kind="symlink", target=os.readlink(path))
 
 
-def restore_pointer(path: Path, snapshot: dict[str, Any]) -> None:
+def restore_pointer(path: Path, snapshot: MissingSnapshot | SymlinkSnapshot) -> None:
     if snapshot["kind"] == "missing":
         if lexists(path):
             path.unlink()
     else:
         atomic_symlink(str(snapshot["target"]), path)
-

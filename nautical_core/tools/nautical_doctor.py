@@ -13,7 +13,7 @@ import tomllib
 import zoneinfo
 from datetime import timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, cast
+from typing import Any, Callable, cast
 
 ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
 RICH_SPEC_FACTORY: Callable[[str], Any] = importlib.util.find_spec
@@ -43,7 +43,7 @@ except Exception as exc:  # configuration can fail while the package is importin
         }, ensure_ascii=False, separators=(",", ":")))
         raise SystemExit(1)
     raise
-from nautical_core.operator_presentation import finding_display, finding_status, group_findings_by_severity, ordered_findings, render_result  # noqa: E402
+from nautical_core.operator_presentation import finding_display, group_findings_by_severity, ordered_findings, render_result  # noqa: E402
 from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
 from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.operator_findings import OperatorFinding, doctor_finding  # noqa: E402

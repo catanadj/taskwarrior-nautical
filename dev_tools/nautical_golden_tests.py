@@ -73,7 +73,6 @@ from dev_tools.golden_tests.support import (
     fixture_observation as _fixture_observation,
     fixture_task as _fixture_task,
     find_hook_file as _find_hook_file,
-    canonical_hook_fixture as _canonical_hook_fixture,
     generation_service as _generation_service,
     compute_anchor_child_due as _compute_anchor_child_due,
     compute_cp_child_due as _compute_cp_child_due,
@@ -596,7 +595,6 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         Absent,
         ChainDisablePayload,
         ChildCompensationPayload,
-        ChildImportPayload,
         CommandFailureKind,
         FailureEvidence,
         Found,
@@ -606,7 +604,6 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         MutationOperation,
         MutationOutcomeKind,
         MutationRequest,
-        MetadataRepairPayload,
         NativeUntilRepairPayload,
         ParentLinkClearPayload,
         ParentLinkPayload,
@@ -968,7 +965,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
 def test_child_import_rejects_incomplete_existing_rows():
     """A matching UUID is not enough to acknowledge a malformed child row."""
     from nautical_core.integration_models import (
-        Absent, ChildImportPayload, Found, GuardTimestamp, GuardTimestampField,
+        Absent, Found, GuardTimestamp, GuardTimestampField,
         MutationGuard, MutationOperation, MutationOutcomeKind, MutationRequest,
     )
     from nautical_core.lifecycle_models import recurrence_fingerprint
@@ -1115,8 +1112,8 @@ def test_child_import_rejects_incomplete_existing_rows():
 def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
     """Batch child-absence checks avoid duplicate pre-import UUID exports safely."""
     from nautical_core.integration_models import (
-        Absent, ChildImportPayload, Found, GuardTimestamp, GuardTimestampField,
-        MutationGuard, MutationOperation, MutationOutcomeKind, MutationRequest,
+        Absent, Found, GuardTimestamp, GuardTimestampField,
+        MutationGuard,
     )
     from nautical_core.lifecycle_models import recurrence_fingerprint
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
@@ -1283,7 +1280,7 @@ def test_lifecycle_batch_prefetch_uses_one_union_set_read():
 def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot():
     """A failed phase snapshot cannot be mistaken for a verified mutation."""
     from nautical_core.integration_models import (
-        ChildImportPayload, CommandFailureKind, FailureEvidence, Found, GuardTimestamp,
+        CommandFailureKind, FailureEvidence, Found, GuardTimestamp,
         GuardTimestampField, MutationGuard, MutationOperation, MutationOutcomeKind,
         MutationRequest, ParentLinkPayload, TaskCommand, Unavailable,
     )
@@ -12151,7 +12148,6 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
             expect(child_due == expected_due, f"unexpected anchor_file child due: {child_due!r}")
             expect(isinstance(meta, dict) and meta.get("target_field") == "due", f"unexpected anchor_file meta: {meta!r}")
 
-            from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
             evaluator = _evaluator_for_fixture(
                 parent,
@@ -12279,7 +12275,6 @@ def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
             expect(child_due == expected_due, f"unexpected combined anchor child due: {child_due!r}")
             expect(isinstance(meta, dict) and meta.get("target_field") == "due", f"unexpected combined anchor meta: {meta!r}")
 
-            from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
             evaluator = _evaluator_for_fixture(
                 parent,
@@ -12519,7 +12514,6 @@ def test_on_modify_compute_anchor_child_due_skips_omit_date():
     expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 10), (9, 0)))
     expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next due with omit: {mod.core.fmt_isoz(child_due)}")
     expect(meta.get("target_field") == "due", f"expected due target field: {meta}")
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
     evaluator = _evaluator_for_fixture(parent, timezone_value=mod.core._LOCAL_TZ)
     result = evaluator.select_mode(
@@ -14724,7 +14718,6 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
         expect(flex_meta.get("basis") == "flex", f"flex metadata drifted: {flex_meta}")
         expect(flex_meta.get("source") == "anchor", f"flex mode source drifted: {flex_meta}")
 
-        from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
         evaluator = _evaluator_for_fixture(
             common,
@@ -15407,7 +15400,7 @@ def _legacy_test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id
     import tempfile
     from pathlib import Path
     from nautical_core.lifecycle_models import (
-        LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
+        LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard,
         recurrence_fingerprint,
     )
     from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository

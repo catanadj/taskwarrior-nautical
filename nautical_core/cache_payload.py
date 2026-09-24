@@ -14,7 +14,7 @@ _CACHE_VERSION_KEY = "_nautical_cache_version"
 _SELECTION_SCOPES = frozenset(("week", "month", "quarter", "year", "season", *SEASON_NAMES))
 
 
-def is_atom_like(atom) -> bool:
+def is_atom_like(atom: Any) -> bool:
     if not isinstance(atom, dict):
         return False
     typ = atom.get("typ") or atom.get("type")
@@ -29,7 +29,7 @@ def is_atom_like(atom) -> bool:
     return True
 
 
-def is_selection_like(value) -> bool:
+def is_selection_like(value: Any) -> bool:
     if not isinstance(value, dict) or value.get("kind") != "select":
         return False
     if value.get("scope") not in _SELECTION_SCOPES:
@@ -45,13 +45,13 @@ def is_selection_like(value) -> bool:
     return is_dnf_like(value.get("expr"), is_atom_like=is_factor_like)
 
 
-def is_factor_like(value) -> bool:
+def is_factor_like(value: Any) -> bool:
     if isinstance(value, dict) and value.get("kind") == "select":
         return is_selection_like(value)
     return is_atom_like(value)
 
 
-def is_dnf_like(dnf, *, is_atom_like) -> bool:
+def is_dnf_like(dnf: Any, *, is_atom_like: Any) -> bool:
     if not isinstance(dnf, list):
         return False
     for term in dnf:
@@ -63,7 +63,7 @@ def is_dnf_like(dnf, *, is_atom_like) -> bool:
     return True
 
 
-def clone_mod_value(value):
+def clone_mod_value(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(clone_mod_value(item) for item in value)
     if isinstance(value, list):
@@ -73,7 +73,7 @@ def clone_mod_value(value):
     return value
 
 
-def clone_mods(mods) -> dict[str, Any]:
+def clone_mods(mods: Any) -> dict[str, Any]:
     if not isinstance(mods, dict):
         return {}
     out: dict[str, Any] = {}
@@ -89,7 +89,7 @@ def clone_mods(mods) -> dict[str, Any]:
     return out
 
 
-def clone_atom(atom):
+def clone_atom(atom: Any) -> Any:
     if not isinstance(atom, dict):
         return atom
     out: dict[str, Any] = {}
@@ -107,7 +107,7 @@ def clone_atom(atom):
     return out
 
 
-def clone_dnf(dnf):
+def clone_dnf(dnf: Any) -> Any:
     if not isinstance(dnf, list):
         return dnf
     out = []
@@ -143,7 +143,7 @@ def clone_cache_payload(obj: dict) -> dict:
     return out
 
 
-def normalize_dnf_cached(dnf):
+def normalize_dnf_cached(dnf: Any) -> Any:
     if not isinstance(dnf, (list, tuple)):
         return dnf
     for term in dnf:
@@ -186,7 +186,7 @@ def normalize_dnf_cached(dnf):
     return dnf
 
 
-def cache_payload_shape_ok(obj: dict, *, is_dnf_like) -> bool:
+def cache_payload_shape_ok(obj: dict, *, is_dnf_like: Any) -> bool:
     try:
         if "dnf" in obj and not is_dnf_like(obj.get("dnf")):
             return False
@@ -214,7 +214,7 @@ def cache_payload_shape_ok(obj: dict, *, is_dnf_like) -> bool:
     return True
 
 
-def _bounded_decompress(blob: bytes, zlib_mod, limit: int) -> bytes:
+def _bounded_decompress(blob: bytes, zlib_mod: Any, limit: int) -> bytes:
     decompressor = zlib_mod.decompressobj()
     data = decompressor.decompress(blob, limit + 1)
     if len(data) > limit:
@@ -227,7 +227,7 @@ def _bounded_decompress(blob: bytes, zlib_mod, limit: int) -> bytes:
     return data
 
 
-def cache_atomic_replace(src: str, dst: str, *, os_mod) -> None:
+def cache_atomic_replace(src: str, dst: str, *, os_mod: Any) -> None:
     try:
         os_mod.replace(src, dst)
         return
@@ -255,22 +255,22 @@ def cache_load(
     key: str,
     *,
     enable_anchor_cache: bool,
-    cache_path,
+    cache_path: Any,
     anchor_cache_ttl: int,
-    time_mod,
-    cache_load_mem,
+    time_mod: Any,
+    cache_load_mem: Any,
     cache_load_mem_ttl: int,
-    clone_cache_payload,
-    normalize_dnf_cached,
-    cache_payload_shape_ok,
+    clone_cache_payload: Any,
+    normalize_dnf_cached: Any,
+    cache_payload_shape_ok: Any,
     cache_load_mem_max: int,
-    diag,
-    os_mod,
-    json_mod,
-    zlib_mod,
-    base64_mod,
-    quarantine_cache=None,
-):
+    diag: Any,
+    os_mod: Any,
+    json_mod: Any,
+    zlib_mod: Any,
+    base64_mod: Any,
+    quarantine_cache: Any = None,
+) -> Any:
     if not enable_anchor_cache:
         return None
     path = cache_path(key)
@@ -280,7 +280,7 @@ def cache_load(
         st = os_mod.stat(path)
         if anchor_cache_ttl and (time_mod.time() - st.st_mtime) > anchor_cache_ttl:
             return None
-        def _stamp(stat_result):
+        def _stamp(stat_result: Any) -> Any:
             mtime_ns = getattr(stat_result, "st_mtime_ns", None)
             if mtime_ns is None:
                 mtime_ns = int(stat_result.st_mtime * 1_000_000_000)
@@ -363,18 +363,18 @@ def cache_save(
     obj: dict,
     *,
     enable_anchor_cache: bool,
-    json_mod,
-    zlib_mod,
-    base64_mod,
-    cache_path,
-    cache_dir,
-    cache_lock,
-    diag,
-    os_mod,
-    tempfile_mod,
-    cache_atomic_replace,
-    cache_load_mem,
-):
+    json_mod: Any,
+    zlib_mod: Any,
+    base64_mod: Any,
+    cache_path: Any,
+    cache_dir: Any,
+    cache_lock: Any,
+    diag: Any,
+    os_mod: Any,
+    tempfile_mod: Any,
+    cache_atomic_replace: Any,
+    cache_load_mem: Any,
+) -> bool:
     if not enable_anchor_cache:
         return False
     payload = dict(obj)
@@ -450,10 +450,10 @@ def cache_gc(
     max_entries: int = 512,
     stale_tmp_age: float = 86400.0,
     stale_lock_age: float = 86400.0,
-    cache_lock,
-    stale_lock_check,
-    time_mod,
-    os_mod,
+    cache_lock: Any,
+    stale_lock_check: Any,
+    time_mod: Any,
+    os_mod: Any,
 ) -> dict:
     """Prune expired/temporary cache files without touching active writers."""
     result = {
@@ -558,8 +558,8 @@ def cache_key_for_task_cached(
     fmt: str,
     business_calendar_fingerprint: str = "",
     *,
-    build_acf,
-    cache_key,
+    build_acf: Any,
+    cache_key: Any,
 ) -> str:
     _ = fmt
     try:

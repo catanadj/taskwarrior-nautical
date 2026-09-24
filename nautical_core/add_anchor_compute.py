@@ -25,7 +25,7 @@ def _scheduler_business_calendar(core: Any) -> Any:
         return None
 
 
-def anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, *, core: Any):
+def anchor_step_once(dnf: Any, prev_local_date: Any, interval_seed: Any, seed_base: Any, *, core: Any) -> Any:
     return anchor_step_once_with_omit(
         dnf,
         prev_local_date,
@@ -36,7 +36,7 @@ def anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, *, core: An
     )
 
 
-def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *, omit_dnf, core: Any):
+def anchor_step_once_with_omit(dnf: Any, prev_local_date: Any, interval_seed: Any, seed_base: Any, *, omit_dnf: Any, core: Any) -> Any:
     try:
         anchor_omit = core._import_sibling("anchor_omit")
         nxt_date, _ = anchor_omit.next_after_expr_with_omit(
@@ -56,7 +56,7 @@ def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *
         raise
 
 
-def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
+def anchor_term_fires_on_date(term: Any, d: Any, interval_seed: Any, seed_base: Any, *, core: Any) -> Any:
     try:
         engine = _scheduler_engine(core)
         return all(engine.factor_matches_on(atom, d, interval_seed, seed_base=seed_base) for atom in term)
@@ -64,7 +64,7 @@ def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
         raise
 
 
-def anchor_expr_fires_on_date(dnf, d, interval_seed, seed_base, *, core: Any):
+def anchor_expr_fires_on_date(dnf: Any, d: Any, interval_seed: Any, seed_base: Any, *, core: Any) -> Any:
     return anchor_expr_fires_on_date_with_omit(
         dnf,
         d,
@@ -75,7 +75,7 @@ def anchor_expr_fires_on_date(dnf, d, interval_seed, seed_base, *, core: Any):
     )
 
 
-def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omit_dnf, core: Any):
+def anchor_expr_fires_on_date_with_omit(dnf: Any, d: Any, interval_seed: Any, seed_base: Any, *, omit_dnf: Any, core: Any) -> Any:
     try:
         engine = _scheduler_engine(core)
         anchor_omit = core._import_sibling("anchor_omit")
@@ -110,17 +110,17 @@ def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omi
 
 
 def anchor_times_for_date(
-    dnf,
-    d,
-    interval_seed,
-    seed_base,
-    omit_dnf=None,
+    dnf: Any,
+    d: Any,
+    interval_seed: Any,
+    seed_base: Any,
+    omit_dnf: Any = None,
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
     project_time: Callable[[Any, date], Any] | None = None,
-):
+) -> list[tuple[int, int]]:
     times = set()
     for term in dnf:
         term_matches = anchor_term_fires_on_date(term, d, interval_seed, seed_base, core=core)
@@ -191,7 +191,7 @@ def anchor_times_for_date(
     return sorted(times)
 
 
-def _unique_local_candidates(d: date, slots, *, core: Any):
+def _unique_local_candidates(d: date, slots: Any, *, core: Any) -> Any:
     """Build local candidates once so DST gap normalization cannot duplicate an instant."""
     seen = set()
     for slot in slots:
@@ -211,7 +211,7 @@ def _unique_local_candidates(d: date, slots, *, core: Any):
         yield cand_local
 
 
-def _build_slot_datetime(d: date, slot, *, core: Any):
+def _build_slot_datetime(d: date, slot: Any, *, core: Any) -> Any:
     if isinstance(slot, tuple) and len(slot) == 3:
         day_offset, hour, minute = slot
         d = d + timedelta(days=int(day_offset))
@@ -220,19 +220,19 @@ def _build_slot_datetime(d: date, slot, *, core: Any):
 
 
 def _available_time_after_date(
-    dnf,
-    start_date,
-    interval_seed,
-    seed_base,
-    fallback_hhmm,
-    omit_dnf,
+    dnf: Any,
+    start_date: Any,
+    interval_seed: Any,
+    seed_base: Any,
+    fallback_hhmm: Any,
+    omit_dnf: Any,
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None,
     project_time: Callable[[Any, date], Any] | None = None,
     max_days: int = 32,
-):
+) -> Any:
     """Search the current phase/month window after an unavailable event date."""
     for offset in range(1, max_days + 1):
         candidate = start_date + timedelta(days=offset)
@@ -245,7 +245,7 @@ def _available_time_after_date(
                 dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf,
                 core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
                 project_time=project_time,
-            ) or [fallback_hhmm]
+            ) or [fallback_hhmm or (9, 0)]
         except LookupError:
             continue
         return candidate, tlist
@@ -253,19 +253,19 @@ def _available_time_after_date(
 
 
 def anchor_pick_occurrence_local(
-    dnf,
-    ref_dt_local,
+    dnf: Any,
+    ref_dt_local: Any,
     inclusive: bool,
-    fallback_hhmm,
-    interval_seed,
-    seed_base,
-    omit_dnf=None,
+    fallback_hhmm: Any,
+    interval_seed: Any,
+    seed_base: Any,
+    omit_dnf: Any = None,
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
     project_time: Callable[[Any, date], Any] | None = None,
-):
+) -> Any:
     d0 = ref_dt_local.date()
     unavailable = None
     if anchor_expr_fires_on_date_with_omit(dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core):
@@ -274,7 +274,7 @@ def anchor_pick_occurrence_local(
                 dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
                 norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
                 project_time=project_time,
-            ) or [fallback_hhmm]
+            ) or [fallback_hhmm or (9, 0)]
             for cand_local in _unique_local_candidates(d0, tlist, core=core):
                 comparison = compare_datetimes(cand_local, ref_dt_local)
                 matches = comparison >= 0 if inclusive else comparison > 0
@@ -338,7 +338,7 @@ def anchor_next_occurrence_after_local_dt(
     seed_base: str = "",
     omit_dnf: Any = None,
     *,
-    default_seed_date=None,
+    default_seed_date: Any = None,
     core: Any | None = None,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]] | None = None,
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
@@ -374,7 +374,7 @@ def anchor_next_occurrence_after_local_dt(
                 dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
                 norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
                 project_time=project_time,
-            ) or [fallback_hhmm]
+            ) or [fallback_hhmm or (9, 0)]
             for cand_local in _unique_local_candidates(d0, tlist, core=core):
                 if compare_datetimes(cand_local, after_dt_local) > 0:
                     return cand_local
@@ -422,7 +422,7 @@ def anchor_next_occurrence_after_local_dt(
             tlist = anchor_times_for_date(
                 dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
                 norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
-            ) or [fallback_hhmm]
+            ) or [fallback_hhmm or (9, 0)]
         except LookupError as exc:
             unavailable = exc
             same_window = _available_time_after_date(
@@ -441,19 +441,19 @@ def anchor_next_occurrence_after_local_dt(
 
 
 def anchor_until_summary(
-    dnf,
-    until_dt,
-    first_date_local,
-    first_hhmm,
-    interval_seed,
-    seed_base,
-    omit_dnf=None,
+    dnf: Any,
+    until_dt: Any,
+    first_date_local: Any,
+    first_hhmm: Any,
+    interval_seed: Any,
+    seed_base: Any,
+    omit_dnf: Any = None,
     *,
     core: Any,
     to_local_cached: Callable[[Any], Any],
     max_iterations: int,
     evaluator: Any | None = None,
-):
+) -> Any:
     if not until_dt:
         return None, None
     if evaluator is None:
@@ -481,18 +481,18 @@ def anchor_until_summary(
 
 
 def anchor_build_preview(
-    dnf,
-    first_due_local_dt,
+    dnf: Any,
+    first_due_local_dt: Any,
     preview_limit: int,
-    until_dt,
-    fallback_hhmm,
-    interval_seed,
-    seed_base,
-    omit_dnf=None,
+    until_dt: Any,
+    fallback_hhmm: Any,
+    interval_seed: Any,
+    seed_base: Any,
+    omit_dnf: Any = None,
     *,
     core: Any,
     evaluator: Any | None = None,
-):
+) -> Any:
     if evaluator is None:
         raise TypeError("anchor_build_preview requires the evaluator contract")
     if evaluator is not None:

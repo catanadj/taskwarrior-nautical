@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import re
+from typing import Any
 
 from .business_calendar import WEEKDAY_BUSINESS_DAYS
 
@@ -10,7 +11,7 @@ def _is_random_spec(spec: str) -> bool:
     return bool(re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", str(spec or "").strip().lower()))
 
 
-def days_in_month(y: int, m: int, *, monthrange) -> int:
+def days_in_month(y: int, m: int, *, monthrange: Any) -> int:
     return monthrange(y, m)[1]
 
 
@@ -27,7 +28,7 @@ def wd_idx(s: str, *, wd_abbr: list[str]) -> int | None:
     return None
 
 
-def wday_idx_any(s: str, *, weekdays: dict[str, int], wd_idx) -> int | None:
+def wday_idx_any(s: str, *, weekdays: dict[str, int], wd_idx: Any) -> int | None:
     s = (s or "").strip().lower()
     if not s:
         return None
@@ -40,9 +41,9 @@ def weekly_spec_to_wset(
     spec: str,
     *,
     mods: dict | None = None,
-    expand_weekly_aliases,
-    split_csv_lower,
-    wday_idx_any,
+    expand_weekly_aliases: Any,
+    split_csv_lower: Any,
+    wday_idx_any: Any,
 ) -> set[int]:
     spec = expand_weekly_aliases(spec)
     if not spec:
@@ -86,10 +87,10 @@ def doms_for_weekly_spec(
     y: int,
     m: int,
     *,
-    expand_weekly_aliases,
-    split_csv_tokens,
-    wd_idx,
-    days_in_month,
+    expand_weekly_aliases: Any,
+    split_csv_tokens: Any,
+    wd_idx: Any,
+    days_in_month: Any,
 ) -> set[int]:
     spec = expand_weekly_aliases(spec)
     if not spec:
@@ -117,7 +118,7 @@ def doms_for_weekly_spec(
     return allowed
 
 
-def y_ranges_from_spec(spec: str, *, split_csv_lower, re_mod, year_pair) -> list[tuple[int, int, int, int]]:
+def y_ranges_from_spec(spec: str, *, split_csv_lower: Any, re_mod: Any, year_pair: Any) -> list[tuple[int, int, int, int]]:
     out = []
     for tok in split_csv_lower(spec):
         m_randm = re_mod.fullmatch(r"rand-(\d{2})", tok)
@@ -146,9 +147,9 @@ def doms_allowed_by_year(
     m: int,
     y_specs: list[str],
     *,
-    y_ranges_from_spec,
-    days_in_month,
-    expand_yearly,
+    y_ranges_from_spec: Any,
+    days_in_month: Any,
+    expand_yearly: Any,
 ) -> set[int]:
     if not y_specs:
         return set(range(1, days_in_month(y, m) + 1))

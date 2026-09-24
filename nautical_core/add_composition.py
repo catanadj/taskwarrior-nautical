@@ -23,7 +23,7 @@ def initialize_core(host: Any) -> None:
         _datetime_parser(host)
         return
     hook_runtime = host._hook_runtime_module()
-    core, target, context = hook_runtime.initialize_integration_context(
+    runtime_state = hook_runtime.initialize_integration_context(
         module_access=host._hook_module_access(),
         hook_bootstrap=host.hook_bootstrap,
         core_base=host._CORE_BASE,
@@ -31,12 +31,12 @@ def initialize_core(host: Any) -> None:
         tw_dir=str(host.TW_DIR),
         access="read_only",
     )
-    host.core = core
-    host._CORE_IMPORT_TARGET = target
-    host._INTEGRATION_CONTEXT = context
-    host.TW_DATA_DIR = context.taskdata
-    host._TASKDATA_RAW = str(context.taskdata)
-    host._USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
+    host.core = runtime_state.core
+    host._CORE_IMPORT_TARGET = runtime_state.target
+    host._INTEGRATION_CONTEXT = runtime_state.context
+    host.TW_DATA_DIR = runtime_state.taskdata
+    host._TASKDATA_RAW = str(runtime_state.taskdata)
+    host._USE_RC_DATA_LOCATION = runtime_state.uses_rc_data_location
     _datetime_parser(host)
 
 
@@ -106,7 +106,7 @@ def validate_chain_limits(host: Any, task: TaskPayload, now_utc: datetime) -> da
     return until_dt
 
 
-def due_context(host: Any, task: TaskPayload, now_utc: datetime):
+def due_context(host: Any, task: TaskPayload, now_utc: datetime) -> Any:
     has_due, has_scheduled = bool(task.get("due")), bool(task.get("scheduled"))
     implicit_due = has_due and _due_matches_entry(host, task)
     if has_scheduled and (not has_due or implicit_due):
@@ -163,10 +163,10 @@ class AddCompositionServices:
     def workflow_application(self) -> Any:
         return self._workflow_application
 
-    def result(self, task, *, sanitize: bool, prof):
+    def result(self, task: Any, *, sanitize: bool, prof: Any) -> Any:
         return self._result_cls(task=task, sanitize=sanitize, prof=prof)
 
-    def has_nautical_fields(self, task) -> bool:
+    def has_nautical_fields(self, task: Any) -> bool:
         return self._host._task_has_nautical_fields(task)
 
     def load_core(self) -> None:
@@ -181,12 +181,12 @@ class AddCompositionServices:
     def fail_and_exit(self, title: str, message: str) -> None:
         self._host._fail_and_exit(title, message)
 
-    def validate_task(self, task):
+    def validate_task(self, task: Any) -> Any:
         """Validate and classify the add request before workflow construction."""
         return validate_task(self._host, task)
 
 
-    def build_context(self, task, now_utc, now_local, *, observation=None, prof):
+    def build_context(self, task: Any, now_utc: Any, now_local: Any, *, observation: Any = None, prof: Any) -> Any:
         host = self._host
         core = host.core
         hook_context = host._module("hook_context")
@@ -233,7 +233,7 @@ class AddCompositionServices:
             if prof is not None:
                 prof.add_ms("validate:cp_vs_anchor", (host.time.perf_counter() - started) * 1000.0)
 
-    def record_schedule(self, plan, task, target_field):
+    def record_schedule(self, plan: Any, task: Any, target_field: Any) -> Any:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         raw = task.get(target_field)
@@ -249,7 +249,7 @@ class AddCompositionServices:
             )
             raise
 
-    def record_preview(self, plan):
+    def record_preview(self, plan: Any) -> Any:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         policy = workflow.preview_policy(
@@ -259,12 +259,12 @@ class AddCompositionServices:
         )
         return workflow.record_preview(plan, policy)
 
-    def record_limits(self, plan, task, context):
+    def record_limits(self, plan: Any, task: Any, context: Any) -> Any:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         timestamp = core._import_sibling("task_models").TaskTimestamp
 
-        def as_timestamp(field):
+        def as_timestamp(field: Any) -> Any:
             raw = task.get(field)
             if not raw:
                 return None
@@ -283,10 +283,10 @@ class AddCompositionServices:
         )
         return workflow.record_limits(plan, limits)
 
-    def stamp_chain_id(self, task) -> None:
+    def stamp_chain_id(self, task: Any) -> None:
         self._host._stamp_chain_id_on_add(task)
 
-    def render_anchor_preview(self, context, *, prof) -> None:
+    def render_anchor_preview(self, context: Any, *, prof: Any) -> None:
         self._host._module("add_preview_composition").render_anchor(
             self._host, task=context.task, anchor_str=context.anchor_str,
             anchor_file_str=context.anchor_file_str, ch=context.chain_state,
@@ -298,7 +298,7 @@ class AddCompositionServices:
             prof=prof,
         )
 
-    def render_cp_preview(self, context, *, prof) -> None:
+    def render_cp_preview(self, context: Any, *, prof: Any) -> None:
         self._host._module("add_preview_composition").render_cp(
             self._host, context.task, context.cp_str, context.chain_state,
             context.now_utc, context.user_provided_due,
@@ -306,7 +306,7 @@ class AddCompositionServices:
         )
 
 
-def validate_task(host: Any, task):
+def validate_task(host: Any, task: Any) -> Any:
     """Validate and classify an add request without constructing services."""
     core = host.core
     validation = core._import_sibling("hook_validation_pipeline")
@@ -341,16 +341,16 @@ __all__ = (
 )
 
 
-def build_on_add_context(host: Any, task, now_utc, now_local, *, observation=None, prof=None):
+def build_on_add_context(host: Any, task: Any, now_utc: Any, now_local: Any, *, observation: Any = None, prof: Any = None) -> Any:
     """Build recurrence context through the installed composition boundary."""
     return AddCompositionServices(host, object()).build_context(
         task, now_utc, now_local, observation=observation, prof=prof
     )
 
 
-def render_anchor_preview(host: Any, context, *, prof) -> None:
+def render_anchor_preview(host: Any, context: Any, *, prof: Any) -> None:
     AddCompositionServices(host, object()).render_anchor_preview(context, prof=prof)
 
 
-def render_cp_preview(host: Any, context, *, prof) -> None:
+def render_cp_preview(host: Any, context: Any, *, prof: Any) -> None:
     AddCompositionServices(host, object()).render_cp_preview(context, prof=prof)

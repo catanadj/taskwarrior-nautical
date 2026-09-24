@@ -16,7 +16,7 @@ Features:
 
 from __future__ import annotations
 
-import sys, json, os, importlib, importlib.util, time
+import sys, os, importlib, importlib.util, time
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -122,10 +122,9 @@ if __name__ == "__main__":
 
 
 import atexit
-import random
 import re
 from contextlib import contextmanager, nullcontext
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -303,14 +302,14 @@ TW_DATA_DIR = Path(TW_DIR).expanduser()
 _IMPORT_MS = None
 
 
-def _hook_runtime_module():
+def _hook_runtime_module() -> Any:
     global _HOOK_RUNTIME
     if _HOOK_RUNTIME is None:
         _HOOK_RUNTIME = importlib.import_module("nautical_core.hook_runtime")
     return _HOOK_RUNTIME
 
 
-def _hook_module_access():
+def _hook_module_access() -> Any:
     global _HOOK_MODULE_ACCESS
     if _HOOK_MODULE_ACCESS is None:
         hook_runtime = _hook_runtime_module()
@@ -318,7 +317,7 @@ def _hook_module_access():
     return _HOOK_MODULE_ACCESS
 
 
-def _module(name: str, *, required: bool = True):
+def _module(name: str, *, required: bool = True) -> Any:
     return _hook_module_access().module(name, required=required)
 
 def _task_cmd_prefix() -> list[str]:
@@ -343,58 +342,20 @@ def _load_core() -> None:
         if hasattr(host, name):
             globals()[name] = getattr(host, name)
 
-class _Profiler:
-    """Minimal, low-risk profiler for hook execution (stderr-only)."""
-
-    def __init__(self, level: int = 0, import_ms: float | None = None):
-        self.level = int(level or 0)
-        self.enabled = self.level > 0
-        self.import_ms = float(import_ms) if import_ms is not None else None
-        self._t0 = time.perf_counter()
-        self._events: list[tuple[str, float]] = []
-
-    @contextmanager
-    def section(self, name: str):
-        if not self.enabled:
-            yield
-            return
-        t0 = time.perf_counter()
-        try:
-            yield
-        finally:
-            self._events.append((name, (time.perf_counter() - t0) * 1000.0))
-
-    def add_ms(self, name: str, ms: float) -> None:
-        if self.enabled:
-            self._events.append((name, float(ms)))
-
-    def emit(self) -> None:
-        if not self.enabled:
-            return
-        total_ms = (time.perf_counter() - self._t0) * 1000.0
-        lines = []
-        lines.append(f"[NAUTICAL_PROFILE] total={total_ms:.1f}ms")
-        if self.import_ms is not None:
-            lines.append(f"  import_core={self.import_ms:.1f}ms")
-        for name, ms in self._events:
-            lines.append(f"  {name}={ms:.1f}ms")
-        if self.level >= 2 and self._events:
-            lines.append("  -- slowest --")
-            for name, ms in sorted(self._events, key=lambda x: x[1], reverse=True)[:8]:
-                lines.append(f"  {name}={ms:.1f}ms")
-        sys.stderr.write("\n".join(lines) + "\n")
+# Resolve profiling support only when the hook actually runs; importing this
+# implementation must not import the full ``nautical_core`` package.
 
 
 # --------------------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------------------
 @lru_cache(maxsize=512)
-def _fmt_dt_local_cached(dt):
+def _fmt_dt_local_cached(dt: Any) -> str:
     return core.fmt_dt_local(dt)
 
 
 @lru_cache(maxsize=512)
-def _to_local_cached(dt):
+def _to_local_cached(dt: Any) -> Any:
     return core.to_local(dt)
 
 
@@ -435,11 +396,11 @@ def _task_has_nautical_fields(task: dict) -> bool:
     return False
 
 
-def _human_delta(a, b, use_months_days=True):
+def _human_delta(a: Any, b: Any, use_months_days: bool = True) -> str:
     return core.humanize_delta(a, b, use_months_days=use_months_days)
 
 
-def _short(u):
+def _short(u: Any) -> str:
     try:
         s = str(u)
         return s[:8] if s else "—"
@@ -457,7 +418,7 @@ def _strip_quotes(s: str) -> str:
     return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"') else s
 
 
-def _panel(title, rows, kind: str = "info", task: dict | None = None):
+def _panel(title: str, rows: Any, kind: str = "info", task: dict | None = None) -> None:
     if core is None:
         try:
             _load_core()
@@ -502,41 +463,15 @@ _DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note
 
 
 def _diag_redact_msg(msg: object) -> str:
-    raw = msg if isinstance(msg, str) else str(msg)
-    redactor = getattr(core, "diag_log_redact", None) if core is not None else None
-    if callable(redactor):
-        try:
-            red = redactor(raw)
-            return red if isinstance(red, str) else str(red)
-        except Exception:
-            pass
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            for k in list(data.keys()):
-                if k in _DIAG_REDACT_KEYS:
-                    data[k] = "[redacted]"
-            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        pass
-    return raw
+    return _hook_runtime_module().redact_diagnostic_message(msg, core=core)
 
 
 def _diag(msg: str) -> None:
-    safe_msg = _diag_redact_msg(msg)
     try:
         _load_core()
     except Exception:
         pass
-    if core is not None:
-        event_factory = getattr(core, "DiagnosticEvent", None)
-        event = event_factory.from_message(safe_msg, hook="on-add") if event_factory is not None else safe_msg
-        core.diag(event, "on-add", str(TW_DATA_DIR))
-    elif os.environ.get("NAUTICAL_DIAG") == "1":
-        try:
-            sys.stderr.write(f"[nautical] {safe_msg}\n")
-        except Exception:
-            pass
+    _hook_runtime_module().emit_diagnostic(msg, hook_name="on-add", core=core, taskdata=TW_DATA_DIR)
 
 
 def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
@@ -548,12 +483,13 @@ def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]
 def _fail_and_exit(title: str, msg: str) -> None:
     # Pretty panel -> stderr
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
-    sys.exit(1)
+    raise _module("hook_results").HookFailure(title, msg)
 
 
-def _error_and_exit(msg_tuples):
+def _error_and_exit(msg_tuples: Any) -> None:
     _panel("❌ Invalid Chain", msg_tuples, kind="error")
-    sys.exit(1)
+    message = "; ".join(f"{title}: {detail}" for title, detail in msg_tuples)
+    raise _module("hook_results").HookFailure("Invalid Chain", message)
 
 _RAW_INPUT_TEXT = ""
 _PARSED_TASK = None
@@ -569,7 +505,7 @@ def _panic_passthrough() -> None:
 # Canonical timezone-aware local ISO string back to Taskwarrior.  Typed
 # recurrence validation requires an explicit timezone once preview assigns a
 # target, while retaining the user's configured wall-clock time.
-def _fmt_local_for_task(dt_utc):
+def _fmt_local_for_task(dt_utc: Any) -> str:
     return core.to_local(dt_utc).isoformat(timespec="seconds")
 
 
@@ -664,7 +600,7 @@ def _append_wait_sched_rows(
 
 
 # Helper to validate chainUntil is in the future
-def _validate_until_not_past(until_dt, now_utc) -> tuple[bool, str | None]:
+def _validate_until_not_past(until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
     add_validation = _module("add_validation")
     return add_validation.validate_until_not_past(until_dt, now_utc, core=core)
 
@@ -722,7 +658,7 @@ def _validate_native_until_after_target_or_fail(
 def _validate_native_until_anchor_slots_or_fail(
     task: dict,
     target_dt: datetime,
-    dnf,
+    dnf: Any,
     anchor_file_value: str,
     fallback_hhmm: tuple[int, int],
 ) -> None:
@@ -786,14 +722,14 @@ def _validate_native_until_anchor_slots_or_fail(
 
 
 # Helper to check if due is in the past (warning only)
-def _check_due_in_past(due_dt, now_utc) -> tuple[bool, str | None]:
+def _check_due_in_past(due_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
     add_validation = _module("add_validation")
     return add_validation.check_due_in_past(due_dt, now_utc, core=core)
 
 
 # Helper to warn if chain extends unreasonably far
 def _validate_chain_duration_reasonable(
-    until_dt, now_utc, first_due, kind
+    until_dt: Any, now_utc: Any, first_due: Any, kind: Any
 ) -> tuple[bool, str | None]:
     add_validation = _module("add_validation")
     return add_validation.validate_chain_duration_reasonable(
@@ -806,7 +742,7 @@ def _validate_chain_duration_reasonable(
 
 
 # Helper to safely parse with context
-def _validate_datetime_field(s, field_name) -> tuple[datetime | None, str | None]:
+def _validate_datetime_field(s: Any, field_name: str) -> tuple[datetime | None, str | None]:
     add_validation = _module("add_validation")
     from nautical_core.task_datetime import parser_for_core
     parser = _TASK_DATETIME_PARSER
@@ -819,7 +755,7 @@ def _validate_datetime_field(s, field_name) -> tuple[datetime | None, str | None
     )
 
 
-def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
+def _safe_parse_duration(s: Any, field_name: str) -> tuple[timedelta | None, str | None]:
     add_validation = _module("add_validation")
     return add_validation.safe_parse_duration(s, field_name, core=core, diag=_diag)
 
@@ -846,12 +782,12 @@ def _validate_omit_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[lis
         return None, str(exc)
 
 
-def _load_omit_file_dates(name: str):
+def _load_omit_file_dates(name: str) -> Any:
     omit_files = core._import_sibling("omit_files")
     return omit_files.load_omit_file_dates(name, getattr(core, "OMIT_FILE_DIR", ""))
 
 
-def _load_anchor_file_dates(name: str):
+def _load_anchor_file_dates(name: str) -> Any:
     anchor_files = core._import_sibling("anchor_files")
     return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
 
@@ -876,7 +812,7 @@ def _validate_omit_file_for_anchor_or_fail(anchor_str: str, anchor_file_str: str
         _error_and_exit([("Invalid omit_file", str(exc))])
 
 
-def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
+def _validate_anchor_mode(mode_str: Any) -> tuple[str, str | None]:
     add_validation = _module("add_validation")
     return add_validation.validate_anchor_mode(mode_str)
 
@@ -941,7 +877,7 @@ def _stamp_chain_id_on_add(task: dict) -> None:
     task["chainID"] = chain_id
 
 
-def _norm_t_mod(v):
+def _norm_t_mod(v: Any) -> list[tuple[int, int]]:
     if v is None:
         return []
     if isinstance(v, tuple) and len(v) == 2:
@@ -963,7 +899,7 @@ def _norm_t_mod(v):
     return []
 
 
-def _resolve_time_slots(v, target_date):
+def _resolve_time_slots(v: Any, target_date: Any) -> Any:
     time_slots = core._import_sibling("time_slots")
     return time_slots.resolve_time_slots(
         v,
@@ -973,7 +909,7 @@ def _resolve_time_slots(v, target_date):
     )
 
 
-def _anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, omit_dnf=None):
+def _anchor_step_once(dnf: Any, prev_local_date: Any, interval_seed: Any, seed_base: Any, omit_dnf: Any = None) -> Any:
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_step_once_with_omit(
         dnf, prev_local_date, interval_seed, seed_base, omit_dnf=omit_dnf, core=core
@@ -981,15 +917,15 @@ def _anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, omit_dnf=N
 
 
 def _anchor_until_summary(
-    dnf,
-    until_dt,
-    first_date_local,
-    first_hhmm,
-    interval_seed,
-    seed_base,
-    omit_dnf=None,
-    evaluator=None,
-):
+    dnf: Any,
+    until_dt: Any,
+    first_date_local: Any,
+    first_hhmm: Any,
+    interval_seed: Any,
+    seed_base: Any,
+    omit_dnf: Any = None,
+    evaluator: Any = None,
+) -> Any:
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_until_summary(
         dnf,
@@ -1007,16 +943,16 @@ def _anchor_until_summary(
 
 
 def _anchor_build_preview(
-    dnf,
-    first_due_local_dt,
+    dnf: Any,
+    first_due_local_dt: Any,
     preview_limit: int,
-    until_dt,
-    fallback_hhmm,
-    interval_seed,
-    seed_base,
-    omit_dnf=None,
-    evaluator=None,
-):
+    until_dt: Any,
+    fallback_hhmm: Any,
+    interval_seed: Any,
+    seed_base: Any,
+    omit_dnf: Any = None,
+    evaluator: Any = None,
+) -> Any:
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_build_preview(
         dnf,
@@ -1065,27 +1001,27 @@ class _NoopProfiler:
     enabled = False
 
     @contextmanager
-    def section(self, _name):
+    def section(self, _name: str) -> Any:
         yield
 
-    def add_ms(self, _name, _ms):
+    def add_ms(self, _name: str, _ms: float) -> None:
         return None
 
-    def emit(self):
+    def emit(self) -> None:
         return None
 
 
-def _build_profiler():
+def _build_profiler() -> Any:
     prof: Any = _NoopProfiler()
     if _PROFILE_LEVEL <= 0:
         return prof
-    prof = _Profiler(level=_PROFILE_LEVEL, import_ms=_IMPORT_MS)
+    prof = _hook_runtime_module().HookProfiler(level=_PROFILE_LEVEL, import_ms=_IMPORT_MS)
     if prof.enabled:
         atexit.register(prof.emit)
     return prof
 
 
-def _read_on_add_task(prof) -> dict:
+def _read_on_add_task(prof: Any) -> dict:
     global _RAW_INPUT_TEXT, _PARSED_TASK, _PARSED_OBSERVATION
     if _EARLY_PROTOCOL_RESULT is not None:
         _RAW_INPUT_TEXT = _EARLY_PROTOCOL_RESULT.raw_text
@@ -1134,7 +1070,7 @@ def _read_on_add_task(prof) -> dict:
     return task
 
 
-def _build_hook_runtime_context(task=None):
+def _build_hook_runtime_context(task: dict | None = None) -> Any:
     hook_runtime = _hook_runtime_module()
     business_calendar = None
     if task is not None:
@@ -1173,12 +1109,12 @@ def _due_matches_entry_timestamp_on_add(task: dict) -> bool:
     return _module("add_composition")._due_matches_entry(host, task)
 
 
-def _due_context_on_add(task: dict, now_utc: datetime):
+def _due_context_on_add(task: dict, now_utc: datetime) -> Any:
     host = sys.modules.get(__name__, SimpleNamespace(**globals()))
     return _module("add_composition").due_context(host, task, now_utc)
 
 
-def main():
+def main() -> None:
     global _PARSED_OBSERVATION
     prof = _build_profiler()
     task = _read_on_add_task(prof)
@@ -1249,9 +1185,9 @@ def run_hook(
     argv: tuple[str, ...],
     hook_dir: str,
     core_base: str,
-    protocol=None,
-    probe=_PROBE_UNSET,
-    protocol_error=None,
+    protocol: Any = None,
+    probe: Any = _PROBE_UNSET,
+    protocol_error: Any = None,
 ) -> int:
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE, _EARLY_PROTOCOL_RESULT, _PROTOCOL

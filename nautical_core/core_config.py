@@ -227,7 +227,6 @@ def warn_rate_limited_any(key: str, message: str, min_interval_s: float = 3600.0
 
 
 def _get_config() -> dict:
-    import copy
 
     global _CONF_CACHE
     out, _CONF_CACHE = _load_support_module("config_support").get_config(_CONF_CACHE, load_config=_load_config)

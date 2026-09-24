@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+from typing import Any
 
 
 _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
@@ -212,7 +213,7 @@ def _box_write_line(text: str, inner_width: int, style: str | None = None) -> No
         sys.stderr.write(f"│ {raw}{' ' * pad} │\n")
 
 
-def panel_line_from_rows(title, rows) -> str:
+def panel_line_from_rows(title: Any, rows: Any) -> str:
     title_txt = strip_rich_markup(str(title))
     if not rows:
         return title_txt
@@ -285,7 +286,7 @@ def _normalize_panel_mode(
     return mode
 
 
-def _panel_label_width(rows, label_width_min: int, label_width_max: int) -> int:
+def _panel_label_width(rows: Any, label_width_min: int, label_width_max: int) -> int:
     label_w = 0
     for k, _v in rows:
         if k is None:
@@ -333,8 +334,8 @@ def _panel_emit_timeline_row(label: str, value: str, inner_width: int, label_w: 
 
 
 def _render_panel_fast(
-    title,
-    rows,
+    title: Any,
+    rows: Any,
     *,
     fast_color: bool,
     label_width_min: int,
@@ -383,8 +384,8 @@ def _render_panel_fast(
 
 
 def _build_rich_panel(
-    title,
-    rows,
+    title: Any,
+    rows: Any,
     *,
     kind: str,
     themes: dict | None,
@@ -481,8 +482,8 @@ def _build_rich_panel(
 
 
 def _render_panel_rich(
-    title,
-    rows,
+    title: Any,
+    rows: Any,
     *,
     kind: str,
     themes: dict | None,
@@ -504,8 +505,8 @@ def _render_panel_rich(
 
 
 def _render_panel_live(
-    title,
-    rows,
+    title: Any,
+    rows: Any,
     *,
     kind: str,
     themes: dict | None,
@@ -612,7 +613,7 @@ def _normalized_live_duration_ms(duration_ms: int | float) -> float:
     return max(0.0, min(float(_MAX_LIVE_PANEL_DURATION_MS), duration))
 
 
-def _live_panel_too_tall(console, panel) -> bool:
+def _live_panel_too_tall(console: Any, panel: Any) -> bool:
     try:
         terminal_height = max(1, int(console.height))
         rendered_height = len(console.render_lines(panel, pad=False))
@@ -642,7 +643,7 @@ def _reset_live_animation_state() -> None:
     _LIVE_ANIMATION_USED = False
 
 
-def _live_reveal_frames(rows) -> list[tuple[list[tuple[object, object]], int]]:
+def _live_reveal_frames(rows: Any) -> list[tuple[list[tuple[object, object]], int]]:
     frames: list[tuple[list[tuple[object, object]], int]] = []
     completed: list[tuple[object, object]] = []
 
@@ -681,8 +682,8 @@ def _live_reveal_delays(
 
 
 def render_panel(
-    title,
-    rows,
+    title: Any,
+    rows: Any,
     *,
     kind: str = "info",
     panel_mode: str = "rich",
@@ -694,7 +695,7 @@ def render_panel(
     line_force_rich_kinds: set[str] | None = None,
     label_width_min: int = 6,
     label_width_max: int = 14,
-):
+) -> None:
     """
     Render a panel using Rich or a fast fallback.
     """

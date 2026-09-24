@@ -34,7 +34,7 @@ class ExitServices:
     def strict_feedback(self, stats: ExitDrainStats) -> str | None:
         return self._strict_feedback(stats)
 
-    def result(self, *, exit_code: int, feedback_message: str | None, stats: ExitDrainStats):
+    def result(self, *, exit_code: int, feedback_message: str | None, stats: ExitDrainStats) -> Any:
         return self._result_cls(
             exit_code=exit_code,
             feedback_message=feedback_message,

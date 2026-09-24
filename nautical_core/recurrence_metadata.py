@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 
 def active_mod_keys(mods: dict) -> set:
@@ -14,19 +15,19 @@ def active_mod_keys(mods: dict) -> set:
     }
 
 
-def atom_type(atom) -> str:
+def atom_type(atom: Any) -> str:
     return (atom.get("typ") or atom.get("type") or "").lower()
 
 
-def atom_spec(atom) -> str:
+def atom_spec(atom: Any) -> str:
     return str(atom.get("spec") or atom.get("value") or "").lower()
 
 
-def atom_mods(atom) -> dict:
+def atom_mods(atom: Any) -> dict:
     return atom.get("mods") or {}
 
 
-def atom_interval(atom) -> int:
+def atom_interval(atom: Any) -> int:
     try:
         return int(atom.get("ival") or atom.get("intv") or 1)
     except Exception:

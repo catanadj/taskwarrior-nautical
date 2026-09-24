@@ -1,7 +1,8 @@
 from __future__ import annotations
+from typing import Any
 
 
-def iter_y_segments(s: str, *, re_mod):
+def iter_y_segments(s: str, *, re_mod: Any) -> Any:
     """
     Yield the raw yearly-spec segments that follow 'y:' up to the next
     term delimiter (+, |, ) or end. We don't fully parse here; it's
@@ -11,9 +12,9 @@ def iter_y_segments(s: str, *, re_mod):
         yield (match.group(1) or "").strip()
 
 
-def lint_expand_year_month_aliases(s: str, *, month_from_alias, year_full_month_range_token, re_mod) -> str:
+def lint_expand_year_month_aliases(s: str, *, month_from_alias: Any, year_full_month_range_token: Any, re_mod: Any) -> str:
     # Allow bare month aliases: replace 'y:jun' with a canonical monthly window for linting.
-    def _lint_month_alias_sub(match):
+    def _lint_month_alias_sub(match: Any) -> str:
         mm = month_from_alias(match.group(1))
         if not mm:
             return match.group(0)
@@ -27,7 +28,7 @@ def lint_expand_year_month_aliases(s: str, *, month_from_alias, year_full_month_
     return s
 
 
-def lint_check_weekly_delimiter_contract(s: str, *, re_mod) -> str | None:
+def lint_check_weekly_delimiter_contract(s: str, *, re_mod: Any) -> str | None:
     if re_mod.search(
         r"\bw(?:/\d+)?\s*:\s*(?:mon|tue|wed|thu|fri|sat|sun)\s*-\s*(?:mon|tue|wed|thu|fri|sat|sun)\b",
         s,
@@ -41,7 +42,7 @@ def lint_check_weekly_delimiter_contract(s: str, *, re_mod) -> str | None:
     return None
 
 
-def lint_check_yearly_segments(s: str, *, yearfmt, iter_y_segments, split_csv_tokens, re_mod) -> str | None:
+def lint_check_yearly_segments(s: str, *, yearfmt: Any, iter_y_segments: Any, split_csv_tokens: Any, re_mod: Any) -> str | None:
     fmt = yearfmt()
     for seg in iter_y_segments(s):
         for tok in split_csv_tokens(seg):
@@ -80,7 +81,7 @@ def lint_check_yearly_segments(s: str, *, yearfmt, iter_y_segments, split_csv_to
     return None
 
 
-def lint_check_global_md_dm_confusion(s: str, *, yearfmt, re_mod) -> str | None:
+def lint_check_global_md_dm_confusion(s: str, *, yearfmt: Any, re_mod: Any) -> str | None:
     for match in re_mod.finditer(r"\b(\d{2})-(\d{2})(?=([^\d:]|$))", s):
         a, b = int(match.group(1)), int(match.group(2))
         fmt = yearfmt()
@@ -93,7 +94,7 @@ def lint_check_global_md_dm_confusion(s: str, *, yearfmt, re_mod) -> str | None:
     return None
 
 
-def lint_check_invalid_weekday_names(s: str, *, wd_abbr, re_mod, difflib_mod) -> str | None:
+def lint_check_invalid_weekday_names(s: str, *, wd_abbr: Any, re_mod: Any, difflib_mod: Any) -> str | None:
     wd_set = set(wd_abbr)
     for wd in re_mod.findall(r"\b[a-z]{3,}\b", s):
         if wd in wd_set or wd in ("rand", "rand*"):
@@ -108,7 +109,7 @@ def lint_check_invalid_weekday_names(s: str, *, wd_abbr, re_mod, difflib_mod) ->
     return None
 
 
-def lint_check_nth_weekday_suffixes(s: str, *, re_mod) -> str | None:
+def lint_check_nth_weekday_suffixes(s: str, *, re_mod: Any) -> str | None:
     ord_ok = {"1": "1st", "2": "2nd", "3": "3rd", "4": "4th", "5": "5th"}
     for match in re_mod.finditer(r"\b(\d+)(st|nd|rd|th)-([a-z]+)\b", s):
         n, suff, wd = match.group(1), match.group(2), match.group(3)
@@ -120,7 +121,7 @@ def lint_check_nth_weekday_suffixes(s: str, *, re_mod) -> str | None:
     return None
 
 
-def lint_check_unsat_pure_weekly_and(s: str, *, wd_abbr, split_csv_tokens, re_mod) -> str | None:
+def lint_check_unsat_pure_weekly_and(s: str, *, wd_abbr: Any, split_csv_tokens: Any, re_mod: Any) -> str | None:
     wd_set = set(wd_abbr)
     and_terms = [term.strip() for term in re_mod.split(r"\|", s)]
     for term in and_terms:
@@ -153,7 +154,7 @@ def lint_check_unsat_pure_weekly_and(s: str, *, wd_abbr, split_csv_tokens, re_mo
     return None
 
 
-def lint_check_backward_quarter_ranges(s: str, *, re_mod) -> str | None:
+def lint_check_backward_quarter_ranges(s: str, *, re_mod: Any) -> str | None:
     match = re_mod.search(r"\bq([1-4])\s*\.\.\s*q([1-4])\b", s)
     if match and int(match.group(2)) < int(match.group(1)):
         return (
@@ -163,7 +164,7 @@ def lint_check_backward_quarter_ranges(s: str, *, re_mod) -> str | None:
     return None
 
 
-def lint_collect_warnings(s: str, *, re_mod) -> list[str]:
+def lint_collect_warnings(s: str, *, re_mod: Any) -> list[str]:
     warnings: list[str] = []
     if re_mod.search(r"y:[^|+)]*@t=\d{2}:\d{2},", s):
         warnings.append("Multiple @t times inside a single 'y:' atom; ensure each spec has its own @t or use '|'.")
@@ -173,17 +174,17 @@ def lint_collect_warnings(s: str, *, re_mod) -> list[str]:
 def lint_anchor_expr(
     expr: str,
     *,
-    unwrap_quotes,
-    lint_expand_year_month_aliases,
-    lint_check_weekly_delimiter_contract,
-    lint_check_yearly_segments,
-    lint_check_global_md_dm_confusion,
-    lint_check_invalid_weekday_names,
-    lint_check_nth_weekday_suffixes,
-    lint_check_unsat_pure_weekly_and,
-    lint_check_backward_quarter_ranges,
-    lint_collect_warnings,
-    re_mod,
+    unwrap_quotes: Any,
+    lint_expand_year_month_aliases: Any,
+    lint_check_weekly_delimiter_contract: Any,
+    lint_check_yearly_segments: Any,
+    lint_check_global_md_dm_confusion: Any,
+    lint_check_invalid_weekday_names: Any,
+    lint_check_nth_weekday_suffixes: Any,
+    lint_check_unsat_pure_weekly_and: Any,
+    lint_check_backward_quarter_ranges: Any,
+    lint_collect_warnings: Any,
+    re_mod: Any,
 ) -> tuple[str | None, list[str]]:
     s = unwrap_quotes(expr or "").strip().lower()
     if len(s) > 1024:

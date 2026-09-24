@@ -14,7 +14,6 @@ from .occurrence_outcomes import (
     UnavailableOccurrence,
 )
 from .occurrence_provider import OccurrenceBatch
-from .occurrence_provider import Occurrence
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
 from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest

@@ -11,7 +11,6 @@
 import sys, json, os, importlib, importlib.util
 import time as _ptime
 import copy
-from contextlib import nullcontext
 from pathlib import Path
 
 _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
@@ -103,25 +102,23 @@ if __name__ == "__main__":
 
 
 import atexit
-import re
-import time as _time
 import uuid
 from collections import OrderedDict
-from datetime import datetime, timedelta, timezone, time
+from datetime import datetime
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, NoReturn, Optional, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 if TYPE_CHECKING:
-    from nautical_core.modify_models import CompletionLifecycleResult
+    pass
 
 
 # set config show_analytics=false to disable analytics panel entry.
 # Test and diagnostic callers may request the extracted timeline adapter without
 # making it part of the production route surface.
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name == "_timeline_lines":
         host = _hook_host()
-        def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
+        def _timeline_lines(kind: Any, task: Any, child_due_utc: Any, child_short: Any, dnf: Any, **kwargs: Any) -> Any:
             return _module("modify_composition_adapters").timeline_lines_for(
                 host, kind, task, child_due_utc, child_short, dnf, **kwargs
             )
@@ -146,7 +143,7 @@ _MODIFY_RUNTIME_STATE = None
 _HOOK_HOST = None
 
 
-def _hook_host():
+def _hook_host() -> Any:
     """Return the single live composition view for this hook module."""
     global _HOOK_HOST
     if _HOOK_HOST is None:
@@ -170,44 +167,18 @@ _DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note
 
 
 def _diag_redact_msg(msg: object) -> str:
-    raw = msg if isinstance(msg, str) else str(msg)
-    redactor = getattr(core, "diag_log_redact", None) if core is not None else None
-    if callable(redactor):
-        try:
-            red = redactor(raw)
-            return red if isinstance(red, str) else str(red)
-        except Exception:
-            pass
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            for key in list(data):
-                if key in _DIAG_REDACT_KEYS:
-                    data[key] = "[redacted]"
-            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        pass
-    return raw
+    return _hook_runtime_module().redact_diagnostic_message(msg, core=core)
 
 
 def _diag(msg: str) -> None:
-    safe_msg = _diag_redact_msg(msg)
     try:
         _load_core()
     except Exception:
         pass
-    if core is not None:
-        event_factory = getattr(core, "DiagnosticEvent", None)
-        event = event_factory.from_message(safe_msg, hook="on-modify") if event_factory is not None else safe_msg
-        core.diag(event, "on-modify", str(TW_DATA_DIR))
-    elif os.environ.get("NAUTICAL_DIAG") == "1":
-        try:
-            sys.stderr.write(f"[nautical] {safe_msg}\n")
-        except Exception:
-            pass
+    _hook_runtime_module().emit_diagnostic(msg, hook_name="on-modify", core=core, taskdata=TW_DATA_DIR)
 
 
-def _modify_runtime_state():
+def _modify_runtime_state() -> Any:
     global _MODIFY_RUNTIME_STATE
     if _MODIFY_RUNTIME_STATE is None:
         modify_runtime = _module("modify_runtime")
@@ -234,7 +205,7 @@ def _anchor_file_provider_for(
     *,
     fallback_hhmm: tuple[int, int],
     seed_base: str,
-):
+ ) -> Any:
     return _module("modify_runtime").anchor_file_provider_for(
         anchor_file,
         fallback_hhmm=fallback_hhmm,
@@ -297,15 +268,15 @@ def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
         _diag_count(f"run_task_failures_{bucket}")
 
 
-def _emit_diag_block(title: str, items, *, columns: int = 3) -> None:
-    try:
-        pairs = [f"{k}={v}" for k, v in (items or ())]
-        sys.stderr.write(f"[nautical] {title}:\n")
-        step = max(1, int(columns or 1))
-        for idx in range(0, len(pairs), step):
-            sys.stderr.write("[nautical]   " + "  ".join(pairs[idx:idx + step]) + "\n")
-    except Exception:
-        pass
+def _emit_diag_block(title: str, items: Any, *, columns: int = 3) -> None:
+    _hook_runtime_module().emit_diagnostic_block(
+        title,
+        items,
+        hook_name="on-modify",
+        emit=_diag,
+        enabled=os.environ.get("NAUTICAL_DIAG") == "1",
+        columns=columns,
+    )
 
 
 def _dump_diag_stats() -> None:
@@ -321,7 +292,7 @@ def _dump_diag_stats() -> None:
             pass
 
 
-def _query_ctx_get(bucket: str, key):
+def _query_ctx_get(bucket: str, key: Any) -> Any:
     try:
         store = _modify_runtime_state().query_ctx.get(bucket)
         if isinstance(store, dict):
@@ -346,7 +317,7 @@ def _write_bench_stats() -> None:
     return None
 
 
-def _query_ctx_set(bucket: str, key, value) -> None:
+def _query_ctx_set(bucket: str, key: Any, value: Any) -> None:
     try:
         state = _modify_runtime_state()
         store = state.query_ctx.get(bucket)
@@ -360,7 +331,7 @@ def _query_ctx_set(bucket: str, key, value) -> None:
 _READ_QUERY_MISSING = object()
 
 
-def _read_query_get(kind: str, key):
+def _read_query_get(kind: str, key: Any) -> Any:
     """Return a defensive copy of a read-only Taskwarrior query result."""
     try:
         state = _modify_runtime_state()
@@ -376,7 +347,7 @@ def _read_query_get(kind: str, key):
         return _READ_QUERY_MISSING
 
 
-def _read_query_set(kind: str, key, value) -> None:
+def _read_query_set(kind: str, key: Any, value: Any) -> None:
     try:
         state = _modify_runtime_state()
         bucket = state.query_ctx.get("read_query")
@@ -395,7 +366,7 @@ def _read_query_set(kind: str, key, value) -> None:
         pass
 
 
-def _read_query_delete(kind: str, key) -> None:
+def _read_query_delete(kind: str, key: Any) -> None:
     try:
         state = _modify_runtime_state()
         bucket = state.query_ctx.get("read_query")
@@ -451,7 +422,7 @@ def _diag_summary() -> None:
         pass
 
 
-def _diag_lifecycle_result(result) -> None:
+def _diag_lifecycle_result(result: Any) -> None:
     """Write structured lifecycle diagnostics only to gated stderr output."""
     if os.environ.get("NAUTICAL_DIAG") != "1" or result is None:
         return
@@ -687,6 +658,12 @@ _MODULE_SPECS = {
         "_LIFECYCLE_OUTBOX_LOAD_FAILED",
         "lifecycle_outbox.py",
         "nautical_core.lifecycle_outbox",
+    ),
+    "lifecycle_outbox_operations": (
+        "_LIFECYCLE_OUTBOX_OPERATIONS",
+        "_LIFECYCLE_OUTBOX_OPERATIONS_LOAD_FAILED",
+        "lifecycle_outbox_operations.py",
+        "nautical_core.lifecycle_outbox_operations",
     ),
     "modify_feedback": (
         "_MODIFY_FEEDBACK",
@@ -945,14 +922,14 @@ _USE_RC_DATA_LOCATION = False
 TW_DATA_DIR = Path(TW_DIR).expanduser()
 
 
-def _hook_runtime_module():
+def _hook_runtime_module() -> Any:
     global _HOOK_RUNTIME
     if _HOOK_RUNTIME is None:
         _HOOK_RUNTIME = importlib.import_module("nautical_core.hook_runtime")
     return _HOOK_RUNTIME
 
 
-def _hook_module_access():
+def _hook_module_access() -> Any:
     global _HOOK_MODULE_ACCESS
     if _HOOK_MODULE_ACCESS is None:
         hook_runtime = _hook_runtime_module()
@@ -960,11 +937,11 @@ def _hook_module_access():
     return _HOOK_MODULE_ACCESS
 
 
-def _module(name: str, *, required: bool = True):
+def _module(name: str, *, required: bool = True) -> Any:
     return _hook_module_access().module(name, required=required)
 
 
-def _build_hook_runtime_context(task=None):
+def _build_hook_runtime_context(task: dict | None = None) -> Any:
     hook_runtime = _hook_runtime_module()
     business_calendar = None
     if task is not None:
@@ -993,7 +970,7 @@ def _initialize_integration_context() -> None:
     if _INTEGRATION_CONTEXT is not None:
         return
     hook_runtime = _hook_runtime_module()
-    core, target, context = hook_runtime.initialize_integration_context(
+    runtime_state = hook_runtime.initialize_integration_context(
         module_access=_hook_module_access(),
         hook_bootstrap=hook_bootstrap,
         core_base=_CORE_BASE,
@@ -1001,11 +978,12 @@ def _initialize_integration_context() -> None:
         tw_dir=str(TW_DIR),
         access="read_only",
     )
-    _CORE_IMPORT_TARGET = target
-    _INTEGRATION_CONTEXT = context
-    TW_DATA_DIR = context.taskdata
-    _TASKDATA_RAW = str(context.taskdata)
-    _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
+    core = runtime_state.core
+    _CORE_IMPORT_TARGET = runtime_state.target
+    _INTEGRATION_CONTEXT = runtime_state.context
+    TW_DATA_DIR = runtime_state.taskdata
+    _TASKDATA_RAW = str(runtime_state.taskdata)
+    _USE_RC_DATA_LOCATION = runtime_state.uses_rc_data_location
 
 def _load_core() -> None:
     global core, _TASK_DATETIME_PARSER, _MAX_JSON_BYTES, _CORE_READY, _IMPORT_MS
@@ -1066,12 +1044,12 @@ def _apply_core_config() -> None:
 # Small cached helpers for speed + consistency
 # ------------------------------------------------------------------------------
 @lru_cache(maxsize=512)
-def _fmt_dt_local_cached(dt):
+def _fmt_dt_local_cached(dt: Any) -> str:
     return core.fmt_dt_local(dt)
 
 
 @lru_cache(maxsize=512)
-def _to_local_cached(dt):
+def _to_local_cached(dt: Any) -> Any:
     # Accept either datetime or (datetime, meta) tuples from helper parsers.
     if isinstance(dt, (tuple, list)) and dt:
         dt0 = dt[0]
@@ -1095,21 +1073,21 @@ def _validate_omit_expr_cached(expr: str) -> list[list[dict]]:
     )
 
 
-def _load_omit_file_dates(name: str):
+def _load_omit_file_dates(name: str) -> Any:
     omit_files = core._import_sibling("omit_files")
     return omit_files.load_omit_file_dates(name, getattr(core, "OMIT_FILE_DIR", ""))
 
 
-def _load_anchor_file_dates(name: str):
+def _load_anchor_file_dates(name: str) -> Any:
     anchor_files = core._import_sibling("anchor_files")
     return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
 
 
-def _fmtlocal(dt):
+def _fmtlocal(dt: Any) -> str:
     return _fmt_dt_local_cached(dt)
 
 
-def _tolocal(dt):
+def _tolocal(dt: Any) -> Any:
     return _to_local_cached(dt)
 
 
@@ -1118,7 +1096,7 @@ def _tolocal(dt):
 # ------------------------------------------------------------------------------
 def _fail_and_exit(title: str, msg: str) -> NoReturn:
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
-    sys.exit(1)
+    raise _module("hook_results").HookFailure(title, msg)
 
 _RAW_INPUT_TEXT = ""
 _PARSED_NEW = None
@@ -1165,7 +1143,7 @@ def _decode_leading_json_objects(raw: str, max_objects: int = 2) -> tuple[list[o
         _fail_protocol_error(str(exc))
 
 
-def _read_two():
+def _read_two() -> tuple[dict, dict]:
     global _RAW_INPUT_TEXT, _PARSED_NEW, _PARSED_OLD_OBSERVATION, _PARSED_NEW_OBSERVATION
     if _EARLY_PROTOCOL_RESULT is not None:
         _RAW_INPUT_TEXT = _EARLY_PROTOCOL_RESULT.raw_text
@@ -1235,6 +1213,7 @@ def _read_two():
         return only, only
 
     _fail_invalid_input("on-modify must receive two JSON tasks")
+    raise AssertionError("unreachable: invalid on-modify input")
 
 
 def _apply_description_uda_aliases(old: dict, new: dict) -> None:
@@ -1263,7 +1242,7 @@ def _panic_passthrough() -> None:
     )
 
 
-def _print_task(task):
+def _print_task(task: dict) -> Any:
     host = _hook_host()
     ui = _module("modify_ui_effects")
     return ui.print_task(ui.ui_ports_for(host), task)
@@ -1272,13 +1251,13 @@ def _print_task(task):
 
 
 def _panel(
-    title,
-    rows,
+    title: str,
+    rows: Any,
     kind: str = "info",
     border_style: str | None = None,
     title_style: str | None = None,
     label_style: str | None = None,
-):
+) -> Any:
     host = _hook_host()
     ui = _module("modify_ui_effects")
     return ui.panel(
@@ -1331,7 +1310,7 @@ _RESERVED_OVERRIDE = {"due", "entry", "status", "chain", "prevLink", "link"}
 # Timeline (capped) — no dependency on core.next_anchor_after
 # ------------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     _module("modify_composition").run_on_modify(
         _hook_host()
     )
@@ -1343,9 +1322,9 @@ def run_hook(
     argv: tuple[str, ...],
     hook_dir: str,
     core_base: str,
-    protocol=None,
-    probe=_PROBE_UNSET,
-    protocol_error=None,
+    protocol: Any = None,
+    probe: Any = _PROBE_UNSET,
+    protocol_error: Any = None,
     ) -> int:
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE, _EARLY_PROTOCOL_RESULT, _PROTOCOL

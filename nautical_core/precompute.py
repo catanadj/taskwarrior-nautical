@@ -9,12 +9,12 @@ def build_and_cache_hints(
     anchor_expr: str,
     *,
     anchor_mode: str,
-    default_due_dt,
-    cache_key_for_task,
-    cache_load,
-    validate_anchor_expr_strict,
-    describe_anchor_expr_from_dnf,
-    cache_save,
+    default_due_dt: Any,
+    cache_key_for_task: Any,
+    cache_load: Any,
+    validate_anchor_expr_strict: Any,
+    describe_anchor_expr_from_dnf: Any,
+    cache_save: Any,
     anchor_year_fmt: str,
     wrand_salt: str,
     local_tz_name: str,
@@ -22,8 +22,8 @@ def build_and_cache_hints(
     include_per_year: bool = True,
     hint_builder: Any | None = None,
     hint_builder_factory: Callable[[], Any] | None = None,
-):
-    def _canonical(value):
+)-> Any:
+    def _canonical(value: Any) -> Any:
         if isinstance(value, dict):
             return {str(key): _canonical(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
         if isinstance(value, (list, tuple)):

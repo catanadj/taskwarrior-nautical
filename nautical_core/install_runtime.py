@@ -17,8 +17,11 @@ from typing import Any
 
 from . import hook_bootstrap
 from .install_filesystem import (
+    FileSystemSnapshot,
     InstallError,
     InstallLock as _InstallLock,
+    MissingSnapshot,
+    SymlinkSnapshot,
     atomic_copy as _atomic_copy,
     atomic_symlink as _atomic_symlink,
     atomic_write_text as _atomic_write_text,
@@ -699,9 +702,9 @@ def install_release(
         legacy_core: Path | None = None
         migrated_configs: list[str] = []
         initialized_config = ""
-        pointer_before: dict[str, Any] | None = None
+        pointer_before: MissingSnapshot | SymlinkSnapshot | None = None
         core_before: dict[str, Any] | None = None
-        file_snapshots: dict[Path, dict[str, Any]] = {}
+        file_snapshots: dict[Path, FileSystemSnapshot] = {}
         switched = False
         try:
             _copy_release(source, stage)

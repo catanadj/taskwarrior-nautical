@@ -10,40 +10,40 @@ from .core_context import CoreContext
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     core = core_namespace(module, namespace, context, "quarter_api")
 
-    def yearly_tokens(term):
+    def yearly_tokens(term: Any) -> Any:
         return core["_quarter_helpers"].yearly_tokens(
             term,
             split_csv_tokens=core["_split_csv_tokens"],
         )
 
-    def monthly_tokens(term):
+    def monthly_tokens(term: Any) -> Any:
         return core["_quarter_helpers"].monthly_tokens(
             term,
             split_csv_tokens=core["_split_csv_tokens"],
         )
 
-    def quarters_from_first_month_tokens(tokens):
+    def quarters_from_first_month_tokens(tokens: Any) -> Any:
         return core["_quarter_helpers"].quarters_from_tokens(
             tokens,
             token_rev=core["_Q_FIRST_MONTH_TOKEN_REV"],
         )
 
-    def quarters_from_start_day_tokens(tokens):
+    def quarters_from_start_day_tokens(tokens: Any) -> Any:
         return core["_quarter_helpers"].quarters_from_tokens(
             tokens,
             token_rev=core["_Q_START_DAY_REV"],
         )
 
-    def quarters_from_end_day_tokens(tokens):
+    def quarters_from_end_day_tokens(tokens: Any) -> Any:
         return core["_quarter_helpers"].quarters_from_tokens(
             tokens,
             token_rev=core["_Q_END_DAY_REV"],
         )
 
-    def format_quarter_set(values):
+    def format_quarter_set(values: Any) -> Any:
         return core["_quarter_helpers"].format_quarter_set(values)
 
-    def rewrite_quarter_spec_mode(spec: str, mode: str, meta_out=None) -> str:
+    def rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: Any = None) -> str:
         return core["_quarter_rewrite"].rewrite_quarter_spec_mode(
             spec,
             mode,
@@ -117,7 +117,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             rewrite_quarter_spec_mode=rewrite_quarter_spec_mode,
         )
 
-    def rewrite_quarters_in_context(dnf):
+    def rewrite_quarters_in_context(dnf: Any) -> Any:
         return core["_quarter_rewrite"].rewrite_quarters_in_context(
             dnf,
             has_quarter_tokens=has_quarter_tokens,

@@ -1095,7 +1095,6 @@ class OperatorHealthService:
     def diagnose_taskwarrior(request: TaskwarriorDiagnosisRequest) -> tuple[OperatorHealthReport, object]:
         """Evaluate Taskwarrior availability and resolve its hooks directory."""
         from pathlib import Path
-        import os
         available, error = request.probe()
         findings = list(OperatorHealthService.taskdata_findings(
             available, request.taskdata, task_error=error,

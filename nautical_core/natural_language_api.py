@@ -18,7 +18,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def term_collect_mods(term: list) -> dict:
         return natural.term_collect_mods(term)
 
-    def fmt_hhmm_for_term(term: list, default_due_dt):
+    def fmt_hhmm_for_term(term: list, default_due_dt: Any) -> Any:
         return natural.fmt_hhmm_for_term(term, default_due_dt)
 
     def fmt_weekdays_list(spec: str) -> str:
@@ -43,7 +43,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         name = natural._MONTH_ABBR[month - 1]
         return f"{day} {name}" if fmt == "DM" else f"{name} {day}"
 
-    def is_full_month(d1, m1, d2, m2) -> int | None:
+    def is_full_month(d1: Any, m1: Any, d2: Any, m2: Any) -> int | None:
         if m1 != m2 or d1 != 1:
             return None
         return m1 if 28 <= d2 <= 31 else None
@@ -56,10 +56,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             yearfmt=core["_yearfmt"],
         )
 
-    def describe_monthly_tokens(spec: str):
+    def describe_monthly_tokens(spec: str) -> Any:
         return natural.describe_monthly_tokens(spec, split_csv_lower=core["_split_csv_lower"])
 
-    def describe_is_pure_nth_weekday_spec(spec: str):
+    def describe_is_pure_nth_weekday_spec(spec: str) -> Any:
         return natural.describe_is_pure_nth_weekday_spec(
             spec,
             split_csv_lower=core["_split_csv_lower"],
@@ -67,28 +67,28 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             nth_wd_re=core["_nth_wd_re"],
         )
 
-    def describe_is_pure_dom_spec(spec: str):
+    def describe_is_pure_dom_spec(spec: str) -> Any:
         return natural.describe_is_pure_dom_spec(spec, split_csv_lower=core["_split_csv_lower"])
 
-    def describe_single_full_month_from_yearly_spec(spec: str):
+    def describe_single_full_month_from_yearly_spec(spec: str) -> Any:
         return natural.describe_single_full_month_from_yearly_spec(
             spec,
             year_range_colon_re=core["_year_range_colon_re"],
         )
 
-    def describe_term_roll_shift(term) -> str | None:
+    def describe_term_roll_shift(term: Any) -> str | None:
         return natural.describe_term_roll_shift(term)
 
-    def describe_term_bd_filter(term) -> bool:
+    def describe_term_bd_filter(term: Any) -> bool:
         return natural.describe_term_bd_filter(term)
 
     def describe_roll_suffix(roll: str) -> str:
         return natural.describe_roll_suffix(roll)
 
-    def describe_inject_schedule_suffixes(txt: str, term) -> str:
+    def describe_inject_schedule_suffixes(txt: str, term: Any) -> str:
         return natural.describe_inject_schedule_suffixes(txt, term)
 
-    def describe_anchor_term_collect(term):
+    def describe_anchor_term_collect(term: Any) -> Any:
         return natural.describe_anchor_term_collect(
             term,
             fmt_weekdays_list=fmt_weekdays_list,
@@ -98,10 +98,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     def describe_anchor_term_fused_month_year(
-        term,
-        default_due_dt,
-        monthly_specs,
-        yearly_specs,
+        term: Any,
+        default_due_dt: Any,
+        monthly_specs: Any,
+        yearly_specs: Any,
         yr_ival: int,
         bd_filter: bool,
         m_parts: list[str],
@@ -119,7 +119,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             fmt_hhmm_for_term=fmt_hhmm_for_term,
         )
 
-    def describe_anchor_term_interval_prefix(wk_ival, mo_ival, yr_ival, monthly_specs):
+    def describe_anchor_term_interval_prefix(wk_ival: Any, mo_ival: Any, yr_ival: Any, monthly_specs: Any) -> Any:
         return natural.describe_anchor_term_interval_prefix(
             wk_ival,
             mo_ival,
@@ -129,10 +129,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             describe_is_pure_dom_spec=describe_is_pure_dom_spec,
         )
 
-    def describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter: bool) -> list[str]:
+    def describe_anchor_term_parts(w_phrase: Any, m_parts: Any, y_parts: Any, bd_filter: bool) -> list[str]:
         return natural.describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter)
 
-    def describe_anchor_term(term: list, default_due_dt=None) -> str:
+    def describe_anchor_term(term: list, default_due_dt: Any = None) -> str:
         selections = [factor for factor in term if core["_position_selection"].is_selection_node(factor)]
         if selections:
             selection = selections[0]
@@ -183,14 +183,14 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             describe_is_pure_dom_spec=describe_is_pure_dom_spec,
         )
 
-    def describe_anchor_expr_from_dnf(dnf: list, default_due_dt=None) -> str:
+    def describe_anchor_expr_from_dnf(dnf: list, default_due_dt: Any = None) -> str:
         return natural.describe_anchor_expr_from_dnf(
             dnf,
             default_due_dt=default_due_dt,
             describe_anchor_term=describe_anchor_term,
         )
 
-    def describe_anchor_expr_impl(anchor_expr: str, default_due_dt=None) -> str:
+    def describe_anchor_expr_impl(anchor_expr: str, default_due_dt: Any = None) -> str:
         return natural.describe_anchor_expr(
             anchor_expr,
             default_due_dt=default_due_dt,
@@ -198,10 +198,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             describe_anchor_expr_from_dnf=describe_anchor_expr_from_dnf,
         )
 
-    def term_prevnext_wd(term):
+    def term_prevnext_wd(term: Any) -> Any:
         return natural.term_prevnext_wd(term, wdname=natural._WDNAME)
 
-    def inject_prevnext_phrase(txt: str, term) -> str:
+    def inject_prevnext_phrase(txt: str, term: Any) -> str:
         return natural.inject_prevnext_phrase(txt, term, wdname=natural._WDNAME)
 
     def join_natural_or_terms(terms: list[str]) -> str:

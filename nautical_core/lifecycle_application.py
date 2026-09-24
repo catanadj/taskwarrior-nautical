@@ -28,11 +28,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import time
-from typing import Any, Callable, Mapping, Protocol, Sequence, cast
+from typing import Any, Callable, Protocol, Sequence, cast
 
 from .integration_models import (
     ChainDisablePayload,
-    ChildCompensationPayload,
     ChildImportPayload,
     GuardTimestamp,
     GuardTimestampField,

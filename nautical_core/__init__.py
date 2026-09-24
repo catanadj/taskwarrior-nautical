@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import os, re, sys
 from collections import OrderedDict
-from typing import Any, Callable, Mapping, TYPE_CHECKING, TypeAlias, TypedDict, cast
+from typing import Any, Callable, Mapping, TYPE_CHECKING, TypeAlias, cast
 from functools import partial
 
 if TYPE_CHECKING:
@@ -22,6 +22,7 @@ import importlib
 import types
 from types import MappingProxyType
 from . import compat_api as _compat_api
+from .hint_models import AnchorHintsPayload, HintLimits, HintMeta, HintMetaCfg, HintPerYear
 fcntl: Any
 try:
     import fcntl  # POSIX advisory lock
@@ -52,12 +53,12 @@ def _ensure_public_models() -> None:
     _compat_api.ensure_public_models(globals(), _PKG_IMPORT_ROOT)
 
 
-def _import_sibling(module_name: str):
+def _import_sibling(module_name: str) -> Any:
     _PKG_PROXY.__dict__.update(globals())
     return importlib.import_module(f"{_PKG_IMPORT_ROOT}.{module_name}")
 
 
-def _LazySibling(module_name: str):
+def _LazySibling(module_name: str) -> Any:
     return _compat_api._LazySibling(module_name, _import_sibling)
 
 
@@ -66,7 +67,7 @@ def _LazyApiBundle(
     aliases: tuple[str | tuple[str, str], ...],
     *,
     core: Any,
-):
+) -> Any:
     def prepare() -> None:
         ensure_tokens = globals().get("_ensure_tokenutil_constants")
         if callable(ensure_tokens):
@@ -105,41 +106,6 @@ if TYPE_CHECKING:
 TaskDict: TypeAlias = dict[str, Any]
 
 
-class HintMetaCfg(TypedDict, total=False):
-    fmt: str
-    salt: str
-    tz: str
-    hol: str
-    bc: str
-
-
-class HintMeta(TypedDict, total=False):
-    created: int
-    cfg: HintMetaCfg
-
-
-class HintPerYear(TypedDict, total=False):
-    est: int
-    first: str
-    last: str
-
-
-class HintLimits(TypedDict, total=False):
-    stop: str
-    max_left: int
-    until: str
-
-
-class AnchorHintsPayload(TypedDict, total=False):
-    meta: HintMeta
-    dnf: AnchorDNFType
-    natural: str
-    next_dates: list[str]
-    per_year: HintPerYear
-    limits: HintLimits
-    rand_preview: list[str]
-
-
 # ==============================================================================
 # TABLE OF CONTENTS (major sections)
 # 1) Config & defaults
@@ -159,10 +125,13 @@ _CACHE_LOAD_MEM_MAX = 128
 _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[tuple[int, int, int, int], dict, float]] = OrderedDict()
 _core_config = _LazySibling("core_config")
+_configuration_facade = _LazySibling("configuration_facade")
+_cache_facade = _LazySibling("cache_facade")
+_timezone_facade = _LazySibling("timezone_facade")
 
 
-def _config_call(name: str):
-    def call(*args, **kwargs):
+def _config_call(name: str) -> Any:
+    def call(*args: Any, **kwargs: Any) -> Any:
         return getattr(_core_config, name)(*args, **kwargs)
 
     call.__name__ = name
@@ -188,11 +157,10 @@ _warn_rate_limited_any = _config_call("warn_rate_limited_any")
 _warn_toml_parse_error = _config_call("_warn_toml_parse_error")
 _get_config = _config_call("_get_config")
 def effective_config_snapshot() -> dict:
-    """Return the effective config after synchronizing facade exports."""
-    refresh = globals().get("_refresh_facade_config_exports")
-    if callable(refresh):
-        refresh()
-    return _core_config.effective_config_snapshot()
+    return _configuration_facade.effective_snapshot(
+        _core_config,
+        globals().get("_refresh_facade_config_exports"),
+    )
 effective_config_fingerprint = _config_call("effective_config_fingerprint")
 scheduler_config_fingerprint = _config_call("scheduler_config_fingerprint")
 configuration_drift = _config_call("configuration_drift")
@@ -210,79 +178,40 @@ _ttl_lru_cache = _config_call("ttl_lru_cache")
 
 
 def _emit_cache_metrics() -> None:
-    """Emit lru_cache metrics when NAUTICAL_DIAG_METRICS=1."""
-    if os.environ.get("NAUTICAL_DIAG_METRICS") != "1":
-        return
-    lines = []
-    try:
-        lines.append(f"normalize_acf: {_normalize_spec_for_acf_cached.cache_info()}")
-    except Exception:
-        pass
-    try:
-        lines.append(f"year_pair: {_year_pair_cached.cache_info()}")
-    except Exception:
-        pass
-    try:
-        lines.append(f"parse_y_token: {_parse_y_token_cached.cache_info()}")
-    except Exception:
-        pass
-    try:
-        lines.append(f"expand_monthly: {expand_monthly_cached.cache_info()}")
-    except Exception:
-        pass
-    try:
-        lines.append(f"expand_weekly: {expand_weekly_cached.cache_info()}")
-    except Exception:
-        pass
-    if not lines:
-        return
-    msg = "[nautical-metrics] " + " | ".join(lines)
-    _warn_once_per_day("cache_metrics", msg)
+    _cache_facade.emit_metrics(
+        (
+            ("normalize_acf", _normalize_spec_for_acf_cached),
+            ("year_pair", _year_pair_cached),
+            ("parse_y_token", _parse_y_token_cached),
+            ("expand_monthly", expand_monthly_cached),
+            ("expand_weekly", expand_weekly_cached),
+        ),
+        _warn_once_per_day,
+    )
 
 
 def _clear_all_caches() -> None:
-    """Clear all LRU caches (for long-running contexts)."""
-    try:
-        _CACHE_LOAD_MEM.clear()
-    except Exception:
-        pass
-    try:
-        _normalize_spec_for_acf_cached.cache_clear()
-    except Exception:
-        pass
-    try:
-        _year_pair_cached.cache_clear()
-    except Exception:
-        pass
-    try:
-        _parse_y_token_cached.cache_clear()
-    except Exception:
-        pass
-    try:
-        expand_monthly_cached.cache_clear()
-    except Exception:
-        pass
-    try:
-        expand_weekly_cached.cache_clear()
-    except Exception:
-        pass
-    try:
-        _cache_key_for_task_cached.cache_clear()
-    except Exception:
-        pass
-    try:
-        _position_selection.clear_candidate_cache()
-        _selection_inner_matcher.cache_clear()
-    except Exception:
-        pass
+    _cache_facade.clear_all(
+        _CACHE_LOAD_MEM,
+        (
+            _normalize_spec_for_acf_cached,
+            _year_pair_cached,
+            _parse_y_token_cached,
+            expand_monthly_cached,
+            expand_weekly_cached,
+            _cache_key_for_task_cached,
+        ),
+        position_selection=_position_selection,
+        selection_matcher=_selection_inner_matcher,
+    )
 
 
 # -------- UI helpers ----------------------------------------------------------
 _ui = _LazySibling("ui")
 
 
-def _lazy_ui_call(name: str):
-    def call(*args, **kwargs):
+def _lazy_ui_call(name: str) -> Any:
+    def call(*args: Any, **kwargs: Any) -> Any:
         return getattr(_ui, name)(*args, **kwargs)
 
     call.__name__ = name
@@ -303,11 +232,11 @@ panel_themes = _lazy_ui_call("panel_themes")
 _panel_colours = _LazySibling("panel_colours")
 
 
-def chain_colour_root(*args, **kwargs):
+def chain_colour_root(*args: Any, **kwargs: Any) -> Any:
     return _panel_colours.chain_colour_root(*args, **kwargs)
 
 
-def render_panel(*args, **kwargs):
+def render_panel(*args: Any, **kwargs: Any) -> Any:
     ui = _ui._resolve()
     ui.panel_line = panel_line
     ui.text_line = text_line
@@ -352,36 +281,18 @@ _CACHE_LOAD_MEM_TTL = 300
 # SECTION: Taskwarrior helpers
 # ==============================================================================
 def _split_csv_tokens(spec: str) -> list[str]:
-    return [token.strip() for token in str(spec or "").split(",") if token.strip()]
+    return _common.split_csv_tokens(spec)
 
 
 def _split_csv_lower(spec: str) -> list[str]:
-    return [token.lower() for token in _split_csv_tokens(spec)]
+    return _common.split_csv_lower(spec)
 
 
-def _coerce_int(value, default=None):
-    try:
-        if value is None or isinstance(value, bool):
-            return default
-        if isinstance(value, int):
-            return value if abs(value) <= (2**63 - 1) else default
-        if isinstance(value, float):
-            if not math.isfinite(value):
-                return default
-            integer = int(round(value))
-            return integer if abs(integer) <= (2**63 - 1) else default
-        text = str(value).strip()
-        integer = int(float(text)) if _int_floatish_re.fullmatch(text) else int(text)
-        return integer if abs(integer) <= (2**63 - 1) else default
-    except Exception:
-        return default
+def _coerce_int(value: Any, default: Any = None) -> Any:
+    return _common.coerce_int(value, default)
 
 
-_common = types.SimpleNamespace(
-    split_csv_tokens=_split_csv_tokens,
-    split_csv_lower=_split_csv_lower,
-    coerce_int=_coerce_int,
-)
+_common = _LazySibling("common")
 
 _cache_payload = _LazySibling("cache_payload")
 _cache_locking = _LazySibling("cache_locking")
@@ -418,42 +329,25 @@ _year_tokens = _LazySibling("year_tokens")
 def _ensure_tokenutil_constants() -> None:
     if "_WD_ABBR" in globals():
         return
-    globals()["_MONTH_ALIAS"] = _tokenutil.MONTH_ALIAS
-    globals()["_WD_ABBR"] = _tokenutil.WD_ABBR
-    globals()["_WEEKLY_ALIAS"] = _tokenutil.WEEKLY_ALIAS
-    globals()["_MONTHLY_ALIAS"] = _tokenutil.MONTHLY_ALIAS
+    _configuration_facade.sync_token_constants(globals(), _tokenutil)
 
 
 def _configure_season_support() -> None:
-    _season_support.configure_hemisphere(SEASON_HEMISPHERE)
-    _season_support.configure_mode(SEASON_MODE)
-    _season_support.configure_timezone(LOCAL_TZ_NAME)
+    _configuration_facade.configure_season_support(
+        _season_support, SEASON_HEMISPHERE, SEASON_MODE, LOCAL_TZ_NAME
+    )
 
 def short_uuid(u: str | None) -> str:
-    """Taskwarrior-style short UUID without importing the broad common facade."""
-    if not u or not isinstance(u, str):
-        return ""
-    value = u.strip().lower()
-    if not value:
-        return ""
-    return value.split("-", 1)[0] if "-" in value else value[:8]
+    """Taskwarrior-style short UUID delegated to the canonical common module."""
+    return _common.short_uuid(u)
 
 
 def _ensure_business_calendar_exports() -> None:
-    globals()["DEFAULT_BUSINESS_CALENDAR"] = _business_calendar.DEFAULT_BUSINESS_CALENDAR
-    globals()["business_calendar_displacement_for_date"] = (
-        _business_calendar.business_calendar_displacement_for_date
-    )
-    globals()["capture_business_calendar_displacements"] = (
-        _business_calendar.capture_business_calendar_displacements
-    )
+    _configuration_facade.sync_business_calendar_exports(globals(), _business_calendar)
 
 
-def _with_business_calendar(fn: Callable[..., Any], business_calendar) -> Callable[..., Any]:
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    if business_calendar is _business_calendar.DEFAULT_BUSINESS_CALENDAR:
-        return fn
-    return partial(fn, business_calendar=business_calendar)
+def _with_business_calendar(fn: Callable[..., Any], business_calendar: Any) -> Callable[..., Any]:
+    return _business_calendar.with_business_calendar(fn, business_calendar)
 
 # ==============================================================================
 # SECTION: Time & timezone helpers
@@ -470,24 +364,11 @@ _TIMEZONE_CONFIG_ERROR = ""
 
 def _refresh_timezone() -> None:
     global _LOCAL_TZ, _TIMEZONE_CONFIG_ERROR
-    if _zoneinfo is None:
-        _TIMEZONE_CONFIG_ERROR = "timezone support unavailable (zoneinfo import failed)"
-        _LOCAL_TZ = None
-        _warn_once_per_day(
-            "timezone_zoneinfo_unavailable",
-            "[nautical] timezone support unavailable (zoneinfo import failed); using UTC fallback.",
-        )
-        return
-    try:
-        _LOCAL_TZ = _zoneinfo.ZoneInfo(LOCAL_TZ_NAME)
-        _TIMEZONE_CONFIG_ERROR = ""
-    except Exception:
-        _TIMEZONE_CONFIG_ERROR = f"configured timezone '{LOCAL_TZ_NAME}' is invalid or unavailable"
-        _LOCAL_TZ = None
-        _warn_once_per_day(
-            "timezone_local_invalid",
-            f"[nautical] timezone '{LOCAL_TZ_NAME}' is invalid/unavailable; using UTC fallback.",
-        )
+    _LOCAL_TZ, _TIMEZONE_CONFIG_ERROR = _timezone_facade.resolve(
+        LOCAL_TZ_NAME,
+        _zoneinfo,
+        _warn_once_per_day,
+    )
 
 
 _refresh_timezone()
@@ -496,58 +377,39 @@ _timeutil = _LazySibling("timeutil")
 
 
 def scheduling_configuration_error() -> str:
-    """Return a blocking configuration error for Nautical scheduling paths."""
-    _core_config.ensure_loaded()
-    config_error = _core_config.configuration_error()
-    if config_error:
-        return config_error
-    if CONFIG_ERROR:
-        return CONFIG_ERROR
-    return _TIMEZONE_CONFIG_ERROR
+    return _configuration_facade.scheduling_error(
+        _core_config,
+        CONFIG_ERROR,
+        _TIMEZONE_CONFIG_ERROR,
+    )
+
+
+configured_business_calendars: Callable[[], Any]
 
 
 def validate_scheduling_configuration() -> None:
-    """Validate domain-specific scheduling configuration before mutation."""
-    try:
-        raw_season_mode = str(_core_config._CONF.get("season_mode", "fixed") or "").strip().lower()
-        valid_season_modes = _core_config.config_schema.CONFIG_SPECS["season_mode"]["choices"]
-        if raw_season_mode not in valid_season_modes:
-            raise ValueError(
-                f"season_mode must be 'fixed' or 'astronomical', got {raw_season_mode!r}"
-            )
-        _astronomy.validate_configuration(ASTRONOMY_CONFIG)
-
-        for name in sorted(dict(ANCHOR_PRESETS or {})):
-            expression = resolve_anchor_presets(f"@{name}")
-            validate_anchor_expr_strict(expression)
-
-        anchor_omit = _import_sibling("anchor_omit")
-        for name in sorted(dict(OMIT_PRESETS or {})):
-            anchor_omit.validate_omit_expr_strict(
-                f"@{name}",
-                validate_anchor_expr_cached=validate_anchor_expr_strict,
-                resolve_omit_presets=resolve_omit_presets,
-            )
-
-        configured = globals().get("configured_business_calendars")
-        clear_cache = getattr(configured, "cache_clear", None)
-        if callable(clear_cache):
-            clear_cache()
-        if callable(configured):
-            configured()
-    except Exception as exc:
-        message = str(exc).strip() or type(exc).__name__
-        raise RuntimeError(f"Invalid Nautical scheduling configuration: {message}") from exc
+    _configuration_facade.validate_scheduling(
+        core_config=_core_config,
+        astronomy_config=ASTRONOMY_CONFIG,
+        anchor_presets=ANCHOR_PRESETS,
+        omit_presets=OMIT_PRESETS,
+        resolve_anchor_presets=resolve_anchor_presets,
+        validate_anchor_expr=validate_anchor_expr_strict,
+        resolve_omit_presets=resolve_omit_presets,
+        configured_business_calendars=configured_business_calendars,
+        import_sibling=_import_sibling,
+    )
 
 
 def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResult:
     """Apply the validated configuration selected for a Taskwarrior data directory."""
     global CONFIG_ERROR, _FACADE_CONFIG_SYNCED
-    result = _core_config.reload_for_taskdata(taskdata)
-    if not result.get("ok"):
-        error = str(result.get("error") or "configuration unavailable")
-        CONFIG_ERROR = f"Nautical configuration reload failed: {error}"
-        raise RuntimeError(f"Nautical configuration reload failed: {error}")
+    result = _configuration_facade.reload_taskdata(
+        _core_config,
+        taskdata,
+        set_config_error=lambda value: globals().__setitem__("CONFIG_ERROR", value),
+        refresh_exports=_refresh_facade_config_exports,
+    )
 
     for name in (
         "WRAND_SALT",
@@ -624,26 +486,14 @@ def _refresh_facade_config_exports() -> None:
         "RECURRENCE_UPDATE_UDAS", "_CACHE_TTL_SECS", "_CACHE_LOAD_MEM_MAX",
         "_CACHE_LOAD_MEM_TTL",
     )
-    initial_sync = not _FACADE_CONFIG_SYNCED
-    if initial_sync:
-        for name in names:
-            config_name = name if not name.startswith("_") else name[1:]
-            if name != "SEASON_HEMISPHERE" or not season_override:
-                globals()[name] = getattr(_core_config, config_name)
-        _FACADE_CONFIG_SYNCED = True
-    _CONF = _core_config._CONF
-    CONFIG_ERROR = _core_config.configuration_error()
-    if globals().get("MAX_ANCHOR_DNF_TERMS") == globals().get("_CONFIG_DEFAULT_MAX_ANCHOR_DNF_TERMS", 10_000):
-        MAX_ANCHOR_DNF_TERMS = _conf_int("max_anchor_dnf_terms", 10_000, min_value=64, max_value=200_000)
-    if "_refresh_timezone" in globals():
-        _refresh_timezone()
-    if initial_sync and not season_override:
-        _configure_season_support()
-    else:
-        # A config reload may change the backend or timezone even when a
-        # caller intentionally keeps a process-local hemisphere override.
-        _season_support.configure_mode(SEASON_MODE)
-        _season_support.configure_timezone(LOCAL_TZ_NAME)
+    _FACADE_CONFIG_SYNCED = _configuration_facade.refresh_loaded_state(
+        globals(), _core_config, names,
+        facade_synced=_FACADE_CONFIG_SYNCED,
+        season_support=_season_support,
+        refresh_timezone=_refresh_timezone,
+        configure_season_support=_configure_season_support,
+        conf_int=_conf_int,
+    )
 
 
 # --- Date/time config ---
@@ -780,32 +630,32 @@ ACF_CHECKSUM_LEN = 8
 _runtime = _LazySibling("runtime")
 
 
-def _hook_arg_value(*args, **kwargs):
+def _hook_arg_value(*args: Any, **kwargs: Any) -> Any:
     return _runtime.hook_arg_value(*args, **kwargs)
 
 
-def resolve_task_data_context(*args, **kwargs):
+def resolve_task_data_context(*args: Any, **kwargs: Any) -> Any:
     return _runtime.resolve_task_data_context(*args, **kwargs)
 
 
-def diag_log_redact(*args, **kwargs):
+def diag_log_redact(*args: Any, **kwargs: Any) -> Any:
     return _runtime.diag_log_redact(*args, **kwargs)
 
 
-def diag_log(*args, **kwargs):
+def diag_log(*args: Any, **kwargs: Any) -> Any:
     return _runtime.diag_log(*args, **kwargs)
 
 
-def diag(*args, **kwargs):
+def diag(*args: Any, **kwargs: Any) -> Any:
     return _runtime.diag(*args, **kwargs)
 
 
-def _runtime_command_module():
+def _runtime_command_module() -> Any:
     """Load subprocess/tempfile support only when a command is requested."""
     return _import_sibling("runtime_command")
 
 
-def run_task_result(*args, **kwargs):
+def run_task_result(*args: Any, **kwargs: Any) -> Any:
     return _runtime_command_module().run_task_result(*args, **kwargs)
 
 
@@ -852,19 +702,19 @@ def _active_mod_keys(mods: dict) -> set:
     return _recurrence_metadata.active_mod_keys(mods)
 
 
-def _atype(atom) -> str:
+def _atype(atom: Any) -> str:
     return _recurrence_metadata.atom_type(atom)
 
 
-def _aspec(atom) -> str:
+def _aspec(atom: Any) -> str:
     return _recurrence_metadata.atom_spec(atom)
 
 
-def _amods(atom) -> dict:
+def _amods(atom: Any) -> dict:
     return _recurrence_metadata.atom_mods(atom)
 
 
-def _ainterval(atom) -> int:
+def _ainterval(atom: Any) -> int:
     return _recurrence_metadata.atom_interval(atom)
 
 
@@ -873,7 +723,7 @@ def _ainterval(atom) -> int:
 _WD = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
-def _months_since(seed_local, year: int, month: int) -> int:
+def _months_since(seed_local: Any, year: int, month: int) -> int:
     return _recurrence_metadata.months_since(seed_local, year, month)
 
 
@@ -882,15 +732,15 @@ def _months_since(seed_local, year: int, month: int) -> int:
 _cp_parser = _LazySibling("cp_parser")
 
 
-def parse_cp_duration(dur: str):
+def parse_cp_duration(dur: str) -> Any:
     return _cp_parser.parse_cp_duration(dur)
 
 
-def parse_cp_sequence_tokens(cp: str):
+def parse_cp_sequence_tokens(cp: str) -> Any:
     return _cp_parser.parse_cp_sequence_tokens(cp)
 
 
-def parse_cp_sequence(cp: str):
+def parse_cp_sequence(cp: str) -> Any:
     return _cp_parser.parse_cp_sequence(cp)
 
 
@@ -898,7 +748,7 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     return _cp_parser.cp_sequence_parse_error(cp)
 
 
-def cp_sequence_interval_for_token(token, *, cp: str, link_no: int, token_index: int, chain_id: str | None = None):
+def cp_sequence_interval_for_token(token: Any, *, cp: str, link_no: int, token_index: int, chain_id: str | None = None) -> Any:
     return _cp_parser.cp_sequence_interval_for_token(
         token,
         cp=cp,
@@ -908,7 +758,7 @@ def cp_sequence_interval_for_token(token, *, cp: str, link_no: int, token_index:
     )
 
 
-def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = None):
+def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = None) -> Any:
     return _cp_parser.cp_sequence_interval_for_link(cp, link_no, chain_id)
 
 
@@ -1284,7 +1134,7 @@ _bind_lazy_api_aliases(_hint_builder_api)
 __all__ = _compat_api.PUBLIC_EXPORTS
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """Resolve public types whose implementation is intentionally lazy."""
     if name == "BusinessCalendarConfigError":
         value = _business_calendar_config.BusinessCalendarConfigError

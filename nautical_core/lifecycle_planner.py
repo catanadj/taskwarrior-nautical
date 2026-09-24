@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Protocol
 
 from .lifecycle_models import (
-    ExecutionStage,
     LifecycleAction,
     LifecycleContractError,
     LifecycleEvent,
@@ -25,7 +24,7 @@ from .lifecycle_models import (
 )
 from .task_codec import TaskCodec
 from .task_codec import DEFAULT_TASK_CODEC
-from .task_models import NauticalTask, TaskDraft, TaskPayload
+from .task_models import NauticalTask, TaskDraft
 
 
 class LifecyclePlanningError(RuntimeError):

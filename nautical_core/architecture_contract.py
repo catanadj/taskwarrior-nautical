@@ -59,9 +59,10 @@ _ENTRYPOINT_DIRS = {"hooks", "tools"}
 _COMPATIBILITY_NAMES = {
     "__init__", "compat_api", "api_bindings", "parser_api", "scheduler_api",
     "cache_api", "time_api", "token_api", "quarter_api", "acf_api", "expansion_api",
-    "business_calendar_api", "hint_builder_api", "linting_api",
+    "business_calendar_api", "hint_builder_api", "linting_api", "configuration_facade", "cache_facade", "timezone_facade",
 }
 _INTEGRATION_NAMES = {"hook_context", "hook_runtime", "operator_health_service"}
+_DOMAIN_NAMES = {"common", "hint_models", "task_models", "diagnostic_models"}
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,8 @@ def module_layer(relative_path: str | Path) -> str:
         return COMPATIBILITY
     if stem in _INTEGRATION_NAMES:
         return INTEGRATION
+    if stem in _DOMAIN_NAMES:
+        return DOMAIN
     if parts and parts[0] == "tools":
         return ENTRYPOINT
     if stem in {"operator_models", "operator_findings", "diagnostic_models", "on_exit_models"}:

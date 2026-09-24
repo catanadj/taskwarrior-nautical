@@ -850,25 +850,35 @@ failures.
 
 ## Final Verification and Acceptance
 
-- [ ] Full unit discovery passes with zero failures and errors.
-- [ ] Normal and deterministic shuffled golden suites pass with identical test
+- [x] Full unit discovery passes with zero failures and errors.
+- [x] Normal and deterministic shuffled golden suites pass with identical test
   counts.
-- [ ] Configured mypy passes across the package.
-- [ ] Strict mypy passes for every refactored ownership group.
-- [ ] Combined branch coverage meets the ratcheted floor and does not lose
+- [x] Configured mypy passes across the package.
+- [x] Strict mypy passes for every refactored ownership group.
+- [x] Combined branch coverage meets the ratcheted floor and does not lose
   coverage on hook protocol, lifecycle execution, or recovery paths.
-- [ ] Deployment and architecture sanity report `status: ok`.
-- [ ] Golden strict-JSON and Unicode tests pass for add and modify hooks.
-- [ ] Malformed-input tests prove no hook emits a traceback or partial JSON.
-- [ ] Black-box Taskwarrior lifecycle tests pass against disposable Taskdata.
-- [ ] Normal and extended performance budgets pass.
-- [ ] Stress and short-soak profiles pass without queue, dead-letter, or
+- [x] Deployment and architecture sanity report `status: ok`.
+- [x] Golden strict-JSON and Unicode tests pass for add and modify hooks.
+- [x] Malformed-input tests prove no hook emits a traceback or partial JSON.
+- [x] Black-box Taskwarrior lifecycle tests pass against disposable Taskdata.
+- [x] Normal and extended performance budgets pass.
+- [x] Stress and short-soak profiles pass without queue, dead-letter, or
   recovery regressions.
-- [ ] Documentation names the canonical owner of each moved public API.
-- [ ] `git diff --check` passes and generated reports, caches, databases, and
+- [x] Documentation names the canonical owner of each moved public API.
+- [x] `git diff --check` passes and generated reports, caches, databases, and
   local artifacts are not staged.
-- [ ] A fresh tracked-HEAD health scan is captured after the execution queue is
+- [x] A fresh tracked-HEAD health scan is captured after the execution queue is
   clear; stale findings are not manually marked resolved without scan evidence.
+
+Final acceptance evidence — 2026-09-24, commits `6d5d318` and `6e73978`:
+full unit discovery 1318 passed/3 skipped; strict golden 404/404 passed in
+normal and deterministic shuffled order; configured and strict mypy passed all
+255 source files; branch coverage 63% (44% floor); deployment/architecture
+sanity `status: ok`; black-box lifecycle passed; normal and extended performance
+budgets passed; CI stress passed with no violations; 30-second soak passed with
+zero failures, queue bytes, or dead letters. A forced local tracked-HEAD
+desloppify scan completed on 2026-09-24 after resetting the local plan queue;
+the resulting health queue contains 13 subjective review items.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. \

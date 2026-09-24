@@ -488,6 +488,71 @@ def _build_expiration_child_with_day_end(
     ).to_mapping()
 
 
+def _plan_existing_child_recovery(
+    parent: TaskPayload,
+    decision_parent: TaskObservation,
+    existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
+    *,
+    child_short: str,
+    next_link: int,
+    is_expiration: bool,
+) -> RecoveryResult:
+    """Build the idempotent recovery plan when the successor already exists."""
+    existing_child = next(
+        (
+            row
+            for row in existing_children
+            if str(_observation_value(row, "uuid") or "").strip().lower().startswith(child_short.lower())
+        ),
+        None,
+    )
+    if not isinstance(existing_child, TaskObservation):
+        return _recovery_refusal(
+            decision_parent,
+            RecoveryStatus.MANUAL_REVIEW,
+            "existing successor identity could not be loaded",
+            evidence={"child_short": child_short},
+        )
+    try:
+        guard = ParentGuard(
+            status=str(parent.get("status") or "pending"),
+            chain=str(parent.get("chain") or "on"),
+            chain_id=str(parent.get("chainID") or ""),
+            link=int_or_default(parent.get("link"), next_link - 1),
+            recurrence_fingerprint=recurrence_fingerprint(parent),
+            modified=str(parent.get("modified") or ""),
+        )
+        identity = LifecycleIdentity(
+            chain_id=guard.chain_id,
+            parent_uuid=str(parent.get("uuid") or ""),
+            source_link=guard.link,
+            target_link=next_link,
+            event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
+        )
+        lifecycle_plan = LifecyclePlan.from_draft(
+            identity=identity,
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=guard,
+            draft=_child_draft(existing_child.to_mapping()),
+            parent_patch={"nextLink": child_short},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
+    except Exception as exc:
+        return _recovery_refusal(
+            decision_parent,
+            RecoveryStatus.ERROR,
+            f"failed to build successor recovery plan: {scheduling_error_message(exc)}",
+            evidence={"child_short": child_short},
+        )
+    return _recovery_plan_result(
+        decision_parent,
+        lifecycle_plan,
+        reason="next link already exists",
+        child_short=child_short,
+        child_observation=existing_child,
+    )
+
+
 def _plan_recovery_decision_unscoped(
     parent: TaskPayload,
     *,
@@ -538,58 +603,13 @@ def _plan_recovery_decision_unscoped(
     if child_error:
         return _recovery_refusal(decision_parent, RecoveryStatus.MANUAL_REVIEW, child_error)
     if child_short:
-        existing_child = next(
-            (
-                row
-                for row in existing_children
-                if str(_observation_value(row, "uuid") or "").strip().lower().startswith(child_short.lower())
-            ),
-            None,
-        )
-        if not isinstance(existing_child, TaskObservation):
-            return _recovery_refusal(
-                decision_parent,
-                RecoveryStatus.MANUAL_REVIEW,
-                "existing successor identity could not be loaded",
-                evidence={"child_short": child_short},
-            )
-        try:
-            guard = ParentGuard(
-                status=str(parent.get("status") or "pending"),
-                chain=str(parent.get("chain") or "on"),
-                chain_id=str(parent.get("chainID") or ""),
-                link=link,
-                recurrence_fingerprint=recurrence_fingerprint(parent),
-                modified=str(parent.get("modified") or ""),
-            )
-            identity = LifecycleIdentity(
-                chain_id=guard.chain_id,
-                parent_uuid=str(parent.get("uuid") or ""),
-                source_link=guard.link,
-                target_link=next_link,
-                event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
-            )
-            lifecycle_plan = LifecyclePlan.from_draft(
-                identity=identity,
-                action=LifecycleAction.SPAWN_CHILD,
-                parent_guard=guard,
-                draft=_child_draft(existing_child.to_mapping()),
-                parent_patch={"nextLink": child_short},
-                expected_postconditions=("child_present", "parent_linked", "verified"),
-            )
-        except Exception as exc:
-            return _recovery_refusal(
-                decision_parent,
-                RecoveryStatus.ERROR,
-                f"failed to build successor recovery plan: {scheduling_error_message(exc)}",
-                evidence={"child_short": child_short},
-            )
-        return _recovery_plan_result(
+        return _plan_existing_child_recovery(
+            parent,
             decision_parent,
-            lifecycle_plan,
-            reason="next link already exists",
+            existing_children,
             child_short=child_short,
-            child_observation=existing_child,
+            next_link=next_link,
+            is_expiration=is_expiration,
         )
 
     try:

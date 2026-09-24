@@ -10,6 +10,7 @@ import os
 import random
 import tempfile
 import time
+from dataclasses import dataclass
 from typing import Any, Callable
 from .api_bindings import ApiBinding, core_namespace
 import zlib
@@ -23,33 +24,66 @@ except Exception:
     fcntl = None
 
 
-def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
-    """Create cache APIs without sharing cache state across deps loaders."""
+@dataclass(frozen=True, slots=True)
+class _CacheBindingContext:
+    """Resolved dependencies and owned cache modules for one facade binding."""
+
+    deps: CacheDependencies
+    import_sibling: Callable[[str], Any]
+    cache_support: Any
+    cache_locking: Any
+    cache_payload: Any
+    cache_dir_state: list[str | None]
+    cache_state: CacheState
+
+
+def _binding_context(
+    module: Any,
+    *,
+    namespace: dict[str, Any] | None,
+    context: CoreContext | None,
+) -> _CacheBindingContext:
+    """Resolve dependency state without mixing it into cache operation binding."""
     deps = CacheDependencies.from_mapping(
         context.namespace if context is not None
         else core_namespace(module, namespace, context, "cache_api")
     )
-    import_sibling: Callable[[str], Any] | None
     if context is not None:
         import_sibling = context.import_sibling
     else:
         import_sibling = deps.get("_import_sibling")
         if not callable(import_sibling):
             raise TypeError("cache_api.for_core requires _import_sibling in its dependency snapshot")
-    cache_dir_state: list[str | None] = [None]
-    cache_state = CacheState(
-        memory=deps["_CACHE_LOAD_MEM"],
-        max_entries=int(deps["_CACHE_LOAD_MEM_MAX"]),
-        ttl=float(deps["_CACHE_LOAD_MEM_TTL"]),
+    return _CacheBindingContext(
+        deps=deps,
+        import_sibling=import_sibling,
+        cache_support=import_sibling("cache_support"),
+        cache_locking=import_sibling("cache_locking"),
+        cache_payload=import_sibling("cache_payload"),
+        cache_dir_state=[None],
+        cache_state=CacheState(
+            memory=deps["_CACHE_LOAD_MEM"],
+            max_entries=int(deps["_CACHE_LOAD_MEM_MAX"]),
+            ttl=float(deps["_CACHE_LOAD_MEM_TTL"]),
+        ),
     )
-    cache_support = import_sibling("cache_support")
-    cache_locking = import_sibling("cache_locking")
-    cache_payload = import_sibling("cache_payload")
 
-    def is_atom_like(atom) -> bool:
+
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
+    """Create cache APIs without sharing cache state across deps loaders."""
+    binding = _binding_context(module, namespace=namespace, context=context)
+    deps = binding.deps
+    import_sibling = binding.import_sibling
+    cache_support = binding.cache_support
+    cache_locking = binding.cache_locking
+    cache_payload = binding.cache_payload
+    cache_dir_state = binding.cache_dir_state
+    cache_state = binding.cache_state
+
+    def is_atom_like(atom: Any) -> bool:
         return cache_payload.is_factor_like(atom)
 
-    def is_dnf_like(dnf) -> bool:
+    def is_dnf_like(dnf: Any) -> bool:
         return cache_payload.is_dnf_like(dnf, is_atom_like=is_atom_like)
 
     clone_mod_value = cache_payload.clone_mod_value
@@ -103,7 +137,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         jitter: float,
         mode: int,
         mkdir: bool,
-    ):
+    ) -> Any:
         with cache_locking.safe_lock_fcntl_context(
             path_str,
             tries=tries,
@@ -128,7 +162,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         mode: int,
         mkdir: bool,
         stale_after: float | None,
-    ):
+    ) -> Any:
         with cache_locking.safe_lock_excl_context(
             path_str,
             tries=tries,
@@ -156,7 +190,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         mode: int = 0o600,
         mkdir: bool = True,
         stale_after: float | None = 60.0,
-    ):
+    ) -> Any:
         with cache_locking.safe_lock(
             path,
             retries=retries,
@@ -173,7 +207,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             yield acquired
 
     @contextmanager
-    def cache_lock(key: str):
+    def cache_lock(key: str) -> Any:
         with cache_locking.cache_lock(
             key,
             cache_lock_path=cache_lock_path,
@@ -419,7 +453,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         raw = str(deps["os"].environ.get("NAUTICAL_DNF_DISK_CACHE") or "1").strip().lower()
         return bool(deps.get("ENABLE_ANCHOR_CACHE", True)) and raw in {"1", "true", "yes", "on"}
 
-    def dnf_cache_load(expr: str):
+    def dnf_cache_load(expr: str) -> Any:
         if not _dnf_cache_enabled():
             return None
         key = dnf_cache_key(expr)

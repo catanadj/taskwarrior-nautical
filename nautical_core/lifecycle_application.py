@@ -26,7 +26,6 @@ service see identical outcomes from identical Taskwarrior state.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 import os
 import time
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
@@ -59,27 +58,28 @@ from .lifecycle_models import (
 from .task_codec import TaskCodec
 from .lifecycle_outbox import (
     LifecycleOutboxRecord,
-    LifecycleOutboxRepository,
     OutboxFailure,
     OutboxResult,
     OutboxResultKind,
     LifecycleOutboxError,
 )
 from .operator_context import OperatorBudgetLedger
+from .lifecycle_execution_policy import (
+    FailureDisposition,
+    MUTATION_TO_APPLICATION,
+    OUTBOX_TO_APPLICATION,
+    SPAWN_STAGE_ORDER,
+    LifecycleApplicationOutcomeKind,
+    classify_mutation_failure,
+    classify_outbox_failure,
+    remaining_drain_work,
+)
+from .lifecycle_outbox_claims import LifecycleOutboxClaimPort
+from .lifecycle_outbox_operations import LifecycleExecutionOutboxPort
 
 
 class LifecycleApplicationError(RuntimeError):
     """Raised when the lifecycle application service is misused."""
-
-
-class LifecycleApplicationOutcomeKind(str, Enum):
-    APPLIED = "applied"
-    ALREADY_APPLIED = "already_applied"
-    RETRYABLE = "retryable"
-    CONFLICT = "conflict"
-    MANUAL_REVIEW = "manual_review"
-    QUARANTINED = "quarantined"
-    NOOP = "noop"
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,54 +186,148 @@ class _BatchState:
     progress_completed: int = 0
 
 
+class _BatchProgressReporter:
+    """Own progress accounting for one batched lifecycle drain."""
+
+    def __init__(
+        self,
+        *,
+        total: int,
+        started: float,
+        emit: Callable[[LifecycleDrainProgressCallback | None, LifecycleDrainProgress], None],
+        progress: LifecycleDrainProgressCallback | None,
+    ) -> None:
+        self.total = total
+        self.started = started
+        self.emit = emit
+        self.progress = progress
+        self.completed = 0
+
+    def action(self, state: _BatchState, detail: str, units: int = 1) -> None:
+        remaining = _remaining_drain_work(state.record.stage) - state.progress_completed
+        advance = min(max(0, int(units)), remaining)
+        if not advance:
+            return
+        state.progress_completed += advance
+        self.completed += advance
+        self.emit(
+            self.progress,
+            LifecycleDrainProgress(
+                stage=LifecycleDrainStage.PROCESSING,
+                completed=self.completed,
+                total=self.total,
+                intent_id=state.record.intent_id,
+                detail=detail,
+                elapsed_seconds=time.monotonic() - self.started,
+            ),
+        )
+
+    def outcome(
+        self,
+        record: LifecycleOutboxRecord,
+        outcome: LifecycleApplicationOutcome,
+        state: _BatchState | None = None,
+    ) -> None:
+        record_total = _remaining_drain_work(record.stage)
+        accounted = state.progress_completed if state is not None else 0
+        self.completed += max(0, record_total - accounted)
+        if state is not None:
+            state.progress_completed = record_total
+        self.emit(
+            self.progress,
+            LifecycleDrainProgress(
+                stage=LifecycleDrainStage.COMPLETE,
+                completed=self.completed,
+                total=self.total,
+                intent_id=record.intent_id,
+                outcome=outcome.kind.value,
+                detail="intent finished",
+                elapsed_seconds=time.monotonic() - self.started,
+            ),
+        )
+
+
+class _BatchPersistenceCoordinator:
+    """Coordinate batched lease renewal and durable stage advancement."""
+
+    def __init__(
+        self,
+        *,
+        outbox: LifecycleOutboxClaimPort,
+        owner: str,
+        retry_or_review: Callable[
+            [LifecycleOutboxRecord, OutboxResult, str, tuple[MutationOutcome, ...]],
+            LifecycleApplicationOutcome,
+        ],
+    ) -> None:
+        self.outbox = outbox
+        self.owner = owner
+        self.retry_or_review = retry_or_review
+
+    def renew(self, candidates: Sequence[_BatchState], step: str, lease_seconds: float) -> None:
+        eligible = tuple(
+            state
+            for state in candidates
+            if state.terminal is None
+            and _SPAWN_STAGE_ORDER[state.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.VERIFIED]
+        )
+        if not eligible:
+            return
+        overall, rows = self.outbox.renew_leases(
+            intent_ids=tuple(state.record.intent_id for state in eligible),
+            owner=self.owner,
+            lease_seconds=lease_seconds,
+        )
+        for state in eligible:
+            result = rows.get(state.record.intent_id)
+            if not overall.ok or result is None or result.kind not in {
+                OutboxResultKind.APPLIED,
+                OutboxResultKind.ALREADY_APPLIED,
+            }:
+                state.terminal = self.retry_or_review(
+                    state.record,
+                    overall if not overall.ok else result or OutboxResult(
+                        OutboxResultKind.CONFLICT,
+                        reason="bulk lease result missing",
+                    ),
+                    f"could not renew lifecycle lease before {step}",
+                    tuple(state.mutations),
+                )
+
+    def advance(self, candidates: Sequence[_BatchState], target: ExecutionStage, detail: str, owner: str) -> None:
+        eligible = tuple(state for state in candidates if state.terminal is None)
+        if not eligible:
+            return
+        overall, rows = self.outbox.advance_stages(
+            stages={state.record.intent_id: target for state in eligible},
+            owner=owner,
+        )
+        for state in eligible:
+            result = rows.get(state.record.intent_id)
+            if not overall.ok or result is None or result.kind not in {
+                OutboxResultKind.APPLIED,
+                OutboxResultKind.ALREADY_APPLIED,
+            }:
+                state.terminal = self.retry_or_review(
+                    state.record,
+                    overall if not overall.ok else result or OutboxResult(
+                        OutboxResultKind.CONFLICT,
+                        reason="bulk stage result missing",
+                    ),
+                    detail,
+                    tuple(state.mutations),
+                )
+            else:
+                state.stage = target
+
 class _UnitOfWork(Protocol):
     mutation_epoch: int
 
 
-# Durable stage progression used only for SPAWN_CHILD outbox intents. Mirrors
-# lifecycle_outbox._STAGE_ORDER; kept local because that mapping is private
-# to the outbox repository and this module only needs the ordering, not the
-# repository's own bookkeeping.
-_SPAWN_STAGE_ORDER = {
-    ExecutionStage.PLANNED: 0,
-    ExecutionStage.PERSISTED: 0,
-    ExecutionStage.CHILD_PRESENT: 1,
-    ExecutionStage.PARENT_LINKED: 2,
-    ExecutionStage.VERIFIED: 3,
-    ExecutionStage.FINALIZED: 4,
-}
-
-
-def _remaining_drain_work(stage: ExecutionStage) -> int:
-    """Return observable work units remaining for one claimed spawn intent."""
-    stage_order = _SPAWN_STAGE_ORDER[stage]
-    if stage_order < _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]:
-        return 6
-    if stage_order < _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]:
-        return 4
-    if stage_order < _SPAWN_STAGE_ORDER[ExecutionStage.VERIFIED]:
-        return 2
-    return 1
+_SPAWN_STAGE_ORDER = SPAWN_STAGE_ORDER
+_remaining_drain_work = remaining_drain_work
 
 _TERMINAL_ACTIONS = (LifecycleAction.DISABLE_CHAIN, LifecycleAction.FINALIZE_CHAIN)
-
-_OUTBOX_TO_APPLICATION = {
-    OutboxResultKind.APPLIED: LifecycleApplicationOutcomeKind.APPLIED,
-    OutboxResultKind.ALREADY_APPLIED: LifecycleApplicationOutcomeKind.ALREADY_APPLIED,
-    OutboxResultKind.RETRYABLE: LifecycleApplicationOutcomeKind.RETRYABLE,
-    OutboxResultKind.CONFLICT: LifecycleApplicationOutcomeKind.CONFLICT,
-    OutboxResultKind.REJECTED: LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
-}
-
-_MUTATION_TO_APPLICATION = {
-    MutationOutcomeKind.APPLIED: LifecycleApplicationOutcomeKind.APPLIED,
-    MutationOutcomeKind.ALREADY_APPLIED: LifecycleApplicationOutcomeKind.ALREADY_APPLIED,
-    MutationOutcomeKind.RETRYABLE: LifecycleApplicationOutcomeKind.RETRYABLE,
-    MutationOutcomeKind.CONFLICT: LifecycleApplicationOutcomeKind.CONFLICT,
-    MutationOutcomeKind.REJECTED: LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
-    MutationOutcomeKind.MANUAL_REVIEW: LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
-}
-
 
 def _mutation_guard(plan: LifecyclePlan, *, mutation_epoch: int) -> MutationGuard | None:
     """Build a fresh, invocation-scoped guard from a plan's durable ParentGuard."""
@@ -375,7 +469,7 @@ def _from_outbox_result(
     requested_config: str = "",
     requested_schedule: str = "",
 ) -> LifecycleApplicationOutcome:
-    kind = _OUTBOX_TO_APPLICATION.get(result.kind, LifecycleApplicationOutcomeKind.MANUAL_REVIEW)
+    kind = OUTBOX_TO_APPLICATION.get(result.kind, LifecycleApplicationOutcomeKind.MANUAL_REVIEW)
     intent_id = result.record.intent_id if result.record is not None else ""
     reason = result.reason
     if result.record is not None and requested is not None and not result.ok:
@@ -414,7 +508,7 @@ class LifecycleApplicationService:
         unit_of_work: _UnitOfWork | None = None,
         mutations: TaskwarriorMutationPort | None = None,
         execution: LifecycleExecutionPort | None = None,
-        outbox: LifecycleOutboxRepository,
+        outbox: LifecycleExecutionOutboxPort,
         owner: str = "",
         lease_seconds: float = 30.0,
         budget: OperatorBudgetLedger | None = None,
@@ -847,95 +941,18 @@ class LifecycleApplicationService:
         states: list[_BatchState] = []
         outcomes: list[LifecycleApplicationOutcome] = []
         total = sum(_remaining_drain_work(record.stage) for record in records)
-        completed = 0
         drain_started = time.monotonic()
-
-        def report_action(state: _BatchState, detail: str, units: int = 1) -> None:
-            nonlocal completed
-            remaining = _remaining_drain_work(state.record.stage) - state.progress_completed
-            advance = min(max(0, int(units)), remaining)
-            if not advance:
-                return
-            state.progress_completed += advance
-            completed += advance
-            self._report_drain_progress(
-                progress,
-                LifecycleDrainProgress(
-                    stage=LifecycleDrainStage.PROCESSING,
-                    completed=completed,
-                    total=total,
-                    intent_id=state.record.intent_id,
-                    detail=detail,
-                    elapsed_seconds=time.monotonic() - drain_started,
-                ),
-            )
-
-        def report_outcome(
-            record: LifecycleOutboxRecord,
-            outcome: LifecycleApplicationOutcome,
-            state: _BatchState | None = None,
-        ) -> None:
-            nonlocal completed
-            record_total = _remaining_drain_work(record.stage)
-            accounted = state.progress_completed if state is not None else 0
-            completed += max(0, record_total - accounted)
-            if state is not None:
-                state.progress_completed = record_total
-            self._report_drain_progress(
-                progress,
-                LifecycleDrainProgress(
-                    stage=LifecycleDrainStage.COMPLETE,
-                    completed=completed,
-                    total=total,
-                    intent_id=record.intent_id,
-                    outcome=outcome.kind.value,
-                    detail="intent finished",
-                    elapsed_seconds=time.monotonic() - drain_started,
-                ),
-            )
-
-        def renew_batch(candidates: Sequence[_BatchState], step: str) -> None:
-            """Renew all currently eligible leases in one CAS transaction."""
-            eligible = tuple(
-                state
-                for state in candidates
-                if state.terminal is None
-                and _SPAWN_STAGE_ORDER[state.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.VERIFIED]
-            )
-            if eligible:
-                overall, rows = self._outbox.renew_leases(
-                    intent_ids=tuple(state.record.intent_id for state in eligible),
-                    owner=self._owner,
-                    lease_seconds=self._lease_seconds,
-                )
-                for state in eligible:
-                    result = rows.get(state.record.intent_id)
-                    if not overall.ok or result is None or result.kind not in {OutboxResultKind.APPLIED, OutboxResultKind.ALREADY_APPLIED}:
-                        state.terminal = self._retry_or_review(
-                            state.record,
-                            overall if not overall.ok else result or OutboxResult(OutboxResultKind.CONFLICT, reason="bulk lease result missing"),
-                            f"could not renew lifecycle lease before {step}",
-                            tuple(state.mutations),
-                        )
-
-        def advance_batch(candidates: Sequence[_BatchState], target: ExecutionStage, detail: str) -> None:
-            eligible = tuple(state for state in candidates if state.terminal is None)
-            if not eligible:
-                return
-            overall, rows = self._outbox.advance_stages(
-                stages={state.record.intent_id: target for state in eligible}, owner=self._owner
-            )
-            for state in eligible:
-                result = rows.get(state.record.intent_id)
-                if not overall.ok or result is None or result.kind not in {OutboxResultKind.APPLIED, OutboxResultKind.ALREADY_APPLIED}:
-                    state.terminal = self._retry_or_review(
-                        state.record,
-                        overall if not overall.ok else result or OutboxResult(OutboxResultKind.CONFLICT, reason="bulk stage result missing"),
-                        detail,
-                        tuple(state.mutations),
-                    )
-                else:
-                    state.stage = target
+        reporter = _BatchProgressReporter(
+            total=total,
+            started=drain_started,
+            emit=self._report_drain_progress,
+            progress=progress,
+        )
+        persistence = _BatchPersistenceCoordinator(
+            outbox=self._outbox,
+            owner=self._owner,
+            retry_or_review=self._retry_or_review,
+        )
 
         for record in records:
             plan = record.plan
@@ -950,13 +967,13 @@ class LifecycleApplicationService:
             ):
                 review = self._manual_review(record, "outbox record is invalid for batched lifecycle execution")
                 outcomes.append(review)
-                report_outcome(record, review)
+                reporter.outcome(record, review)
                 continue
             states.append(_BatchState(record, plan, child_payload, link_payload, record.stage, []))
 
         pending_children: list[tuple[_BatchState, MutationRequest]] = []
         child_requests: list[tuple[_BatchState, MutationRequest]] = []
-        renew_batch(states, "child import")
+        persistence.renew(states, "child import", self._lease_seconds)
         for state in states:
             if state.terminal is not None or _SPAWN_STAGE_ORDER[state.stage] >= _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]:
                 continue
@@ -979,11 +996,11 @@ class LifecycleApplicationService:
                         "child batch mutation returned no result",
                     )
                 state.mutations.append(outcome)
-                report_action(state, "child mutation")
+                reporter.action(state, "child mutation")
                 if outcome.kind is MutationOutcomeKind.APPLIED:
                     pending_children.append((state, request))
                 elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
-                    report_action(state, "child verified")
+                    reporter.action(state, "child verified")
                     settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
                     state.terminal = settled
                     if settled is None:
@@ -991,7 +1008,7 @@ class LifecycleApplicationService:
                 else:
                     state.terminal = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
         verified_children: list[tuple[_BatchState, MutationRequest]] = []
-        renew_batch([state for state, _request in pending_children], "child verification")
+        persistence.renew([state for state, _request in pending_children], "child verification", self._lease_seconds)
         for state, request in pending_children:
             if state.terminal is None:
                 verified_children.append((state, request))
@@ -1009,15 +1026,15 @@ class LifecycleApplicationService:
                     "child batch verification returned no result",
                 )
             state.mutations.append(mutation_outcome)
-            report_action(state, "child verified")
+            reporter.action(state, "child verified")
             if mutation_outcome.kind in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
                 child_stage_candidates.append(state)
             else:
                 state.terminal = self._settle_step(state.record, mutation_outcome, ExecutionStage.CHILD_PRESENT)
-        advance_batch(child_stage_candidates, ExecutionStage.CHILD_PRESENT, "could not persist child-present lifecycle stage")
+        persistence.advance(child_stage_candidates, ExecutionStage.CHILD_PRESENT, "could not persist child-present lifecycle stage", self._owner)
 
         pending_parents: list[tuple[_BatchState, MutationRequest]] = []
-        renew_batch(states, "parent link")
+        persistence.renew(states, "parent link", self._lease_seconds)
         for state in states:
             if state.terminal is not None or _SPAWN_STAGE_ORDER[state.stage] >= _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]:
                 continue
@@ -1027,11 +1044,11 @@ class LifecycleApplicationService:
                 continue
             outcome = apply_unverified(request)
             state.mutations.append(outcome)
-            report_action(state, "parent mutation")
+            reporter.action(state, "parent mutation")
             if outcome.kind is MutationOutcomeKind.APPLIED:
                 pending_parents.append((state, request))
             elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
-                report_action(state, "parent verified")
+                reporter.action(state, "parent verified")
                 settled = self._settle_step(state.record, outcome, ExecutionStage.PARENT_LINKED)
                 state.terminal = settled
                 if settled is None:
@@ -1042,7 +1059,7 @@ class LifecycleApplicationService:
                 )
 
         verified_parents: list[tuple[_BatchState, MutationRequest]] = []
-        renew_batch([state for state, _request in pending_parents], "parent verification")
+        persistence.renew([state for state, _request in pending_parents], "parent verification", self._lease_seconds)
         for state, request in pending_parents:
             if state.terminal is None:
                 verified_parents.append((state, request))
@@ -1059,16 +1076,16 @@ class LifecycleApplicationService:
                     "parent batch verification returned no result",
                 )
             state.mutations.append(mutation_outcome)
-            report_action(state, "parent verified")
+            reporter.action(state, "parent verified")
             if mutation_outcome.kind in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
                 parent_stage_candidates.append(state)
             else:
                 state.terminal = self._parent_failure(
                     state.record, state.plan, state.child_payload, mutation_outcome, state.mutations
                 )
-        advance_batch(parent_stage_candidates, ExecutionStage.PARENT_LINKED, "could not persist parent-linked lifecycle stage")
+        persistence.advance(parent_stage_candidates, ExecutionStage.PARENT_LINKED, "could not persist parent-linked lifecycle stage", self._owner)
 
-        renew_batch(states, "verification")
+        persistence.renew(states, "verification", self._lease_seconds)
         ready_for_stage = [state for state in states if state.terminal is None]
         advance_status, advance_rows = self._outbox.advance_stages(
             stages={state.record.intent_id: ExecutionStage.VERIFIED for state in ready_for_stage},
@@ -1085,7 +1102,7 @@ class LifecycleApplicationService:
                     mutations=tuple(state.mutations),
                 )
                 outcomes.append(outcome)
-                report_outcome(state.record, outcome, state)
+                reporter.outcome(state.record, outcome, state)
                 continue
             advance = advance_rows.get(
                 state.record.intent_id,
@@ -1093,15 +1110,15 @@ class LifecycleApplicationService:
             )
             if not advance_status.ok:
                 advance = advance_status
-            report_action(state, "intent verified")
+            reporter.action(state, "intent verified")
             if not advance_status.ok or not advance.ok:
                 outcome = self._retry_or_review(state.record, advance, "could not persist verified lifecycle stage", tuple(state.mutations))
                 outcomes.append(outcome)
-                report_outcome(state.record, outcome, state)
+                reporter.outcome(state.record, outcome, state)
                 continue
             advanced.append(state)
 
-        renew_batch(advanced, "acknowledgement")
+        persistence.renew(advanced, "acknowledgement", self._lease_seconds)
         ack_candidates = [state for state in advanced if state.terminal is None]
         ack_status, ack_rows = self._outbox.acknowledge_many(
                 intent_ids=tuple(state.record.intent_id for state in ack_candidates), owner=self._owner
@@ -1113,7 +1130,7 @@ class LifecycleApplicationService:
                     intent_id=state.terminal.intent_id, mutations=tuple(state.mutations),
                 )
                 outcomes.append(outcome)
-                report_outcome(state.record, outcome, state)
+                reporter.outcome(state.record, outcome, state)
                 continue
             ack = ack_rows.get(
                 state.record.intent_id,
@@ -1121,11 +1138,11 @@ class LifecycleApplicationService:
             )
             if not ack_status.ok:
                 ack = ack_status
-            report_action(state, "intent acknowledged")
+            reporter.action(state, "intent acknowledged")
             if not ack_status.ok or not ack.ok:
                 outcome = self._retry_or_review(state.record, ack, "could not acknowledge finalized lifecycle intent", tuple(state.mutations))
                 outcomes.append(outcome)
-                report_outcome(state.record, outcome, state)
+                reporter.outcome(state.record, outcome, state)
                 continue
             outcome = LifecycleApplicationOutcome(
                 LifecycleApplicationOutcomeKind.APPLIED,
@@ -1134,7 +1151,7 @@ class LifecycleApplicationService:
                 mutations=tuple(state.mutations),
             )
             outcomes.append(outcome)
-            report_outcome(state.record, outcome, state)
+            reporter.outcome(state.record, outcome, state)
         return DrainResult(claim=claim, outcomes=tuple(outcomes))
 
     @staticmethod
@@ -1369,7 +1386,7 @@ class LifecycleApplicationService:
             if not advance.ok:
                 return self._retry_or_review(record, advance, "could not persist lifecycle stage progress", ())
             return None
-        if outcome.kind is MutationOutcomeKind.RETRYABLE:
+        if classify_mutation_failure(outcome.kind) is FailureDisposition.RETRY:
             release = self._outbox.release_retry(
                 intent_id=record.intent_id,
                 owner=self._owner,
@@ -1408,7 +1425,7 @@ class LifecycleApplicationService:
         review stores both the parent failure and compensation evidence in
         the outbox, so recovery cannot repeat an unsafe mutation.
         """
-        if outcome.kind is MutationOutcomeKind.RETRYABLE:
+        if classify_mutation_failure(outcome.kind) is FailureDisposition.RETRY:
             settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
             assert settled is not None
             return settled
@@ -1446,7 +1463,7 @@ class LifecycleApplicationService:
     ) -> LifecycleApplicationOutcome:
         plan = record.plan
         reason = outbox_result.reason or fallback
-        if outbox_result.kind is OutboxResultKind.RETRYABLE:
+        if classify_outbox_failure(outbox_result.kind) is FailureDisposition.RETRY:
             return LifecycleApplicationOutcome(
                 LifecycleApplicationOutcomeKind.RETRYABLE, plan.identity, reason=reason, intent_id=record.intent_id, mutations=mutations
             )
@@ -1555,7 +1572,7 @@ class LifecycleApplicationService:
                 plan.identity,
                 reason="could not construct a guarded mutation request",
             )
-        kind = _MUTATION_TO_APPLICATION.get(outcome.kind, LifecycleApplicationOutcomeKind.MANUAL_REVIEW)
+        kind = MUTATION_TO_APPLICATION.get(outcome.kind, LifecycleApplicationOutcomeKind.MANUAL_REVIEW)
         return LifecycleApplicationOutcome(kind, plan.identity, reason=outcome.reason, mutations=(outcome,))
 
     # -- shared mutation application -----------------------------------

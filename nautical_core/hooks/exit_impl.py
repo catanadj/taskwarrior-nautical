@@ -70,46 +70,6 @@ def _core_target_from_base(base: Path) -> Path | None:
     return hook_bootstrap.core_target_from_base(base)
 
 _CORE_BASE = _trusted_core_base(TW_DIR)
-_EARLY_EXIT_PROBE = None
-
-if (
-    __name__ == "__main__"
-    and os.environ.get("NAUTICAL_DIAG") != "1"
-    and os.environ.get("NAUTICAL_BENCH_FORCE_FULL") != "1"
-):
-    _taskdata_env = str(os.environ.get("TASKDATA") or "").strip()
-    if _taskdata_env:
-        _path_support = None
-    else:
-        _path_support, _path_support_path, _path_support_error = hook_bootstrap.load_core_helper_module(
-            _CORE_BASE,
-            "config_support.py",
-            "_nautical_exit_path_support",
-        )
-    _exit_probe, _exit_probe_path, _exit_probe_error = hook_bootstrap.load_core_helper_module(
-        _CORE_BASE,
-        "exit_probe.py",
-        "_nautical_exit_probe",
-    )
-    if _exit_probe is not None and (_taskdata_env or _path_support is not None):
-        try:
-            # Taskwarrior supplies TASKDATA for normal hook invocations. Avoid
-            # importing config_support just to validate that already-resolved path.
-            if _taskdata_env:
-                _EARLY_EXIT_PROBE = _exit_probe.probe_exit_work(_taskdata_env)
-            else:
-                _early_taskdata = hook_bootstrap.resolve_task_data_context_light(
-                    path_support=_path_support,
-                    argv=sys.argv[1:],
-                    env=os.environ,
-                    tw_dir=str(TW_DIR),
-                )
-                if _early_taskdata is not None:
-                    _EARLY_EXIT_PROBE = _exit_probe.probe_exit_work(_early_taskdata[0])
-        except Exception:
-            _EARLY_EXIT_PROBE = None
-        if _EARLY_EXIT_PROBE is not None and _EARLY_EXIT_PROBE.definitely_empty:
-            raise SystemExit(0)
 
 
 import json
@@ -181,6 +141,12 @@ _MODULE_SPECS = {
         "_LIFECYCLE_OUTBOX_LOAD_FAILED",
         "lifecycle_outbox.py",
         "nautical_core.lifecycle_outbox",
+    ),
+    "lifecycle_outbox_operations": (
+        "_LIFECYCLE_OUTBOX_OPERATIONS",
+        "_LIFECYCLE_OUTBOX_OPERATIONS_LOAD_FAILED",
+        "lifecycle_outbox_operations.py",
+        "nautical_core.lifecycle_outbox_operations",
     ),
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -275,14 +241,14 @@ def _load_core() -> None:
     _CORE_READY = True
 
 
-def _hook_runtime_module():
+def _hook_runtime_module() -> Any:
     global _HOOK_RUNTIME
     if _HOOK_RUNTIME is None:
         _HOOK_RUNTIME = importlib.import_module("nautical_core.hook_runtime")
     return _HOOK_RUNTIME
 
 
-def _hook_module_access():
+def _hook_module_access() -> Any:
     global _HOOK_MODULE_ACCESS
     if _HOOK_MODULE_ACCESS is None:
         hook_runtime = _hook_runtime_module()
@@ -290,7 +256,7 @@ def _hook_module_access():
     return _HOOK_MODULE_ACCESS
 
 
-def _module(name: str, *, required: bool = True):
+def _module(name: str, *, required: bool = True) -> Any:
     return _hook_module_access().module(name, required=required)
 
 def _initialize_integration_context() -> None:
@@ -299,7 +265,7 @@ def _initialize_integration_context() -> None:
     if _INTEGRATION_CONTEXT is not None:
         return
     hook_runtime = _hook_runtime_module()
-    core, target, context = hook_runtime.initialize_integration_context(
+    runtime_state = hook_runtime.initialize_integration_context(
         module_access=_hook_module_access(),
         hook_bootstrap=hook_bootstrap,
         core_base=_CORE_BASE,
@@ -307,11 +273,12 @@ def _initialize_integration_context() -> None:
         tw_dir=str(TW_DIR),
         access="mutation",
     )
-    _CORE_IMPORT_TARGET = target
-    _INTEGRATION_CONTEXT = context
-    TW_DATA_DIR = context.taskdata
-    _TASKDATA_RAW = str(context.taskdata)
-    _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
+    core = runtime_state.core
+    _CORE_IMPORT_TARGET = runtime_state.target
+    _INTEGRATION_CONTEXT = runtime_state.context
+    TW_DATA_DIR = runtime_state.taskdata
+    _TASKDATA_RAW = str(runtime_state.taskdata)
+    _USE_RC_DATA_LOCATION = runtime_state.uses_rc_data_location
 
 
 def _reset_integration_context() -> None:
@@ -328,7 +295,7 @@ def _reset_integration_context() -> None:
 
 
 
-def _build_hook_runtime_context():
+def _build_hook_runtime_context() -> Any:
     hook_runtime = _hook_runtime_module()
     return hook_runtime.build_hook_runtime_context(
         module_access=_hook_module_access(),
@@ -442,7 +409,7 @@ _EXIT_EQUIV_PRELOAD_CHUNK_SIZE = 8
 _EXIT_DIAG_STATS: dict[str, Any] = {}
 
 
-def _exit_runtime_state():
+def _exit_runtime_state() -> Any:
     global _EXIT_RUNTIME_STATE
     if _EXIT_RUNTIME_STATE is None:
         exit_runtime = _module("exit_runtime")
@@ -468,50 +435,22 @@ _DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note
 
 
 def _diag_redact_msg(msg: object) -> str:
-    raw = msg if isinstance(msg, str) else str(msg)
-    redactor = getattr(core, "diag_log_redact", None) if core is not None else None
-    if callable(redactor):
-        try:
-            red = redactor(raw)
-            return red if isinstance(red, str) else str(red)
-        except Exception:
-            pass
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            for k in list(data.keys()):
-                if k in _DIAG_REDACT_KEYS:
-                    data[k] = "[redacted]"
-            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        pass
-    return raw
+    return _hook_runtime_module().redact_diagnostic_message(msg, core=core)
 
 
 def _diag(msg: str) -> None:
-    safe_msg = _diag_redact_msg(msg)
-    if core is not None:
-        event_factory = getattr(core, "DiagnosticEvent", None)
-        event = event_factory.from_message(safe_msg, hook="on-exit") if event_factory is not None else safe_msg
-        core.diag(event, "on-exit", str(TW_DATA_DIR))
-    elif os.environ.get("NAUTICAL_DIAG") == "1":
-        try:
-            sys.stderr.write(f"[nautical] {safe_msg}\n")
-        except Exception:
-            pass
+    _hook_runtime_module().emit_diagnostic(msg, hook_name="on-exit", core=core, taskdata=TW_DATA_DIR)
 
 
-def _diag_block(title: str, items, *, columns: int = 3) -> None:
-    if os.environ.get("NAUTICAL_DIAG") != "1":
-        return
-    try:
-        pairs = [f"{k}={v}" for k, v in (items or ())]
-        _diag(f"{title}:")
-        step = max(1, int(columns or 1))
-        for idx in range(0, len(pairs), step):
-            _diag("  " + "  ".join(pairs[idx:idx + step]))
-    except Exception:
-        pass
+def _diag_block(title: str, items: Any, *, columns: int = 3) -> None:
+    _hook_runtime_module().emit_diagnostic_block(
+        title,
+        items,
+        hook_name="on-exit",
+        emit=_diag,
+        enabled=os.environ.get("NAUTICAL_DIAG") == "1",
+        columns=columns,
+    )
 
 
 def _emit_exit_feedback(msg: str) -> None:
@@ -531,7 +470,7 @@ def _emit_exit_feedback(msg: str) -> None:
             pass
 
 
-def _drain_outbox_result(runtime):
+def _drain_outbox_result(runtime: Any) -> Any:
     """Claim and execute one bounded batch of lifecycle intents.
 
     All staging, mutation, verification, and recovery logic lives in
@@ -556,7 +495,7 @@ def _drain_outbox_result(runtime):
     lifecycle_outbox = _module("lifecycle_outbox")
 
     mutations = taskwarrior_mutations.TaskwarriorMutationService(unit_of_work)
-    outbox = lifecycle_outbox.LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
+    outbox = lifecycle_outbox._LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
     owner = f"exit-{os.getpid()}-{os.urandom(8).hex()}"
     service = lifecycle_application.LifecycleApplicationService(
         unit_of_work=unit_of_work,

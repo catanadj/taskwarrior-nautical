@@ -57,11 +57,11 @@ class EndChainSummaryPorts:
     services: Any
 
 
-def _parse_datetime_value(port: DatetimeValuePort, value: object):
+def _parse_datetime_value(port: DatetimeValuePort, value: object) -> Any:
     return datetime_value(port.parser, value)
 
 
-def chain_health_advice(ports: AnalyticsPorts, chain, kind: str, task, tol_secs: int, style: str):
+def chain_health_advice(ports: AnalyticsPorts, chain: Any, kind: str, task: Any, tol_secs: int, style: str) -> Any:
     return ports.core._import_sibling("modify_analytics").chain_health_advice(
         chain,
         kind,
@@ -75,7 +75,7 @@ def chain_health_advice(ports: AnalyticsPorts, chain, kind: str, task, tol_secs:
     )
 
 
-def chain_integrity_warnings(ports: AnalyticsPorts, chain, expected_chain_id: str | None = None) -> list[str]:
+def chain_integrity_warnings(ports: AnalyticsPorts, chain: Any, expected_chain_id: str | None = None) -> list[str]:
     return ports.core._import_sibling("modify_analytics").chain_integrity_warnings(
         chain,
         expected_chain_id=expected_chain_id,
@@ -94,13 +94,13 @@ def analytics_ports_for(host: Any) -> AnalyticsPorts:
     )
 
 
-def lateness_stats(ports: AnalyticsPorts, chain, tol_secs: int = 60) -> dict:
+def lateness_stats(ports: AnalyticsPorts, chain: Any, tol_secs: int = 60) -> dict[str, Any]:
     return ports.core._import_sibling("modify_analytics").lateness_stats(
         chain, parse_datetime=ports.parse_datetime, tol_secs=tol_secs
     )
 
 
-def sort_chain_for_analytics(ports: AnalyticsPorts, chain):
+def sort_chain_for_analytics(ports: AnalyticsPorts, chain: Any) -> Any:
     return ports.core._import_sibling("modify_analytics").sort_chain_for_analytics(
         chain, coerce_int=ports.coerce_int, parse_datetime=ports.parse_datetime
     )
@@ -113,7 +113,7 @@ def chain_export_ports_for(host: Any) -> ChainExportPorts:
     )
 
 
-def export_chain_endpoint(ports: ChainExportPorts, chain_id: str, direction: str):
+def export_chain_endpoint(ports: ChainExportPorts, chain_id: str, direction: str) -> Any:
     """Return a chain endpoint from the invocation's authoritative snapshot."""
     rows = ports.service.get_chain_export(chain_id)
     if rows is None:
@@ -143,7 +143,7 @@ def timeline_summary_ports_for(host: Any) -> TimelineSummaryPorts:
     )
 
 
-def last_n_timeline(ports: TimelineSummaryPorts, chain, n: int = 6) -> list[str]:
+def last_n_timeline(ports: TimelineSummaryPorts, chain: Any, n: int = 6) -> list[str]:
     return ports.summary.last_n_timeline(
         chain,
         n,
@@ -169,7 +169,7 @@ def span_fields_ports_for(host: Any) -> SpanFieldsPorts:
     )
 
 
-def span_fields(ports: SpanFieldsPorts, chain_id: str, chain, *, stop_at=None, stopped_by_delete: bool = False):
+def span_fields(ports: SpanFieldsPorts, chain_id: str, chain: Any, *, stop_at: Any = None, stopped_by_delete: bool = False) -> Any:
     return ports.summary.span_fields(
         chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete,
         export_endpoint=ports.export_endpoint,
@@ -224,7 +224,7 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
     max_chain_walk = host._MAX_CHAIN_WALK
     diagnostic = host._diag
 
-    def export_sorted_chain(chain_id: str, actual_current: dict) -> list:
+    def export_sorted_chain(chain_id: str, actual_current: dict[str, Any]) -> list[Any]:
         chain = read_effects.export_chain_required(chain_export_port, actual_current)
         if actual_current and chain:
             for index, task in enumerate(chain):
@@ -238,12 +238,12 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
         except Exception:
             return chain
 
-    def render_span_fields(chain_id: str, chain: list[dict], *, stop_at=None, stopped_by_delete: bool = False):
+    def render_span_fields(chain_id: str, chain: list[dict[str, Any]], *, stop_at: Any = None, stopped_by_delete: bool = False) -> Any:
         return span_fields(
             span_ports, chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete
         )
 
-    def kind_rows(rows, kind: str, task: Any) -> None:
+    def kind_rows(rows: list[Any], kind: str, task: Any) -> None:
         summary.kind_rows(
             rows,
             kind,
@@ -253,7 +253,7 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
             describe_anchor=describe_anchor,
         )
 
-    def stats_rows(rows, chain, clock) -> None:
+    def stats_rows(rows: list[Any], chain: Any, clock: Any) -> None:
         summary.stats_rows(
             rows,
             chain,
@@ -262,7 +262,7 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
             format_seconds_delta=lambda _now, value: format_seconds_delta(seconds_port, value),
         )
 
-    def limits_row(rows, task) -> None:
+    def limits_row(rows: list[Any], task: Any) -> None:
         summary.limits_row(
             rows,
             task,
@@ -293,7 +293,7 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
     return EndChainSummaryPorts(summary=summary, services=render_services)
 
 
-def end_chain_summary(ports: EndChainSummaryPorts, current: dict, reason: str, now_utc, current_task: dict | None = None) -> None:
+def end_chain_summary(ports: EndChainSummaryPorts, current: dict[str, Any], reason: str, now_utc: Any, current_task: dict[str, Any] | None = None) -> None:
     ports.summary.render_chain_summary(
         current,
         reason,

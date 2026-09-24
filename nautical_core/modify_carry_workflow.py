@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from typing import Any
 
 from .task_changes import TaskPatch, timestamp_equal
 from .task_models import TaskTimestamp
@@ -93,7 +94,7 @@ class TemporalCarryDecision:
         )
 
 
-def decision_from_cp_adjustments(result, *, timestamp_factory=TaskTimestamp) -> TemporalCarryDecision:
+def decision_from_cp_adjustments(result: Any, *, timestamp_factory: Any = TaskTimestamp) -> TemporalCarryDecision:
     """Normalize the established CP carry result into the typed decision."""
     if result is None:
         return TemporalCarryDecision("unchanged")

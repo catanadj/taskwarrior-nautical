@@ -84,7 +84,7 @@ def parse_extra_tokens(port: ExtraTokenPort, extra: str | None) -> list[str] | N
     return port.parse(extra)
 
 
-def seed_runtime_lookup_task(ports: SeedLookupPorts, payload: dict | None, *, lookup_short: str | None = None):
+def seed_runtime_lookup_task(ports: SeedLookupPorts, payload: dict[str, Any] | None, *, lookup_short: str | None = None) -> Any:
     if not isinstance(payload, dict):
         return None
     uuid_str = str(payload.get("uuid") or "").strip()
@@ -107,7 +107,7 @@ def seed_runtime_lookup_tasks(ports: SeedLookupPorts, *tasks: dict | None) -> No
         seed_runtime_lookup_task(ports, task)
 
 
-def collect_prev_two(ports: PreviousChainPorts, current_task: dict, chain_by_link=None):
+def collect_prev_two(ports: PreviousChainPorts, current_task: dict[str, Any], chain_by_link: Any = None) -> Any:
     from .integration_models import Absent, Found, Unavailable
 
     read = ports.service.collect_prev_two(
@@ -126,7 +126,7 @@ def collect_prev_two(ports: PreviousChainPorts, current_task: dict, chain_by_lin
     return list(read.value)
 
 
-def export_chain_required(port: ChainExportPort, seed_payload: dict, env=None):
+def export_chain_required(port: ChainExportPort, seed_payload: dict[str, Any], env: Any = None) -> Any:
     chain_id = seed_payload.get("chainID")
     if not chain_id:
         raise RuntimeError("ChainID is required (legacy chain traversal removed). Run chainID backfill, then retry.")

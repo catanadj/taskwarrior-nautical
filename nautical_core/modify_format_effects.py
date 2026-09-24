@@ -32,11 +32,11 @@ def line_preview_ports_for(host: Any) -> LinePreviewPorts:
     )
 
 
-def human_delta(port: HumanDeltaPort, start, end, prefer_months: bool = True):
+def human_delta(port: HumanDeltaPort, start: Any, end: Any, prefer_months: bool = True) -> Any:
     return port.humanize(start, end, use_months_days=bool(prefer_months))
 
 
-def on_time_delta(port: HumanDeltaPort, due_dt, end_dt, tol_secs: int = 60):
+def on_time_delta(port: HumanDeltaPort, due_dt: Any, end_dt: Any, tol_secs: int = 60) -> Any:
     if not (due_dt and end_dt):
         return ""
     diff = (end_dt - due_dt).total_seconds()
@@ -49,7 +49,15 @@ def on_time_delta(port: HumanDeltaPort, due_dt, end_dt, tol_secs: int = 60):
     return "[green](on time)[/]"
 
 
-def line_preview(ports: LinePreviewPorts, link_no: int, task: TaskPayload, child_due_utc, child_short: str, now_utc, **kwargs) -> str:
+def line_preview(
+    ports: LinePreviewPorts,
+    link_no: int,
+    task: TaskPayload,
+    child_due_utc: Any,
+    child_short: str,
+    now_utc: Any,
+    **kwargs: Any,
+) -> str:
     task_view = ports.task_view.from_mapping(task)
     return ports.format_line_preview(
         link_no, task_view, child_due_utc, child_short, now_utc,

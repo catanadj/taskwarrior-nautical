@@ -168,17 +168,17 @@ class CompletionSpawnPorts:
     diagnostic: Any
 
 
-def _ui_ports_for(host: Any):
+def _ui_ports_for(host: Any) -> Any:
     ui = host._module("modify_ui_effects")
     return ui, ui.ui_ports_for(host)
 
 
-def _print_task_port_for(host: Any):
+def _print_task_port_for(host: Any) -> Any:
     ui, ports = _ui_ports_for(host)
     return lambda task: ui.print_task(ports, task)
 
 
-def _end_summary_port_for(host: Any):
+def _end_summary_port_for(host: Any) -> Any:
     diagnostics = host._module("modify_diagnostics_effects")
     ports = diagnostics.end_chain_summary_ports_for(host)
     return lambda task, reason, now, current_task=None: diagnostics.end_chain_summary(
@@ -195,12 +195,12 @@ def _feedback_ports_for(host: Any, compute: Any, *, summarize: bool = True) -> C
     )
 
 
-def _panel_port_for(host: Any):
+def _panel_port_for(host: Any) -> Any:
     ui, ports = _ui_ports_for(host)
     return lambda title, rows, **kwargs: ui.panel(ports, title, rows, **kwargs)
 
 
-def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload):
+def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload) -> Any:
     return ports.preflight.completion_link_numbers_or_fail(
         new,
         coerce_int=ports.coerce_int, max_link_number=ports.max_link_number,
@@ -208,7 +208,7 @@ def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload):
     )
 
 
-def kind_or_stop(ports: CompletionPreflightPorts, new: TaskPayload, now_utc: datetime):
+def kind_or_stop(ports: CompletionPreflightPorts, new: TaskPayload, now_utc: datetime) -> Any:
     return ports.preflight.completion_kind_or_stop(
         new,
         now_utc,
@@ -225,7 +225,7 @@ def chain_id_or_fail(ports: CompletionPreflightPorts, new: TaskPayload) -> str |
     )
 
 
-def existing_next_or_fail(ports: CompletionPreflightPorts, new: TaskPayload, next_no: int, chain_snapshot) -> bool:
+def existing_next_or_fail(ports: CompletionPreflightPorts, new: TaskPayload, next_no: int, chain_snapshot: Any) -> bool:
     return ports.preflight.completion_existing_next_or_fail(
         new,
         next_no,
@@ -238,7 +238,7 @@ def _snapshot_mode(ports: SnapshotPorts) -> str:
     return ports.mode()
 
 
-def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: int):
+def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: int) -> Any:
     del base_no, next_no
     from .integration_models import Absent, Found, Unavailable
 
@@ -294,8 +294,8 @@ def preflight_context(
     ports: CompletionPreflightContextPorts,
     new: TaskPayload,
     now_utc: datetime,
-    repository,
-):
+    repository: Any,
+) -> Any:
     preflight = ports.preflight
     models = ports.models
     snapshot_ports = SnapshotPorts(
@@ -327,13 +327,13 @@ def preflight_context(
     return preflight.completion_preflight_context(new, now_utc, services=services)
 
 
-def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str):
+def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str) -> Any:
     compute = ports.compute
 
-    def typed_task(task):
+    def typed_task(task: Any) -> Any:
         return ports.task_model.NauticalTask.from_observation(ports.decode_task(task, source_query="on-modify completion"))
 
-    def handle_terminal(exc) -> bool:
+    def handle_terminal(exc: Any) -> bool:
         message = ports.exhaustion_message(exc)
         if exc.is_date_limit:
             ports.ensure_terminal(new, "complete")
@@ -358,7 +358,7 @@ def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str):
     )
 
 
-def until_or_fail(ports: UntilCompletionPorts, new: TaskPayload, now_utc: datetime):
+def until_or_fail(ports: UntilCompletionPorts, new: TaskPayload, now_utc: datetime) -> Any:
     return ports.compute.completion_until_or_fail(
         new, now_utc,
         safe_parse_datetime=ports.parse_datetime,
@@ -367,20 +367,26 @@ def until_or_fail(ports: UntilCompletionPorts, new: TaskPayload, now_utc: dateti
     )
 
 
-def until_guard_or_stop(ports: CompletionFeedbackPorts, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> bool:
+def until_guard_or_stop(ports: CompletionFeedbackPorts, new: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime) -> bool:
     return ports.compute.completion_until_guard_or_stop(
         new, child_due, until_dt, now_utc,
         end_chain_summary=ports.end_chain_summary, print_task=ports.print_task,
     )
 
 
-def require_child_due_or_fail(ports: CompletionFeedbackPorts, new: TaskPayload, child_due) -> bool:
+def require_child_due_or_fail(ports: CompletionFeedbackPorts, new: TaskPayload, child_due: Any) -> bool:
     return ports.compute.completion_require_child_due_or_fail(
         new, child_due, panel=ports.panel, print_task=ports.print_task
     )
 
 
-def warn_unreasonable_duration(ports: DurationWarningPorts, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> None:
+def warn_unreasonable_duration(
+    ports: DurationWarningPorts,
+    new: TaskPayload,
+    child_due: Any,
+    until_dt: Any,
+    now_utc: datetime,
+) -> None:
     ports.compute.completion_warn_unreasonable_duration(
         new, child_due, until_dt, now_utc,
         validate_chain_duration_reasonable=ports.validate_duration,
@@ -388,7 +394,7 @@ def warn_unreasonable_duration(ports: DurationWarningPorts, new: TaskPayload, ch
     )
 
 
-def caps(ports: CompletionCapsPorts, kind: str, new: TaskPayload, child_due, dnf):
+def caps(ports: CompletionCapsPorts, kind: str, new: TaskPayload, child_due: Any, dnf: Any) -> Any:
     return ports.compute.completion_caps(
         kind, new, child_due, dnf,
         coerce_int=ports.coerce_int, dtparse=ports.parse_datetime,
@@ -535,8 +541,8 @@ def compute_next_and_limits(
     next_no: int,
     now_utc: datetime,
     *,
-    preflight=None,
-):
+    preflight: Any = None,
+) -> Any:
     services = ports.services_type(
         completion_compute_child_due=ports.compute_child_due,
         completion_until_or_fail=ports.until_or_fail,
@@ -585,7 +591,7 @@ def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
     task_models = host._module("task_models")
     models = host._module("modify_models")
 
-    def build_child_draft(task, *args, **inner_kwargs):
+    def build_child_draft(task: Any, *args: Any, **inner_kwargs: Any) -> Any:
         typed_task = task_models.NauticalTask.from_observation(
             codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
         )
@@ -606,7 +612,7 @@ def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
     )
 
 
-def build_and_spawn_child(ports: CompletionSpawnPorts, new: TaskPayload, **kwargs):
+def build_and_spawn_child(ports: CompletionSpawnPorts, new: TaskPayload, **kwargs: Any) -> Any:
     services = ports.services_type(
         build_child_draft=ports.build_child_draft,
         spawn_child_atomic=ports.spawn_child_atomic,

@@ -87,7 +87,7 @@ def spawn_child_ports_for(host: Any) -> SpawnChildPorts:
     )
 
 
-def enqueue_spawn_intent(ports: SpawnIntentPorts, plan) -> tuple[bool, str]:
+def enqueue_spawn_intent(ports: SpawnIntentPorts, plan: Any) -> tuple[bool, str]:
     """Stage one immutable lifecycle plan without re-entering Taskwarrior."""
     context = ports.context
     if context is None:
@@ -113,7 +113,7 @@ def enqueue_spawn_intent(ports: SpawnIntentPorts, plan) -> tuple[bool, str]:
     return False, f"lifecycle outbox staging returned {kind}"
 
 
-def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict, child: dict):
+def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict[str, Any], child: dict[str, Any]) -> Any:
     models = ports.models
     chain_id = str(parent.get("chainID") or "").strip()
     parent_uuid = str(parent.get("uuid") or "").strip()
@@ -139,7 +139,13 @@ def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict, child: dic
     )
 
 
-def spawn_child_atomic(ports: SpawnChildPorts, child_task, parent_task_with_nextlink: dict, *, lifecycle_plan=None):
+def spawn_child_atomic(
+    ports: SpawnChildPorts,
+    child_task: Any,
+    parent_task_with_nextlink: dict[str, Any],
+    *,
+    lifecycle_plan: Any = None,
+) -> Any:
     if hasattr(child_task, "to_mapping"):
         child_task = child_task.to_mapping()
     return ports.spawn.spawn_child_atomic(

@@ -133,6 +133,11 @@ def _capabilities_payload() -> dict[str, Any]:
     }
 
 
+def capabilities_payload() -> dict[str, Any]:
+    """Return the stable, read-only capabilities contract."""
+    return _capabilities_payload()
+
+
 def _emit(result: OperatorV2Result, *, exit_code: int = 0, budget: object | None = None) -> int:
     """Serialize one typed query result at the process presentation boundary."""
     if not isinstance(result, OperatorV2Result):

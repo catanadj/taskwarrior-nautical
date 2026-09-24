@@ -20,19 +20,29 @@ import time
 from typing import Any, Callable, Iterator, Mapping, Sequence
 import uuid
 
-from nautical_core.lifecycle_models import ExecutionStage, LifecycleContractError, LifecyclePlan
+from nautical_core.lifecycle_models import ExecutionStage, LifecyclePlan
+from nautical_core.lifecycle_outbox_codec import (
+    canonical_object_json,
+    decode_plan,
+    plan_json,
+    transition_allowed,
+)
+from nautical_core.lifecycle_outbox_schema import (
+    OUTBOX_LEGACY_SCHEMA_VERSION,
+    OUTBOX_SCHEMA_VERSION,
+    _INIT_BACKOFF_S,
+    _INIT_RETRIES,
+    _MAX_INIT_BACKOFF_S,
+    initialize as initialize_schema,
+    validate_schema,
+)
 
 
-OUTBOX_SCHEMA_VERSION = 2
-OUTBOX_LEGACY_SCHEMA_VERSION = 1
 OUTBOX_ACK_RETENTION_SECONDS = 90.0 * 24.0 * 60.0 * 60.0
 OUTBOX_HOUSEKEEPING_INTERVAL_SECONDS = 24.0 * 60.0 * 60.0
 OUTBOX_HOUSEKEEPING_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
 OUTBOX_HOUSEKEEPING_ROW_LIMIT = 1000
 OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE = "filesystem_security_failure"
-_INIT_RETRIES = 8
-_INIT_BACKOFF_S = 0.025
-_MAX_INIT_BACKOFF_S = 0.25
 _RECOVERY_LOCK_STALE_SECONDS = 15.0 * 60.0
 
 
@@ -74,16 +84,6 @@ _TERMINAL_STATES = frozenset(
         OutboxProcessingState.ACKNOWLEDGED,
     }
 )
-_STAGE_ORDER = {
-    ExecutionStage.PLANNED: 0,
-    ExecutionStage.PERSISTED: 0,
-    ExecutionStage.CHILD_PRESENT: 1,
-    ExecutionStage.PARENT_LINKED: 2,
-    ExecutionStage.VERIFIED: 3,
-    ExecutionStage.FINALIZED: 4,
-}
-
-
 @dataclass(frozen=True, slots=True)
 class OutboxFailure:
     code: str
@@ -240,38 +240,19 @@ def _busy(exc: BaseException) -> bool:
 
 
 def _plan_json(plan: LifecyclePlan) -> str:
-    return json.dumps(plan.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return plan_json(plan)
 
 
 def _decode_plan(value: Any) -> LifecyclePlan:
-    try:
-        raw = json.loads(str(value or ""))
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise LifecycleOutboxError(f"invalid lifecycle plan JSON: {exc}") from exc
-    if not isinstance(raw, dict):
-        raise LifecycleOutboxError("invalid lifecycle plan JSON: expected object")
-    try:
-        return LifecyclePlan.from_dict(raw)
-    except (LifecycleContractError, TypeError, ValueError) as exc:
-        raise LifecycleOutboxError(f"invalid lifecycle plan: {exc}") from exc
+    return decode_plan(value, error_type=LifecycleOutboxError)
 
 
 def _canonical_object_json(value: Any, *, field: str) -> str:
-    try:
-        decoded = json.loads(str(value or ""))
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise LifecycleOutboxError(f"invalid outbox {field} JSON: {exc}") from exc
-    if not isinstance(decoded, dict):
-        raise LifecycleOutboxError(f"invalid outbox {field} JSON: expected object")
-    return json.dumps(decoded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return canonical_object_json(value, field=field, error_type=LifecycleOutboxError)
 
 
 def _transition_allowed(current: ExecutionStage, target: ExecutionStage) -> bool:
-    current_order = _STAGE_ORDER.get(current)
-    target_order = _STAGE_ORDER.get(target)
-    if current_order is None or target_order is None:
-        return False
-    return target_order == current_order or target_order == current_order + 1
+    return transition_allowed(current, target)
 
 
 @contextmanager
@@ -286,7 +267,7 @@ def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
         conn.commit()
 
 
-class LifecycleOutboxRepository:
+class _LifecycleOutboxRepository:
     """Single durable store for lifecycle plans and their verified progress."""
 
     def __init__(
@@ -428,7 +409,7 @@ class LifecycleOutboxRepository:
             os.close(fd)
 
     @contextmanager
-    def session(self) -> Iterator["LifecycleOutboxRepository"]:
+    def session(self) -> Iterator["_LifecycleOutboxRepository"]:
         """Open one validated outbox connection for a bounded invocation.
 
         Repository methods continue to use short-lived connections when called
@@ -505,91 +486,15 @@ class LifecycleOutboxRepository:
 
     @staticmethod
     def _initialize(conn: sqlite3.Connection) -> None:
-        for attempt in range(_INIT_RETRIES):
-            try:
-                version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
-                if version > OUTBOX_SCHEMA_VERSION:
-                    raise LifecycleOutboxError(
-                        f"outbox schema v{version} is newer than supported v{OUTBOX_SCHEMA_VERSION}"
-                    )
-                if version == OUTBOX_SCHEMA_VERSION:
-                    # A validated schema is already adopted. Avoid reopening
-                    # WAL negotiation on every short-lived hook process.
-                    LifecycleOutboxRepository._validate_schema(conn)
-                    return
-                if version == OUTBOX_LEGACY_SCHEMA_VERSION:
-                    with _transaction(conn):
-                        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
-                        if "work_kind" not in columns:
-                            conn.execute(
-                                "ALTER TABLE lifecycle_outbox ADD COLUMN work_kind TEXT NOT NULL DEFAULT 'lifecycle'"
-                            )
-                        conn.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION}")
-                    LifecycleOutboxRepository._validate_schema(conn)
-                    return
-                if version != 0:
-                    raise LifecycleOutboxError(f"unsupported outbox schema v{version}")
-
-                # WAL is negotiated only while creating or upgrading the
-                # durable database. Competing first-openers retry the complete
-                # sequence rather than using a process-local success flag.
-                conn.execute("PRAGMA journal_mode=WAL")
-                with _transaction(conn):
-                    conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS lifecycle_outbox (
-                            intent_id TEXT PRIMARY KEY,
-                            work_kind TEXT NOT NULL DEFAULT 'lifecycle',
-                            plan_json TEXT NOT NULL,
-                            plan_fingerprint TEXT NOT NULL,
-                            parent_guard_json TEXT NOT NULL,
-                            configuration_fingerprint TEXT NOT NULL,
-                            schedule_fingerprint TEXT NOT NULL,
-                            lifecycle_stage TEXT NOT NULL,
-                            processing_state TEXT NOT NULL,
-                            lease_owner TEXT NOT NULL DEFAULT '',
-                            lease_expires_at REAL NOT NULL DEFAULT 0,
-                            attempts INTEGER NOT NULL DEFAULT 0,
-                            failure_json TEXT NOT NULL DEFAULT '',
-                            created_at REAL NOT NULL,
-                            updated_at REAL NOT NULL,
-                            acknowledged_at REAL NOT NULL DEFAULT 0,
-                            CHECK (attempts >= 0)
-                        )
-                        """
-                    )
-                    conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_lifecycle_outbox_claim "
-                        "ON lifecycle_outbox (processing_state, lease_expires_at, created_at)"
-                    )
-                    conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_lifecycle_outbox_stage "
-                        "ON lifecycle_outbox (lifecycle_stage, processing_state)"
-                    )
-                    conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_lifecycle_outbox_ack "
-                        "ON lifecycle_outbox (processing_state, acknowledged_at)"
-                    )
-                    conn.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION}")
-                LifecycleOutboxRepository._validate_schema(conn)
-                return
-            except sqlite3.OperationalError as exc:
-                if not _busy(exc) or attempt + 1 >= _INIT_RETRIES:
-                    raise
-                time.sleep(min(_MAX_INIT_BACKOFF_S, _INIT_BACKOFF_S * (2**attempt)))
+        initialize_schema(
+            conn,
+            transaction=_transaction,
+            error_type=LifecycleOutboxError,
+        )
 
     @staticmethod
     def _validate_schema(conn: sqlite3.Connection) -> None:
-        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
-        required = {
-            "intent_id", "work_kind", "plan_json", "plan_fingerprint", "parent_guard_json",
-            "configuration_fingerprint", "schedule_fingerprint", "lifecycle_stage",
-            "processing_state", "lease_owner", "lease_expires_at", "attempts",
-            "failure_json", "created_at", "updated_at", "acknowledged_at",
-        }
-        missing = sorted(required - columns)
-        if missing:
-            raise LifecycleOutboxError(f"outbox schema is incomplete: missing {', '.join(missing)}")
+        validate_schema(conn, error_type=LifecycleOutboxError)
 
     def _assert_integrity(self, conn: sqlite3.Connection) -> None:
         """Fail closed before enqueueing into a damaged SQLite outbox."""
@@ -2056,10 +1961,14 @@ class LifecycleOutboxRepository:
                 conn.close()
 
 
+# Public integration name.  The underscored implementation remains available
+# to legacy in-package callers while new consumers use the stable contract.
+LifecycleOutboxRepository = _LifecycleOutboxRepository
+
 __all__ = (
     "LifecycleOutboxError",
-    "LifecycleOutboxRecord",
     "LifecycleOutboxRepository",
+    "LifecycleOutboxRecord",
     "OUTBOX_SCHEMA_VERSION",
     "OUTBOX_ACK_RETENTION_SECONDS",
     "OUTBOX_HOUSEKEEPING_INTERVAL_SECONDS",

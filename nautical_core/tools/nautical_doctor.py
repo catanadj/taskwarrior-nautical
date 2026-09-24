@@ -68,6 +68,7 @@ from nautical_core.queue_status_service import QueueStatusService  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
 _JSON_SCHEMA_VERSION = 1
+JSON_SCHEMA = _JSON_SCHEMA
 
 
 REQUIRED_UDAS = {

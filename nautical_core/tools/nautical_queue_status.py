@@ -18,8 +18,8 @@ if str(ROOT) not in sys.path:
 from nautical_core.lifecycle_outbox import (  # noqa: E402
     OUTBOX_SCHEMA_VERSION,
     OUTBOX_ACK_RETENTION_SECONDS,
-    LifecycleOutboxRepository,
 )
+from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository  # noqa: E402
 from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
 from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
@@ -29,11 +29,17 @@ from nautical_core.queue_status_service import QueueStatusService  # noqa: E402
 
 _JSON_SCHEMA = "nautical.lifecycle_outbox_status"
 _JSON_SCHEMA_VERSION = 1
+JSON_SCHEMA = _JSON_SCHEMA
 
 
 def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> tuple[dict[str, Any], OperatorInvocationBudget]:
     budget = OperatorInvocationBudget(OperatorLimits(outbox_rows=max(1, limit)))
     return QueueStatusService().status_payload(taskdata, stale_after=stale_after, limit=limit, budget=budget), budget
+
+
+def status_payload(taskdata: Path, *, stale_after: float, limit: int) -> tuple[dict[str, Any], OperatorInvocationBudget]:
+    """Return the stable queue-status payload and invocation budget."""
+    return _status_payload(taskdata, stale_after=stale_after, limit=limit)
 
 
 def main() -> int:
@@ -54,7 +60,7 @@ def main() -> int:
     maintenance: dict[str, Any] | None = None
     if args.prune_acknowledged:
         taskdata = Path(args.taskdata).expanduser().resolve()
-        result = LifecycleOutboxRepository(taskdata).prune_acknowledged(
+        result = _LifecycleOutboxRepository(taskdata).prune_acknowledged(
             retention_seconds=args.retention_seconds,
             limit=args.maintenance_limit,
             checkpoint=args.checkpoint,

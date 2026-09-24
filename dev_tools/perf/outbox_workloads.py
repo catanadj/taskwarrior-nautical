@@ -14,7 +14,7 @@ from typing import Any
 
 def schema_hot(lifecycle_outbox: Any, rounds: int) -> float:
     with tempfile.TemporaryDirectory(prefix="nautical-perf-outbox-") as td:
-        repository = lifecycle_outbox._LifecycleOutboxRepository(Path(td))
+        repository = lifecycle_outbox.LifecycleOutboxRepository(Path(td))
         if not repository.open().ok:
             raise RuntimeError("outbox schema benchmark setup failed")
         started = time.perf_counter()
@@ -29,8 +29,8 @@ def schema_cold(root: Path, rounds: int) -> float:
     with tempfile.TemporaryDirectory(prefix="nautical-perf-outbox-cold-") as td:
         script = (
             "from pathlib import Path; import sys; "
-            "from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository; "
-            "result = _LifecycleOutboxRepository(Path(sys.argv[1])).open(); "
+            "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
+            "result = LifecycleOutboxRepository(Path(sys.argv[1])).open(); "
             "raise SystemExit(0 if result.ok else result.reason)"
         )
         env = os.environ.copy()
@@ -66,7 +66,7 @@ def lifecycle_staging(
         init_empty_outbox(taskdata)
         _parents, plans = outbox_lifecycle_fixture("stage", 0, count=1)
         plans[0] = replace(plans[0], parent_guard=replace(plans[0].parent_guard, modified="20260829T000000Z"))
-        repository = lifecycle_outbox._LifecycleOutboxRepository(taskdata)
+        repository = lifecycle_outbox.LifecycleOutboxRepository(taskdata)
         service = LifecycleApplicationService(outbox=repository, owner="perf-stage")
         started = time.perf_counter()
         outcome = service.stage(plans[0], configuration_fingerprint="perf-config", schedule_fingerprint="perf-schedule")

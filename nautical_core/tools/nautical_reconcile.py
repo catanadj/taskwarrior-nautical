@@ -16,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 from types import ModuleType
-from typing import Any, cast
+from typing import Any, Iterator, cast
 
 _fcntl: ModuleType | None
 try:
@@ -103,9 +103,9 @@ _UNIT_OF_WORK: TaskwarriorUnitOfWork | None = None
 
 def _opportunistic_housekeeping(taskdata: Path) -> dict[str, Any]:
     """Run bounded outbox maintenance without involving Taskwarrior."""
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
 
-    result = LifecycleOutboxRepository(taskdata).opportunistic_housekeeping()
+    result = _LifecycleOutboxRepository(taskdata).opportunistic_housekeeping()
     return {
         "status": "skipped" if result.skipped else ("ok" if result.ok else "deferred"),
         "kind": result.kind.value,
@@ -194,7 +194,7 @@ def _format_local_until(hook: Any, value: Any) -> str:
     return raw
 
 
-def _parse_datetime(hook: Any, value: Any):
+def _parse_datetime(hook: Any, value: Any) -> tuple[Any, Any]:
     # Reconcile and hook workflows use the same configured parser port.  The
     # hook object remains an integration carrier, never the parser contract.
     state = _reconcile_runtime_state()
@@ -287,6 +287,11 @@ def _configuration_verification(hook: Any) -> _ConfigurationVerification:
         "drifted",
         f"configuration changed during reconcile (source: {source}); restart and rerun",
     )
+
+
+def configuration_verification(hook: Any) -> _ConfigurationVerification:
+    """Return the stable configuration-verification result for operators."""
+    return _configuration_verification(hook)
 
 
 def _configuration_state(hook: Any) -> tuple[str, str]:
@@ -529,7 +534,7 @@ def _expiration_hop_limit(value: str) -> int:
 
 
 @contextmanager
-def _parent_apply_lock(taskdata: Path, parent_uuid: str):
+def _parent_apply_lock(taskdata: Path, parent_uuid: str) -> Iterator[bool]:
     lock_path = parent_nextlink_lock_path(taskdata, parent_uuid)
     with safe_lock(
         lock_path,
@@ -541,7 +546,7 @@ def _parent_apply_lock(taskdata: Path, parent_uuid: str):
 
 
 @contextmanager
-def _reconcile_apply_lock(taskdata: Path):
+def _reconcile_apply_lock(taskdata: Path) -> Iterator[bool]:
     """Serialize reconciler mutations without blocking a second invocation."""
     lock_path = reconcile_lock_path(taskdata)
     with safe_lock(
@@ -554,7 +559,7 @@ def _reconcile_apply_lock(taskdata: Path):
 
 
 @contextmanager
-def _reconcile_mutation_lock(taskdata: Path, *, lease_held: bool):
+def _reconcile_mutation_lock(taskdata: Path, *, lease_held: bool) -> Iterator[bool]:
     """Reuse the run lease when present, otherwise protect a direct mutation call."""
     if lease_held:
         yield True
@@ -1277,8 +1282,9 @@ class _ReconcileSession:
 
     __slots__ = ("unit_of_work", "repository", "snapshot", "control_plane", "mutation_gateway", "integrity_outbox", "lifecycle_service", "lifecycle_application", "runtime_state", "datetime_parser")
 
-    def __init__(self, unit_of_work, repository, snapshot, control_plane, mutation_gateway,
-                 integrity_outbox, lifecycle_service, lifecycle_application, runtime_state, datetime_parser):
+    def __init__(self, unit_of_work: Any, repository: Any, snapshot: Any, control_plane: Any, mutation_gateway: Any,
+                 integrity_outbox: Any, lifecycle_service: Any, lifecycle_application: Any, runtime_state: Any,
+                 datetime_parser: Any) -> None:
         self.unit_of_work = unit_of_work
         self.repository = repository
         self.snapshot = snapshot
@@ -1358,9 +1364,9 @@ def _build_reconcile_session(
     configuration = unit_of_work.context.configuration
     control_plane = OperatorControlPlane.from_configuration(configuration, DomainApplicationRegistry())
     from nautical_core.lifecycle_application import LifecycleApplicationService
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
     mutation_gateway = TaskwarriorMutationService(unit_of_work)
-    integrity_outbox = LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
+    integrity_outbox = _LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
     lifecycle_application = LifecycleApplicationService(
         unit_of_work=unit_of_work,
         mutations=mutation_gateway,

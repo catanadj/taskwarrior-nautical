@@ -121,10 +121,10 @@ def _bench_parse_validate(exprs: list[str], rounds: int) -> float:
 
 def _bench_capabilities_stage() -> float:
     """Measure the content-free capabilities composition root."""
-    from nautical_core.tools.nautical_query import _capabilities_payload
+    from nautical_core.tools.nautical_query import capabilities_payload
 
     started = time.perf_counter()
-    payload = _capabilities_payload()
+    payload = capabilities_payload()
     if not isinstance(payload, dict) or payload.get("status") != "ok" or not payload.get("operations"):
         raise RuntimeError("capabilities stage returned an invalid payload")
     return time.perf_counter() - started
@@ -132,12 +132,12 @@ def _bench_capabilities_stage() -> float:
 
 def _bench_queue_status_stage() -> float:
     """Measure queue-status composition against an isolated empty outbox."""
-    from nautical_core.tools.nautical_queue_status import _status_payload
+    from nautical_core.tools.nautical_queue_status import status_payload
 
     with tempfile.TemporaryDirectory(prefix="nautical-perf-queue-status-") as td:
         taskdata = Path(td)
         started = time.perf_counter()
-        payload, _budget = _status_payload(taskdata, stale_after=300.0, limit=5)
+        payload, _budget = status_payload(taskdata, stale_after=300.0, limit=5)
         if not isinstance(payload, dict) or payload.get("taskdata") != str(taskdata):
             raise RuntimeError("queue-status stage returned an invalid payload")
         return time.perf_counter() - started
@@ -260,7 +260,7 @@ def _bench_doctor_installation_stage() -> float:
     task_bin = shutil.which("task")
     if not task_bin:
         return 0.0
-    from nautical_core.tools.nautical_doctor import _JSON_SCHEMA
+    from nautical_core.tools.nautical_doctor import JSON_SCHEMA
 
     with tempfile.TemporaryDirectory(prefix="nautical-perf-doctor-") as td:
         taskdata = Path(td)
@@ -304,17 +304,17 @@ def _bench_doctor_installation_stage() -> float:
                     f"Doctor stage returned invalid JSON ({mode or ('full',)}): "
                     f"{(proc.stderr or proc.stdout).strip()}"
                 ) from exc
-            if not isinstance(payload, dict) or payload.get("schema") != _JSON_SCHEMA:
+            if not isinstance(payload, dict) or payload.get("schema") != JSON_SCHEMA:
                 raise RuntimeError(f"Doctor stage returned an invalid envelope ({mode or ('full',)})")
         return time.perf_counter() - started
 
 
 def _bench_housekeeping_stage() -> float:
     """Measure bounded housekeeping against an isolated outbox."""
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
     with tempfile.TemporaryDirectory(prefix="nautical-perf-housekeeping-") as td:
-        repository = _LifecycleOutboxRepository(Path(td))
+        repository = LifecycleOutboxRepository(Path(td))
         opened = repository.open()
         if not opened.ok:
             raise RuntimeError(f"housekeeping outbox setup failed: {opened.reason or opened.kind.value}")
@@ -437,13 +437,13 @@ def _bench_operator_scope_matrix_stage() -> float:
 
 
 def _bench_operator_failure_matrix_stage() -> float:
-    from nautical_core.tools.nautical_reconcile import _configuration_verification
+    from nautical_core.tools.nautical_reconcile import configuration_verification
     return _operator_workloads.operator_failure_matrix(
         _bench_query_pagination_stage,
         _bench_query_unavailable_stage,
         _bench_repair_planner_stage,
         _bench_queue_stale_stage,
-        _configuration_verification,
+        configuration_verification,
     )
 
 
@@ -859,7 +859,7 @@ def _run_hook_timed(
 
 
 def _init_empty_outbox(taskdata: Path) -> None:
-    result = lifecycle_outbox._LifecycleOutboxRepository(taskdata).open()
+    result = lifecycle_outbox.LifecycleOutboxRepository(taskdata).open()
     if not result.ok:
         raise RuntimeError(f"outbox benchmark setup failed: {result.reason or result.kind.value}")
 
@@ -1239,7 +1239,7 @@ def _apply_outbox_budgets(result: dict, samples: list[dict[str, float]], budget:
 
 def _workflow_outbox_pending(taskdata: Path) -> list[dict]:
     """Read active lifecycle outbox records for benchmark mutation assertions."""
-    result, status = lifecycle_outbox._LifecycleOutboxRepository(taskdata).status(limit=100)
+    result, status = lifecycle_outbox.LifecycleOutboxRepository(taskdata).status(limit=100)
     if not result.ok:
         raise RuntimeError(f"workflow outbox status failed: {result.reason or result.kind.value}")
     return [
@@ -1256,7 +1256,7 @@ def _stage_workflow_plans(
     configuration_fingerprint: str,
     schedule_fingerprint: str,
 ) -> None:
-    repository = lifecycle_outbox._LifecycleOutboxRepository(taskdata)
+    repository = lifecycle_outbox.LifecycleOutboxRepository(taskdata)
     for plan in plans:
         result = repository.enqueue(
             plan,

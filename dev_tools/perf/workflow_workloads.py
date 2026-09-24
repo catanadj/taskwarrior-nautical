@@ -398,7 +398,7 @@ def run_scenarios(
                 raise RuntimeError(
                     "queue drain benchmark did not retain 8 parents and import 8 children: "
                     f"{len(exported) if isinstance(exported, list) else type(exported).__name__} tasks; "
-                    f"outbox={deps.lifecycle_outbox._LifecycleOutboxRepository(queue_data).status(limit=20)[1]!r}"
+                    f"outbox={deps.lifecycle_outbox.LifecycleOutboxRepository(queue_data).status(limit=20)[1]!r}"
                 )
             children = [
                 row
@@ -1162,7 +1162,7 @@ def queue_healthy_replay(
     except json.JSONDecodeError as exc:
         raise RuntimeError("queue drain benchmark export was not valid JSON") from exc
     if not isinstance(exported, list) or len(exported) != 16:
-        raise RuntimeError(f"queue drain benchmark did not retain 8 parents and import 8 children: {len(exported) if isinstance(exported, list) else type(exported).__name__} tasks; outbox={lifecycle_outbox._LifecycleOutboxRepository(queue_data).status(limit=20)[1]!r}")
+        raise RuntimeError(f"queue drain benchmark did not retain 8 parents and import 8 children: {len(exported) if isinstance(exported, list) else type(exported).__name__} tasks; outbox={lifecycle_outbox.LifecycleOutboxRepository(queue_data).status(limit=20)[1]!r}")
     children = [row for row in exported if isinstance(row, dict) and str(row.get("uuid") or "") in child_uuids]
     if len(children) != 8 or any(not str(row.get("prevLink") or "").strip() for row in children):
         raise RuntimeError("queue drain benchmark did not import/link all child tasks")
@@ -1211,7 +1211,7 @@ def queue_replay_verify(
     except json.JSONDecodeError as exc:
         raise RuntimeError("queue drain benchmark export was not valid JSON") from exc
     if not isinstance(exported, list) or len(exported) != 16:
-        raise RuntimeError(f"queue drain benchmark did not retain 8 parents and import 8 children: {len(exported) if isinstance(exported, list) else type(exported).__name__} tasks; outbox={lifecycle_outbox._LifecycleOutboxRepository(queue_data).status(limit=20)[1]!r}")
+        raise RuntimeError(f"queue drain benchmark did not retain 8 parents and import 8 children: {len(exported) if isinstance(exported, list) else type(exported).__name__} tasks; outbox={lifecycle_outbox.LifecycleOutboxRepository(queue_data).status(limit=20)[1]!r}")
     children = [row for row in exported if isinstance(row, dict) and str(row.get("uuid") or "") in child_uuids]
     parents = [row for row in exported if isinstance(row, dict) and str(row.get("uuid") or "") in parent_uuids]
     if len(children) != 8 or any(not str(row.get("prevLink") or "").strip() for row in children):
@@ -1312,7 +1312,7 @@ def queue_shape(
     staged = workflow_outbox_pending(shape_data)
     if len(staged) != 1:
         from nautical_core import lifecycle_outbox
-        status = lifecycle_outbox._LifecycleOutboxRepository(shape_data).status(limit=20)[1]
+        status = lifecycle_outbox.LifecycleOutboxRepository(shape_data).status(limit=20)[1]
         raise RuntimeError(f"{name} fixture staged {len(staged)} active intents before on-exit; taskdata={shape_data}; status={status!r}")
     started = time.perf_counter()
     elapsed, _result, stderr = run_workflow_hook_result(hook_root / "on-exit.nautical", input_text="", env=env, expect_output=False)

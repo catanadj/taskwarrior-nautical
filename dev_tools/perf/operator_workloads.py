@@ -46,7 +46,7 @@ def queue_stale(
         taskdata = Path(td); init_empty_outbox(taskdata)
         _parents, plans = outbox_lifecycle_fixture("stale", 0, count=1)
         stage_workflow_plans(taskdata, plans, configuration_fingerprint="perf", schedule_fingerprint="perf")
-        repository = lifecycle_outbox._LifecycleOutboxRepository(taskdata)
+        repository = lifecycle_outbox.LifecycleOutboxRepository(taskdata)
         claimed, records = repository.claim_batch(owner="perf-owner", lease_seconds=30.0, limit=1)
         if not claimed.ok or len(records) != 1:
             raise RuntimeError("stale queue fixture could not claim a valid lifecycle plan")
@@ -64,7 +64,7 @@ def operator_interrupted(lifecycle_outbox: Any, init_empty_outbox: Callable[[Pat
         taskdata = Path(td); init_empty_outbox(taskdata)
         _parents, plans = outbox_lifecycle_fixture("operator-interrupted", 0, count=1)
         stage_workflow_plans(taskdata, plans, configuration_fingerprint="perf", schedule_fingerprint="perf")
-        repository = lifecycle_outbox._LifecycleOutboxRepository(taskdata)
+        repository = lifecycle_outbox.LifecycleOutboxRepository(taskdata)
         started = time.perf_counter()
         first, records = repository.claim_batch(owner="interrupted-a", lease_seconds=0.05, limit=1)
         if not first.ok or len(records) != 1:
@@ -78,13 +78,13 @@ def operator_interrupted(lifecycle_outbox: Any, init_empty_outbox: Callable[[Pat
 
 def exit_probe() -> float:
     from nautical_core.exit_probe import probe_exit_work
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="nautical-perf-exit-probe-") as td:
         taskdata = Path(td)
         empty = probe_exit_work(taskdata)
         if not empty.definitely_empty: raise RuntimeError(f"empty exit probe reported possible work: {empty.reason}")
-        if not _LifecycleOutboxRepository(taskdata).open().ok: raise RuntimeError("exit probe fixture outbox could not be initialized")
+        if not LifecycleOutboxRepository(taskdata).open().ok: raise RuntimeError("exit probe fixture outbox could not be initialized")
         terminal = probe_exit_work(taskdata)
         if not terminal.definitely_empty: raise RuntimeError(f"terminal exit probe reported possible work: {terminal.reason}")
     return time.perf_counter() - started

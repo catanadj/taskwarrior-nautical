@@ -103,9 +103,9 @@ _UNIT_OF_WORK: TaskwarriorUnitOfWork | None = None
 
 def _opportunistic_housekeeping(taskdata: Path) -> dict[str, Any]:
     """Run bounded outbox maintenance without involving Taskwarrior."""
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
-    result = _LifecycleOutboxRepository(taskdata).opportunistic_housekeeping()
+    result = LifecycleOutboxRepository(taskdata).opportunistic_housekeeping()
     return {
         "status": "skipped" if result.skipped else ("ok" if result.ok else "deferred"),
         "kind": result.kind.value,
@@ -1364,9 +1364,9 @@ def _build_reconcile_session(
     configuration = unit_of_work.context.configuration
     control_plane = OperatorControlPlane.from_configuration(configuration, DomainApplicationRegistry())
     from nautical_core.lifecycle_application import LifecycleApplicationService
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
     mutation_gateway = TaskwarriorMutationService(unit_of_work)
-    integrity_outbox = _LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
+    integrity_outbox = LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
     lifecycle_application = LifecycleApplicationService(
         unit_of_work=unit_of_work,
         mutations=mutation_gateway,

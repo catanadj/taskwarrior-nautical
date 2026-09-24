@@ -495,7 +495,7 @@ def _drain_outbox_result(runtime: Any) -> Any:
     lifecycle_outbox = _module("lifecycle_outbox")
 
     mutations = taskwarrior_mutations.TaskwarriorMutationService(unit_of_work)
-    outbox = lifecycle_outbox._LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
+    outbox = lifecycle_outbox.LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
     owner = f"exit-{os.getpid()}-{os.urandom(8).hex()}"
     service = lifecycle_application.LifecycleApplicationService(
         unit_of_work=unit_of_work,

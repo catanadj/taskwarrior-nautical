@@ -50,7 +50,7 @@ def spawn_intent_ports_for(host: Any) -> SpawnIntentPorts:
     return SpawnIntentPorts(
         context=getattr(host, "_INTEGRATION_CONTEXT", None),
         models=host._module("lifecycle_models"),
-        outbox_factory=lifecycle_outbox._LifecycleOutboxRepository,
+        outbox_factory=lifecycle_outbox.LifecycleOutboxRepository,
         application_service=host._module("lifecycle_application").LifecycleApplicationService,
         data_dir=host.TW_DATA_DIR,
     )

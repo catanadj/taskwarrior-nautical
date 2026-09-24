@@ -19,7 +19,7 @@ from nautical_core.lifecycle_outbox import (  # noqa: E402
     OUTBOX_SCHEMA_VERSION,
     OUTBOX_ACK_RETENTION_SECONDS,
 )
-from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository  # noqa: E402
+from nautical_core.lifecycle_outbox import LifecycleOutboxRepository  # noqa: E402
 from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
 from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
@@ -60,7 +60,7 @@ def main() -> int:
     maintenance: dict[str, Any] | None = None
     if args.prune_acknowledged:
         taskdata = Path(args.taskdata).expanduser().resolve()
-        result = _LifecycleOutboxRepository(taskdata).prune_acknowledged(
+        result = LifecycleOutboxRepository(taskdata).prune_acknowledged(
             retention_seconds=args.retention_seconds,
             limit=args.maintenance_limit,
             checkpoint=args.checkpoint,

@@ -825,6 +825,13 @@ invalid result shapes, pass flags, negative metrics, and non-finite metrics.
 The focused performance contract suite passes 43 tests; the full suite passes
 1318 tests with 3 skipped.
 
+The final workflow verification fixed two extraction regressions: expiration
+staging now uses the canonical private outbox repository, and queue-shape
+fixtures use the isolated workflow root instead of the checkout root. Fresh
+bridge verification now completes the normal enforced budget with exit code 0
+and all 78 workload results present; the full suite remains 1318 passed with 3
+skipped.
+
 ### Post-WP7 typing hardening follow-up
 
 - [x] Replace the highest-value callback-boundary `Any` annotations with small

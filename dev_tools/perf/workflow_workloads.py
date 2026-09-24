@@ -520,7 +520,7 @@ def run_scenarios(
         results["workflow_queue_drain_partial_recovery"] = queue_partial_result
 
         results["workflow_queue_drain_one_intent"] = deps.workloads.queue_shape(
-            name="queue-one-intent", background_rows=0, root=deps.ROOT, base_env=base_env,
+            name="queue-one-intent", background_rows=0, root=root, hook_root=deps.ROOT, base_env=base_env,
             real_task=real_task, slow_device=slow_device,
             config_fingerprint=config_fingerprint, schedule_fingerprint=schedule_fingerprint,
             budgets=budgets, init_empty_outbox=deps._init_empty_outbox,
@@ -540,7 +540,7 @@ def run_scenarios(
         results["workflow_queue_drain_large_history"] = deps.workloads.queue_shape(
             name="queue-large-history",
             background_rows=max(default_history_rows, int(workflow_cfg.get(history_key, default_history_rows))),
-            root=deps.ROOT, base_env=base_env, real_task=real_task, slow_device=slow_device,
+            root=root, hook_root=deps.ROOT, base_env=base_env, real_task=real_task, slow_device=slow_device,
             config_fingerprint=config_fingerprint, schedule_fingerprint=schedule_fingerprint,
             budgets=budgets, init_empty_outbox=deps._init_empty_outbox,
             outbox_lifecycle_fixture=deps._outbox_lifecycle_fixture,
@@ -1278,6 +1278,7 @@ def queue_shape(
     name: str,
     background_rows: int,
     root: Path,
+    hook_root: Path,
     base_env: dict[str, str],
     real_task: str,
     slow_device: bool,
@@ -1308,8 +1309,13 @@ def queue_shape(
     if probe.returncode != 0: raise RuntimeError(f"{name} fixture probe failed: {(probe.stderr or probe.stdout or '').strip()}")
     plans = bind_workflow_plans(plans, json.loads(probe.stdout or "[]"))
     stage_workflow_plans(shape_data, plans, configuration_fingerprint=config_fingerprint, schedule_fingerprint=schedule_fingerprint)
+    staged = workflow_outbox_pending(shape_data)
+    if len(staged) != 1:
+        from nautical_core import lifecycle_outbox
+        status = lifecycle_outbox._LifecycleOutboxRepository(shape_data).status(limit=20)[1]
+        raise RuntimeError(f"{name} fixture staged {len(staged)} active intents before on-exit; taskdata={shape_data}; status={status!r}")
     started = time.perf_counter()
-    elapsed, _result, stderr = run_workflow_hook_result(root / "on-exit.nautical", input_text="", env=env, expect_output=False)
+    elapsed, _result, stderr = run_workflow_hook_result(hook_root / "on-exit.nautical", input_text="", env=env, expect_output=False)
     if workflow_outbox_pending(shape_data): raise RuntimeError(f"{name} left active outbox work: {workflow_outbox_pending(shape_data)!r}")
     timing = read_exit_task_timing_stats(stats_path); calls = read_exit_task_call_stats(stats_path); outbox = read_exit_outbox_stats(stats_path)
     if not calls.get("run_task_calls"): raise RuntimeError(f"{name} did not execute Taskwarrior commands: {stderr.strip()!r}")

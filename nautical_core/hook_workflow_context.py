@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Protocol
+from datetime import datetime, timezone, date
+from typing import Any, TYPE_CHECKING, Protocol
 from .integration_context import IntegrationContext
 
 if TYPE_CHECKING:
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class BusinessCalendar(Protocol):
     name: str
 
-    def is_business_day(self, value) -> bool: ...
+    def is_business_day(self, value: date) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +174,6 @@ class WorkflowInvocationContext:
     def __enter__(self) -> "WorkflowInvocationContext":
         return self
 
-    def __exit__(self, exc_type, exc, traceback) -> None:
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         del exc_type, exc, traceback
         self.close()

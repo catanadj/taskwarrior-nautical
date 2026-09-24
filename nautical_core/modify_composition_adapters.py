@@ -9,16 +9,16 @@ from .task_datetime import datetime_value, parser_for_host
 from .task_models import TaskPayload
 
 
-def _capabilities(host: Any):
+def _capabilities(host: Any) -> Any:
     return host._module("modify_composition").capabilities_for(host)
 
 
-def _runtime(host: Any, runtime: Any = None):
+def _runtime(host: Any, runtime: Any = None) -> Any:
     composition = host._module("modify_composition")
     return runtime or composition.ModifyRuntimeServices.from_host(host)
 
 
-def expiration_services_for(host: Any):
+def expiration_services_for(host: Any) -> Any:
     capabilities = _capabilities(host)
     modify_expiration = capabilities.modify_expiration
     generation_module = capabilities.modify_generation_effects
@@ -28,7 +28,7 @@ def expiration_services_for(host: Any):
     ui = capabilities.modify_ui_effects
     ui_ports = ui.ui_ports_for(host)
 
-    def typed_task(task):
+    def typed_task(task: Any) -> Any:
         return task_models.NauticalTask.from_observation(
             task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify expiration")
         )
@@ -76,9 +76,9 @@ def handle_non_completion(
     host: Any,
     old: TaskPayload,
     new: TaskPayload,
-    unit_of_work,
+    unit_of_work: Any,
     *,
-    transition=None,
+    transition: Any = None,
     runtime: Any = None,
 ) -> None:
     runtime = _runtime(host, runtime)
@@ -146,11 +146,11 @@ def handle_completion(
     host: Any,
     old: TaskPayload,
     new: TaskPayload,
-    unit_of_work,
+    unit_of_work: Any,
     *,
-    transition=None,
+    transition: Any = None,
     runtime: Any = None,
-):
+) -> Any:
     runtime = _runtime(host, runtime)
     runtime.runtime_state().task_repository = unit_of_work.repository
     capabilities = runtime.completion
@@ -203,10 +203,10 @@ def handle_deleted(
     host: Any,
     old: TaskPayload,
     new: TaskPayload,
-    unit_of_work,
+    unit_of_work: Any,
     *,
-    transition=None,
-    terminal_decision=None,
+    transition: Any = None,
+    terminal_decision: Any = None,
     runtime: Any = None,
 ) -> None:
     runtime = _runtime(host, runtime)

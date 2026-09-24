@@ -27,7 +27,7 @@ class ExitDrainProgress:
         "intent finished": "Completed",
     }
 
-    def __init__(self, *, core: Any, diagnostic=None) -> None:
+    def __init__(self, *, core: Any, diagnostic: Any = None) -> None:
         self._core = core
         self._diagnostic = diagnostic
         self._progress: Any = None

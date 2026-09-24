@@ -50,7 +50,7 @@ class OmitState:
         return len(self.dates)
 
 
-def freeze_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None) -> OmitState | None:
+def freeze_omit_state(*, omit_dnf: Any = None, omit_dates: Any = None, omit_descriptions: Any = None) -> OmitState | None:
     dates = frozenset(omit_dates or [])
     descriptions = MappingProxyType(dict(omit_descriptions or {}))
     if not omit_dnf and not dates and not descriptions:
@@ -58,7 +58,7 @@ def freeze_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None)
     return OmitState(_freeze_omit_value(omit_dnf), dates, descriptions)
 
 
-def combine_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None):
+def combine_omit_state(*, omit_dnf: Any = None, omit_dates: Any = None, omit_descriptions: Any = None) -> OmitState | None:
     """Build the canonical evaluator-owned omission state.
 
     ``OmitState`` is the sole boundary shape; legacy dictionary inputs remain
@@ -71,7 +71,7 @@ def combine_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None
     )
 
 
-def _split_omit_state(omit_state):
+def _split_omit_state(omit_state: Any) -> tuple[Any, frozenset, Mapping]:
     if not omit_state:
         return None, frozenset(), {}
     if isinstance(omit_state, OmitState):
@@ -151,10 +151,10 @@ def validate_omit_expr_strict(
 
 
 def omit_expr_fires_on_date(
-    omit_dnf,
-    d,
-    default_seed,
-    seed_base,
+    omit_dnf: Any,
+    d: Any,
+    default_seed: Any,
+    seed_base: Any,
     *,
     core: Any,
 ) -> bool:
@@ -186,7 +186,7 @@ def omit_expr_fires_on_date(
         ) from exc
 
 
-def _omit_expr_match_lookback_days(omit_expr_dnf) -> int:
+def _omit_expr_match_lookback_days(omit_expr_dnf: Any) -> int:
     max_lookback = 1
     for term in omit_expr_dnf or []:
         for atom in term or []:
@@ -208,23 +208,23 @@ def _omit_expr_match_lookback_days(omit_expr_dnf) -> int:
     return max_lookback
 
 
-def omit_description_for_date(omit_dnf, d) -> str | None:
+def omit_description_for_date(omit_dnf: Any, d: Any) -> str | None:
     _omit_expr_dnf, _omit_dates, omit_descriptions = _split_omit_state(omit_dnf)
     text = str(omit_descriptions.get(d) or "").strip()
     return text or None
 
 
 def next_after_expr_with_omit(
-    dnf,
-    after_date,
-    default_seed=None,
-    seed_base=None,
+    dnf: Any,
+    after_date: Any,
+    default_seed: Any = None,
+    seed_base: Any = None,
     *,
-    omit_dnf=None,
+    omit_dnf: Any = None,
     core: Any,
     max_skip_iterations: int = 512,
     business_calendar: Any | None = None,
-):
+) -> Any:
     omit_expr_dnf, omit_dates, _omit_descriptions = _split_omit_state(omit_dnf)
     business_calendar = business_calendar or _scheduler_business_calendar(core)
     if not omit_expr_dnf and not omit_dates:

@@ -61,6 +61,13 @@ class RuntimeConfigContracts(unittest.TestCase):
         finally:
             core_config.os.stat = original_stat
 
+    def test_loaded_config_accessors_are_canonical_and_isolated(self) -> None:
+        snapshot = core_config.loaded_config_snapshot()
+        self.assertIsInstance(snapshot, dict)
+        self.assertEqual(core_config.loaded_config_value("tz"), snapshot["tz"])
+        snapshot["tz"] = "mutated-in-test"
+        self.assertNotEqual(core_config.loaded_config_value("tz"), "mutated-in-test")
+
 
 if __name__ == "__main__":
     unittest.main()

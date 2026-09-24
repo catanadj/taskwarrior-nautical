@@ -34,7 +34,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def year_pair(a: int, b: int) -> tuple[int, int]:
         return year_pair_cached(a, b, core["_yearfmt"]())
 
-    def normalize_spec_for_acf_uncached(typ: str, spec: str):
+    def normalize_spec_for_acf_uncached(typ: str, spec: str) -> Any:
         return acf.normalize_spec_for_acf_uncached(
             typ,
             spec,
@@ -47,7 +47,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     @ttl_lru_cache(maxsize=512)
-    def normalize_spec_for_acf_cached(typ: str, spec: str, fmt: str):
+    def normalize_spec_for_acf_cached(typ: str, spec: str, fmt: str) -> Any:
         typ = (typ or "").strip().lower()
         if typ not in ("w", "m", "y"):
             return None
@@ -55,7 +55,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         fmt = "DM" if (fmt or "").upper() == "DM" else "MD"
         return normalize_spec_for_acf_uncached(typ, spec)
 
-    def normalize_spec_for_acf(typ: str, spec: str):
+    def normalize_spec_for_acf(typ: str, spec: str) -> Any:
         return acf.normalize_spec_for_acf(
             typ,
             spec,
@@ -71,7 +71,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def acf_mods_to_string(value: dict) -> str:
         return acf.acf_mods_to_string(value, wd_abbr=core["_WD_ABBR"])
 
-    def acf_spec_to_string(typ: str, spec) -> str:
+    def acf_spec_to_string(typ: str, spec: Any) -> str:
         return acf.acf_spec_to_string(
             typ,
             spec,

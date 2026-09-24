@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeAlias, TypedDict
+from typing import TypeAlias, TypedDict
 
 
 class AnchorMods(TypedDict, total=False):

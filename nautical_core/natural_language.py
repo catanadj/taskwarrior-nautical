@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from calendar import month_name
+from typing import Any
 
 from .time_windows import parse_random_time_window_spec
 
@@ -61,7 +62,7 @@ def term_collect_mods(term: list) -> dict:
     return merged
 
 
-def fmt_hhmm_for_term(term: list, default_due_dt):
+def fmt_hhmm_for_term(term: list, default_due_dt: Any) -> Any:
     _ = default_due_dt
     tmod = term_collect_mods(term).get("t")
     if isinstance(tmod, tuple):
@@ -174,7 +175,7 @@ def fmt_time_schedule_for_term(term: list) -> str | None:
     return description
 
 
-def fmt_weekdays_list(spec: str, *, expand_weekly_aliases, split_csv_lower, wday_idx_any) -> str:
+def fmt_weekdays_list(spec: str, *, expand_weekly_aliases: Any, split_csv_lower: Any, wday_idx_any: Any) -> str:
     spec = expand_weekly_aliases(spec)
     tokens = split_csv_lower(spec)
     if not tokens:
@@ -226,9 +227,9 @@ def fmt_monthly_atom(
     spec: str,
     *,
     monthly_alias: dict,
-    safe_match,
-    nth_wd_re,
-    bd_re,
+    safe_match: Any,
+    nth_wd_re: Any,
+    bd_re: Any,
 ) -> str:
     text = (spec or "").lower().strip()
     if text in monthly_alias:
@@ -290,9 +291,9 @@ def fmt_monthly_atom(
 def fmt_yearly_atom(
     tok: str,
     *,
-    rand_mm_re,
-    md_range_re,
-    yearfmt,
+    rand_mm_re: Any,
+    md_range_re: Any,
+    yearfmt: Any,
 ) -> str:
     text = (tok or "").strip().lower()
 
@@ -375,11 +376,11 @@ def fmt_yearly_atom(
     return f"{_MONTH_ABBR[m1 - 1]} {d1} each year"
 
 
-def describe_monthly_tokens(spec: str, *, split_csv_lower):
+def describe_monthly_tokens(spec: str, *, split_csv_lower: Any) -> Any:
     return split_csv_lower(spec)
 
 
-def describe_is_pure_nth_weekday_spec(spec: str, *, split_csv_lower, safe_match, nth_wd_re):
+def describe_is_pure_nth_weekday_spec(spec: str, *, split_csv_lower: Any, safe_match: Any, nth_wd_re: Any) -> Any:
     toks = describe_monthly_tokens(spec, split_csv_lower=split_csv_lower)
     if not toks:
         return False, []
@@ -397,7 +398,7 @@ def describe_is_pure_nth_weekday_spec(spec: str, *, split_csv_lower, safe_match,
     return True, out
 
 
-def describe_is_pure_dom_spec(spec: str, *, split_csv_lower):
+def describe_is_pure_dom_spec(spec: str, *, split_csv_lower: Any) -> Any:
     toks = describe_monthly_tokens(spec, split_csv_lower=split_csv_lower)
     if not toks:
         return False, []
@@ -412,7 +413,7 @@ def describe_is_pure_dom_spec(spec: str, *, split_csv_lower):
     return True, out
 
 
-def describe_single_full_month_from_yearly_spec(spec: str, *, year_range_colon_re):
+def describe_single_full_month_from_yearly_spec(spec: str, *, year_range_colon_re: Any) -> Any:
     match = year_range_colon_re.match(str(spec or "").strip())
     if not match:
         return None
@@ -424,7 +425,7 @@ def describe_single_full_month_from_yearly_spec(spec: str, *, year_range_colon_r
     return m1
 
 
-def describe_term_roll_shift(term) -> str | None:
+def describe_term_roll_shift(term: Any) -> str | None:
     saw = set()
     for atom in term:
         roll = (atom.get("mods") or {}).get("roll")
@@ -439,25 +440,25 @@ def describe_term_roll_shift(term) -> str | None:
     return None
 
 
-def describe_term_bd_filter(term) -> bool:
+def describe_term_bd_filter(term: Any) -> bool:
     return any((atom.get("mods") or {}).get("bd") for atom in term)
 
 
-def describe_term_day_offset(term) -> int:
+def describe_term_day_offset(term: Any) -> int:
     total = 0
     for atom in term:
         total += int((atom.get("mods") or {}).get("day_offset") or 0)
     return total
 
 
-def describe_term_business_day_offset(term) -> int:
+def describe_term_business_day_offset(term: Any) -> int:
     total = 0
     for atom in term:
         total += int((atom.get("mods") or {}).get("business_day_offset") or 0)
     return total
 
 
-def describe_term_time_offset(term) -> str:
+def describe_term_time_offset(term: Any) -> str:
     """Describe a time-of-day offset in compact, user-facing language."""
     minutes = int(term_collect_mods(term).get("time_offset_minutes") or 0)
     if not minutes:
@@ -482,7 +483,7 @@ def describe_roll_suffix(roll: str) -> str:
     return ""
 
 
-def describe_inject_schedule_suffixes(txt: str, term) -> str:
+def describe_inject_schedule_suffixes(txt: str, term: Any) -> str:
     roll = describe_term_roll_shift(term)
     day_offset = describe_term_day_offset(term)
     business_day_offset = describe_term_business_day_offset(term)
@@ -529,13 +530,13 @@ def describe_inject_schedule_suffixes(txt: str, term) -> str:
 
 
 def describe_anchor_term_collect(
-    term,
+    term: Any,
     *,
-    fmt_weekdays_list,
-    split_csv_tokens,
-    fmt_monthly_atom,
-    fmt_yearly_atom,
-):
+    fmt_weekdays_list: Any,
+    split_csv_tokens: Any,
+    fmt_monthly_atom: Any,
+    fmt_yearly_atom: Any,
+) -> Any:
     m_parts = []
     y_parts = []
     w_phrase = None
@@ -600,8 +601,8 @@ def describe_yearly_rand_filter(
     yearly_specs: list[str],
     yr_ival: int,
     *,
-    split_csv_tokens,
-    fmt_yearly_atom,
+    split_csv_tokens: Any,
+    fmt_yearly_atom: Any,
 ) -> str | None:
     if yr_ival != 1 or len(yearly_specs) != 2:
         return None
@@ -657,18 +658,18 @@ def describe_random_weekday_pool(
 
 
 def describe_anchor_term_fused_month_year(
-    term,
-    default_due_dt,
-    monthly_specs,
-    yearly_specs,
+    term: Any,
+    default_due_dt: Any,
+    monthly_specs: Any,
+    yearly_specs: Any,
     yr_ival: int,
     bd_filter: bool,
     m_parts: list[str],
     *,
-    describe_is_pure_nth_weekday_spec,
-    describe_single_full_month_from_yearly_spec,
-    fmt_hhmm_for_term,
-):
+    describe_is_pure_nth_weekday_spec: Any,
+    describe_single_full_month_from_yearly_spec: Any,
+    fmt_hhmm_for_term: Any,
+) -> Any:
     if len(monthly_specs) != 1 or len(yearly_specs) != 1:
         return None
     mspec = monthly_specs[0]
@@ -694,15 +695,15 @@ def describe_anchor_term_fused_month_year(
 
 
 def describe_anchor_term_interval_prefix(
-    wk_ival,
-    mo_ival,
-    yr_ival,
-    monthly_specs,
-    yearly_specs,
+    wk_ival: Any,
+    mo_ival: Any,
+    yr_ival: Any,
+    monthly_specs: Any,
+    yearly_specs: Any,
     *,
-    describe_is_pure_nth_weekday_spec,
-    describe_is_pure_dom_spec,
-):
+    describe_is_pure_nth_weekday_spec: Any,
+    describe_is_pure_dom_spec: Any,
+) -> Any:
     interval_prefix = None
     suppress_tail = False
 
@@ -756,7 +757,7 @@ def describe_anchor_term_interval_prefix(
     return interval_prefix, suppress_tail
 
 
-def describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter: bool) -> list[str]:
+def describe_anchor_term_parts(w_phrase: Any, m_parts: Any, y_parts: Any, bd_filter: bool) -> list[str]:
     parts = []
     if w_phrase:
         parts.append(w_phrase)
@@ -784,7 +785,7 @@ def describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter: bool) -> l
     return parts
 
 
-def term_prevnext_wd(term, *, wdname: dict) -> tuple[str, str] | None:
+def term_prevnext_wd(term: Any, *, wdname: dict) -> tuple[str, str] | None:
     for atom in term:
         mods = atom.get("mods") or {}
         roll = mods.get("roll")
@@ -795,7 +796,7 @@ def term_prevnext_wd(term, *, wdname: dict) -> tuple[str, str] | None:
     return None
 
 
-def inject_prevnext_phrase(txt: str, term, *, wdname: dict) -> str:
+def inject_prevnext_phrase(txt: str, term: Any, *, wdname: dict) -> str:
     tup = term_prevnext_wd(term, wdname=wdname)
     if not tup:
         return txt
@@ -826,17 +827,17 @@ def inject_prevnext_phrase(txt: str, term, *, wdname: dict) -> str:
 
 def describe_anchor_term(
     term: list,
-    default_due_dt=None,
+    default_due_dt: Any = None,
     *,
-    fmt_weekdays_list,
-    split_csv_tokens,
-    fmt_monthly_atom,
-    fmt_yearly_atom,
-    describe_is_pure_nth_weekday_spec,
-    describe_single_full_month_from_yearly_spec,
-    fmt_hhmm_for_term,
-    describe_is_pure_dom_spec,
-):
+    fmt_weekdays_list: Any,
+    split_csv_tokens: Any,
+    fmt_monthly_atom: Any,
+    fmt_yearly_atom: Any,
+    describe_is_pure_nth_weekday_spec: Any,
+    describe_single_full_month_from_yearly_spec: Any,
+    fmt_hhmm_for_term: Any,
+    describe_is_pure_dom_spec: Any,
+) -> Any:
     (
         w_phrase,
         m_parts,
@@ -945,7 +946,7 @@ def describe_anchor_term(
     return txt or "any day"
 
 
-def describe_anchor_expr_from_dnf(dnf: list, default_due_dt=None, *, describe_anchor_term) -> str:
+def describe_anchor_expr_from_dnf(dnf: list, default_due_dt: Any = None, *, describe_anchor_term: Any) -> str:
     nat_terms = []
     for term in dnf or []:
         try:
@@ -967,7 +968,7 @@ def describe_anchor_expr_from_dnf(dnf: list, default_due_dt=None, *, describe_an
     return ordered[0] if len(ordered) == 1 else compress_natural_or_terms(ordered)
 
 
-def describe_anchor_expr(anchor_expr: str, default_due_dt=None, *, parse_anchor_expr_to_dnf_cached, describe_anchor_expr_from_dnf) -> str:
+def describe_anchor_expr(anchor_expr: str, default_due_dt: Any = None, *, parse_anchor_expr_to_dnf_cached: Any, describe_anchor_expr_from_dnf: Any) -> str:
     if not anchor_expr or not str(anchor_expr).strip():
         return ""
     try:
@@ -1112,7 +1113,7 @@ def compress_natural_or_terms(terms: list[str]) -> str:
     )
 
 
-def normalize_range_token(tok: str, *, safe_match, int_range_re) -> str | None:
+def normalize_range_token(tok: str, *, safe_match: Any, int_range_re: Any) -> str | None:
     text = (tok or "").strip().lower()
     match = safe_match(int_range_re, text)
     if not match:
@@ -1137,7 +1138,7 @@ def rand_bucket_merge_mods(mods: dict, time_str: str | None, bd_flag: bool) -> t
     return time_str, bd_flag
 
 
-def rand_bucket_signature(term: list[dict], *, normalize_range_token) -> tuple | None:
+def rand_bucket_signature(term: list[dict], *, normalize_range_token: Any) -> tuple | None:
     has_rand = False
     range_norm = None
     ival_seen = None
@@ -1168,7 +1169,7 @@ def rand_bucket_signature(term: list[dict], *, normalize_range_token) -> tuple |
     return (ival_seen or 1, time_str, bd_flag, range_norm)
 
 
-def try_bucket_rand_monthly(dnf: list[list[dict]], task: dict, *, rand_bucket_signature) -> str | None:
+def try_bucket_rand_monthly(dnf: list[list[dict]], task: dict, *, rand_bucket_signature: Any) -> str | None:
     _ = task
     if not dnf or any(len(term) == 0 for term in dnf):
         return None
@@ -1186,7 +1187,7 @@ def try_bucket_rand_monthly(dnf: list[list[dict]], task: dict, *, rand_bucket_si
             return None
         ranges.append(result[3])
 
-    def _start_val(range_text):
+    def _start_val(range_text: Any) -> int:
         left = range_text.split("–", 1)[0]
         try:
             return int(left)
@@ -1216,10 +1217,10 @@ def describe_anchor_dnf(
     dnf: list,
     task: dict,
     *,
-    try_bucket_rand_monthly,
-    parse_dt_any,
-    describe_anchor_term,
-):
+    try_bucket_rand_monthly: Any,
+    parse_dt_any: Any,
+    describe_anchor_term: Any,
+) -> str:
     def _mode_tail(mode: str) -> str:
         if mode == "all":
             return "backfill all missed anchors"

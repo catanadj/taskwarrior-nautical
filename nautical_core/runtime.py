@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from typing import Any
 
 from . import _normalized_abspath, _validated_user_dir
 from .hook_bootstrap import env_int
@@ -79,7 +80,7 @@ def _redact_dict(data: dict, redact_keys: frozenset) -> dict:
     return out
 
 
-def diag_log_redact(msg: str, redact_keys: frozenset | None = None):
+def diag_log_redact(msg: str, redact_keys: frozenset | None = None) -> Any:
     """Redact sensitive keys from JSON msg for diagnostic logs."""
     keys = redact_keys or DIAG_LOG_REDACT_KEYS
     if isinstance(msg, dict):
@@ -171,7 +172,7 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
         pass
 
 
-def diag(msg, hook_name: str = "nautical", data_dir: str | None = None) -> None:
+def diag(msg: Any, hook_name: str = "nautical", data_dir: str | None = None) -> None:
     """Write diagnostics to stderr when NAUTICAL_DIAG=1 and append to diag log when NAUTICAL_DIAG_LOG=1."""
     render = getattr(msg, "render", None)
     rendered = render() if callable(render) else str(msg)
@@ -190,7 +191,7 @@ def diag(msg, hook_name: str = "nautical", data_dir: str | None = None) -> None:
     diag_log(log_value, hook_name, data_dir)
 
 
-def _runtime_command_module():
+def _runtime_command_module() -> Any:
     """Resolve command execution only when a runtime caller requests it."""
     from . import runtime_command
 

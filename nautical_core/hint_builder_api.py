@@ -13,16 +13,16 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def build_and_cache_hints(
         anchor_expr: str,
         anchor_mode: str = "ALL",
-        default_due_dt=None,
-        business_calendar=None,
+        default_due_dt: Any = None,
+        business_calendar: Any = None,
         include_per_year: bool = True,
-    ):
+    ) -> Any:
         business_calendar = core["_business_calendar"].effective_business_calendar(
             business_calendar
         )
         calendar_fingerprint = core["business_calendar_fingerprint"](business_calendar)
 
-        def scheduler_service_factory(anchor: str):
+        def scheduler_service_factory(anchor: str) -> Any:
             scheduler_service = core["_import_sibling"]("scheduler_service")
             context_type = core["_import_sibling"]("recurrence_context").RecurrenceContext
             context = context_type(
@@ -48,7 +48,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                 context=context,
             )
 
-        def hint_builder_factory():
+        def hint_builder_factory() -> Any:
             service = scheduler_service_factory(anchor_expr)
             return core["_import_sibling"]("hint_builder").HintBuilder(service)
 

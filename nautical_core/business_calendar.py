@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from functools import partial
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import lru_cache
 from typing import Callable, Protocol
+from typing import Any
 
 
 class BusinessCalendar(Protocol):
@@ -54,6 +56,13 @@ class ConfiguredBusinessCalendar:
 
 DEFAULT_BUSINESS_CALENDAR = WeekdayBusinessCalendar()
 WEEKDAY_BUSINESS_DAYS = frozenset({0, 1, 2, 3, 4})
+
+
+def with_business_calendar(fn: Any, business_calendar: BusinessCalendar | None) -> Any:
+    selected = effective_business_calendar(business_calendar)
+    if selected is DEFAULT_BUSINESS_CALENDAR:
+        return fn
+    return partial(fn, business_calendar=selected)
 _ACTIVE_BUSINESS_CALENDAR: ContextVar[BusinessCalendar] = ContextVar(
     "nautical_business_calendar",
     default=DEFAULT_BUSINESS_CALENDAR,
@@ -75,7 +84,7 @@ def effective_business_calendar(
 
 
 @contextmanager
-def use_business_calendar(business_calendar: BusinessCalendar):
+def use_business_calendar(business_calendar: BusinessCalendar) -> Any:
     token = _ACTIVE_BUSINESS_CALENDAR.set(business_calendar)
     try:
         yield business_calendar
@@ -84,7 +93,7 @@ def use_business_calendar(business_calendar: BusinessCalendar):
 
 
 @contextmanager
-def capture_business_calendar_displacements():
+def capture_business_calendar_displacements() -> Any:
     events: list[CalendarDisplacement] = []
     token = _ACTIVE_DISPLACEMENTS.set(events)
     try:

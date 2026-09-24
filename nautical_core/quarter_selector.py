@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 
 MONTH_SELECTOR_MAX_LEN = 64
 
@@ -8,14 +9,14 @@ def quarter_atom_spec(atom: dict) -> str:
     return (atom.get("spec") or atom.get("value") or "").lower()
 
 
-def has_quarter_tokens(spec: str, *, split_csv_lower, re_mod) -> bool:
+def has_quarter_tokens(spec: str, *, split_csv_lower: Any, re_mod: Any) -> bool:
     for tok in split_csv_lower(spec):
         if re_mod.fullmatch(r"q[1-4][sme]?(?:\.\.q[1-4][sme]?)?", tok):
             return True
     return False
 
 
-def has_plain_quarter_tokens(spec: str, *, split_csv_lower, re_mod) -> bool:
+def has_plain_quarter_tokens(spec: str, *, split_csv_lower: Any, re_mod: Any) -> bool:
     for tok in split_csv_lower(spec):
         if re_mod.fullmatch(r"q[1-4](?:\.\.q[1-4])?", tok):
             return True
@@ -32,9 +33,9 @@ def is_negative_ascii_int(tok: str) -> bool:
 def is_start_month_selector(
     tok: str,
     *,
-    parse_error_cls,
-    safe_match,
-    nth_weekday_re,
+    parse_error_cls: Any,
+    safe_match: Any,
+    nth_weekday_re: Any,
 ) -> bool:
     t = (tok or "").strip().lower()
     if len(t) > MONTH_SELECTOR_MAX_LEN:
@@ -51,10 +52,10 @@ def is_start_month_selector(
 def is_end_month_selector(
     tok: str,
     *,
-    parse_error_cls,
-    safe_match,
-    nth_weekday_re,
-    bd_re,
+    parse_error_cls: Any,
+    safe_match: Any,
+    nth_weekday_re: Any,
+    bd_re: Any,
 ) -> bool:
     t = (tok or "").strip().lower()
     if len(t) > MONTH_SELECTOR_MAX_LEN:
@@ -74,11 +75,11 @@ def is_end_month_selector(
 def quarter_month_selector_mode(
     m_atoms: list[dict],
     *,
-    parse_error_cls,
-    expand_monthly_aliases,
-    split_csv_tokens,
-    is_start_month_selector,
-    is_end_month_selector,
+    parse_error_cls: Any,
+    expand_monthly_aliases: Any,
+    split_csv_tokens: Any,
+    is_start_month_selector: Any,
+    is_end_month_selector: Any,
 ) -> str:
     if len(m_atoms) != 1:
         raise parse_error_cls(
@@ -115,9 +116,9 @@ def term_quarter_rewrite_mode(
     y_atoms: list[dict],
     m_atoms: list[dict],
     *,
-    quarter_atom_spec,
-    has_plain_quarter_tokens,
-    quarter_month_selector_mode,
+    quarter_atom_spec: Any,
+    has_plain_quarter_tokens: Any,
+    quarter_month_selector_mode: Any,
 ) -> str:
     if not m_atoms:
         return "first_month"

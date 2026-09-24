@@ -256,10 +256,10 @@ def resolve_business_calendars(
             load_dates=load_omit_file_dates,
         )
 
-        def anchor_matches(value: date, rules=anchor_rules, calendar_name=name) -> bool:
+        def anchor_matches(value: date, rules: Any = anchor_rules, calendar_name: str = name) -> bool:
             return any(expression_matches_date(rule, value, calendar_name) for rule in rules)
 
-        def omit_matches(value: date, rules=omit_rules, calendar_name=name) -> bool:
+        def omit_matches(value: date, rules: Any = omit_rules, calendar_name: str = name) -> bool:
             return any(expression_matches_date(rule, value, calendar_name) for rule in rules)
 
         fingerprint_payload = {

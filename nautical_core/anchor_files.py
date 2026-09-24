@@ -324,7 +324,7 @@ def _transform_anchor_file_date(
     return apply_day_offset(rolled, mods, business_calendar=business_calendar)
 
 
-def _norm_t_list(tval) -> list[tuple[int, int]]:
+def _norm_t_list(tval: Any) -> list[tuple[int, int]]:
     if not tval:
         return []
     if isinstance(tval, tuple):

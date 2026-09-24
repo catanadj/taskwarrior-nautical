@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import importlib
 from dataclasses import FrozenInstanceError, is_dataclass
 import hashlib
 from types import ModuleType
@@ -121,6 +122,63 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertEqual(set(wildcard), set(compat_api.PUBLIC_EXPORTS))
         self.assertTrue(callable(facade.normalize_task_business_calendar))
         self.assertTrue(callable(facade.normalize_task_business_calendar_in_place))
+        self.assertEqual(
+            inspect.signature(facade.normalize_task_business_calendar),
+            inspect.signature(facade.normalize_task_business_calendar_in_place),
+        )
+
+    def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
+        owners = compat_api.PUBLIC_OWNER_MODULES
+        self.assertEqual(set(owners), set(compat_api.PUBLIC_EXPORTS))
+        self.assertEqual(owners["parse_anchor_expr_to_dnf"], "nautical_core.parser_api")
+        self.assertEqual(owners["AnchorDNF"], "nautical_core.parsing.parser_models")
+        self.assertEqual(owners["OccurrenceSearchExhausted"], "nautical_core.scheduler_models")
+        self.assertEqual(owners["effective_config_snapshot"], "nautical_core.core_config")
+        self.assertEqual(owners["cache_load"], "nautical_core.cache_api")
+        self.assertEqual(owners["business_calendar_for_task"], "nautical_core.business_calendar_api")
+        self.assertEqual(owners["business_calendar_displacement_for_date"], "nautical_core.business_calendar")
+        self.assertEqual(owners["build_local_datetime"], "nautical_core.time_api")
+        self.assertEqual(owners["TaskDict"], "nautical_core.task_models")
+        self.assertEqual(owners["render_panel"], "nautical_core.ui")
+        self.assertEqual(owners["_build_anchor_atom_dnf"], "nautical_core.parser_api")
+        self.assertEqual(owners["_weeks_between"], "nautical_core.scheduler_api")
+        self.assertEqual(owners["resolve_task_data_context"], "nautical_core.runtime")
+        self.assertEqual(owners["fcntl"], "fcntl")
+        self.assertEqual(owners["tempfile"], "tempfile")
+
+    def test_public_surface_categories_cover_exports_and_legacy_alias(self) -> None:
+        categories = compat_api.PUBLIC_EXPORT_CATEGORIES
+        self.assertEqual(set(categories), set(compat_api.PUBLIC_EXPORTS) | {
+            "normalize_task_business_calendar",
+        })
+        allowed = {"supported_public_api", "installed_runtime", "test_seam", "legacy_compatibility_alias"}
+        self.assertTrue(set(categories.values()) <= allowed)
+        self.assertEqual(categories["normalize_task_business_calendar"], "legacy_compatibility_alias")
+        self.assertEqual(categories["diag"], "installed_runtime")
+        self.assertEqual(categories["_build_anchor_atom_dnf"], "test_seam")
+
+    def test_canonical_owner_modules_are_importable(self) -> None:
+        owners = set(compat_api.PUBLIC_OWNER_MODULES.values())
+        for module_name in sorted(owners):
+            with self.subTest(module=module_name):
+                self.assertIsNotNone(importlib.import_module(module_name))
+
+    def test_legacy_alias_and_public_wrappers_preserve_callable_contracts(self) -> None:
+        import nautical_core as facade
+
+        for name in (
+            "parse_anchor_expr_to_dnf",
+            "parse_cp_sequence",
+            "cache_load",
+            "render_panel",
+            "resolve_task_data_context",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(callable(getattr(facade, name)))
+        self.assertEqual(
+            inspect.signature(facade.normalize_task_business_calendar),
+            inspect.signature(facade.normalize_task_business_calendar_in_place),
+        )
 
     def test_public_facade_exports_only_supported_symbols_with_stable_signatures(self) -> None:
         import nautical_core as facade

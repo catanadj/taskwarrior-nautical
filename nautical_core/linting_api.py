@@ -12,7 +12,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     core = core_namespace(module, namespace, context, "linting_api")
     linting = core["_linting"]
 
-    def iter_y_segments(value: str):
+    def iter_y_segments(value: str) -> Any:
         yield from linting.iter_y_segments(value, re_mod=core["re"])
 
     def lint_expand_year_month_aliases(value: str) -> str:

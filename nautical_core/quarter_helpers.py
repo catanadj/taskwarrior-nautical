@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
 
-def yearly_tokens(term, *, split_csv_tokens):
+def yearly_tokens(term: Any, *, split_csv_tokens: Any) -> list[str]:
     out = []
     for atom in term:
         if (atom.get("typ") or atom.get("type") or "").lower() == "y":
@@ -10,7 +11,7 @@ def yearly_tokens(term, *, split_csv_tokens):
     return out
 
 
-def monthly_tokens(term, *, split_csv_tokens):
+def monthly_tokens(term: Any, *, split_csv_tokens: Any) -> list[str]:
     out = []
     for atom in term:
         if (atom.get("typ") or atom.get("type") or "").lower() == "m":
@@ -19,7 +20,7 @@ def monthly_tokens(term, *, split_csv_tokens):
     return out
 
 
-def quarters_from_tokens(y_toks, *, token_rev: dict[str, int]):
+def quarters_from_tokens(y_toks: Any, *, token_rev: dict[str, int]) -> list[int]:
     qs = []
     for tok in y_toks:
         q = token_rev.get(tok)
@@ -28,7 +29,7 @@ def quarters_from_tokens(y_toks, *, token_rev: dict[str, int]):
     return sorted(set(qs))
 
 
-def format_quarter_set(qs):
+def format_quarter_set(qs: Any) -> str | None:
     """Return ('each quarter' | 'Q2' | 'Q1–Q2' | 'Q1 and Q3')."""
     if not qs:
         return None

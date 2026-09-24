@@ -40,7 +40,7 @@ from .integration_models import (
 from .task_codec import TaskCodec
 from .lifecycle_models import recurrence_fingerprint
 from .task_codec import DEFAULT_TASK_CODEC
-from .task_models import FieldPresence, TaskObservation
+from .task_models import ALL_TASK_STATUSES, FieldPresence, TaskObservation, TaskStatus
 from .task_changes import timestamp_equal
 from .task_set_reads import SetReadResult, SetReadStatus, UUIDSetRequest
 from .taskwarrior_client import TaskwarriorClient
@@ -49,6 +49,17 @@ from .task_read_repository import TaskReadRepository
 
 class _TaskRepository(Protocol):
     def by_uuid(self, uuid_value: str, *, refresh: bool = False) -> TaskRead[TaskObservation]: ...
+
+    def exact_child_slot(
+        self,
+        chain_id: str,
+        link: int,
+        *,
+        statuses: Sequence[str] = ALL_TASK_STATUSES,
+        expected_prev_link: str = "",
+        complete_chain_history: bool = False,
+        refresh: bool = False,
+    ) -> TaskRead[TaskObservation]: ...
 
     def read_uuid_set(self, request: UUIDSetRequest) -> SetReadResult: ...
 
@@ -143,12 +154,12 @@ def _child_import_matches(
     if _text(_observed_value(row, "prevLink")).lower() != _text(parent_uuid)[:8].lower():
         return False
     status = _text(_observed_value(row, "status")).lower()
-    if status != "pending":
+    if status != TaskStatus.PENDING.value:
         # Taskwarrior may immediately expire a child whose carried native
         # until is already in the past. That is a valid imported occurrence;
         # the reconciler can continue from its deleted slot on the next hop.
         until = _parse_timestamp(fields.get("until"))
-        if status != "deleted" or until is None or until > datetime.now(timezone.utc):
+        if status != TaskStatus.DELETED.value or until is None or until > datetime.now(timezone.utc):
             return False
     if _text(_observed_value(row, "chain")).lower() != "on":
         return False
@@ -395,7 +406,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 return row, None
             if (
                 request.operation is MutationOperation.CHILD_COMPENSATION
-                and _text(_observed_value(row, "status")).lower() == "deleted"
+                and _text(_observed_value(row, "status")).lower() == TaskStatus.DELETED.value
             ):
                 return row, None
             return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
@@ -507,7 +518,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert child is not None
-        if _text(_observed_value(child, "status")).lower() == "deleted":
+        if _text(_observed_value(child, "status")).lower() == TaskStatus.DELETED.value:
             return self._outcome(
                 request,
                 MutationOutcomeKind.ALREADY_APPLIED,
@@ -521,7 +532,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.CHILD_COMPENSATED,
-            lambda row: _text(_observed_value(row, "status")).lower() == "deleted",
+            lambda row: _text(_observed_value(row, "status")).lower() == TaskStatus.DELETED.value,
         )
 
     def compensate_imported_child(self, request: MutationRequest) -> MutationOutcome:
@@ -585,6 +596,42 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         assert parent is not None
         if _text(_observed_value(parent, "chain")).lower() != "on":
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
+        slot = self._uow.repository.exact_child_slot(
+            request.payload.chain_id,
+            request.payload.target_link,
+            statuses=ALL_TASK_STATUSES,
+            complete_chain_history=True,
+            refresh=True,
+        )
+        if isinstance(slot, Unavailable):
+            kind = MutationOutcomeKind.RETRYABLE if slot.retryable else MutationOutcomeKind.MANUAL_REVIEW
+            context = (
+                f"chain={request.payload.chain_id} link={request.payload.target_link} "
+                f"parent={request.guard.task_uuid[:8]} expected_child={request.payload.child_uuid[:8]}"
+            )
+            return self._outcome(
+                request,
+                kind,
+                reason=f"slot preflight failed ({context}): {slot.evidence.detail}",
+                failure=slot.evidence,
+            )
+        if isinstance(slot, Found):
+            slot_uuid = _text(_observed_value(slot.value, "uuid")).lower()
+            if slot_uuid != request.payload.child_uuid.lower():
+                context = (
+                    f"chain={request.payload.chain_id} link={request.payload.target_link} "
+                    f"parent={request.guard.task_uuid[:8]} expected_child={request.payload.child_uuid[:8]}"
+                )
+                return self._outcome(
+                    request,
+                    MutationOutcomeKind.MANUAL_REVIEW,
+                    reason=(
+                        f"chain slot {request.payload.chain_id}:{request.payload.target_link} "
+                        f"is occupied by {slot_uuid or 'an invalid UUID'} ({context})"
+                    ),
+                )
+        elif not isinstance(slot, Absent):
+            return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid child slot read result")
         existing = self._prefetched_children.pop(request.payload.child_uuid.lower(), None)
         prefetched = existing is not None
         if existing is None:

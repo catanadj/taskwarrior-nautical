@@ -10,7 +10,7 @@ import os
 import re
 import sys
 from collections.abc import MutableMapping
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping
 
 if TYPE_CHECKING:
     from .task_models import TaskDraft, TaskObservation

@@ -19,6 +19,12 @@ from nautical_core.add_anchor_preview import (
 
 
 class ArchitectureContractTests(unittest.TestCase):
+    def test_extracted_model_modules_have_explicit_domain_ownership(self) -> None:
+        self.assertEqual(architecture_contract.module_layer("common.py"), architecture_contract.DOMAIN)
+        self.assertEqual(architecture_contract.module_layer("hint_models.py"), architecture_contract.DOMAIN)
+        self.assertEqual(architecture_contract.module_layer("configuration_facade.py"), architecture_contract.COMPATIBILITY)
+        self.assertEqual(architecture_contract.module_layer("timezone_facade.py"), architecture_contract.COMPATIBILITY)
+
     def test_operator_presentation_has_no_mutation_dependencies(self) -> None:
         source = (
             Path(__file__).parents[1] / "nautical_core" / "operator_presentation.py"

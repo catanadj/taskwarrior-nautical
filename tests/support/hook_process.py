@@ -28,11 +28,32 @@ class HookSubprocessFixture(unittest.TestCase):
         *,
         diagnostics: bool = False,
         extra_environment: dict[str, str] | None = None,
+        timeout: float = 15.0,
+        coverage_file: str | Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return self.run_script(
+            ROOT / hook,
+            payload,
+            diagnostics=diagnostics,
+            extra_environment=extra_environment,
+            timeout=timeout,
+            coverage_file=coverage_file,
+        )
+
+    def run_script(
+        self,
+        script: str | Path,
+        payload: str = "",
+        *,
+        diagnostics: bool = False,
+        extra_environment: dict[str, str] | None = None,
+        timeout: float = 15.0,
+        coverage_file: str | Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment.update(
             {
-                "TASKDATA": self.taskdata,
+                "TASKDATA": str(self.taskdata),
                 "NAUTICAL_CORE_PATH": str(ROOT),
                 "NAUTICAL_TRUST_CORE_PATH": "1",
                 "TZ": "UTC",
@@ -44,11 +65,34 @@ class HookSubprocessFixture(unittest.TestCase):
             environment["NAUTICAL_DIAG"] = "1"
         else:
             environment.pop("NAUTICAL_DIAG", None)
+        command = [sys.executable]
+        if coverage_file is not None:
+            coverage_path = Path(coverage_file)
+            coverage_path.parent.mkdir(parents=True, exist_ok=True)
+            command.extend(
+                [
+                    "-m",
+                    "coverage",
+                    "run",
+                    "--parallel-mode",
+                    "--data-file",
+                    str(coverage_path),
+                ]
+            )
+        command.append(str(script))
         return subprocess.run(
-            [sys.executable, str(ROOT / hook)],
+            command,
             input=payload,
             text=True,
             capture_output=True,
             env=environment,
-            timeout=15,
+            timeout=timeout,
+        )
+
+    def combine_coverage(self, coverage_file: str | Path) -> None:
+        import coverage
+
+        coverage_path = Path(coverage_file)
+        coverage.Coverage(data_file=str(coverage_path)).combine(
+            data_paths=[str(coverage_path.parent)]
         )

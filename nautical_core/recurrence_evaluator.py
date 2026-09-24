@@ -10,7 +10,7 @@ import copy
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Mapping, NoReturn
+from typing import Any, NoReturn
 
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec

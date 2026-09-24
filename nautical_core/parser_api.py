@@ -33,12 +33,12 @@ class ParserOwnerDependencies:
     resolve_presets: Callable[[str], str] | None = None
 
 
-def _core_module():
+def _core_module() -> Any:
     package = __package__ or "nautical_core"
     return sys.modules.get(package) or importlib.import_module(package)
 
 
-def _parse_anchor_expr_to_dnf_impl(module: Any, s: str, deps: ParserOwnerDependencies | None = None):
+def _parse_anchor_expr_to_dnf_impl(module: Any, s: str, deps: ParserOwnerDependencies | None = None) -> Any:
     """Run the parser pipeline against one isolated deps facade."""
     if deps is not None and deps.parser_dnf is not None and deps.resolve_presets is not None:
         parser_dnf = deps.parser_dnf
@@ -78,7 +78,7 @@ def _parse_anchor_expr_to_dnf_impl(module: Any, s: str, deps: ParserOwnerDepende
     )
 
 
-def _validate_anchor_expr_strict_impl(module: Any, expr: Any):
+def _validate_anchor_expr_strict_impl(module: Any, expr: Any) -> Any:
     """Run strict validation against one isolated deps facade."""
     return module._strict_validation.validate_anchor_expr_strict(
         expr,
@@ -88,7 +88,7 @@ def _validate_anchor_expr_strict_impl(module: Any, expr: Any):
     )
 
 
-def _normalize_anchor_input_to_dnf(module: Any, expr):
+def _normalize_anchor_input_to_dnf(module: Any, expr: Any) -> Any:
     return module._strict_validation.normalize_anchor_input_to_dnf(
         expr,
         parse_anchor_expr_to_dnf_cached=module.parse_anchor_expr_to_dnf_cached,
@@ -96,7 +96,7 @@ def _normalize_anchor_input_to_dnf(module: Any, expr):
     )
 
 
-def _assert_dnf_structure_strict(module: Any, dnf):
+def _assert_dnf_structure_strict(module: Any, dnf: Any) -> Any:
     module._strict_validation.assert_dnf_structure_strict(
         dnf,
         is_atom_like=module._is_atom_like,
@@ -115,7 +115,7 @@ def _validate_anchor_atom_strict(module: Any, atom: dict) -> None:
     )
 
 
-def _validate_anchor_dnf_atoms_strict(module: Any, dnf) -> None:
+def _validate_anchor_dnf_atoms_strict(module: Any, dnf: Any) -> None:
     module._strict_validation.validate_anchor_dnf_atoms_strict(
         dnf,
         validate_anchor_atom_strict=lambda atom: _validate_anchor_atom_strict(module, atom),
@@ -157,7 +157,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         seen_chain = tuple(sorted(_seen)) if isinstance(_seen, frozenset) else tuple(_seen or ())
         seen = set(seen_chain)
 
-        def repl(match):
+        def repl(match: Any) -> str:
             start = match.start()
             if start > 0 and raw[start - 1] not in " \t\r\n(|+,":
                 return match.group(0)
@@ -185,7 +185,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
 
         return preset_ref_re.sub(repl, raw)
 
-    def resolve_anchor_presets_impl(expr: str, *, _seen=None) -> str:
+    def resolve_anchor_presets_impl(expr: str, *, _seen: Any = None) -> str:
         return resolve_preset_refs(
             expr,
             presets=deps["ANCHOR_PRESETS"],
@@ -194,7 +194,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             _seen=_seen,
         )
 
-    def resolve_omit_presets(expr: str, *, _seen=None) -> str:
+    def resolve_omit_presets(expr: str, *, _seen: Any = None) -> str:
         return resolve_preset_refs(
             expr,
             presets=deps["OMIT_PRESETS"],
@@ -251,7 +251,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def normalize_monthly_ordinal_spec(spec: str) -> str:
         return parser_atoms.normalize_monthly_ordinal_spec(spec, re_mod=deps["re"])
 
-    def build_anchor_atom_dnf(head: str, full_tail: str):
+    def build_anchor_atom_dnf(head: str, full_tail: str) -> Any:
         return parser_atoms.build_anchor_atom_dnf(
             head,
             full_tail,
@@ -263,7 +263,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             parse_error_cls=deps["ParseError"],
         )
 
-    def parse_anchor_atom_at(value: str, index: int, length: int):
+    def parse_anchor_atom_at(value: str, index: int, length: int) -> Any:
         return parser_atoms.parse_anchor_atom_at(
             value,
             index,
@@ -295,7 +295,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             year_token_format_error_cls=deps["YearTokenFormatError"],
         )
 
-    def validate_yearly_token_format(spec: str):
+    def validate_yearly_token_format(spec: str) -> Any:
         return deps["_yearly_validation"].validate_yearly_token_format(
             spec,
             yearfmt=deps["_yearfmt"],
@@ -304,13 +304,13 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             month_from_alias=deps["_month_from_alias"],
         )
 
-    def validate_year_tokens_in_dnf(dnf):
+    def validate_year_tokens_in_dnf(dnf: Any) -> Any:
         return deps["_yearly_validation"].validate_year_tokens_in_dnf(
             dnf,
             validate_yearly_token_format=validate_yearly_token_format,
         )
 
-    def validate_yearly_token(token: str):
+    def validate_yearly_token(token: str) -> Any:
         return deps["_yearly_validation"].validate_yearly_token(
             token,
             quarters=deps["_QUARTERS"],
@@ -338,7 +338,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             month_full=deps["_natural_language"]._MONTH_FULL,
         )
 
-    def validate_yearly_spec(spec: str):
+    def validate_yearly_spec(spec: str) -> Any:
         return deps["_yearly_validation"].validate_yearly_spec(
             spec,
             split_csv_lower=deps["_split_csv_lower"],
@@ -348,7 +348,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
 
     leap_year_for_checks = 2028
 
-    def weekday_set_from_weekly_atom(atom) -> set[int]:
+    def weekday_set_from_weekly_atom(atom: Any) -> set[int]:
         return deps["_satisfiability"].weekday_set_from_weekly_atom(
             atom,
             weekly_spec_to_wset=deps["_weekly_spec_to_wset"],
@@ -381,7 +381,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
         )
 
-    def term_has_any_match_within(term: list[dict], start, seed, years: int = 8) -> bool:
+    def term_has_any_match_within(term: list[dict], start: Any, seed: Any, years: int = 8) -> bool:
         return deps["_satisfiability"].term_has_any_match_within(
             term,
             start,
@@ -390,7 +390,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             years=years,
         )
 
-    def validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d):
+    def validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: Any) -> Any:
         for term in dnf:
             for factor in term:
                 if position_selection.is_selection_node(factor):
@@ -429,7 +429,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
         )
 
-    def parse_anchor_expr_to_dnf_bound(s: str):
+    def parse_anchor_expr_to_dnf_bound(s: str) -> Any:
         owner_deps = ParserOwnerDependencies(
             normalize_input=normalize_anchor_expr_input,
             raise_bad_year_colons=deps["_raise_on_bad_colon_year_tokens"],
@@ -493,23 +493,23 @@ def build_acf(expr: str) -> str:
     return _core_module()._build_acf_impl(expr)
 
 
-def resolve_anchor_presets(expr: str, *, _seen=None) -> str:
+def resolve_anchor_presets(expr: str, *, _seen: Any = None) -> str:
     return _core_module()._resolve_anchor_presets_impl(expr, _seen=_seen)
 
 
-def resolve_omit_presets(expr: str, *, _seen=None) -> str:
+def resolve_omit_presets(expr: str, *, _seen: Any = None) -> str:
     return _core_module()._resolve_omit_presets_impl(expr, _seen=_seen)
 
 
-def parse_anchor_expr_to_dnf(s: str):
+def parse_anchor_expr_to_dnf(s: str) -> Any:
     return _parse_anchor_expr_to_dnf_impl(_core_module(), s)
 
 
-def parse_anchor_expr_to_dnf_cached(s: str):
+def parse_anchor_expr_to_dnf_cached(s: str) -> Any:
     return _core_module()._parse_anchor_expr_to_dnf_cached_impl(s)
 
 
-def validate_anchor_expr_strict(expr: Any):
+def validate_anchor_expr_strict(expr: Any) -> Any:
     return _validate_anchor_expr_strict_impl(_core_module(), expr)
 
 

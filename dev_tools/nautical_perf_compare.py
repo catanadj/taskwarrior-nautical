@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
+import sys
 from pathlib import Path
 
 
@@ -26,6 +28,39 @@ def _load(path: str) -> dict:
     if not isinstance(data, dict):
         raise RuntimeError(f"Invalid report format in '{p}': expected JSON object")
     return data
+
+
+_METRIC_KEY_MARKERS = ("_s", "_seconds", "_ms", "_bytes", "_rows", "_calls", "_count")
+
+
+def _validate_report(report: dict, label: str, *, require_pass: bool = False) -> None:
+    """Reject malformed benchmark data before it can affect comparisons."""
+    results = report.get("results")
+    if not isinstance(results, dict):
+        raise RuntimeError(f"invalid {label} report: results must be an object")
+    for name, result in results.items():
+        if not isinstance(result, dict):
+            raise RuntimeError(f"invalid {label} report: result {name!r} must be an object")
+        if require_pass and not isinstance(result.get("pass"), bool):
+            raise RuntimeError(f"invalid {label} report: result {name!r} has non-boolean pass")
+        for key, value in _walk_report_values(result):
+            if key == "pass" or not any(marker in key for marker in _METRIC_KEY_MARKERS):
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if not math.isfinite(float(value)) or float(value) < 0.0:
+                raise RuntimeError(f"invalid {label} report: result {name!r} has invalid {key}")
+
+
+def _walk_report_values(value: object, key: str = ""):
+    if isinstance(value, dict):
+        for child_key, child_value in value.items():
+            yield from _walk_report_values(child_value, str(child_key))
+    elif isinstance(value, list):
+        for child_value in value:
+            yield from _walk_report_values(child_value, key)
+    else:
+        yield key, value
 
 
 def _as_float(v, default: float = 0.0) -> float:
@@ -63,6 +98,51 @@ def _mapping_list(value: object) -> list[dict]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _compare_workload_contract(base: dict, head: dict) -> dict[str, object]:
+    """Compare stable workload coverage and pass/fail decisions.
+
+    Timing and extended metrics intentionally do not participate here; this
+    contract is the extraction gate that proves the same workloads ran and
+    reached the same budget decisions before timing noise is considered.
+    """
+    def _results(report: object, side: str) -> tuple[dict[str, object], list[str]]:
+        raw = report.get("results") if isinstance(report, dict) else None
+        if not isinstance(raw, dict):
+            return {}, [f"{side}:results"]
+        invalid = []
+        results: dict[str, object] = {}
+        for name, result in raw.items():
+            key = str(name)
+            if not isinstance(result, dict) or not isinstance(result.get("pass"), bool):
+                invalid.append(key)
+            else:
+                results[key] = result
+        return results, sorted(invalid)
+
+    base_results, invalid_base = _results(base, "base")
+    head_results, invalid_head = _results(head, "head")
+    base_names = {str(name) for name in base_results}
+    head_names = {str(name) for name in head_results}
+    missing = sorted(base_names - head_names)
+    added = sorted(head_names - base_names)
+    decision_changes = []
+    for name in sorted(base_names & head_names):
+        base_result = base_results.get(name)
+        head_result = head_results.get(name)
+        base_pass = base_result.get("pass") if isinstance(base_result, dict) else None
+        head_pass = head_result.get("pass") if isinstance(head_result, dict) else None
+        if base_pass != head_pass:
+            decision_changes.append(name)
+    return {
+        "missing": missing,
+        "added": added,
+        "decision_changes": decision_changes,
+        "invalid_base": invalid_base,
+        "invalid_head": invalid_head,
+        "ok": not missing and not added and not decision_changes and not invalid_base and not invalid_head,
+    }
 
 
 def _metric_value(result: dict, metric: str) -> float | None:
@@ -145,6 +225,11 @@ def main() -> int:
     ap.add_argument("--base", required=True, help="baseline perf report JSON path")
     ap.add_argument("--head", required=True, help="current perf report JSON path")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of markdown table")
+    ap.add_argument(
+        "--contract-only",
+        action="store_true",
+        help="check workload coverage and pass/fail parity without timing metrics",
+    )
     ap.add_argument("--enforce", action="store_true", help="exit non-zero on regressions")
     ap.add_argument("--abs-floor-s", type=float, default=0.003, help="absolute regression floor in seconds")
     ap.add_argument(
@@ -156,8 +241,33 @@ def main() -> int:
     ap.add_argument("--pct-floor", type=float, default=0.15, help="relative regression floor ratio (0.15 = 15%%)")
     args = ap.parse_args()
 
-    base = _load(args.base)
-    head = _load(args.head)
+    try:
+        base = _load(args.base)
+        head = _load(args.head)
+        _validate_report(base, "base", require_pass=args.contract_only)
+        _validate_report(head, "head", require_pass=args.contract_only)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if args.contract_only:
+        contract = _compare_workload_contract(base, head)
+        summary = {
+            "base_report": str(Path(args.base).resolve()),
+            "head_report": str(Path(args.head).resolve()),
+            "contract": contract,
+            "ok": bool(contract["ok"]),
+            "enforced": bool(args.enforce),
+        }
+        if args.json:
+            print(json.dumps(summary, ensure_ascii=False, separators=(",", ":"), indent=2))
+        else:
+            print("Nautical Perf Workload Contract")
+            print(f"Missing: {', '.join(contract['missing']) or 'none'}")
+            print(f"Added: {', '.join(contract['added']) or 'none'}")
+            print(f"Decision changes: {', '.join(contract['decision_changes']) or 'none'}")
+        if args.enforce and not contract["ok"]:
+            return 1
+        return 0
     bres = base.get("results") if isinstance(base.get("results"), dict) else {}
     hres = head.get("results") if isinstance(head.get("results"), dict) else {}
     names = sorted(set(bres.keys()) | set(hres.keys()))

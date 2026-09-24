@@ -95,11 +95,11 @@ def _anchor_omit_natural_text(task: TaskPayload, *, core: Any) -> str:
             anchor_omit = core._import_sibling('anchor_omit')
             omit_expr = core._parser_api.resolve_omit_presets(omit_raw)
             omit_norm = anchor_omit.normalize_omit_expr(omit_expr)
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             omit_norm = omit_raw
         try:
             natural = core.describe_anchor_expr(omit_norm)
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             natural = ''
         parts.append(natural or omit_raw)
     if omit_file:
@@ -162,14 +162,14 @@ def anchor_preview_prepare_dnf(
         rows.append(("Pattern", f"[white]{anchor_str}[/]  {tag}"))
     try:
         rows.append(("Natural", f"[white]{core.describe_anchor_dnf(dnf, task)}[/]"))
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         pass
     try:
         selection = core._import_sibling("position_selection")
         advice = selection.selection_advice_for_dnf(dnf)
         if advice:
             rows.append(("Advice", f"[yellow]{' '.join(advice)}[/]"))
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         pass
     return dnf, mode
 
@@ -201,17 +201,17 @@ def anchor_preview_prepare_omit_dnf(
             anchor_omit = core._import_sibling("anchor_omit")
             omit_expr = core._parser_api.resolve_omit_presets(omit_str)
             omit_norm = anchor_omit.normalize_omit_expr(omit_expr)
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             omit_norm = omit_str
         try:
             rows.append(("Except", f"[white]{core.describe_anchor_expr(omit_norm)}[/]"))
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             pass
         try:
             _fatal, warns = core.lint_anchor_expr(omit_norm)
             for w in warns or []:
                 rows.append(("Warning", f"[yellow]{w}[/]"))
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             pass
     if omit_file:
         try:
@@ -228,7 +228,7 @@ def anchor_preview_prepare_omit_dnf(
     try:
         anchor_omit = core._import_sibling("anchor_omit")
         return anchor_omit.combine_omit_state(omit_dnf=omit_dnf, omit_dates=omit_dates)
-    except Exception:
+    except (KeyError, TypeError, ValueError):
         if omit_dates:
             return {"dnf": omit_dnf, "dates": frozenset(omit_dates)}
         return omit_dnf
@@ -242,7 +242,23 @@ def anchor_preview_seed_context(
     *,
     root_uuid_from: Callable[[TaskPayload], str | None],
 ) -> tuple[Any, Any, str]:
-    base_local_date = due_day if user_provided_due else now_local.date()
+    entry_day = None
+    if not user_provided_due:
+        entry = task.get("entry")
+        if isinstance(entry, str) and entry.strip():
+            raw_entry = entry.strip()
+            try:
+                entry_dt = datetime.strptime(raw_entry, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+            except ValueError:
+                try:
+                    entry_dt = datetime.fromisoformat(raw_entry.replace("Z", "+00:00"))
+                except ValueError:
+                    entry_dt = None
+            if entry_dt is not None:
+                if now_local.tzinfo is not None:
+                    entry_dt = entry_dt.astimezone(now_local.tzinfo)
+                entry_day = entry_dt.date()
+    base_local_date = due_day if user_provided_due else (entry_day or now_local.date())
     seed_base = _preview_seed_base(task, root_uuid_from(task) or "preview")
     interval_seed = base_local_date
     return base_local_date, interval_seed, seed_base
@@ -437,7 +453,7 @@ def _preview_omit_label(
         return "omitted"
     try:
         text = str(omit_description_for_task_date(task, item_local.date()) or "").strip()
-    except Exception:
+    except (KeyError, TypeError, ValueError):
         text = ""
     if not text:
         return "omitted"

@@ -4,6 +4,7 @@ import math
 import os
 import re
 import sys
+from typing import Any
 
 
 _INT_FLOATISH_RE = re.compile(r"^[+-]?\d+(?:\.0+)?$")
@@ -31,7 +32,7 @@ def should_stamp_chain_id(task: dict) -> bool:
     return (has_anchor or has_anchor_file or has_cp) and not already
 
 
-def sanitize_text(v: str, max_len: int = 1024):
+def sanitize_text(v: str, max_len: int = 1024) -> Any:
     """Remove control chars and clamp length for UDA safety."""
     if not isinstance(v, str):
         return v
@@ -54,7 +55,7 @@ def split_csv_lower(spec: str) -> list[str]:
     return [t.lower() for t in split_csv_tokens(spec)]
 
 
-def coerce_int(v, default=None):
+def coerce_int(v: Any, default: Any = None) -> Any:
     """Safely convert value to int, handling floats and strings."""
     try:
         if v is None:

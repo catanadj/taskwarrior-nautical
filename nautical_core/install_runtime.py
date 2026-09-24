@@ -16,6 +16,21 @@ from pathlib import Path
 from typing import Any
 
 from . import hook_bootstrap
+from .install_filesystem import (
+    FileSystemSnapshot,
+    InstallError,
+    InstallLock as _InstallLock,
+    MissingSnapshot,
+    SymlinkSnapshot,
+    atomic_copy as _atomic_copy,
+    atomic_symlink as _atomic_symlink,
+    atomic_write_text as _atomic_write_text,
+    lexists as _lexists,
+    pointer_snapshot as _pointer_snapshot,
+    restore_file as _restore_file,
+    restore_pointer as _restore_pointer,
+    snapshot_file as _snapshot_file,
+)
 from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES, OPERATOR_RUNTIME_FILES
 
 fcntl: Any
@@ -103,10 +118,6 @@ def default_launcher_path() -> Path:
     if configured:
         return Path(configured).expanduser()
     return Path.home() / ".local" / "bin" / "nautical"
-
-
-class InstallError(RuntimeError):
-    pass
 
 
 def python_contract(path: Path) -> tuple[dict[str, int], set[str], str]:
@@ -472,127 +483,6 @@ def validate_installed(
     return apis
 
 
-class _InstallLock:
-    def __init__(self, path: Path):
-        self.path = path
-        self.handle: Any = None
-        self.fallback_fd: int | None = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if fcntl is not None:
-            self.handle = self.path.open("a+", encoding="utf-8")
-            try:
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                self.handle.close()
-                self.handle = None
-                raise InstallError("another Nautical installation is already running") from exc
-            self.handle.seek(0)
-            self.handle.truncate()
-            self.handle.write(f"{os.getpid()}\n")
-            self.handle.flush()
-            return self
-        try:
-            self.fallback_fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.write(self.fallback_fd, f"{os.getpid()}\n".encode("ascii"))
-        except FileExistsError as exc:
-            raise InstallError("another Nautical installation is already running") from exc
-        return self
-
-    def __exit__(self, _exc_type, _exc, _tb):
-        if self.handle is not None:
-            try:
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
-            finally:
-                self.handle.close()
-        if self.fallback_fd is not None:
-            os.close(self.fallback_fd)
-            try:
-                self.path.unlink()
-            except FileNotFoundError:
-                pass
-
-
-def _lexists(path: Path) -> bool:
-    return os.path.lexists(str(path))
-
-
-def _atomic_symlink(target: str, path: Path) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temp = path.parent / f".{path.name}.tmp-{uuid.uuid4().hex}"
-    try:
-        os.symlink(target, temp)
-        os.replace(temp, path)
-    finally:
-        if _lexists(temp):
-            temp.unlink()
-
-
-def _atomic_copy(source: Path, target: Path, *, executable: bool = False) -> None:
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temp = target.parent / f".{target.name}.tmp-{uuid.uuid4().hex}"
-    try:
-        shutil.copy2(source, temp)
-        if executable:
-            temp.chmod(0o755)
-        os.replace(temp, target)
-    finally:
-        if _lexists(temp):
-            temp.unlink()
-
-
-def _atomic_write_text(text: str, target: Path) -> None:
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temp = target.parent / f".{target.name}.tmp-{uuid.uuid4().hex}"
-    try:
-        temp.write_text(text, encoding="utf-8")
-        temp.chmod(0o600)
-        os.replace(temp, target)
-    finally:
-        if _lexists(temp):
-            temp.unlink()
-
-
-def _snapshot_file(path: Path, backup_dir: Path) -> dict[str, Any]:
-    if not _lexists(path):
-        return {"kind": "missing"}
-    if path.is_symlink():
-        return {"kind": "symlink", "target": os.readlink(path)}
-    if not path.is_file():
-        raise InstallError(f"managed install path is not a file or symlink: {path}")
-    backup = backup_dir / f"{hashlib.sha256(str(path).encode('utf-8')).hexdigest()[:12]}-{path.name}"
-    shutil.copy2(path, backup)
-    return {"kind": "file", "backup": str(backup)}
-
-
-def _restore_file(path: Path, snapshot: dict[str, Any]) -> None:
-    kind = snapshot["kind"]
-    if kind == "missing":
-        if _lexists(path):
-            path.unlink()
-    elif kind == "symlink":
-        _atomic_symlink(str(snapshot["target"]), path)
-    else:
-        _atomic_copy(Path(str(snapshot["backup"])), path, executable=os.access(str(snapshot["backup"]), os.X_OK))
-
-
-def _pointer_snapshot(path: Path) -> dict[str, Any]:
-    if not _lexists(path):
-        return {"kind": "missing"}
-    if not path.is_symlink():
-        raise InstallError(f"managed runtime pointer is not a symlink: {path}")
-    return {"kind": "symlink", "target": os.readlink(path)}
-
-
-def _restore_pointer(path: Path, snapshot: dict[str, Any]) -> None:
-    if snapshot["kind"] == "missing":
-        if _lexists(path):
-            path.unlink()
-    else:
-        _atomic_symlink(str(snapshot["target"]), path)
-
-
 def _hook_conflicts(hooks_dir: Path) -> list[str]:
     conflicts = []
     for event, canonical_name in HOOK_FILES.items():
@@ -812,9 +702,9 @@ def install_release(
         legacy_core: Path | None = None
         migrated_configs: list[str] = []
         initialized_config = ""
-        pointer_before: dict[str, Any] | None = None
+        pointer_before: MissingSnapshot | SymlinkSnapshot | None = None
         core_before: dict[str, Any] | None = None
-        file_snapshots: dict[Path, dict[str, Any]] = {}
+        file_snapshots: dict[Path, FileSystemSnapshot] = {}
         switched = False
         try:
             _copy_release(source, stage)

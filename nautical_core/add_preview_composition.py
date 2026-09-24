@@ -16,11 +16,11 @@ def _compare_datetimes(host: Any, left: datetime, right: datetime) -> int:
     return host.core._import_sibling("timeutil").compare_datetimes(left, right)
 
 
-def cp_add_period_builder(host: Any, td: timedelta):
+def cp_add_period_builder(host: Any, td: timedelta) -> Any:
     secs = int(td.total_seconds())
     preserve = secs % 86400 == 0
 
-    def add_period(dt):
+    def add_period(dt: Any) -> Any:
         if preserve:
             dl = host.core.to_local(dt)
             base = host.core.build_local_datetime(
@@ -50,7 +50,7 @@ def cp_sequence_period_for_link(
     return td or timedelta()
 
 
-def cp_until_summary(host: Any, due_dt: datetime, until_dt: datetime | None, add_period):
+def cp_until_summary(host: Any, due_dt: datetime, until_dt: datetime | None, add_period: Any) -> Any:
     if not until_dt:
         return None, None
     count = 0
@@ -67,7 +67,7 @@ def cp_until_summary(host: Any, due_dt: datetime, until_dt: datetime | None, add
     return max(0, count - 1), last
 
 
-def cp_preview_lines(host: Any, due_dt: datetime, until_dt: datetime | None, limit: int, add_period) -> list[str]:
+def cp_preview_lines(host: Any, due_dt: datetime, until_dt: datetime | None, limit: int, add_period: Any) -> list[str]:
     preview = []
     nxt = due_dt
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
@@ -89,7 +89,7 @@ def cp_sequence_until_summary(
     *,
     start_link_no: int,
     chain_id: str | None = None,
-):
+) -> Any:
     if not until_dt:
         return None, None
     count = 0
@@ -151,7 +151,7 @@ def cp_limit_rows(
     until_dt: datetime | None,
     exact_until_count: int | None,
     final_until_dt: datetime | None,
-    add_period,
+    add_period: Any,
     now_utc: datetime,
     tokens: list[dict] | None = None,
     cp_str: str = "",
@@ -186,8 +186,8 @@ def cp_limit_rows(
         rows.append(("Future links", f"[white]{min(future_counts)}[/]"))
 
 
-def render_cp(host: Any, task, cp_str: str, ch: str, now_utc, user_provided_due: bool,
-              recurrence_field: str, due_dt, until_dt, *, prof=None) -> None:
+def render_cp(host: Any, task: Any, cp_str: str, ch: str, now_utc: Any, user_provided_due: bool,
+              recurrence_field: str, due_dt: Any, until_dt: Any, *, prof: Any = None) -> None:
     core = host.core
     rows: list[tuple[str, str]] = []
     diagnostics = host._module("panel_diagnostics")
@@ -196,10 +196,10 @@ def render_cp(host: Any, task, cp_str: str, ch: str, now_utc, user_provided_due:
     ):
         rows.append(("Warning", f"[yellow]{warning}[/]"))
 
-    def fmt(value):
+    def fmt(value: Any) -> Any:
         return core.fmt_dt_local(value)
 
-    def parse(value):
+    def parse(value: Any) -> Any:
         return datetime_value(parser_for_host(host), value)
 
     tokens = core.parse_cp_sequence_tokens(cp_str)
@@ -277,15 +277,15 @@ def render_cp(host: Any, task, cp_str: str, ch: str, now_utc, user_provided_due:
     host._panel("⛓ Recurring Chain Preview", host._format_cp_rows(rows), kind="preview_cp", task=task)
 
 
-def render_anchor(host: Any, *, task, anchor_str, anchor_file_str, ch, now_utc, now_local,
-                  user_provided_due, recurrence_field, due_dt, due_day, due_hhmm,
-                  until_dt, past_due_warning, prof) -> None:
+def render_anchor(host: Any, *, task: Any, anchor_str: Any, anchor_file_str: Any, ch: Any, now_utc: Any, now_local: Any,
+                  user_provided_due: Any, recurrence_field: Any, due_dt: Any, due_day: Any, due_hhmm: Any,
+                  until_dt: Any, past_due_warning: Any, prof: Any) -> None:
     core = host.core
     preview = host._module("add_anchor_preview")
     modify_models = host._module("modify_models")
     omit_files = core._import_sibling("omit_files")
 
-    def scheduler_service_for_task(value):
+    def scheduler_service_for_task(value: Any) -> Any:
         recurrence_context = RecurrenceContext(
             chain_id=str(value.get("chainID") or host._root_uuid_from(value) or "preview"),
             timezone=getattr(core, "_LOCAL_TZ", None),
@@ -300,7 +300,7 @@ def render_anchor(host: Any, *, task, anchor_str, anchor_file_str, ch, now_utc, 
             typed_task, context=recurrence_context
         )
 
-    def omit_description_for_task_date(value, day):
+    def omit_description_for_task_date(value: Any, day: Any) -> Any:
         omit_file = str(value.get("omit_file") or "").strip()
         if not omit_file:
             return None
@@ -309,7 +309,7 @@ def render_anchor(host: Any, *, task, anchor_str, anchor_file_str, ch, now_utc, 
         )
         return descriptions.get(day)
 
-    def prepare_anchor_dnf(value, expr, due, rows, profile):
+    def prepare_anchor_dnf(value: Any, expr: Any, due: Any, rows: Any, profile: Any) -> Any:
         return preview.anchor_preview_prepare_dnf(
             value, expr, due, rows, profile, core=core,
             validate_anchor_syntax_strict=host._validate_anchor_syntax_strict,
@@ -317,7 +317,7 @@ def render_anchor(host: Any, *, task, anchor_str, anchor_file_str, ch, now_utc, 
             error_and_exit=host._error_and_exit,
         )
 
-    def prepare_omit_dnf(value, rows):
+    def prepare_omit_dnf(value: Any, rows: Any) -> Any:
         return preview.anchor_preview_prepare_omit_dnf(
             value, rows, core=core,
             validate_omit_syntax_strict=host._validate_omit_syntax_strict,

@@ -30,7 +30,7 @@ def command_ports_for(host: Any) -> CommandPorts:
     )
 
 
-def run_task_result(ports: CommandPorts, cmd: list[str], **kwargs):
+def run_task_result(ports: CommandPorts, cmd: list[str], **kwargs: Any) -> Any:
     started = time.perf_counter()
     result = ports.execute(
         cmd,

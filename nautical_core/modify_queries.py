@@ -5,26 +5,28 @@ from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
 from typing import Any
 
+from .callback_ports import CallbackPort
+
 
 @dataclass(frozen=True, slots=True)
 class QueryPorts:
-    root_uuid: Any
-    tw_get_cached: Any
-    dtparse: Any
-    tolocal: Any
-    cache_get: Any
-    cache_set: Any
-    diag_count: Any
+    root_uuid: CallbackPort
+    tw_get_cached: CallbackPort
+    dtparse: CallbackPort
+    tolocal: CallbackPort
+    cache_get: CallbackPort
+    cache_set: CallbackPort
+    diag_count: CallbackPort
 
 
 def chain_root_and_age(
     task: TaskPayload,
-    now_utc,
+    now_utc: Any,
     *,
-    root_uuid_from,
-    tw_get_cached,
-    dtparse,
-    tolocal,
+    root_uuid_from: Any,
+    tw_get_cached: Any,
+    dtparse: Any,
+    tolocal: Any,
 ) -> tuple[str, int | None]:
     try:
         root_short = root_uuid_from(task)
@@ -43,7 +45,7 @@ def chain_root_and_age(
         return "—", None
 
 
-def format_root_and_age(task: TaskPayload, now_utc, *, chain_root_and_age) -> str:
+def format_root_and_age(task: TaskPayload, now_utc: Any, *, chain_root_and_age: Any) -> str:
     root_short, age_days = chain_root_and_age(task, now_utc)
     if not root_short or root_short == "—":
         return "—"
@@ -52,7 +54,7 @@ def format_root_and_age(task: TaskPayload, now_utc, *, chain_root_and_age) -> st
     return root_short
 
 
-def cached_chain_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc) -> tuple[str, int | None]:
+def cached_chain_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc: Any) -> tuple[str, int | None]:
     """Resolve and cache chain root age within the current modify invocation."""
     try:
         cache_key = (ports.root_uuid(task), str(ports.tolocal(now_utc).date()))
@@ -77,7 +79,7 @@ def cached_chain_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc) -> 
     return result
 
 
-def cached_format_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc) -> str:
+def cached_format_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc: Any) -> str:
     """Format a cached chain root/age value for presentation consumers."""
     try:
         cache_key = (ports.root_uuid(task), str(ports.tolocal(now_utc).date()))

@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+from typing import Any
 
 def rewrite_quarter_spec_mode(
     spec: str,
     mode: str,
     *,
     meta_out: dict | None = None,
-    split_csv_lower,
-    tok_range,
-    static_month_last_day,
+    split_csv_lower: Any,
+    tok_range: Any,
+    static_month_last_day: Any,
     quarter_pos_month: dict[int, dict[str, int]],
-    re_mod,
+    re_mod: Any,
 ) -> str:
     """
     Rewrite q1..q4 tokens in a yearly spec into concrete y:* tokens.
@@ -131,9 +132,9 @@ def rewrite_quarter_year_atoms(
     y_atoms: list[dict],
     mode: str,
     *,
-    quarter_atom_spec,
-    has_quarter_tokens,
-    rewrite_quarter_spec_mode,
+    quarter_atom_spec: Any,
+    has_quarter_tokens: Any,
+    rewrite_quarter_spec_mode: Any,
 ) -> None:
     for atom in y_atoms:
         spec = quarter_atom_spec(atom)
@@ -146,13 +147,13 @@ def rewrite_quarter_year_atoms(
 
 
 def rewrite_quarters_in_context(
-    dnf,
+    dnf: Any,
     *,
-    has_quarter_tokens,
-    quarter_atom_spec,
-    term_quarter_rewrite_mode,
-    rewrite_quarter_year_atoms,
-):
+    has_quarter_tokens: Any,
+    quarter_atom_spec: Any,
+    term_quarter_rewrite_mode: Any,
+    rewrite_quarter_year_atoms: Any,
+) -> Any:
     for term in dnf:
         for factor in term:
             if factor.get("kind") == "select":

@@ -4,11 +4,42 @@ from __future__ import annotations
 
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
+from .callback_ports import CallbackPort
+
+
+class CompletionPreflightService(Protocol):
+    """Validated preflight service used by completion effects."""
+
+    def completion_link_numbers_or_fail(self, task: TaskPayload, **kwargs: Any) -> Any: ...
+    def completion_kind_or_stop(self, task: TaskPayload, now_utc: datetime, **kwargs: Any) -> Any: ...
+    def completion_chain_id_or_fail(self, task: TaskPayload, **kwargs: Any) -> str | None: ...
+    def completion_existing_next_or_fail(self, task: TaskPayload, next_no: int, **kwargs: Any) -> bool: ...
+    def completion_preflight_context(self, task: TaskPayload, now_utc: datetime, *, services: Any) -> Any: ...
+
+
+class CompletionComputeService(Protocol):
+    """Validated compute service used by completion effects."""
+
+    def completion_compute_child_due(self, task: TaskPayload, kind: str, **kwargs: Any) -> Any: ...
+    def completion_until_or_fail(self, task: TaskPayload, now_utc: datetime, **kwargs: Any) -> Any: ...
+    def completion_until_guard_or_stop(self, task: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime, **kwargs: Any) -> bool: ...
+    def completion_require_child_due_or_fail(self, task: TaskPayload, child_due: Any, **kwargs: Any) -> bool: ...
+    def completion_warn_unreasonable_duration(self, task: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime, **kwargs: Any) -> None: ...
+    def completion_caps(self, kind: str, task: TaskPayload, child_due: Any, dnf: Any, **kwargs: Any) -> Any: ...
+    def completion_cap_guard_or_stop(self, task: TaskPayload, next_no: int, cap_no: int | None, now_utc: datetime, **kwargs: Any) -> bool: ...
+    def completion_compute_next_and_limits(self, task: TaskPayload, kind: str, next_no: int, now_utc: datetime, *, services: Any) -> Any: ...
+    def attach_lifecycle_plan(self, task: TaskPayload, computed: Any, next_no: int, now_utc: datetime, **kwargs: Any) -> Any: ...
+
+
+class CompletionSpawnService(Protocol):
+    """Validated child-spawn service used by completion effects."""
+
+    def completion_build_and_spawn_child(self, task: TaskPayload, *, services: Any, **kwargs: Any) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,8 +52,8 @@ class SnapshotPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionPreflightPorts:
-    preflight: Any
-    coerce_int: Any
+    preflight: CompletionPreflightService
+    coerce_int: CallbackPort
     max_link_number: int
     short_uuid: Any
     panel: Any
@@ -33,7 +64,7 @@ class CompletionPreflightPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionFeedbackPorts:
-    compute: Any
+    compute: CompletionComputeService
     panel: Any
     print_task: Any
     end_chain_summary: Any
@@ -41,7 +72,7 @@ class CompletionFeedbackPorts:
 
 @dataclass(frozen=True, slots=True)
 class UntilCompletionPorts:
-    compute: Any
+    compute: CompletionComputeService
     parse_datetime: Any
     validate_until_not_past: Any
     panel: Any
@@ -50,7 +81,7 @@ class UntilCompletionPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionCapsPorts:
-    compute: Any
+    compute: CompletionComputeService
     coerce_int: Any
     parse_datetime: Any
     estimate_cp: Any
@@ -61,7 +92,7 @@ class CompletionCapsPorts:
 
 @dataclass(frozen=True, slots=True)
 class ChildDuePorts:
-    compute: Any
+    compute: CompletionComputeService
     generation: Any
     decode_task: Any
     task_model: Any
@@ -76,7 +107,7 @@ class ChildDuePorts:
 
 @dataclass(frozen=True, slots=True)
 class DurationWarningPorts:
-    compute: Any
+    compute: CompletionComputeService
     validate_duration: Any
     panel: Any
 
@@ -99,7 +130,7 @@ class CompletionLifecyclePlanPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionComputePorts:
-    compute: Any
+    compute: CompletionComputeService
     services_type: Any
     compute_child_due: Any
     until_or_fail: Any
@@ -114,7 +145,7 @@ class CompletionComputePorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionPreflightContextPorts:
-    preflight: Any
+    preflight: CompletionPreflightService
     models: Any
     task_observation: Any
     snapshot_mode: Any
@@ -128,7 +159,7 @@ class CompletionPreflightContextPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionSpawnPorts:
-    spawn: Any
+    spawn: CompletionSpawnService
     services_type: Any
     build_child_draft: Any
     spawn_child_atomic: Any
@@ -137,17 +168,17 @@ class CompletionSpawnPorts:
     diagnostic: Any
 
 
-def _ui_ports_for(host: Any):
+def _ui_ports_for(host: Any) -> Any:
     ui = host._module("modify_ui_effects")
     return ui, ui.ui_ports_for(host)
 
 
-def _print_task_port_for(host: Any):
+def _print_task_port_for(host: Any) -> Any:
     ui, ports = _ui_ports_for(host)
     return lambda task: ui.print_task(ports, task)
 
 
-def _end_summary_port_for(host: Any):
+def _end_summary_port_for(host: Any) -> Any:
     diagnostics = host._module("modify_diagnostics_effects")
     ports = diagnostics.end_chain_summary_ports_for(host)
     return lambda task, reason, now, current_task=None: diagnostics.end_chain_summary(
@@ -164,12 +195,12 @@ def _feedback_ports_for(host: Any, compute: Any, *, summarize: bool = True) -> C
     )
 
 
-def _panel_port_for(host: Any):
+def _panel_port_for(host: Any) -> Any:
     ui, ports = _ui_ports_for(host)
     return lambda title, rows, **kwargs: ui.panel(ports, title, rows, **kwargs)
 
 
-def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload):
+def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload) -> Any:
     return ports.preflight.completion_link_numbers_or_fail(
         new,
         coerce_int=ports.coerce_int, max_link_number=ports.max_link_number,
@@ -177,7 +208,7 @@ def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload):
     )
 
 
-def kind_or_stop(ports: CompletionPreflightPorts, new: TaskPayload, now_utc: datetime):
+def kind_or_stop(ports: CompletionPreflightPorts, new: TaskPayload, now_utc: datetime) -> Any:
     return ports.preflight.completion_kind_or_stop(
         new,
         now_utc,
@@ -194,7 +225,7 @@ def chain_id_or_fail(ports: CompletionPreflightPorts, new: TaskPayload) -> str |
     )
 
 
-def existing_next_or_fail(ports: CompletionPreflightPorts, new: TaskPayload, next_no: int, chain_snapshot) -> bool:
+def existing_next_or_fail(ports: CompletionPreflightPorts, new: TaskPayload, next_no: int, chain_snapshot: Any) -> bool:
     return ports.preflight.completion_existing_next_or_fail(
         new,
         next_no,
@@ -207,7 +238,7 @@ def _snapshot_mode(ports: SnapshotPorts) -> str:
     return ports.mode()
 
 
-def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: int):
+def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: int) -> Any:
     del base_no, next_no
     from .integration_models import Absent, Found, Unavailable
 
@@ -263,8 +294,8 @@ def preflight_context(
     ports: CompletionPreflightContextPorts,
     new: TaskPayload,
     now_utc: datetime,
-    repository,
-):
+    repository: Any,
+) -> Any:
     preflight = ports.preflight
     models = ports.models
     snapshot_ports = SnapshotPorts(
@@ -296,13 +327,13 @@ def preflight_context(
     return preflight.completion_preflight_context(new, now_utc, services=services)
 
 
-def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str):
+def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str) -> Any:
     compute = ports.compute
 
-    def typed_task(task):
+    def typed_task(task: Any) -> Any:
         return ports.task_model.NauticalTask.from_observation(ports.decode_task(task, source_query="on-modify completion"))
 
-    def handle_terminal(exc) -> bool:
+    def handle_terminal(exc: Any) -> bool:
         message = ports.exhaustion_message(exc)
         if exc.is_date_limit:
             ports.ensure_terminal(new, "complete")
@@ -327,7 +358,7 @@ def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str):
     )
 
 
-def until_or_fail(ports: UntilCompletionPorts, new: TaskPayload, now_utc: datetime):
+def until_or_fail(ports: UntilCompletionPorts, new: TaskPayload, now_utc: datetime) -> Any:
     return ports.compute.completion_until_or_fail(
         new, now_utc,
         safe_parse_datetime=ports.parse_datetime,
@@ -336,20 +367,26 @@ def until_or_fail(ports: UntilCompletionPorts, new: TaskPayload, now_utc: dateti
     )
 
 
-def until_guard_or_stop(ports: CompletionFeedbackPorts, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> bool:
+def until_guard_or_stop(ports: CompletionFeedbackPorts, new: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime) -> bool:
     return ports.compute.completion_until_guard_or_stop(
         new, child_due, until_dt, now_utc,
         end_chain_summary=ports.end_chain_summary, print_task=ports.print_task,
     )
 
 
-def require_child_due_or_fail(ports: CompletionFeedbackPorts, new: TaskPayload, child_due) -> bool:
+def require_child_due_or_fail(ports: CompletionFeedbackPorts, new: TaskPayload, child_due: Any) -> bool:
     return ports.compute.completion_require_child_due_or_fail(
         new, child_due, panel=ports.panel, print_task=ports.print_task
     )
 
 
-def warn_unreasonable_duration(ports: DurationWarningPorts, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> None:
+def warn_unreasonable_duration(
+    ports: DurationWarningPorts,
+    new: TaskPayload,
+    child_due: Any,
+    until_dt: Any,
+    now_utc: datetime,
+) -> None:
     ports.compute.completion_warn_unreasonable_duration(
         new, child_due, until_dt, now_utc,
         validate_chain_duration_reasonable=ports.validate_duration,
@@ -357,7 +394,7 @@ def warn_unreasonable_duration(ports: DurationWarningPorts, new: TaskPayload, ch
     )
 
 
-def caps(ports: CompletionCapsPorts, kind: str, new: TaskPayload, child_due, dnf):
+def caps(ports: CompletionCapsPorts, kind: str, new: TaskPayload, child_due: Any, dnf: Any) -> Any:
     return ports.compute.completion_caps(
         kind, new, child_due, dnf,
         coerce_int=ports.coerce_int, dtparse=ports.parse_datetime,
@@ -504,8 +541,8 @@ def compute_next_and_limits(
     next_no: int,
     now_utc: datetime,
     *,
-    preflight=None,
-):
+    preflight: Any = None,
+) -> Any:
     services = ports.services_type(
         completion_compute_child_due=ports.compute_child_due,
         completion_until_or_fail=ports.until_or_fail,
@@ -554,7 +591,7 @@ def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
     task_models = host._module("task_models")
     models = host._module("modify_models")
 
-    def build_child_draft(task, *args, **inner_kwargs):
+    def build_child_draft(task: Any, *args: Any, **inner_kwargs: Any) -> Any:
         typed_task = task_models.NauticalTask.from_observation(
             codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
         )
@@ -575,7 +612,7 @@ def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
     )
 
 
-def build_and_spawn_child(ports: CompletionSpawnPorts, new: TaskPayload, **kwargs):
+def build_and_spawn_child(ports: CompletionSpawnPorts, new: TaskPayload, **kwargs: Any) -> Any:
     services = ports.services_type(
         build_child_draft=ports.build_child_draft,
         spawn_child_atomic=ports.spawn_child_atomic,

@@ -4,14 +4,24 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import hashlib
 import os
 from typing import Any
 
-from .lifecycle_outbox import OUTBOX_ACK_RETENTION_SECONDS, OUTBOX_SCHEMA_VERSION, LifecycleOutboxRepository, lifecycle_outbox_path
+from .lifecycle_outbox import (
+    OUTBOX_ACK_RETENTION_SECONDS,
+    OUTBOX_SCHEMA_VERSION,
+    lifecycle_outbox_path,
+    LifecycleOutboxRepository,
+)
 from .operator_context import OperatorBudgetLedger
 from .taskwarrior_client import TaskwarriorClient
 from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 from .lifecycle_models import recurrence_fingerprint
+from .integrity_query_service import IntegrityQueryService
+from .chain_snapshot import IntegritySnapshotRequest
+from .integration_context import IntegrationRuntime
+from .manual_review_models import ManualReviewEvidence, ManualReviewItem, ManualReviewUnavailable
 
 
 class QueueStatusService:
@@ -106,6 +116,7 @@ class QueueStatusService:
         limit: int = 100,
         intent_id: str | None = None,
         task_binary: str | None = None,
+        runtime: IntegrationRuntime | None = None,
     ) -> dict[str, Any]:
         """Return bounded, read-only evidence for manual-review intents."""
         resolved = Path(taskdata).expanduser().resolve()
@@ -125,6 +136,27 @@ class QueueStatusService:
             record for record in data.get("records", [])
             if record.get("state") in {"manual_review", "quarantined", "poison"}
         ]
+        if not records and task_binary and runtime is not None and (not intent_id or str(intent_id).startswith("integrity:")):
+            integrity_records = self._integrity_review_records(resolved, task_binary, max(0, int(limit)), runtime)
+            records = [
+                record for record in integrity_records
+                if not intent_id or record.get("intent_id") == intent_id
+            ]
+        for record in records:
+            review_item = self.build_review_item(record, task_binary=task_binary)
+            review_payload: dict[str, Any] = review_item.to_dict()
+            if isinstance(review_item, ManualReviewItem):
+                review_payload["confirmation_token"] = self.review_confirmation_token(review_item)
+                review_payload["confirmation_available"] = True
+                if task_binary and (limit == 1 or intent_id):
+                    context = self._task_context(
+                        resolved,
+                        task_binary,
+                        (review_item.evidence.expected_child_uuid, review_item.evidence.parent_uuid),
+                    )
+                    if context:
+                        review_payload["task_context"] = context
+            record["review_item"] = review_payload
         if intent_id and records:
             record = records[0]
             guard = ((record.get("plan") or {}).get("parent_guard") or {})
@@ -246,12 +278,157 @@ class QueueStatusService:
             "failure": None,
         }
 
+    @staticmethod
+    def _task_context(taskdata: Path, task_binary: str, uuids: tuple[str, ...]) -> dict[str, str]:
+        """Read one concise date/description context from authoritative rows."""
+        environment = dict(os.environ)
+        environment["TASKDATA"] = str(taskdata)
+        client = TaskwarriorClient((task_binary,), env=environment)
+        for uuid in uuids:
+            if not str(uuid).strip():
+                continue
+            command = client.execute(
+                (f"uuid:{uuid}", "export"),
+                purpose="queue review task context",
+                timeout=5,
+                attempts=1,
+            )
+            if not command.ok:
+                continue
+            try:
+                rows = DEFAULT_TASK_CODEC.decode_export(command.stdout, source_query="queue review task context")
+            except (TaskCodecError, ValueError):
+                continue
+            if not rows:
+                continue
+            row = rows[0].to_mapping()
+            when = next((str(row.get(field) or "").strip() for field in ("scheduled", "due", "start", "end") if str(row.get(field) or "").strip()), "")
+            description = str(row.get("description") or "").strip()
+            context = {}
+            if when:
+                context["when"] = when
+            if description:
+                context["description"] = description
+            if context:
+                return context
+        return {}
+
+    @staticmethod
+    def _integrity_review_records(taskdata: Path, task_binary: str, limit: int, runtime: IntegrationRuntime) -> list[dict[str, Any]]:
+        """Project authoritative integrity findings into review records."""
+        environment = dict(os.environ)
+        environment["TASKDATA"] = str(taskdata)
+        try:
+            service = IntegrityQueryService(
+                runtime=runtime,
+                task_binary=task_binary,
+                env=environment,
+            )
+            payload, _exit_code = service.query(IntegritySnapshotRequest.candidates(complete_chain_history=True))
+        except Exception:
+            return []
+        records: list[dict[str, Any]] = []
+        for finding in payload.get("findings") or ():
+            if str(finding.get("status") or "") not in {"manual_review", "repairable"}:
+                continue
+            chain_id = str(finding.get("chain_id") or "").strip()
+            evidence = finding.get("evidence") or {}
+            subjects = tuple(str(item) for item in (finding.get("subject_uuids") or ()))
+            intent_id = "integrity:" + ":".join((chain_id, str(finding.get("invariant_id") or "unknown"), str(finding.get("reason_code") or "unknown")))
+            records.append({
+                "intent_id": intent_id,
+                "state": "manual_review",
+                "reason": str(finding.get("message") or finding.get("reason_code") or "integrity finding"),
+                "occupants": tuple(evidence.get("occupants") or subjects),
+                "plan": {
+                    "chainID": chain_id,
+                    "source_link": evidence.get("parent_link"),
+                    "target_link": evidence.get("child_link"),
+                    "parent_uuid": subjects[0] if subjects else "",
+                    "child_uuid": subjects[1] if len(subjects) > 1 else "",
+                },
+                "failure": {"code": str(finding.get("reason_code") or "integrity_review"), "message": str(finding.get("message") or "")},
+            })
+            if limit and len(records) >= limit:
+                break
+        return records
+
+    def build_review_item(
+        self,
+        record: dict[str, Any],
+        *,
+        task_binary: str | None = None,
+    ) -> ManualReviewItem | ManualReviewUnavailable:
+        """Project one persisted review record into redacted operator evidence.
+
+        Chain snapshot enrichment is deliberately layered on top by the review
+        command; this base projection remains safe when Taskwarrior is
+        unavailable.
+        """
+        plan = record.get("plan") or {}
+        parent_guard = plan.get("parent_guard") or {}
+        chain_id = str(plan.get("chainID") or parent_guard.get("chainID") or "").strip()
+        intent_id = str(record.get("intent_id") or "").strip()
+        if not intent_id or not chain_id:
+            return ManualReviewUnavailable(intent_id, "review record lacks intent or chain identity")
+        failure = record.get("failure") or {}
+        occupants = tuple(str(item) for item in (record.get("occupants") or ()))
+        evidence = ManualReviewEvidence(
+            chain_id=chain_id,
+            source_link=plan.get("source_link", parent_guard.get("link")),
+            target_link=plan.get("target_link"),
+            parent_uuid=str(plan.get("parent_uuid") or parent_guard.get("uuid") or ""),
+            expected_child_uuid=str(plan.get("child_uuid") or ""),
+            occupants=occupants,
+            reason=str(failure.get("message") or record.get("reason") or "manual review required"),
+        )
+        return ManualReviewItem.from_evidence(intent_id, str(record.get("state") or "manual_review"), evidence)
+
     def resolve_review(self, taskdata: Path, intent_id: str, reason: str) -> dict[str, Any]:
         result = LifecycleOutboxRepository(Path(taskdata).expanduser().resolve()).resolve_manual_review(
             intent_id=intent_id, reason=reason
         )
         status = "resolved" if result.ok else "already_applied" if result.kind.value == "already_applied" else "error"
         return {"status": status, "reason": result.reason}
+
+    @staticmethod
+    def review_confirmation_token(item: ManualReviewItem) -> str:
+        canonical = json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+
+    def apply_review_action(
+        self,
+        taskdata: Path,
+        intent_id: str,
+        action: str,
+        confirmation: str,
+        *,
+        task_binary: str | None = None,
+        runtime: IntegrationRuntime | None = None,
+    ) -> dict[str, Any]:
+        payload = self.review_payload(taskdata, intent_id=intent_id, task_binary=task_binary, runtime=runtime)
+        if payload.get("status") != "found" or not payload.get("intents"):
+            return {"status": "error", "reason": "review intent is unavailable"}
+        record = payload["intents"][0]
+        item = self.build_review_item(record, task_binary=task_binary)
+        if isinstance(item, ManualReviewUnavailable):
+            return {"status": "error", "reason": item.reason}
+        expected = self.review_confirmation_token(item)
+        if str(confirmation or "").strip() != expected:
+            return {"status": "conflict", "reason": f"stale or invalid confirmation token; expected {expected}"}
+        normalized = str(action or "").strip().lower()
+        if normalized == "skip":
+            return {"status": "skipped", "intent_id": intent_id, "reason": "left unresolved by operator"}
+        if normalized == "resolve-applied":
+            assessment = record.get("assessment") or {}
+            if assessment.get("status") != "already_applied":
+                return {
+                    "status": "conflict",
+                    "intent_id": intent_id,
+                    "reason": "resolve-applied requires high-confidence successor convergence",
+                }
+            return self.resolve_review(taskdata, intent_id, "resolved through guided review")
+        return {"status": "unsupported", "intent_id": intent_id, "reason": f"action is not executable yet: {normalized}"}
 
 
 __all__ = ["QueueStatusService"]

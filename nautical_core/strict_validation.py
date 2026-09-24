@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from .moon_phase import PHASES
 
 
-def normalize_anchor_input_to_dnf(expr, *, parse_anchor_expr_to_dnf_cached, parse_error_cls):
+def normalize_anchor_input_to_dnf(expr: Any, *, parse_anchor_expr_to_dnf_cached: Any, parse_error_cls: Any) -> Any:
     """Normalize user input to parsed DNF, preserving current error messages."""
     if isinstance(expr, str):
         s = (expr or "").strip()
@@ -28,7 +29,7 @@ def normalize_anchor_input_to_dnf(expr, *, parse_anchor_expr_to_dnf_cached, pars
     return dnf
 
 
-def assert_dnf_structure_strict(dnf, *, is_atom_like, parse_error_cls) -> None:
+def assert_dnf_structure_strict(dnf: Any, *, is_atom_like: Any, parse_error_cls: Any) -> None:
     if not isinstance(dnf, (list, tuple)):
         raise parse_error_cls("Internal error: DNF must be a list of terms.")
     for term in dnf:
@@ -44,11 +45,11 @@ def assert_dnf_structure_strict(dnf, *, is_atom_like, parse_error_cls) -> None:
 def validate_anchor_atom_strict(
     atom: dict,
     *,
-    validate_weekly_spec,
-    validate_monthly_spec,
-    active_mod_keys,
-    validate_yearly_token_format,
-    parse_error_cls,
+    validate_weekly_spec: Any,
+    validate_monthly_spec: Any,
+    active_mod_keys: Any,
+    validate_yearly_token_format: Any,
+    parse_error_cls: Any,
 ) -> None:
     typ = (atom.get("typ") or atom.get("type") or "").lower()
     spec = (atom.get("spec") or atom.get("value") or "").lower()
@@ -127,12 +128,12 @@ def validate_anchor_atom_strict(
 
 
 def validate_anchor_dnf_atoms_strict(
-    dnf,
+    dnf: Any,
     *,
-    validate_anchor_atom_strict,
-    is_selection_node,
-    validate_selection_node,
-    parse_error_cls,
+    validate_anchor_atom_strict: Any,
+    is_selection_node: Any,
+    validate_selection_node: Any,
+    parse_error_cls: Any,
 ) -> None:
     for term in dnf:
         counted_randoms = 0
@@ -178,12 +179,12 @@ def validate_anchor_dnf_atoms_strict(
 
 
 def validate_anchor_expr_strict(
-    expr,
+    expr: Any,
     *,
-    normalize_anchor_input_to_dnf,
-    assert_dnf_structure_strict,
-    validate_anchor_dnf_atoms_strict,
-):
+    normalize_anchor_input_to_dnf: Any,
+    assert_dnf_structure_strict: Any,
+    validate_anchor_dnf_atoms_strict: Any,
+) -> Any:
     """
     Validate an anchor expression. Accepts:
       - str  (e.g., "w/2:sun + m:1st-mon"), parsed to DNF

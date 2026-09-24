@@ -93,7 +93,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             doms_for_monthly_token=doms_for_monthly_token,
         )
 
-    def intersect_monthly_atoms_allowed(term, *, y, m, dim, allowed):
+    def intersect_monthly_atoms_allowed(term: Any, *, y: int, m: int, dim: int, allowed: Any) -> Any:
         return core["_monthly_support"].intersect_monthly_atoms_allowed(
             term,
             y=y,

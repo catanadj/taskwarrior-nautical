@@ -11,12 +11,12 @@ from .core_context import CoreContext
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     core = core_namespace(module, namespace, context, "business_calendar_api")
 
-    def business_calendar_definitions():
+    def business_calendar_definitions() -> Any:
         return core["_business_calendar_config"].parse_business_calendar_definitions(
             core["BUSINESS_CALENDAR_CONFIG"]
         )
 
-    def validate_business_calendar_omit_expr(expr: str):
+    def validate_business_calendar_omit_expr(expr: str) -> Any:
         anchor_omit = core["_import_sibling"]("anchor_omit")
         return anchor_omit.validate_omit_expr_strict(
             expr,
@@ -24,7 +24,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             resolve_omit_presets=core["resolve_omit_presets"],
         )
 
-    def business_calendar_expression_matches_date(dnf, value, name: str) -> bool:
+    def business_calendar_expression_matches_date(dnf: Any, value: Any, name: str) -> bool:
         seed_base = f"business-calendar:{name}"
         return any(
             all(
@@ -41,11 +41,11 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     def resolve_business_calendar_config(
-        raw_config,
+        raw_config: Any,
         *,
         anchor_file_dir: str | None = None,
         omit_file_dir: str | None = None,
-    ):
+    ) -> Any:
         anchor_files = core["_import_sibling"]("anchor_files")
         omit_files = core["_import_sibling"]("omit_files")
         return core["_business_calendar_config"].resolve_business_calendars(
@@ -68,10 +68,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     @lru_cache(maxsize=1)
-    def configured_business_calendars():
+    def configured_business_calendars() -> Any:
         return resolve_business_calendar_config(core["BUSINESS_CALENDAR_CONFIG"])
 
-    def get_configured_business_calendar(name: str):
+    def get_configured_business_calendar(name: str) -> Any:
         normalized = str(name or "").strip().lower()
         # Resolve through the facade so tests and integrations can replace the
         # registry without reaching into this adapter's closure.
@@ -84,7 +84,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                 f"Unknown business calendar {name!r}; configured calendars: {available}."
             ) from None
 
-    def business_calendar_for_task(task: Any | None):
+    def business_calendar_for_task(task: Any | None) -> Any:
         if task is not None and hasattr(task, "field"):
             state = task.field("bc")
             raw_name = str(getattr(state, "value", "") or "").strip()
@@ -94,7 +94,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             return core["_business_calendar"].DEFAULT_BUSINESS_CALENDAR
         return get_configured_business_calendar(core["_unwrap_quotes"](raw_name))
 
-    def normalize_task_business_calendar_in_place(task: dict):
+    def normalize_task_business_calendar_in_place(task: dict) -> Any:
         business_calendar = business_calendar_for_task(task)
         if str(task.get("bc") or "").strip():
             task["bc"] = business_calendar.name
@@ -104,7 +104,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     # the in-place mutation visible to new callers.
     normalize_task_business_calendar = normalize_task_business_calendar_in_place
 
-    def business_calendar_fingerprint(business_calendar=None) -> str:
+    def business_calendar_fingerprint(business_calendar: Any = None) -> str:
         business_calendar = core["_business_calendar"].effective_business_calendar(
             business_calendar
         )
@@ -113,10 +113,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             or f"{business_calendar.name}-v1"
         )
 
-    def use_business_calendar(business_calendar):
+    def use_business_calendar(business_calendar: Any) -> Any:
         return core["_business_calendar"].use_business_calendar(business_calendar)
 
-    def use_task_business_calendar(task: dict):
+    def use_task_business_calendar(task: dict) -> Any:
         return use_business_calendar(normalize_task_business_calendar_in_place(task))
 
     return ApiBinding.from_kwargs(

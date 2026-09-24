@@ -35,6 +35,61 @@ class _Host:
 
 
 class AddPreviewCompositionTests(unittest.TestCase):
+    def test_omit_natural_text_propagates_unexpected_conversion_failures(self):
+        class FailingParser:
+            @staticmethod
+            def resolve_omit_presets(_value):
+                raise RuntimeError("omit configuration failed")
+
+        core = SimpleNamespace(
+            _parser_api=FailingParser(),
+            _import_sibling=lambda _name: SimpleNamespace(normalize_omit_expr=lambda value: value),
+            describe_anchor_expr=lambda value: value,
+        )
+        with self.assertRaisesRegex(RuntimeError, "omit configuration failed"):
+            add_anchor_preview._anchor_omit_natural_text({"omit": "w:sun"}, core=core)
+
+    def test_omit_natural_text_treats_expected_description_errors_as_empty(self):
+        core = SimpleNamespace(
+            _parser_api=SimpleNamespace(resolve_omit_presets=lambda value: value),
+            _import_sibling=lambda _name: SimpleNamespace(normalize_omit_expr=lambda value: value),
+            describe_anchor_expr=lambda _value: (_ for _ in ()).throw(ValueError("invalid omit")),
+        )
+        self.assertEqual(
+            add_anchor_preview._anchor_omit_natural_text({"omit": "w:sun"}, core=core),
+            "w:sun",
+        )
+
+    def test_preview_dnf_propagates_unexpected_description_failures(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "description failed"):
+            add_anchor_preview.anchor_preview_prepare_dnf(
+                {"anchor_mode": "skip"},
+                "w:mon",
+                datetime(2026, 1, 5, 9, tzinfo=UTC),
+                [],
+                SimpleNamespace(add_ms=lambda *_args: None),
+                core=SimpleNamespace(describe_anchor_dnf=lambda *_args: (_ for _ in ()).throw(RuntimeError("description failed"))),
+                validate_anchor_syntax_strict=lambda _value: ([[]], None),
+                validate_anchor_mode=lambda value: (value or "skip", None),
+                error_and_exit=lambda _rows: None,
+            )
+
+    def test_preview_omit_propagates_unexpected_lint_failures(self) -> None:
+        core = SimpleNamespace(
+            _import_sibling=lambda _name: SimpleNamespace(normalize_omit_expr=lambda value: value),
+            _parser_api=SimpleNamespace(resolve_omit_presets=lambda value: value),
+            describe_anchor_expr=lambda value: value,
+            lint_anchor_expr=lambda _value: (_ for _ in ()).throw(RuntimeError("lint failed")),
+        )
+        with self.assertRaisesRegex(RuntimeError, "lint failed"):
+            add_anchor_preview.anchor_preview_prepare_omit_dnf(
+                {"omit": "w:sun"},
+                [],
+                core=core,
+                validate_omit_syntax_strict=lambda _value: ([[]], None),
+                error_and_exit=lambda _rows: None,
+            )
+
     def test_compact_anchor_preview_requests_only_its_first_occurrence(self):
         self.assertEqual(add_anchor_preview._initial_occurrence_limit(200, True), 1)
         self.assertEqual(add_anchor_preview._initial_occurrence_limit(3, False), 19)
@@ -336,6 +391,14 @@ class AddAnchorComputeTests(unittest.TestCase):
 
 
 class AddAnchorPreviewTests(unittest.TestCase):
+    def test_seed_context_uses_entry_date_for_implicit_due(self):
+        task = {"entry": "20260809T090000Z", "chainID": "stable-id"}
+        now = datetime(2026, 9, 21, 10, tzinfo=UTC)
+        result = add_anchor_preview.anchor_preview_seed_context(
+            task, date(2026, 9, 21), now, False, root_uuid_from=lambda _task: "root"
+        )
+        self.assertEqual(result[:2], (date(2026, 8, 9), date(2026, 8, 9)))
+
     def test_seed_context_prefers_chain_identity_and_due_day(self):
         task = {"chainID": "  stable-id "}
         now = datetime(2026, 2, 5, 10, tzinfo=UTC)

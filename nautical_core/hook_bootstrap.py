@@ -20,7 +20,7 @@ def env_int(
     env_map = env if env is not None else os.environ
     try:
         value = int(str(env_map.get(name, "")).strip() or default)
-    except Exception:
+    except (TypeError, ValueError):
         value = int(default)
     if min_value is not None:
         value = max(int(min_value), value)
@@ -40,7 +40,7 @@ def env_float(
     env_map = env if env is not None else os.environ
     try:
         value = float(str(env_map.get(name, "")).strip() or default)
-    except Exception:
+    except (TypeError, ValueError):
         value = float(default)
     if not math.isfinite(value):
         value = float(default)
@@ -57,7 +57,7 @@ def ensure_utf8_stdio() -> None:
         try:
             if stream is not None:
                 stream.reconfigure(encoding="utf-8")
-        except Exception:
+        except (AttributeError, OSError, ValueError):
             pass
 
 

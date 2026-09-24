@@ -14,7 +14,6 @@ from .occurrence_outcomes import (
     UnavailableOccurrence,
 )
 from .occurrence_provider import OccurrenceBatch
-from .occurrence_provider import Occurrence
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
 from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
@@ -23,7 +22,7 @@ from .time_projection import ProjectionResult
 from .scheduler_trace import SchedulerTrace, activate
 from .task_models import NauticalTask, TaskObservation
 from .operator_context import OperatorBudgetLedger
-from .query_models import OmissionPolicy
+from .query_models import OmissionPolicy, validate_omission_policy
 
 
 @dataclass(slots=True)
@@ -61,7 +60,7 @@ class SchedulerService:
             self.trace.emit()
             self.trace.clear()
 
-    def _trace_scope(self):
+    def _trace_scope(self) -> Any:
         return activate(self.trace)
 
     def _record_outcome(self, phase: str, outcome: Any, *, cursor: OccurrenceCursor | None = None) -> None:
@@ -150,8 +149,10 @@ class SchedulerService:
         count_omitted: bool | None = None,
         **kwargs: Any,
     ) -> OccurrenceCollectionResult:
-        if omission_policy not in {"exclude", "include", "report"}:
-            raise ValueError("Occurrence omission policy must be exclude, include, or report.")
+        try:
+            validate_omission_policy(omission_policy)
+        except ValueError as exc:
+            raise ValueError("Occurrence omission policy must be exclude, include, or report.") from exc
         if count_omitted is not None:
             if not isinstance(count_omitted, bool):
                 raise TypeError("count_omitted must be boolean when provided.")

@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack, contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import partial
-import json
 import os
 import random
 import sys
@@ -16,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 from types import ModuleType
-from typing import Any, cast
+from typing import Any, Iterator, cast
 
 _fcntl: ModuleType | None
 try:
@@ -45,10 +44,8 @@ from nautical_core.operator_application import DomainApplicationRegistry  # noqa
 from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
 from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.lifecycle_models import (  # noqa: E402
-    DeletionDisposition,
     LifecycleAction,
     LifecyclePlan,
-    recurrence_fingerprint,
 )
 from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult, RecoveryStatus  # noqa: E402
 from nautical_core.integration_models import (  # noqa: E402
@@ -194,7 +191,7 @@ def _format_local_until(hook: Any, value: Any) -> str:
     return raw
 
 
-def _parse_datetime(hook: Any, value: Any):
+def _parse_datetime(hook: Any, value: Any) -> tuple[Any, Any]:
     # Reconcile and hook workflows use the same configured parser port.  The
     # hook object remains an integration carrier, never the parser contract.
     state = _reconcile_runtime_state()
@@ -287,6 +284,11 @@ def _configuration_verification(hook: Any) -> _ConfigurationVerification:
         "drifted",
         f"configuration changed during reconcile (source: {source}); restart and rerun",
     )
+
+
+def configuration_verification(hook: Any) -> _ConfigurationVerification:
+    """Return the stable configuration-verification result for operators."""
+    return _configuration_verification(hook)
 
 
 def _configuration_state(hook: Any) -> tuple[str, str]:
@@ -529,7 +531,7 @@ def _expiration_hop_limit(value: str) -> int:
 
 
 @contextmanager
-def _parent_apply_lock(taskdata: Path, parent_uuid: str):
+def _parent_apply_lock(taskdata: Path, parent_uuid: str) -> Iterator[bool]:
     lock_path = parent_nextlink_lock_path(taskdata, parent_uuid)
     with safe_lock(
         lock_path,
@@ -541,7 +543,7 @@ def _parent_apply_lock(taskdata: Path, parent_uuid: str):
 
 
 @contextmanager
-def _reconcile_apply_lock(taskdata: Path):
+def _reconcile_apply_lock(taskdata: Path) -> Iterator[bool]:
     """Serialize reconciler mutations without blocking a second invocation."""
     lock_path = reconcile_lock_path(taskdata)
     with safe_lock(
@@ -554,7 +556,7 @@ def _reconcile_apply_lock(taskdata: Path):
 
 
 @contextmanager
-def _reconcile_mutation_lock(taskdata: Path, *, lease_held: bool):
+def _reconcile_mutation_lock(taskdata: Path, *, lease_held: bool) -> Iterator[bool]:
     """Reuse the run lease when present, otherwise protect a direct mutation call."""
     if lease_held:
         yield True
@@ -1277,8 +1279,9 @@ class _ReconcileSession:
 
     __slots__ = ("unit_of_work", "repository", "snapshot", "control_plane", "mutation_gateway", "integrity_outbox", "lifecycle_service", "lifecycle_application", "runtime_state", "datetime_parser")
 
-    def __init__(self, unit_of_work, repository, snapshot, control_plane, mutation_gateway,
-                 integrity_outbox, lifecycle_service, lifecycle_application, runtime_state, datetime_parser):
+    def __init__(self, unit_of_work: Any, repository: Any, snapshot: Any, control_plane: Any, mutation_gateway: Any,
+                 integrity_outbox: Any, lifecycle_service: Any, lifecycle_application: Any, runtime_state: Any,
+                 datetime_parser: Any) -> None:
         self.unit_of_work = unit_of_work
         self.repository = repository
         self.snapshot = snapshot

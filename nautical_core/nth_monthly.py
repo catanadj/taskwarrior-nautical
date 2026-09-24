@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import re
+from typing import Any
 
 
 def parse_nth_wd_tokens(
     spec: str,
     *,
-    split_csv_lower,
+    split_csv_lower: Any,
     nth_weekday_re: re.Pattern,
     weekdays: dict[str, int],
-):
+) -> list[tuple[int, int]] | None:
     """Return list of (k, wd) for pure nth-weekday spec, else None."""
     toks = split_csv_lower(spec)
     out = []
@@ -35,12 +36,12 @@ def month_has_any_nth(
     m: int,
     pairs: list[tuple[int, int]],
     *,
-    month_len,
+    month_len: Any,
 ) -> bool:
     """Does month (y,m) have ANY of the requested nth-weekdays?"""
     last = month_len(y, m)
 
-    def kth(n, wd):
+    def kth(n: int, wd: int) -> int | None:
         if n == 0:
             return None
         if n > 0:
@@ -59,7 +60,7 @@ def month_has_any_nth(
     return False
 
 
-def advance_to_next_allowed_month(y: int, m: int, pairs, *, month_has_any_nth) -> tuple[int, int]:
+def advance_to_next_allowed_month(y: int, m: int, pairs: Any, *, month_has_any_nth: Any) -> tuple[int, int]:
     """Next (including current) month that has an nth-weekday match."""
     yy, mm = y, m
     for _ in range(24):

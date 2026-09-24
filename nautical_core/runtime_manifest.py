@@ -60,6 +60,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "chain_integrity_lifecycle",
         "lifecycle_application",
         "lifecycle_outbox",
+        "lifecycle_outbox_operations",
         "modify_feedback",
         "modify_lifecycle",
         "modify_workflow",
@@ -111,6 +112,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "hook_support",
         "lifecycle_application",
         "lifecycle_outbox",
+        "lifecycle_outbox_operations",
         "exit_runtime",
         "exit_presentation",
         "exit_composition",
@@ -245,7 +247,13 @@ PURE_INTEGRITY_MODULES = (
 # ``panel_colours`` is a core-facade lazy sibling rather than a hook
 # ``_module()`` dependency, but it must still be present in staged releases.
 for _event in HOOK_RUNTIME_FILES:
-    HOOK_RUNTIME_FILES[_event] += ("panel_colours.py",)
+    HOOK_RUNTIME_FILES[_event] += (
+        "panel_colours.py",
+        "cache_facade.py",
+        "configuration_facade.py",
+        "hint_models.py",
+        "timezone_facade.py",
+    )
 
 
 __all__ = (

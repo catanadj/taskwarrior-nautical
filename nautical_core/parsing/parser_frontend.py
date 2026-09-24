@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 
 _RANDOM_SELECTOR_RE = re.compile(
@@ -53,7 +54,7 @@ def normalize_grouped_list_filters(s: str) -> str:
     return " | ".join(t for t in out_terms if t)
 
 
-def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens, re_mod) -> str:
+def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens: Any, re_mod: Any) -> str:
     """
     Rewrite patterns like:
         w:mon@t=09:00,fri@t=15:00
@@ -88,7 +89,7 @@ def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens, re_mod) -> str:
             for part in split_top_level(s[start:end], "+")
         )
 
-    def flush_atom(prefix: str, body: str, *, grouped: bool, random_peer: bool):
+    def flush_atom(prefix: str, body: str, *, grouped: bool, random_peer: bool) -> None:
         parts = split_csv_tokens(body)
         if len(parts) <= 1:
             out.append(prefix + body)
@@ -155,10 +156,10 @@ def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens, re_mod) -> str:
 def normalize_anchor_expr_input(
     s: str,
     *,
-    unwrap_quotes,
-    rewrite_weekly_multi_time_atoms,
-    re_mod,
-    parse_error_cls,
+    unwrap_quotes: Any,
+    rewrite_weekly_multi_time_atoms: Any,
+    re_mod: Any,
+    parse_error_cls: Any,
 ) -> str:
     s = unwrap_quotes(s or "").strip()
     if len(s) > 1024:
@@ -172,9 +173,9 @@ def normalize_anchor_expr_input(
 def fatal_bad_colon_in_year_tail(
     tail: str,
     *,
-    split_csv_tokens,
-    re_mod,
-    yearfmt,
+    split_csv_tokens: Any,
+    re_mod: Any,
+    yearfmt: Any,
 ) -> str | None:
     head = tail.split("@", 1)[0]
     for tok in split_csv_tokens(head):
@@ -193,9 +194,9 @@ def fatal_bad_colon_in_year_tail(
 def raise_on_bad_colon_year_tokens(
     s: str,
     *,
-    re_mod,
-    fatal_bad_colon_in_year_tail,
-    parse_error_cls,
+    re_mod: Any,
+    fatal_bad_colon_in_year_tail: Any,
+    parse_error_cls: Any,
 ) -> None:
     for match in re_mod.finditer(r"\by\s*(?:/\d+)?\s*:", s):
         j = match.end()
@@ -214,7 +215,7 @@ def skip_ws_pos(s: str, i: int, n: int) -> int:
     return i
 
 
-def raise_if_comma_joined_anchors(full_tail: str, *, re_mod, parse_error_cls) -> None:
+def raise_if_comma_joined_anchors(full_tail: str, *, re_mod: Any, parse_error_cls: Any) -> None:
     if re_mod.search(r"@[^)]*?,\s*(?:w|m|y)(?:/|:)", full_tail):
         raise parse_error_cls(
             "It looks like you used a comma to join anchors. "

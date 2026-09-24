@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 
 def compare_datetimes(left: datetime, right: datetime) -> int:
@@ -29,20 +30,20 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
 
-def to_local(dt_utc: datetime, local_tz) -> datetime:
+def to_local(dt_utc: datetime, local_tz: Any) -> datetime:
     """Convert UTC datetime to local timezone."""
     dt_utc = ensure_utc(dt_utc)
     return dt_utc.astimezone(local_tz) if local_tz else dt_utc
 
 
-def utc_to_local_naive(dt_utc: datetime, local_tz) -> datetime:
+def utc_to_local_naive(dt_utc: datetime, local_tz: Any) -> datetime:
     """Convert a UTC timestamp to a naive local wall-clock datetime."""
     if not isinstance(dt_utc, datetime):
         raise TypeError("UTC datetime must be a datetime.")
     return to_local(dt_utc, local_tz).replace(tzinfo=None)
 
 
-def fmt_dt_local(dt_utc: datetime, local_tz) -> str:
+def fmt_dt_local(dt_utc: datetime, local_tz: Any) -> str:
     """Format UTC datetime as local time string."""
     d = to_local(dt_utc, local_tz)
     return d.strftime("%a %Y-%m-%d %H:%M %Z")
@@ -53,7 +54,7 @@ def fmt_isoz(dt_utc: datetime) -> str:
     return ensure_utc(dt_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def local_naive_to_utc(naive: datetime, local_tz) -> datetime:
+def local_naive_to_utc(naive: datetime, local_tz: Any) -> datetime:
     """Resolve a local wall time to UTC across arbitrary DST transitions."""
     if not isinstance(naive, datetime):
         raise TypeError("Local datetime must be a datetime.")
@@ -95,7 +96,7 @@ def local_naive_to_utc(naive: datetime, local_tz) -> datetime:
     raise ValueError("Local datetime could not be resolved in the configured timezone.")
 
 
-def parse_dt_any(s: str, date_formats) -> datetime | None:
+def parse_dt_any(s: str, date_formats: Any) -> datetime | None:
     """Parse datetime from string using multiple formats."""
     if not s:
         return None
@@ -121,7 +122,7 @@ def parse_dt_any(s: str, date_formats) -> datetime | None:
         return None
 
 
-def build_local_datetime(d: date, hhmm, local_tz) -> datetime:
+def build_local_datetime(d: date, hhmm: Any, local_tz: Any) -> datetime:
     """Build a UTC datetime from local wall-clock date+time with DST handling."""
     hh, mm = hhmm
     naive = datetime(d.year, d.month, d.day, hh, mm, 0)

@@ -8,7 +8,7 @@ import hashlib
 import json
 from typing import Any, Callable, Literal, Mapping, TypeAlias, cast
 
-from .integration_models import Absent, Found, Unavailable
+from .integration_models import Absent, Found
 from .integration_context import IntegrationAccess
 from .business_calendar import BusinessCalendar
 from .occurrence_outcomes import OccurrenceCollectionResult

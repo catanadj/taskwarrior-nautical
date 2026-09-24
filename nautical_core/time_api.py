@@ -12,55 +12,55 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     timeutil = core["_timeutil"]
     dates = core["_dates"]
 
-    def now_utc():
+    def now_utc() -> Any:
         return timeutil.now_utc()
 
-    def to_local(dt_utc):
+    def to_local(dt_utc: Any) -> Any:
         return timeutil.to_local(dt_utc, core["_LOCAL_TZ"])
 
-    def utc_to_local_naive(dt_utc):
+    def utc_to_local_naive(dt_utc: Any) -> Any:
         return timeutil.utc_to_local_naive(dt_utc, core["_LOCAL_TZ"])
 
-    def local_naive_to_utc(dt_local_naive):
+    def local_naive_to_utc(dt_local_naive: Any) -> Any:
         return timeutil.local_naive_to_utc(dt_local_naive, core["_LOCAL_TZ"])
 
-    def fmt_dt_local(dt_utc):
+    def fmt_dt_local(dt_utc: Any) -> Any:
         return timeutil.fmt_dt_local(dt_utc, core["_LOCAL_TZ"])
 
-    def fmt_isoz(dt_utc):
+    def fmt_isoz(dt_utc: Any) -> Any:
         return timeutil.fmt_isoz(dt_utc)
 
-    def ensure_utc(dt_utc):
+    def ensure_utc(dt_utc: Any) -> Any:
         return timeutil.ensure_utc(dt_utc)
 
-    def coerce_int(v, default=None):
+    def coerce_int(v: Any, default: Any = None) -> Any:
         return core["_common"].coerce_int(v, default=default)
 
-    def parse_dt_any(s: str):
+    def parse_dt_any(s: str) -> Any:
         return timeutil.parse_dt_any(s, core["DATE_FORMATS"])
 
-    def month_len(year, month):
+    def month_len(year: Any, month: Any) -> Any:
         return dates.month_len(year, month)
 
-    def add_months(day, months: int):
+    def add_months(day: Any, months: int) -> Any:
         return dates.add_months(day, months)
 
-    def months_days_between(first, second):
+    def months_days_between(first: Any, second: Any) -> Any:
         return dates.months_days_between(first, second)
 
-    def humanize_delta(from_dt, to_dt, use_months_days: bool):
+    def humanize_delta(from_dt: Any, to_dt: Any, use_months_days: bool) -> Any:
         return dates.humanize_delta(from_dt, to_dt, use_months_days)
 
-    def expr_has_m_or_y(dnf) -> bool:
+    def expr_has_m_or_y(dnf: Any) -> bool:
         return core["_schedule_utils"].expr_has_m_or_y(dnf)
 
     def pick_hhmm_from_dnf_for_date(
-        dnf,
-        target,
-        default_seed,
-        seed_base=None,
-        business_calendar=None,
-    ):
+        dnf: Any,
+        target: Any,
+        default_seed: Any,
+        seed_base: Any = None,
+        business_calendar: Any = None,
+    ) -> Any:
         return core["_schedule_utils"].pick_hhmm_from_dnf_for_date(
             dnf,
             target,
@@ -71,7 +71,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             ),
         )
 
-    def build_local_datetime(d, hhmm=(core["DEFAULT_DUE_HOUR"], 0)):
+    def build_local_datetime(d: Any, hhmm: Any = (core["DEFAULT_DUE_HOUR"], 0)) -> Any:
         return timeutil.build_local_datetime(d, hhmm, core["_LOCAL_TZ"])
 
     return ApiBinding.from_kwargs(

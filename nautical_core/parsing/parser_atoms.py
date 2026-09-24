@@ -10,7 +10,7 @@ from ..time_windows import parse_clock_value, parse_random_time_window_spec, par
 _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
 
 
-def parse_hhmm(s: str, *, hhmm_re):
+def parse_hhmm(s: str, *, hhmm_re: Any) -> Any:
     match = hhmm_re.match(s)
     if not match:
         return None
@@ -25,7 +25,7 @@ def _time_padding_hint(tok: str) -> str | None:
     return f"Time '{text}' needs a leading zero. Use '0{match.group(1)}:{match.group(2)}'."
 
 
-def parse_atom_head(head: str, *, re_mod, parse_error_cls) -> tuple[str, int]:
+def parse_atom_head(head: str, *, re_mod: Any, parse_error_cls: Any) -> tuple[str, int]:
     h = (head or "").strip().lower()
     match = re_mod.fullmatch(r"(w|m|y)(?:/(\d+))?$", h)
     if not match and h == "moon":
@@ -45,13 +45,13 @@ def parse_atom_head(head: str, *, re_mod, parse_error_cls) -> tuple[str, int]:
 def parse_atom_mods(
     mods_str: str,
     *,
-    split_csv_tokens,
-    parse_hhmm,
-    next_prev_wd_re,
-    weekdays,
-    day_offset_re,
-    parse_error_cls,
-):
+    split_csv_tokens: Any,
+    parse_hhmm: Any,
+    next_prev_wd_re: Any,
+    weekdays: Any,
+    day_offset_re: Any,
+    parse_error_cls: Any,
+) -> dict[str, Any]:
     mods: dict[str, Any] = {
         "t": None,
         "roll": None,
@@ -63,7 +63,7 @@ def parse_atom_mods(
     if not mods_str:
         return mods
 
-    def parse_time_list(v: str):
+    def parse_time_list(v: str) -> Any:
         parts = split_csv_tokens(v)
         if not parts:
             return None
@@ -213,8 +213,8 @@ def parse_atom_mods(
     return mods
 
 
-def normalize_monthly_ordinal_spec(spec: str, *, re_mod) -> str:
-    def ord_norm(match):
+def normalize_monthly_ordinal_spec(spec: str, *, re_mod: Any) -> str:
+    def ord_norm(match: Any) -> str:
         return f"{match.group(1)}{match.group(3).lower()}"
 
     return re_mod.sub(
@@ -229,13 +229,13 @@ def build_anchor_atom_dnf(
     head: str,
     full_tail: str,
     *,
-    parse_atom_head,
-    parse_group_with_inline_mods,
-    normalize_monthly_ordinal_spec,
-    split_csv_lower,
-    parse_atom_mods,
-    parse_error_cls,
-):
+    parse_atom_head: Any,
+    parse_group_with_inline_mods: Any,
+    normalize_monthly_ordinal_spec: Any,
+    split_csv_lower: Any,
+    parse_atom_mods: Any,
+    parse_error_cls: Any,
+) -> Any:
     typ, ival = parse_atom_head(head)
     tlo = (typ or "").lower()
 
@@ -269,11 +269,11 @@ def parse_anchor_atom_at(
     i: int,
     n: int,
     *,
-    skip_ws_pos,
-    raise_if_comma_joined_anchors,
-    build_anchor_atom_dnf,
-    parse_error_cls,
-):
+    skip_ws_pos: Any,
+    raise_if_comma_joined_anchors: Any,
+    build_anchor_atom_dnf: Any,
+    parse_error_cls: Any,
+) -> Any:
     i = skip_ws_pos(s, i, n)
     start = i
     while i < n and s[i] not in ":()+|":

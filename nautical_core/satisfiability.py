@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import timedelta
 import re
+from typing import Any
 
 
-def weekday_set_from_weekly_atom(atom, *, weekly_spec_to_wset) -> set[int]:
+def weekday_set_from_weekly_atom(atom: dict[str, Any], *, weekly_spec_to_wset: Any) -> set[int]:
     if (atom.get("typ") or "").lower() != "w":
         return set()
     spec = atom.get("spec") or ""
@@ -12,7 +13,7 @@ def weekday_set_from_weekly_atom(atom, *, weekly_spec_to_wset) -> set[int]:
     return weekly_spec_to_wset(spec, mods=mods)
 
 
-def md_pairs_from_yearly_spec(spec: str, *, expand_yearly_cached, leap_year_for_checks: int) -> set[tuple[int, int]]:
+def md_pairs_from_yearly_spec(spec: str, *, expand_yearly_cached: Any, leap_year_for_checks: int) -> set[tuple[int, int]]:
     if not spec:
         return set()
     try:
@@ -22,7 +23,7 @@ def md_pairs_from_yearly_spec(spec: str, *, expand_yearly_cached, leap_year_for_
     return {(d.month, d.day) for d in dates}
 
 
-def quick_weekly_and_check(term: list[dict], *, weekday_set_from_weekly_atom, and_term_unsatisfiable_cls) -> None:
+def quick_weekly_and_check(term: list[dict], *, weekday_set_from_weekly_atom: Any, and_term_unsatisfiable_cls: Any) -> None:
     w_sets = [
         weekday_set_from_weekly_atom(atom)
         for atom in term
@@ -37,7 +38,7 @@ def quick_weekly_and_check(term: list[dict], *, weekday_set_from_weekly_atom, an
             )
 
 
-def quick_yearly_and_check(term: list[dict], *, md_pairs_from_yearly_spec, and_term_unsatisfiable_cls) -> None:
+def quick_yearly_and_check(term: list[dict], *, md_pairs_from_yearly_spec: Any, and_term_unsatisfiable_cls: Any) -> None:
     y_atoms = [a for a in term if (a.get("typ") or "").lower() == "y"]
     if len(y_atoms) < 2:
         return
@@ -57,7 +58,7 @@ def quick_yearly_and_check(term: list[dict], *, md_pairs_from_yearly_spec, and_t
             )
 
 
-def quick_moon_and_check(term: list[dict], *, and_term_unsatisfiable_cls) -> None:
+def quick_moon_and_check(term: list[dict], *, and_term_unsatisfiable_cls: Any) -> None:
     phases = []
     for atom in term:
         typ = (atom.get("typ") or atom.get("type") or "").lower()
@@ -75,13 +76,13 @@ def quick_moon_and_check(term: list[dict], *, and_term_unsatisfiable_cls) -> Non
 
 def term_has_any_match_within(
     term: list[dict],
-    start,
-    seed,
+    start: Any,
+    seed: Any,
     *,
-    atom_matches_on,
+    atom_matches_on: Any,
     years: int = 8,
 ) -> bool:
-    def matches_or_flexible(atom, d):
+    def matches_or_flexible(atom: dict[str, Any], d: Any) -> bool:
         typ = (atom.get("typ") or "").lower()
         spec = (atom.get("spec") or "").lower()
         if typ == "moon" or (atom.get("mods") or {}).get("moon"):
@@ -101,15 +102,15 @@ def term_has_any_match_within(
 
 def validate_and_terms_satisfiable(
     dnf: list[list[dict]],
-    ref_d,
+    ref_d: Any,
     *,
-    quick_weekly_and_check,
-    quick_yearly_and_check,
-    quick_moon_and_check,
-    term_has_any_match_within,
-    normalize_spec_for_acf,
-    month_from_alias,
-    and_term_unsatisfiable_cls,
+    quick_weekly_and_check: Any,
+    quick_yearly_and_check: Any,
+    quick_moon_and_check: Any,
+    term_has_any_match_within: Any,
+    normalize_spec_for_acf: Any,
+    month_from_alias: Any,
+    and_term_unsatisfiable_cls: Any,
 ) -> None:
     seed = ref_d
     for term in dnf:

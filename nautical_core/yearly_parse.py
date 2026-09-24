@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+from typing import Any
 
 def parse_y_token(
     tok: str,
     fmt: str,
     *,
-    quarters,
-    months,
-    y_token_re,
-    re_mod,
-):
+    quarters: Any,
+    months: Any,
+    y_token_re: Any,
+    re_mod: Any,
+) -> Any:
     """Parse yearly token (e.g., '15-02', 'd100', 'w20', or 'q1')."""
     tok = tok.strip().lower()
     if tok in quarters:

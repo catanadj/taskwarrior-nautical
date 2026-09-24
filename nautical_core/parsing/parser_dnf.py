@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from .. import position_selection
 
 
@@ -13,7 +15,7 @@ def _group_has_date_modifiers(mods: dict) -> bool:
     )
 
 
-def _apply_group_modifiers(res, mods: dict, *, parse_error_cls) -> None:
+def _apply_group_modifiers(res: list[list[dict[str, Any]]], mods: dict[str, Any], *, parse_error_cls: Any) -> None:
     has_date_modifiers = _group_has_date_modifiers(mods)
     if has_date_modifiers and any(len(term) != 1 for term in res):
         raise parse_error_cls(
@@ -76,31 +78,31 @@ def _apply_group_modifiers(res, mods: dict, *, parse_error_cls) -> None:
 def parse_anchor_expr_to_dnf(
     s: str,
     *,
-    normalize_anchor_expr_input,
-    raise_on_bad_colon_year_tokens,
-    parse_anchor_atom_at,
-    parse_atom_mods,
-    skip_ws_pos,
-    rewrite_quarters_in_context,
-    rewrite_year_month_aliases_in_context,
-    validate_year_tokens_in_dnf,
-    validate_and_terms_satisfiable,
+    normalize_anchor_expr_input: Any,
+    raise_on_bad_colon_year_tokens: Any,
+    parse_anchor_atom_at: Any,
+    parse_atom_mods: Any,
+    skip_ws_pos: Any,
+    rewrite_quarters_in_context: Any,
+    rewrite_year_month_aliases_in_context: Any,
+    validate_year_tokens_in_dnf: Any,
+    validate_and_terms_satisfiable: Any,
     max_anchor_dnf_terms: int,
-    parse_error_cls,
-    today,
-):
+    parse_error_cls: Any,
+    today: Any,
+) -> list[list[dict[str, Any]]]:
     s = normalize_anchor_expr_input(s)
     raise_on_bad_colon_year_tokens(s)
 
     i = 0
     n = len(s)
 
-    def parse_atom():
+    def parse_atom() -> Any:
         nonlocal i
         node, i = parse_anchor_atom_at(s, i, n)
         return node
 
-    def parse_factor(depth: int = 0):
+    def parse_factor(depth: int = 0) -> Any:
         nonlocal i
         if depth > 50:
             raise parse_error_cls("Expression nesting too deep")
@@ -149,7 +151,7 @@ def parse_anchor_expr_to_dnf(
             return res
         return parse_atom()
 
-    def and_merge(a_terms, b_terms):
+    def and_merge(a_terms: list[list[dict[str, Any]]], b_terms: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
         out = []
         for ta in a_terms:
             for tb in b_terms:
@@ -160,7 +162,7 @@ def parse_anchor_expr_to_dnf(
                     )
         return out
 
-    def parse_term(depth: int = 0):
+    def parse_term(depth: int = 0) -> Any:
         nonlocal i
         left = parse_factor(depth)
         while True:
@@ -174,7 +176,7 @@ def parse_anchor_expr_to_dnf(
             left = and_merge(left, right)
         return left
 
-    def parse_expr(depth: int = 0):
+    def parse_expr(depth: int = 0) -> Any:
         nonlocal i
         left = parse_term(depth)
         while True:

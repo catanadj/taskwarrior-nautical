@@ -453,7 +453,7 @@ class IntegrityOperation:
             "depends_on": list(self.depends_on),
         }
 
-    def task_patch(self):
+    def task_patch(self) -> Any:
         """Materialize a repair payload as the canonical typed TaskPatch."""
         from .task_changes import TaskPatch
         from .task_models import TaskUUID

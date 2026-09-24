@@ -14,7 +14,6 @@ import subprocess
 import tempfile
 import time
 import tomllib
-from importlib import metadata as importlib_metadata
 
 CORE_ROOT = Path(__file__).resolve().parents[1].parent
 if str(CORE_ROOT) not in sys.path:

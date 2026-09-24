@@ -12,6 +12,7 @@ from .chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
 from .integrity_report import doctor_findings
 from .integration_models import Found, Unavailable
 from .lifecycle_outbox import LifecycleOutboxRepository
+from .lifecycle_outbox_operations import LifecycleExecutionOutboxPort
 from .operator_context import OperatorInvocationContext
 from .operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind
 from .operator_snapshot import ChainSnapshotReader, SnapshotReadRequest
@@ -50,7 +51,7 @@ def audit_authoritative_rows_with_engine(
     *,
     source: str,
     coverage: SnapshotCoverage,
-    outbox_repository: LifecycleOutboxRepository | None = None,
+    outbox_repository: LifecycleExecutionOutboxPort | None = None,
 ) -> IntegrityAuditBundle | None:
     """Return the shared audit result and engine for an operator apply path."""
     configuration = getattr(getattr(unit_of_work, "context", None), "configuration", None)
@@ -93,7 +94,7 @@ def audit_authoritative_mappings_with_engine(
     *,
     source: str,
     coverage: SnapshotCoverage,
-    outbox_repository: LifecycleOutboxRepository | None = None,
+    outbox_repository: LifecycleExecutionOutboxPort | None = None,
 ) -> IntegrityAuditBundle | None:
     """Decode one authoritative export and audit it through the shared owner."""
     decoded = tuple(DEFAULT_TASK_CODEC.decode_row(row, source_query=source) for row in rows)

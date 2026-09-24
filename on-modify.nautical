@@ -83,6 +83,8 @@ def _core_target_from_base(base: Path) -> Path | None:
 
 _DEFAULT_CORE_BASE = HOOK_DIR if hook_bootstrap.core_target_from_base(HOOK_DIR) is not None else TW_DIR
 _CORE_BASE = _trusted_core_base(_DEFAULT_CORE_BASE)
+if os.environ.get("NAUTICAL_DIAG") == "1":
+    sys.stderr.write(f"[nautical] on-modify core base: {_CORE_BASE}\n")
 
 
 def _read_input() -> bytes:
@@ -182,8 +184,8 @@ def main() -> int:
             )
             or 0
         )
-    except SystemExit:
-        raise
+    except SystemExit as exc:
+        return int(exc.code or 1)
     except Exception as exc:
         _diagnose(f"startup failure: {type(exc).__name__}: {exc}")
         _emit_fallback(protocol, probe)

@@ -7,10 +7,30 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from dev_tools.nautical_perf_compare import _metric_value
+from dev_tools.nautical_perf_compare import _compare_workload_contract, _metric_value
 
 
 class PerformanceCompareTests(unittest.TestCase):
+    def test_workload_contract_comparison_detects_coverage_and_decision_changes(self) -> None:
+        base = {"results": {"stable": {"pass": True}, "removed": {"pass": False}}}
+        head = {"results": {"stable": {"pass": False}, "added": {"pass": True}}}
+
+        contract = _compare_workload_contract(base, head)
+
+        self.assertEqual(contract["missing"], ["removed"])
+        self.assertEqual(contract["added"], ["added"])
+        self.assertEqual(contract["decision_changes"], ["stable"])
+        self.assertFalse(contract["ok"])
+
+    def test_workload_contract_rejects_malformed_results(self) -> None:
+        report = {"results": {"broken": {"median_s": 0.1}}}
+
+        contract = _compare_workload_contract(report, report)
+
+        self.assertFalse(contract["ok"])
+        self.assertEqual(contract["invalid_base"], ["broken"])
+        self.assertEqual(contract["invalid_head"], ["broken"])
+
     def test_help_is_a_valid_argparse_contract(self) -> None:
         compare = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_compare.py"
         proc = subprocess.run(
@@ -22,6 +42,7 @@ class PerformanceCompareTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("usage:", proc.stdout)
         self.assertIn("15%", proc.stdout)
+        self.assertIn("--contract-only", proc.stdout)
         self.assertNotIn("Traceback", proc.stderr)
 
     def test_extended_metrics_extract_from_stage_and_workflow_reports(self) -> None:
@@ -62,6 +83,30 @@ class PerformanceCompareTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         payload = json.loads(proc.stdout)
         self.assertIn("stage_operator_failure_matrix:peak_memory", payload["metric_regressions"])
+
+    def test_compare_rejects_malformed_reports_without_traceback(self) -> None:
+        compare = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_compare.py"
+        invalid_reports = (
+            {"results": []},
+            {"results": {"stable": {"pass": "yes", "median_s": 0.1}}},
+            {"results": {"stable": {"pass": True, "median_s": -1.0}}},
+            {"results": {"stable": {"pass": True, "median_s": float("nan")}}},
+        )
+        for invalid in invalid_reports:
+            with self.subTest(invalid=invalid):
+                with TemporaryDirectory(prefix="nautical-compare-invalid-") as td:
+                    base_path = Path(td) / "base.json"
+                    head_path = Path(td) / "head.json"
+                    valid = {"results": {"stable": {"pass": True, "median_s": 0.1}}}
+                    base_path.write_text(json.dumps(valid), encoding="utf-8")
+                    head_path.write_text(json.dumps(invalid, allow_nan=True), encoding="utf-8")
+                    proc = subprocess.run(
+                        [sys.executable, str(compare), "--base", str(base_path), "--head", str(head_path), "--contract-only", "--enforce"],
+                        capture_output=True, text=True, check=False,
+                    )
+                self.assertEqual(proc.returncode, 2)
+                self.assertIn("invalid head report", proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
 
 
 if __name__ == "__main__":

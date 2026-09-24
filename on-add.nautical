@@ -174,8 +174,8 @@ def main() -> int:
             )
             or 0
         )
-    except SystemExit:
-        raise
+    except SystemExit as exc:
+        return int(exc.code or 1)
     except Exception as exc:
         _diagnose(f"startup failure: {type(exc).__name__}: {exc}")
         _emit_fallback(protocol, probe)

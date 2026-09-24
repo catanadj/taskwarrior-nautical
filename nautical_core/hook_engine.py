@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 import importlib
 from typing import Any, NoReturn, Protocol
 
@@ -55,7 +54,7 @@ class OnExitServices(Protocol):
 
 
 def handle_on_add(
-    request,
+    request: Any,
     services: OnAddServices,
 ) -> object:
     task = request.task
@@ -109,9 +108,9 @@ def handle_on_add(
 
 
 def handle_on_exit(
-    request,
+    request: Any,
     services: OnExitServices,
-):
+) -> object:
     _ = request.runtime
     services.redirect_stdout()
     stats = services.drain_outbox(request.runtime)
@@ -123,9 +122,9 @@ def handle_on_exit(
 
 
 def handle_on_modify(
-    request,
+    request: Any,
     services: OnModifyServices,
-):
+) -> Any:
     old, new = request.old, request.new
     transition = getattr(request, "transition", None)
     if transition is None:
@@ -140,7 +139,7 @@ def handle_on_modify(
     terminal_decision = workflow.terminal_decision_for_route(typed_route)
     if terminal_decision is not None:
         request.terminal_decision = terminal_decision
-    def invoke(handler_name):
+    def invoke(handler_name: str) -> Any:
         handler = getattr(services, handler_name)
         if handler_name == "handle_deleted":
             return handler(

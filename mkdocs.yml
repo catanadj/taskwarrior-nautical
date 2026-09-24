@@ -66,6 +66,7 @@ nav:
       - Backup and Restore: tools/backup-restore.md
   - Operations:
       - Lifecycle and Chain Integrity: operations/lifecycle-and-integrity.md
+      - Guided Manual Review: operations/guided-manual-review.md
       - Sync and Recovery: operations/sync-and-recovery.md
       - Diagnostics and Performance: operations/diagnostics-and-performance.md
       - Offline Readiness: operations/offline-readiness.md

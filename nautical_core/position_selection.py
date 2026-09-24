@@ -1015,7 +1015,7 @@ def clear_candidate_cache() -> None:
     _matching_candidates_cached.cache_clear()
 
 
-def candidate_cache_info():
+def candidate_cache_info() -> Any:
     return _matching_candidates_cached.cache_info()
 
 

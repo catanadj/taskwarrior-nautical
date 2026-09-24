@@ -153,6 +153,12 @@ class IntegrityRepairPlanner:
                 (f"link is {expected}",),
                 (("link", expected),),
             )
+        # A reciprocal edge cannot be repaired safely when either endpoint's
+        # numeric slot has competing occupants. Choosing one UUID would
+        # silently discard an alternate branch, as opposed to restoring a
+        # uniquely inferred link.
+        if source.link is None or len(graph.slot_nodes(source.chain_id, source.link)) != 1:
+            return None
         observed = _pairs(finding)
         fields = [
             field for field in ("prevLink", "nextLink")
@@ -168,6 +174,8 @@ class IntegrityRepairPlanner:
         if len(target_matches) != 1 or not target_matches[0].has_complete_identity:
             return None
         target = target_matches[0]
+        if target.link is None or len(graph.slot_nodes(target.chain_id, target.link)) != 1:
+            return None
         opposite = "prevLink" if field == "nextLink" else "nextLink"
         operation_id = "ciop1-" + hashlib.sha256(
             f"{graph.snapshot.snapshot_id}:{target.task_uuid}:{opposite}:{source.task_uuid}".encode("utf-8")
@@ -193,6 +201,13 @@ class IntegrityRepairPlanner:
             return "repair requires complete chain coverage"
         if finding.status is not FindingStatus.REPAIRABLE:
             return "finding is not automatically repairable"
+        if finding.reason_code == "non_reciprocal_reference":
+            source_matches = context.graph.uuid_matches(
+                finding.subject_uuids[0] if finding.subject_uuids else ""
+            )
+            if len(source_matches) == 1 and source_matches[0].link is not None:
+                if len(context.graph.slot_nodes(source_matches[0].chain_id, source_matches[0].link)) != 1:
+                    return "ambiguous_slot_occupancy"
         if finding.invariant_id.startswith("lifecycle."):
             return "lifecycle successor decisions belong to LifecyclePlanner"
         return "no unique guarded operation is defined for this finding"

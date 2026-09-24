@@ -31,6 +31,16 @@ class ExitHookResponse:
     stats: ExitDrainStats | None = None
 
 
+class HookFailure(SystemExit):
+    """Typed failure raised below a hook entry point and caught at its boundary."""
+
+    def __init__(self, title: str, message: str, *, code: int = 1) -> None:
+        self.title = title
+        self.message = message
+        self.code = int(code)
+        super().__init__(self.code)
+
+
 # Compatibility names retained for existing hook loaders and integrations.
 HookJsonResult = TaskHookResponse
 HookExitResult = ExitHookResponse
@@ -41,11 +51,11 @@ def emit_passthrough_json(task: Any) -> None:
     print(json.dumps(task if isinstance(task, dict) else {}, ensure_ascii=False), end='')
     try:
         sys.stdout.flush()
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 
-def emit_task_json(task: TaskPayload, *, sanitize: bool = False, core=None, prof=None) -> None:
+def emit_task_json(task: TaskPayload, *, sanitize: bool = False, core: Any = None, prof: Any = None) -> None:
     t_out = time.perf_counter()
     if sanitize and core is not None and getattr(core, 'SANITIZE_UDA', False):
         DEFAULT_TASK_CODEC.sanitize_task_mapping(task, max_len=core.SANITIZE_UDA_MAX_LEN)
@@ -76,7 +86,7 @@ def decode_latest_task_from_raw(raw: str) -> dict | None:
 def redirect_stdout_to_devnull() -> None:
     try:
         sys.stdout = open(os.devnull, "w", encoding="utf-8")
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 
@@ -112,11 +122,11 @@ def panic_passthrough(
             pass
 
 
-def emit_json_result(result: TaskHookResponse, *, core=None) -> None:
+def emit_json_result(result: TaskHookResponse, *, core: Any = None) -> None:
     emit_task_json(result.task, sanitize=result.sanitize, core=core, prof=result.prof)
 
 
-def emit_exit_result(result: ExitHookResponse, *, emit_exit_feedback, emit_stats_diag) -> int:
+def emit_exit_result(result: ExitHookResponse, *, emit_exit_feedback: Callable[[str], None], emit_stats_diag: Callable[[dict[str, Any]], None]) -> int:
     stats = result.stats.to_mapping() if isinstance(result.stats, ExitDrainStats) else {}
     emit_stats_diag(stats)
     if result.feedback_message:

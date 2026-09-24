@@ -243,7 +243,7 @@ def _profile(config: dict[str, Any] | None, name: str | None = None) -> tuple[st
     return selected, profile
 
 
-def _observer(config: dict[str, Any] | None, location_name: str | None = None):
+def _observer(config: dict[str, Any] | None, location_name: str | None = None) -> Any:
     selected, profile = _profile(config, location_name)
     try:
         latitude = float(profile["latitude"])

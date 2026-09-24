@@ -4,9 +4,10 @@ import hashlib
 import os
 import stat
 import sys
+from typing import Any
 
 
-def nautical_cache_dir(*, validated_user_dir) -> str:
+def nautical_cache_dir(*, validated_user_dir: Any) -> str:
     base_raw = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
     safe_base = validated_user_dir(
         base_raw,
@@ -54,7 +55,7 @@ def select_cache_dir(
     *,
     anchor_cache_dir_override: str,
     nautical_cache_dir_path: str,
-    validated_user_dir,
+    validated_user_dir: Any,
 ) -> str:
     candidates = []
     if anchor_cache_dir_override:

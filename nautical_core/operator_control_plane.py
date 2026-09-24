@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 from collections.abc import Sequence
 
-from .chain_integrity_models import IntegrityFinding, IntegrityRepairPlan
+from .chain_integrity_models import IntegrityFinding
 from .chain_repair_planner import IntegrityPlanningResult
 from .lifecycle_models import LifecycleEvent, LifecyclePlan, TaskSnapshot
 from .lifecycle_planner import CarryValidator, LifecyclePlanner, LifecyclePreflight

@@ -16,7 +16,7 @@ class GenerationPorts:
     wait_sched_debug: Any
 
 
-def chain_generation_service(ports: GenerationPorts):
+def chain_generation_service(ports: GenerationPorts) -> Any:
     service = ports.state.chain_generation_service
     if service is None or getattr(service, "core", None) is not ports.core or tuple(getattr(service, "recurrence_update_udas", ())) != ports.recurrence_update_udas:
         service = ports.module.ChainGenerationService.from_core(

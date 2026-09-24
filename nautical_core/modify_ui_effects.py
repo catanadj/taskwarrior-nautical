@@ -4,19 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import sys
-from typing import Any, Callable
+from typing import Any
+
+from .callback_ports import CallbackPort
 
 
 @dataclass(frozen=True)
 class UIEffectsPorts:
     """Process-boundary capabilities required by modify UI effects."""
 
-    core: Callable[[], Any]
-    load_core: Callable[[], None]
-    override: Callable[[str], Any]
-    emit_passthrough_json: Callable[[Any], None]
-    emit_task_json: Callable[..., None]
-    stderr_write: Callable[[str], Any]
+    core: CallbackPort
+    load_core: CallbackPort
+    override: CallbackPort
+    emit_passthrough_json: CallbackPort
+    emit_task_json: CallbackPort
+    stderr_write: CallbackPort
 
 
 def ui_ports_for(host: Any) -> UIEffectsPorts:
@@ -26,7 +28,7 @@ def ui_ports_for(host: Any) -> UIEffectsPorts:
         values = vars(host)
     values_map = values if isinstance(values, dict) else {}
 
-    def test_override(name: str):
+    def test_override(name: str) -> Any:
         override = values_map.get(name)
         is_root_delegate = callable(override) and getattr(override, "__name__", "") == name and (
             getattr(getattr(override, "__code__", None), "co_filename", "") == values_map.get("__file__")
@@ -43,7 +45,7 @@ def ui_ports_for(host: Any) -> UIEffectsPorts:
     )
 
 
-def print_task(ports: UIEffectsPorts, task) -> None:
+def print_task(ports: UIEffectsPorts, task: Any) -> None:
     override = ports.override("_print_task")
     if override is not None:
         return override(task)
@@ -60,13 +62,13 @@ def print_task(ports: UIEffectsPorts, task) -> None:
 
 def panel(
     ports: UIEffectsPorts,
-    title,
-    rows,
+    title: Any,
+    rows: Any,
     kind: str = "info",
     border_style: str | None = None,
     title_style: str | None = None,
     label_style: str | None = None,
-):
+) -> Any:
     override = ports.override("_panel")
     if override is not None:
         return override(title, rows, kind=kind)
@@ -107,7 +109,7 @@ def panel(
     )
 
 
-def panel_line(ports: UIEffectsPorts, title: str, line: str, *, kind: str = "info", border_style=None, title_style=None, markup_body=False) -> None:
+def panel_line(ports: UIEffectsPorts, title: str, line: str, *, kind: str = "info", border_style: Any = None, title_style: Any = None, markup_body: bool = False) -> None:
     override = ports.override("_panel_line")
     if override is not None:
         return override(title, line, kind=kind, border_style=border_style, title_style=title_style, markup_body=markup_body)

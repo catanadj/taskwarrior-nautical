@@ -6,15 +6,121 @@ import unittest
 import ast
 import json
 import sqlite3
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 from dev_tools import nautical_perf_budget as budget
+from dev_tools.perf import reporting
 from nautical_core.exit_probe import probe_exit_work
 import nautical_core
 
 
 class PerformanceBudgetContractTests(unittest.TestCase):
+    def test_extracted_reporting_helpers_preserve_schema(self) -> None:
+        result: dict = {}
+        reporting.attach_timing_breakdown(
+            result,
+            [1.0],
+            [{"run_task_seconds": 0.4, "startup_total_ms": 100.0}],
+        )
+        self.assertEqual(result["timing_breakdown"][0]["taskwarrior_seconds"], 0.4)
+        self.assertEqual(reporting.merge_task_timing_stats({"run_task_seconds": 1.0}, {"run_task_seconds": 2.0}), {"run_task_seconds": 3.0})
+        self.assertEqual(
+            reporting.compact_reconcile_report({"status": "ok", "ignored": True}),
+            {"status": "ok"},
+        )
+
+    def test_workflow_workload_module_is_import_safe(self) -> None:
+        from dev_tools.perf import workflow_workloads
+
+        self.assertTrue(callable(workflow_workloads.expensive_workflows))
+        self.assertTrue(callable(workflow_workloads.integrity_scale))
+        self.assertTrue(callable(workflow_workloads.ordinary_modify))
+        self.assertTrue(callable(workflow_workloads.expiration_recovery))
+        self.assertTrue(callable(workflow_workloads.completion_workflows))
+        self.assertTrue(callable(workflow_workloads.queue_preflight))
+        self.assertTrue(callable(workflow_workloads.queue_healthy_replay))
+        self.assertTrue(callable(workflow_workloads.queue_replay_verify))
+        self.assertTrue(callable(workflow_workloads.queue_partial_recovery))
+        self.assertTrue(callable(workflow_workloads.queue_shape))
+        self.assertTrue(callable(workflow_workloads.reconcile_history_fixture))
+        self.assertTrue(callable(workflow_workloads.reconcile_healthy))
+        self.assertTrue(callable(workflow_workloads.reconcile_empty))
+        self.assertTrue(callable(workflow_workloads.reconcile_candidates))
+        self.assertTrue(callable(workflow_workloads.reconcile_candidates_apply))
+        self.assertTrue(callable(workflow_workloads.reconcile_candidates_apply_scale))
+        self.assertTrue(callable(workflow_workloads.reconcile_report_loop))
+        self.assertTrue(callable(workflow_workloads.run_scenarios))
+        self.assertTrue(callable(workflow_workloads.workflow_fixture))
+        self.assertTrue(hasattr(workflow_workloads, "WorkflowContext"))
+        self.assertTrue(callable(workflow_workloads.validate_reconcile_report))
+
+    def test_all_extracted_workload_modules_import_without_side_effects(self) -> None:
+        perf_dir = Path(__file__).parents[1] / "dev_tools" / "perf"
+        modules = sorted(
+            path.stem for path in perf_dir.glob("*.py") if path.name != "__init__.py"
+        )
+        for module in modules:
+            proc = subprocess.run(
+                [sys.executable, "-c", f"import dev_tools.perf.{module}"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, f"{module}: {proc.stderr}")
+            self.assertEqual(proc.stdout, "", f"{module} wrote to stdout on import")
+            self.assertEqual(proc.stderr, "", f"{module} wrote to stderr on import")
+
+    def test_reconcile_report_validation_is_centralized(self) -> None:
+        from dev_tools.perf import workflow_workloads
+
+        workflow_workloads.validate_reconcile_report(
+            {
+                "schema": "nautical.reconcile",
+                "export_calls": 1,
+                "export_rows": 4,
+                "integrity_seconds": 0.01,
+            },
+            max_export_rows=4,
+        )
+        with self.assertRaisesRegex(RuntimeError, "corrupted"):
+            workflow_workloads.validate_reconcile_report(
+                {"schema": "nautical.reconcile", "integrity_audit": {"findings": []}},
+                require_findings=True,
+                label="corrupted",
+            )
+
+    def test_workflow_context_allocates_isolated_taskdata(self) -> None:
+        from dev_tools.perf.workflow_workloads import WorkflowContext
+
+        with tempfile.TemporaryDirectory(prefix="nautical-context-") as td:
+            context = WorkflowContext(
+                root=Path(td), real_task="task", task_wrapper=Path(td) / "wrapper",
+                config_path=Path(td) / "config", taskrc_path=Path(td) / "taskrc",
+                base_env={}, config_fingerprint="config", schedule_fingerprint="schedule",
+            )
+            first = context.taskdata("first")
+            second = context.taskdata("second")
+            self.assertTrue(first.is_dir())
+            self.assertTrue(second.is_dir())
+            self.assertNotEqual(first, second)
+            with self.assertRaises(FileExistsError):
+                context.taskdata("first")
+
+    def test_budget_cli_help_is_a_stable_subprocess_contract(self) -> None:
+        budget_script = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_budget.py"
+        proc = subprocess.run(
+            [sys.executable, str(budget_script), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("usage:", proc.stdout)
+        for option in ("--budget-file", "--json", "--enforce", "--extended", "--workflows-only"):
+            self.assertIn(option, proc.stdout)
+        self.assertNotIn("Traceback", proc.stderr)
+
     def test_budget_manifest_covers_cache_seasonal_hook_and_workflow_paths(self) -> None:
         manifest = json.loads((budget.ROOT / "dev_tools" / "perf_budget.json").read_text(encoding="utf-8"))
         budgets = manifest["budgets_seconds"]

@@ -203,6 +203,42 @@ class ChainGraphAndRepairPlannerTests(unittest.TestCase):
         slot = planner.plan(slot_context, evaluate_invariants(slot_graph))
         self.assertTrue(any(plan.reason_code == "missing_link" for plan in slot.plans))
 
+    def test_reciprocal_repair_refuses_ambiguous_source_slot(self) -> None:
+        root = _node(
+            "aaaaaaaa-0000-0000-0000-000000000941",
+            link=19,
+            nextLink="bbbbbbbb",
+        )
+        proposed = _node(
+            "bbbbbbbb-0000-0000-0000-000000000942",
+            link=20,
+            prevLink=root.task_uuid,
+            nextLink="dddddddd",
+        )
+        competing = _node(
+            "cccccccc-0000-0000-0000-000000000943",
+            link=20,
+            prevLink=root.task_uuid,
+            nextLink="eeeeeeee",
+        )
+        graph = ChainGraph.from_snapshot(
+            ChainSnapshot(
+                "ambiguous-repair",
+                SnapshotCoverage.CHAIN,
+                "unit",
+                (root, proposed, competing),
+            )
+        )
+        context = IntegrityContext(graph, OutboxSnapshot.from_records(()), "cfg-planner")
+
+        result = IntegrityRepairPlanner().plan(context, evaluate_invariants(graph))
+
+        self.assertFalse(result.plans)
+        self.assertTrue(any(
+            refusal.reason == "ambiguous_slot_occupancy"
+            for refusal in result.refusals
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

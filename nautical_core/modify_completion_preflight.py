@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from nautical_core.integration_models import Absent, Found, Unavailable
 from nautical_core.modify_models import CompletionPreflightContext
 from nautical_core.task_models import TaskPayload
@@ -8,10 +10,10 @@ from nautical_core.task_models import TaskPayload
 def completion_link_numbers_or_fail(
     new: TaskPayload,
     *,
-    coerce_int,
+    coerce_int: Any,
     max_link_number: int,
-    panel,
-    print_task,
+    panel: Any,
+    print_task: Any,
 ) -> tuple[int, int] | None:
     base_no = coerce_int(new.get("link"), 1)
     if base_no < 1 or base_no > max_link_number:
@@ -36,11 +38,11 @@ def completion_link_numbers_or_fail(
 
 def completion_kind_or_stop(
     new: TaskPayload,
-    now_utc,
+    now_utc: Any,
     *,
-    panel,
-    print_task,
-    end_chain_summary,
+    panel: Any,
+    print_task: Any,
+    end_chain_summary: Any,
 ) -> str | None:
     raw_ch = (new.get("chain") or "").strip().lower()
     has_anchor = bool((new.get("anchor") or "").strip())
@@ -67,7 +69,7 @@ def completion_kind_or_stop(
     return kind
 
 
-def completion_chain_id_or_fail(new: TaskPayload, *, panel, print_task) -> str | None:
+def completion_chain_id_or_fail(new: TaskPayload, *, panel: Any, print_task: Any) -> str | None:
     chain_id = (new.get("chainID") or "").strip()
     if chain_id:
         return chain_id
@@ -87,10 +89,10 @@ def completion_existing_next_or_fail(
     new: TaskPayload,
     next_no: int,
     *,
-    existing_next_lookup,
-    short,
-    panel,
-    print_task,
+    existing_next_lookup: Any,
+    short: Any,
+    panel: Any,
+    print_task: Any,
 ) -> bool:
     declared_next = str(new.get("nextLink") or "").strip()
     if declared_next:
@@ -152,10 +154,10 @@ def completion_existing_next_or_fail(
 
 def completion_preflight_context(
     new: TaskPayload,
-    now_utc,
+    now_utc: Any,
     *,
-    services,
-):
+    services: Any,
+) -> CompletionPreflightContext | None:
     short = services.short
     completion_link_numbers_or_fail = services.completion_link_numbers_or_fail
     completion_kind_or_stop = services.completion_kind_or_stop

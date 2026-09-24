@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from math import gcd, lcm
+from typing import Any
 
+from .callback_ports import CallbackPort
 from .business_calendar import is_business_day as default_is_business_day
 from .scheduler_models import OccurrenceSearchExhausted
 
@@ -12,9 +14,9 @@ def _choose_rand_dom(
     m: int,
     doms: set[int],
     *,
-    seed_base,
+    seed_base: Any,
     identity: str,
-    random_pick_index,
+    random_pick_index: CallbackPort,
 ) -> int | None:
     if not doms:
         return None
@@ -49,7 +51,7 @@ def _term_has_moon(term: list[dict]) -> bool:
     )
 
 
-def _first_day_next_month(y: int, m: int, *, date_cls, days_in_month) -> object:
+def _first_day_next_month(y: int, m: int, *, date_cls: Any, days_in_month: CallbackPort) -> Any:
     return date_cls(y, m, 1) + timedelta(days=days_in_month(y, m))
 
 
@@ -59,7 +61,7 @@ def _intersect_weekly_atoms_allowed(
     y: int,
     m: int,
     allowed: set[int],
-    doms_for_weekly_spec,
+    doms_for_weekly_spec: CallbackPort,
 ) -> set[int]:
     out = set(allowed)
     for atom in term:
@@ -80,22 +82,22 @@ _GREGORIAN_CYCLE_WEEKS = 20871
 _LAST_SUPPORTED_YEAR = 9999
 
 
-def _calendar_month_span(after_date) -> int:
+def _calendar_month_span(after_date: Any) -> int:
     """Return the number of calendar months still representable, inclusive."""
     return max(1, (_LAST_SUPPORTED_YEAR - after_date.year) * 12 + (12 - after_date.month) + 1)
 
 
-def _calendar_year_span(after_date) -> int:
+def _calendar_year_span(after_date: Any) -> int:
     """Return the number of calendar years still representable, inclusive."""
     return max(1, _LAST_SUPPORTED_YEAR - after_date.year + 1)
 
 
-def _calendar_week_span(after_date) -> int:
+def _calendar_week_span(after_date: Any) -> int:
     """Return the number of calendar weeks still representable, inclusive."""
     return max(1, (date(_LAST_SUPPORTED_YEAR, 12, 31) - after_date).days // 7 + 1)
 
 
-def _rand_search_limit(term: list[dict], after_date, interval: int, *, unit: str) -> int:
+def _rand_search_limit(term: list[dict], after_date: Any, interval: int, *, unit: str) -> int:
     """Derive a bounded random search from cadence and the supported calendar.
 
     Calendar selectors and weekday filters can repeat only after the Gregorian
@@ -160,13 +162,13 @@ def _periodic_atom_period_days(atom: dict) -> int | None:
 
 def _next_for_and_periodic_cycle(
     term: list[dict],
-    ref_d,
-    seed,
-    seed_base,
+    ref_d: Any,
+    seed: Any,
+    seed_base: Any,
     *,
-    next_after_atom_with_mods,
-    atom_matches_on,
-):
+    next_after_atom_with_mods: CallbackPort,
+    atom_matches_on: CallbackPort,
+) -> Any:
     """Search a finite Gregorian cycle using the sparsest plain atom.
 
     A leapfrog search can spend thousands of iterations on a valid but rare
@@ -219,19 +221,19 @@ def _next_for_and_periodic_cycle(
 
 def next_for_and_rand_yearly(
     term: list[dict],
-    ref_d,
+    ref_d: Any,
     y_specs: list[str],
     *,
-    default_seed=None,
-    seed_base,
+    default_seed: Any = None,
+    seed_base: Any,
     identity: str,
-    random_pick_index,
-    days_in_month,
-    doms_allowed_by_year,
-    intersect_monthly_atoms_allowed,
-    doms_for_weekly_spec,
-    date_cls,
-):
+    random_pick_index: CallbackPort,
+    days_in_month: CallbackPort,
+    doms_allowed_by_year: CallbackPort,
+    intersect_monthly_atoms_allowed: CallbackPort,
+    doms_for_weekly_spec: CallbackPort,
+    date_cls: Any,
+) -> Any:
     seed_loc = default_seed or ref_d
     monthly_interval = _term_interval_lcm(term, {"m"})
     yearly_interval = _term_interval_lcm(term, {"y"})
@@ -292,17 +294,17 @@ def next_for_and_rand_yearly(
 
 def next_for_and_fast_path(
     term: list[dict],
-    ref_d,
-    seed,
-    seed_base=None,
+    ref_d: Any,
+    seed: Any,
+    seed_base: Any = None,
     *,
-    next_after_atom_with_mods,
-    atom_matches_on,
+    next_after_atom_with_mods: CallbackPort,
+    atom_matches_on: CallbackPort,
     max_anchor_iter: int,
-    warn_once_per_day,
-    parse_error_cls,
-    os_mod,
-):
+    warn_once_per_day: CallbackPort,
+    parse_error_cls: Any,
+    os_mod: Any,
+) -> Any:
     probe = ref_d
     stalled = 0
     for _ in range(max_anchor_iter):
@@ -360,24 +362,24 @@ def next_for_and_fast_path(
 
 def next_for_and(
     term: list[dict],
-    ref_d,
-    seed,
-    seed_base=None,
+    ref_d: Any,
+    seed: Any,
+    seed_base: Any = None,
     *,
-    random_identity,
-    random_pick_index,
-    days_in_month,
-    doms_allowed_by_year,
-    intersect_monthly_atoms_allowed,
-    doms_for_weekly_spec,
-    next_after_atom_with_mods,
-    atom_matches_on,
+    random_identity: CallbackPort,
+    random_pick_index: CallbackPort,
+    days_in_month: CallbackPort,
+    doms_allowed_by_year: CallbackPort,
+    intersect_monthly_atoms_allowed: CallbackPort,
+    doms_for_weekly_spec: CallbackPort,
+    next_after_atom_with_mods: CallbackPort,
+    atom_matches_on: CallbackPort,
     max_anchor_iter: int,
-    warn_once_per_day,
-    parse_error_cls,
-    os_mod,
-    date_cls,
-):
+    warn_once_per_day: CallbackPort,
+    parse_error_cls: Any,
+    os_mod: Any,
+    date_cls: Any,
+) -> Any:
     """
     Find the next date > ref_d satisfying ALL atoms in term.
     Rand-aware: if the term contains m:rand and any y:, choose the random
@@ -428,7 +430,7 @@ def next_for_and(
     )
 
 
-def next_for_or(dnf: list[list[dict]], ref_d, seed, seed_base=None, *, next_for_and):
+def next_for_or(dnf: list[list[dict]], ref_d: Any, seed: Any, seed_base: Any = None, *, next_for_and: Any) -> Any:
     best = None
     exhausted: OccurrenceSearchExhausted | None = None
     for term in dnf:
@@ -447,15 +449,15 @@ def next_for_or(dnf: list[list[dict]], ref_d, seed, seed_base=None, *, next_for_
 
 
 def next_after_term(
-    term,
-    ref_d,
-    default_seed,
-    seed_base=None,
+    term: Any,
+    ref_d: Any,
+    default_seed: Any,
+    seed_base: Any = None,
     *,
-    next_after_atom_with_mods,
-    atom_matches_on,
+    next_after_atom_with_mods: CallbackPort,
+    atom_matches_on: CallbackPort,
     intersection_guard_steps: int,
-):
+) -> Any:
     """Find next date after ref_d that matches all atoms in term."""
     if len(term) == 1:
         atom = term[0]
@@ -504,7 +506,7 @@ def next_after_term(
     )
 
 
-def _is_simple_weekly(dnf, *, active_mod_keys) -> bool:
+def _is_simple_weekly(dnf: Any, *, active_mod_keys: Any) -> bool:
     if len(dnf) != 1 or len(dnf[0]) != 1:
         return False
     atom = dnf[0][0]
@@ -516,7 +518,7 @@ def _is_simple_weekly(dnf, *, active_mod_keys) -> bool:
     )
 
 
-def _simple_weekly_next(after_date, weekdays: list) -> object:
+def _simple_weekly_next(after_date: Any, weekdays: list) -> Any:
     for offset in range(1, 8):
         try:
             cand = after_date + timedelta(days=offset)
@@ -540,23 +542,23 @@ def _simple_weekly_next(after_date, weekdays: list) -> object:
         ) from exc
 
 
-def _pick_earlier_candidate(best, best_meta, cand, meta):
+def _pick_earlier_candidate(best: Any, best_meta: Any, cand: Any, meta: Any) -> Any:
     if cand and (best is None or cand < best):
         return cand, meta
     return best, best_meta
 
 
 def _selected_random_candidates(
-    candidates,
+    candidates: Any,
     count: int,
     *,
-    seed_base,
+    seed_base: Any,
     domain: str,
     identity: str,
     period: str,
-    random_pick_indices,
-    date_is_excluded,
-):
+    random_pick_indices: Any,
+    date_is_excluded: Any,
+) -> Any:
     pool = [cand for cand in candidates if date_is_excluded is None or not date_is_excluded(cand)]
     if len(pool) < count:
         return []
@@ -575,16 +577,16 @@ def _next_after_expr_weekly_rand_candidate(
     term: list[dict],
     term_id: int,
     info: dict,
-    after_date,
-    default_seed,
-    seed_base,
+    after_date: Any,
+    default_seed: Any,
+    seed_base: Any,
     *,
-    random_identity,
-    random_pick_indices,
-    atom_matches_on,
-    date_is_excluded,
-    is_business_day=default_is_business_day,
-):
+    random_identity: CallbackPort,
+    random_pick_indices: Any,
+    atom_matches_on: CallbackPort,
+    date_is_excluded: Any,
+    is_business_day: Any = default_is_business_day,
+) -> Any:
     count = int(info.get("count") or 1)
     mods = info.get("mods") or {}
     bd_only = bool(mods.get("bd") or mods.get("wd") is True)
@@ -653,18 +655,18 @@ def _next_after_expr_monthly_rand_candidate(
     term: list[dict],
     term_id: int,
     info: dict,
-    after_date,
-    default_seed,
-    seed_base,
+    after_date: Any,
+    default_seed: Any,
+    seed_base: Any,
     *,
-    atype,
-    next_for_and,
-    months_since,
-    term_candidates_in_month,
-    random_identity,
-    random_pick_indices,
-    date_is_excluded,
-):
+    atype: Any,
+    next_for_and: Any,
+    months_since: Any,
+    term_candidates_in_month: Any,
+    random_identity: CallbackPort,
+    random_pick_indices: Any,
+    date_is_excluded: Any,
+) -> Any:
     count = int(info.get("count") or 1)
     if count == 1 and any(atype(a) == "y" for a in term):
         cand = next_for_and(term, after_date, default_seed, seed_base=seed_base)
@@ -727,15 +729,15 @@ def _next_after_expr_yearly_rand_candidate(
     term: list[dict],
     term_id: int,
     info: dict,
-    after_date,
-    default_seed,
-    seed_base,
+    after_date: Any,
+    default_seed: Any,
+    seed_base: Any,
     *,
-    term_candidates_in_month,
-    random_identity,
-    random_pick_indices,
-    date_is_excluded,
-):
+    term_candidates_in_month: Any,
+    random_identity: CallbackPort,
+    random_pick_indices: Any,
+    date_is_excluded: Any,
+) -> Any:
     seed_key_base = seed_base if seed_base is not None else "preview"
     mods = info.get("mods") or {}
     bd_only = bool(mods.get("bd"))
@@ -786,7 +788,7 @@ def _next_after_expr_yearly_rand_candidate(
     )
 
 
-def _next_after_expr_term_candidate(term: list[dict], after_date, default_seed, seed_base, *, next_after_term):
+def _next_after_expr_term_candidate(term: list[dict], after_date: Any, default_seed: Any, seed_base: Any, *, next_after_term: Any) -> Any:
     cand, _ = next_after_term(term, after_date, default_seed, seed_base=seed_base)
     if cand is not None and cand <= after_date:
         cand, _ = next_after_term(term, after_date + timedelta(days=1), default_seed, seed_base=seed_base)
@@ -796,25 +798,25 @@ def _next_after_expr_term_candidate(term: list[dict], after_date, default_seed, 
 
 
 def next_after_expr(
-    dnf,
-    after_date,
-    default_seed=None,
-    seed_base=None,
+    dnf: Any,
+    after_date: Any,
+    default_seed: Any = None,
+    seed_base: Any = None,
     *,
-    active_mod_keys,
-    expand_weekly_cached,
-    term_rand_info,
-    atype,
-    next_for_and,
-    months_since,
-    term_candidates_in_month,
-    random_identity,
-    random_pick_indices,
-    atom_matches_on,
-    next_after_term,
-    date_is_excluded=None,
-    is_business_day=default_is_business_day,
-):
+    active_mod_keys: Any,
+    expand_weekly_cached: Any,
+    term_rand_info: Any,
+    atype: Any,
+    next_for_and: Any,
+    months_since: Any,
+    term_candidates_in_month: Any,
+    random_identity: CallbackPort,
+    random_pick_indices: Any,
+    atom_matches_on: CallbackPort,
+    next_after_term: Any,
+    date_is_excluded: Any = None,
+    is_business_day: Any = default_is_business_day,
+) -> Any:
     """Return the next matching local date strictly > after_date."""
     if _is_simple_weekly(dnf, active_mod_keys=active_mod_keys):
         atom = dnf[0][0]

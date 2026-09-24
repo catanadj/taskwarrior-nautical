@@ -1,26 +1,27 @@
 from __future__ import annotations
+from typing import Any
 
 
-def atom_sort_key(x: dict, *, json_mod) -> tuple:
+def atom_sort_key(x: dict, *, json_mod: Any) -> tuple:
     sj = json_mod.dumps(x.get("s"), separators=(",", ":"), sort_keys=True)
     mj = json_mod.dumps(x.get("m"), separators=(",", ":"), sort_keys=True)
     return (x.get("t", ""), int(x.get("i", 1) or 1), sj, mj)
 
 
-def acf_unpack(packed: str, *, base64_mod, zlib_mod, json_mod) -> dict:
+def acf_unpack(packed: str, *, base64_mod: Any, zlib_mod: Any, json_mod: Any) -> dict:
     raw = base64_mod.b85decode(packed.encode("ascii"))
     return json_mod.loads(zlib_mod.decompress(raw).decode("utf-8"))
 
 
 def _build_acf_terms(
-    dnf,
+    dnf: Any,
     *,
-    coerce_int,
-    normalize_spec_for_acf,
-    mods_to_acf,
-    atom_sort_key,
-    json_mod,
-):
+    coerce_int: Any,
+    normalize_spec_for_acf: Any,
+    mods_to_acf: Any,
+    atom_sort_key: Any,
+    json_mod: Any,
+) -> Any:
     terms = []
     for term in dnf:
         atoms = []
@@ -76,15 +77,15 @@ def _build_acf_terms(
 def build_acf(
     expr: str,
     *,
-    parse_anchor_expr_to_dnf_cached,
-    coerce_int,
-    normalize_spec_for_acf,
-    mods_to_acf,
-    atom_sort_key,
-    json_mod,
-    zlib_mod,
-    base64_mod,
-    hashlib_mod,
+    parse_anchor_expr_to_dnf_cached: Any,
+    coerce_int: Any,
+    normalize_spec_for_acf: Any,
+    mods_to_acf: Any,
+    atom_sort_key: Any,
+    json_mod: Any,
+    zlib_mod: Any,
+    base64_mod: Any,
+    hashlib_mod: Any,
     acf_checksum_len: int,
 ) -> str:
     if not expr or not expr.strip():
@@ -119,13 +120,13 @@ def normalize_spec_for_acf_uncached(
     typ: str,
     spec: str,
     *,
-    expand_weekly_aliases,
-    split_csv_tokens,
-    normalize_weekday,
-    expand_monthly_aliases,
-    re_mod,
-    year_pair,
-):
+    expand_weekly_aliases: Any,
+    split_csv_tokens: Any,
+    normalize_weekday: Any,
+    expand_monthly_aliases: Any,
+    re_mod: Any,
+    year_pair: Any,
+) -> Any:
     spec = (spec or "").strip().lower()
 
     if typ == "w":
@@ -190,14 +191,14 @@ def normalize_spec_for_acf_uncached(
     return None
 
 
-def normalize_spec_for_acf(typ: str, spec: str, *, normalize_spec_for_acf_cached, clone_mod_value):
+def normalize_spec_for_acf(typ: str, spec: str, *, normalize_spec_for_acf_cached: Any, clone_mod_value: Any) -> Any:
     res = normalize_spec_for_acf_cached((typ or "").lower(), spec or "")
     if isinstance(res, (list, dict)):
         return clone_mod_value(res)
     return res
 
 
-def is_valid_acf(acf_str: str, *, hashlib_mod, acf_checksum_len: int, acf_unpack) -> bool:
+def is_valid_acf(acf_str: str, *, hashlib_mod: Any, acf_checksum_len: int, acf_unpack: Any) -> bool:
     if not acf_str:
         return False
     parts = acf_str.split(":", 2)
@@ -222,11 +223,11 @@ def is_valid_acf(acf_str: str, *, hashlib_mod, acf_checksum_len: int, acf_unpack
 def acf_to_original_format(
     acf_str: str,
     *,
-    is_valid_acf,
-    acf_unpack,
-    acf_spec_to_string,
-    acf_mods_to_string,
-    format_selection_positions,
+    is_valid_acf: Any,
+    acf_unpack: Any,
+    acf_spec_to_string: Any,
+    acf_mods_to_string: Any,
+    format_selection_positions: Any,
 ) -> str:
     if not is_valid_acf(acf_str):
         return ""
@@ -239,7 +240,7 @@ def acf_to_original_format(
     if not obj:
         return ""
 
-    def format_terms(terms) -> str:
+    def format_terms(terms: Any) -> str:
         terms_str = []
         for term in terms:
             atoms_str = []
@@ -272,7 +273,7 @@ def acf_to_original_format(
     return format_terms(obj.get("terms", []))
 
 
-def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
+def mods_to_acf(mods: dict, *, hhmm_re: Any) -> dict:
     out: dict[str, object] = {}
     if not mods:
         return out
@@ -328,7 +329,7 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
     return out
 
 
-def acf_mods_to_string(m: dict, *, wd_abbr) -> str:
+def acf_mods_to_string(m: dict, *, wd_abbr: Any) -> str:
     parts = []
     if m.get("tr"):
         parts.append(f"@t={m['tr']}")
@@ -357,7 +358,7 @@ def acf_mods_to_string(m: dict, *, wd_abbr) -> str:
     return "".join(parts)
 
 
-def acf_spec_to_string(typ: str, spec, *, tok, tok_range) -> str:
+def acf_spec_to_string(typ: str, spec: Any, *, tok: Any, tok_range: Any) -> str:
     if typ == "y" and isinstance(spec, list):
         out = []
         for item in spec:

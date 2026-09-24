@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from nautical_core.lifecycle_outbox import (
     LifecycleOutboxError,
-    LifecycleOutboxRepository,
+    _LifecycleOutboxRepository,
     OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE,
     OutboxResultKind,
 )
@@ -20,7 +20,7 @@ from nautical_core.panel_diagnostics import file_source_warnings
 
 class StructuredFailureBoundaryTests(unittest.TestCase):
     def test_outbox_integrity_check_accepts_healthy_database(self) -> None:
-        repository = LifecycleOutboxRepository(Path("/tmp/nautical-integrity-test"))
+        repository = _LifecycleOutboxRepository(Path("/tmp/nautical-integrity-test"))
         connection = Mock()
         connection.execute.return_value.fetchone.return_value = ("ok",)
 
@@ -29,7 +29,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
         connection.execute.assert_called_once_with("PRAGMA quick_check")
 
     def test_outbox_integrity_check_fails_closed_on_database_corruption(self) -> None:
-        repository = LifecycleOutboxRepository(Path("/tmp/nautical-integrity-test"))
+        repository = _LifecycleOutboxRepository(Path("/tmp/nautical-integrity-test"))
         connection = Mock()
         connection.execute.side_effect = sqlite3.DatabaseError("database disk image is malformed")
 
@@ -44,7 +44,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
             database = state / ".nautical_lifecycle_outbox.db"
             database.write_bytes(b"corrupt")
             (state / f"{database.name}-wal").write_bytes(b"wal")
-            repository = LifecycleOutboxRepository(taskdata)
+            repository = _LifecycleOutboxRepository(taskdata)
 
             quarantine = repository._quarantine_corrupt_state("database disk image is malformed")
 
@@ -60,7 +60,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
             marker = Path(directory) / ".nautical_outbox_recovery.lock"
             marker.write_text('{"created_at": 1, "pid": 12345}', encoding="utf-8")
             with patch("nautical_core.lifecycle_outbox.os.kill", side_effect=ProcessLookupError):
-                self.assertTrue(LifecycleOutboxRepository._reclaim_stale_recovery_lock(marker))
+                self.assertTrue(_LifecycleOutboxRepository._reclaim_stale_recovery_lock(marker))
             self.assertFalse(marker.exists())
 
     def test_old_incomplete_outbox_recovery_marker_is_reclaimed(self) -> None:
@@ -70,7 +70,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
             old = 1.0
             os.utime(marker, (old, old))
 
-            self.assertTrue(LifecycleOutboxRepository._reclaim_stale_recovery_lock(marker))
+            self.assertTrue(_LifecycleOutboxRepository._reclaim_stale_recovery_lock(marker))
             self.assertFalse(marker.exists())
 
     def test_panel_config_warning_reports_missing_explicit_config(self) -> None:
@@ -127,7 +127,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
             (taskdata / ".nautical-state").symlink_to(target, target_is_directory=True)
 
             with self.assertRaises(LifecycleOutboxError):
-                LifecycleOutboxRepository(taskdata)._connect()
+                _LifecycleOutboxRepository(taskdata)._connect()
 
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
             self.assertEqual(list(target.iterdir()), [])
@@ -145,7 +145,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
             (state / ".nautical_lifecycle_outbox.db").symlink_to(target)
 
             with self.assertRaises(LifecycleOutboxError):
-                LifecycleOutboxRepository(taskdata)._connect()
+                _LifecycleOutboxRepository(taskdata)._connect()
 
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
 
@@ -161,14 +161,14 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
             (state / ".nautical_lifecycle_outbox.db-wal").symlink_to(target)
 
             with self.assertRaises(LifecycleOutboxError):
-                LifecycleOutboxRepository(taskdata)._connect()
+                _LifecycleOutboxRepository(taskdata)._connect()
 
             self.assertEqual(target.read_text(encoding="utf-8"), "sentinel")
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
 
     def test_outbox_closes_connection_when_setup_fails(self) -> None:
         with TemporaryDirectory() as td:
-            repository = LifecycleOutboxRepository(Path(td))
+            repository = _LifecycleOutboxRepository(Path(td))
             opened: list[sqlite3.Connection] = []
             real_connect = sqlite3.connect
 
@@ -193,7 +193,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
 
     def test_prune_classifies_filesystem_security_failure_and_closes_connection(self) -> None:
         with TemporaryDirectory() as td:
-            repository = LifecycleOutboxRepository(Path(td))
+            repository = _LifecycleOutboxRepository(Path(td))
             connection = Mock()
             with patch.object(repository, "_connect", return_value=connection), \
                     patch.object(repository, "_initialize"), \
@@ -206,7 +206,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
 
     def test_housekeeping_classifies_filesystem_security_failure_and_closes_connection(self) -> None:
         with TemporaryDirectory() as td:
-            repository = LifecycleOutboxRepository(Path(td))
+            repository = _LifecycleOutboxRepository(Path(td))
             repository.path.parent.mkdir(parents=True)
             repository.path.touch()
             connection = Mock()

@@ -30,7 +30,7 @@ except ImportError:  # standalone hook bootstrap loader
     TaskCodecError = _ProtocolCodecError
 
 
-def _codec():
+def _codec() -> Any:
     """Resolve the strict codec only when a probe actually decodes a task."""
     global DEFAULT_TASK_CODEC, TaskCodecError
     if DEFAULT_TASK_CODEC is None:
@@ -365,7 +365,7 @@ def probe_on_modify(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> Hoo
     return _invalid("on-modify", raw_bytes, raw_text, "on-modify must receive two JSON tasks")
 
 
-def read_stdin_bytes(*, max_bytes: int = MAX_JSON_BYTES, stream=None) -> bytes:
+def read_stdin_bytes(*, max_bytes: int = MAX_JSON_BYTES, stream: Any = None) -> bytes:
     source = stream if stream is not None else sys.stdin
     reader = getattr(source, "buffer", source)
     raw = reader.read(max(0, int(max_bytes)) + 1)
@@ -374,15 +374,15 @@ def read_stdin_bytes(*, max_bytes: int = MAX_JSON_BYTES, stream=None) -> bytes:
     return str(raw or "").encode("utf-8")
 
 
-def read_on_add(*, max_bytes: int = MAX_JSON_BYTES, stream=None) -> HookProtocolResult:
+def read_on_add(*, max_bytes: int = MAX_JSON_BYTES, stream: Any = None) -> HookProtocolResult:
     return probe_on_add(read_stdin_bytes(max_bytes=max_bytes, stream=stream), max_bytes=max_bytes)
 
 
-def read_on_modify(*, max_bytes: int = MAX_JSON_BYTES, stream=None) -> HookProtocolResult:
+def read_on_modify(*, max_bytes: int = MAX_JSON_BYTES, stream: Any = None) -> HookProtocolResult:
     return probe_on_modify(read_stdin_bytes(max_bytes=max_bytes, stream=stream), max_bytes=max_bytes)
 
 
-def emit_passthrough_json(task: dict | None, *, stream=None) -> None:
+def emit_passthrough_json(task: dict | None, *, stream: Any = None) -> None:
     target = stream if stream is not None else sys.stdout
     target.write(json.dumps(task if isinstance(task, dict) else {}, ensure_ascii=False))
     try:

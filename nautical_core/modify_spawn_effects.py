@@ -46,10 +46,11 @@ class SpawnChildPorts:
 
 
 def spawn_intent_ports_for(host: Any) -> SpawnIntentPorts:
+    lifecycle_outbox = host._module("lifecycle_outbox")
     return SpawnIntentPorts(
         context=getattr(host, "_INTEGRATION_CONTEXT", None),
         models=host._module("lifecycle_models"),
-        outbox_factory=host._module("lifecycle_outbox").LifecycleOutboxRepository,
+        outbox_factory=lifecycle_outbox.LifecycleOutboxRepository,
         application_service=host._module("lifecycle_application").LifecycleApplicationService,
         data_dir=host.TW_DATA_DIR,
     )
@@ -86,7 +87,7 @@ def spawn_child_ports_for(host: Any) -> SpawnChildPorts:
     )
 
 
-def enqueue_spawn_intent(ports: SpawnIntentPorts, plan) -> tuple[bool, str]:
+def enqueue_spawn_intent(ports: SpawnIntentPorts, plan: Any) -> tuple[bool, str]:
     """Stage one immutable lifecycle plan without re-entering Taskwarrior."""
     context = ports.context
     if context is None:
@@ -105,10 +106,14 @@ def enqueue_spawn_intent(ports: SpawnIntentPorts, plan) -> tuple[bool, str]:
     )
     if result.ok:
         return True, ""
-    return False, result.reason or "lifecycle outbox staging failed"
+    reason = str(result.reason or "").strip()
+    if reason:
+        return False, reason
+    kind = getattr(result.kind, "value", str(result.kind))
+    return False, f"lifecycle outbox staging returned {kind}"
 
 
-def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict, child: dict):
+def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict[str, Any], child: dict[str, Any]) -> Any:
     models = ports.models
     chain_id = str(parent.get("chainID") or "").strip()
     parent_uuid = str(parent.get("uuid") or "").strip()
@@ -134,7 +139,13 @@ def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict, child: dic
     )
 
 
-def spawn_child_atomic(ports: SpawnChildPorts, child_task, parent_task_with_nextlink: dict, *, lifecycle_plan=None):
+def spawn_child_atomic(
+    ports: SpawnChildPorts,
+    child_task: Any,
+    parent_task_with_nextlink: dict[str, Any],
+    *,
+    lifecycle_plan: Any = None,
+) -> Any:
     if hasattr(child_task, "to_mapping"):
         child_task = child_task.to_mapping()
     return ports.spawn.spawn_child_atomic(

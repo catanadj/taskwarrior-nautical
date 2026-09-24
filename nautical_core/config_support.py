@@ -157,11 +157,11 @@ def validated_user_dir(
 def read_toml_result(
     path: str,
     *,
-    tomllib_mod,
-    warn_missing_toml_parser,
-    warn_toml_parse_error,
-    error_sink=None,
-):
+    tomllib_mod: Any,
+    warn_missing_toml_parser: Any,
+    warn_toml_parse_error: Any,
+    error_sink: Any = None,
+) -> ConfigReadResult:
     try:
         if not path or not os.path.exists(path):
             return ConfigReadResult("absent", {})
@@ -237,11 +237,11 @@ def read_toml_result(
 def read_toml(
     path: str,
     *,
-    tomllib_mod,
-    warn_missing_toml_parser,
-    warn_toml_parse_error,
-    error_sink=None,
-):
+    tomllib_mod: Any,
+    warn_missing_toml_parser: Any,
+    warn_toml_parse_error: Any,
+    error_sink: Any = None,
+) -> dict:
     """Compatibility wrapper returning only the parsed table."""
     return read_toml_result(
         path,
@@ -252,7 +252,7 @@ def read_toml(
     ).data
 
 
-def warn_env_config_missing(env_path: str, *, warn_once_per_day_any) -> None:
+def warn_env_config_missing(env_path: str, *, warn_once_per_day_any: Any) -> None:
     warn_once_per_day_any(
         "config_missing",
         "[nautical] NAUTICAL_CONFIG path missing; using defaults.",
@@ -275,7 +275,7 @@ def normalize_keys(data: dict) -> dict:
     return out
 
 
-def normalize_preset_table(value) -> dict[str, str]:
+def normalize_preset_table(value: Any) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
     out: dict[str, str] = {}
@@ -288,11 +288,11 @@ def normalize_preset_table(value) -> dict[str, str]:
     return out
 
 
-def normalize_anchor_presets(value) -> dict[str, str]:
+def normalize_anchor_presets(value: Any) -> dict[str, str]:
     return normalize_preset_table(value)
 
 
-def config_paths(*, warn_env_config_missing, taskdata: str | None = None, error_sink=None) -> list[str]:
+def config_paths(*, warn_env_config_missing: Any, taskdata: str | None = None, error_sink: Any = None) -> list[str]:
     env_path = os.environ.get("NAUTICAL_CONFIG")
     if env_path:
         raw_env = str(env_path).strip()
@@ -376,10 +376,10 @@ def config_paths(*, warn_env_config_missing, taskdata: str | None = None, error_
 def load_config(
     *,
     defaults: dict,
-    config_paths,
-    read_toml_result,
-    normalize_keys,
-):
+    config_paths: Any,
+    read_toml_result: Any,
+    normalize_keys: Any,
+) -> dict:
     cfg = dict(defaults)
     chosen = None
 
@@ -425,13 +425,13 @@ def load_config(
     return cfg
 
 
-def get_config(conf_cache, *, load_config):
+def get_config(conf_cache: Any, *, load_config: Any) -> Any:
     if conf_cache is None:
         conf_cache = copy.deepcopy(load_config())
     return copy.deepcopy(conf_cache), conf_cache
 
 
-def conf_raw(conf: Mapping[str, Any], key: str):
+def conf_raw(conf: Mapping[str, Any], key: str) -> Any:
     return conf.get(key)
 
 
@@ -527,7 +527,7 @@ def conf_uda_field_list(conf: Mapping[str, Any], key: str) -> list[str]:
     return out
 
 
-def trueish(v, default=False):
+def trueish(v: Any, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")

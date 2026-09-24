@@ -2,16 +2,34 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from types import SimpleNamespace
+from typing import Any, Protocol
+
+
+class TimePort(Protocol):
+    def time(self) -> float: ...
+    def sleep(self, seconds: float) -> None: ...
+
+
+class RandomPort(Protocol):
+    def uniform(self, start: float, end: float) -> float: ...
+
+
+class FcntlPort(Protocol):
+    LOCK_EX: int
+    LOCK_NB: int
+    LOCK_UN: int
+
+    def flock(self, file_descriptor: int, operation: int) -> None: ...
 
 
 def cache_dir(
-    current_cache_dir,
+    current_cache_dir: Any,
     *,
-    anchor_cache_dir_override,
-    nautical_cache_dir_path,
-    validated_user_dir,
-    select_cache_dir,
-):
+    anchor_cache_dir_override: Any,
+    nautical_cache_dir_path: Any,
+    validated_user_dir: Any,
+    select_cache_dir: Any,
+) -> Any:
     if current_cache_dir is not None:
         return current_cache_dir
     return select_cache_dir(
@@ -21,7 +39,13 @@ def cache_dir(
     )
 
 
-def safe_lock_sleep_once(sleep_base: float, jitter: float, *, time_mod, random_mod) -> None:
+def safe_lock_sleep_once(
+    sleep_base: float,
+    jitter: float,
+    *,
+    time_mod: TimePort,
+    random_mod: RandomPort,
+) -> None:
     try:
         delay = float(sleep_base or 0.0)
     except Exception:
@@ -35,7 +59,7 @@ def safe_lock_sleep_once(sleep_base: float, jitter: float, *, time_mod, random_m
         time_mod.sleep(delay)
 
 
-def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod) -> None:
+def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: Any) -> None:
     if not mkdir:
         return
     try:
@@ -46,7 +70,7 @@ def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod) -> None:
         pass
 
 
-def safe_lock_age(path_str: str, *, time_mod, os_mod) -> float | None:
+def safe_lock_age(path_str: str, *, time_mod: TimePort, os_mod: Any) -> float | None:
     try:
         with open(path_str, "r", encoding="utf-8") as fh:
             head = fh.read(64)
@@ -62,7 +86,13 @@ def safe_lock_age(path_str: str, *, time_mod, os_mod) -> float | None:
         return None
 
 
-def safe_lock_stale_pid(path_str: str, stale_after: float | None, *, time_mod, os_mod) -> bool:
+def safe_lock_stale_pid(
+    path_str: str,
+    stale_after: float | None,
+    *,
+    time_mod: TimePort,
+    os_mod: Any,
+) -> bool:
     try:
         with open(path_str, "r", encoding="utf-8") as fh:
             head = fh.read(64)
@@ -100,11 +130,11 @@ def safe_lock_fcntl_context(
     jitter: float,
     mode: int,
     mkdir: bool,
-    safe_lock_ensure_parent,
-    safe_lock_sleep_once,
-    fcntl_mod,
-    os_mod,
-):
+    safe_lock_ensure_parent: Any,
+    safe_lock_sleep_once: Any,
+    fcntl_mod: FcntlPort,
+    os_mod: Any,
+) -> Any:
     lf = None
     acquired = False
     safe_lock_ensure_parent(path_str, mkdir)
@@ -149,13 +179,13 @@ def safe_lock_excl_context(
     mode: int,
     mkdir: bool,
     stale_after: float | None,
-    safe_lock_ensure_parent,
-    safe_lock_stale_pid,
-    safe_lock_age,
-    safe_lock_sleep_once,
-    os_mod,
-    time_mod,
-):
+    safe_lock_ensure_parent: Any,
+    safe_lock_stale_pid: Any,
+    safe_lock_age: Any,
+    safe_lock_sleep_once: Any,
+    os_mod: Any,
+    time_mod: TimePort,
+) -> Any:
     fd = None
     acquired = False
     for _ in range(tries):
@@ -206,7 +236,7 @@ def safe_lock_excl_context(
 
 @contextmanager
 def safe_lock(
-    path,
+    path: Any,
     *,
     retries: int = 6,
     sleep_base: float = 0.05,
@@ -214,11 +244,11 @@ def safe_lock(
     mode: int = 0o600,
     mkdir: bool = True,
     stale_after: float | None = 60.0,
-    fcntl_mod,
-    os_mod,
-    time_mod,
-    random_mod,
-):
+    fcntl_mod: FcntlPort | None,
+    os_mod: Any,
+    time_mod: TimePort,
+    random_mod: RandomPort,
+) -> Any:
     path_str = str(path) if path else ""
     if not path_str:
         yield False
@@ -269,13 +299,13 @@ def safe_lock(
 def cache_lock(
     key: str,
     *,
-    cache_lock_path,
-    safe_lock,
+    cache_lock_path: Any,
+    safe_lock: Any,
     cache_lock_retries: int,
     cache_lock_sleep_base: float,
     cache_lock_jitter: float,
     cache_lock_stale_after: float,
-):
+) -> Any:
     lock_path = cache_lock_path(key)
     if not lock_path:
         yield False
@@ -294,18 +324,18 @@ def cache_lock(
 
 def bind_locking(
     *,
-    cache_lock_path,
+    cache_lock_path: Any,
     retries: int,
     sleep_base: float,
     jitter: float,
     stale_after: float,
-    fcntl_mod,
-    os_mod,
-    time_mod,
-    random_mod,
-):
+    fcntl_mod: FcntlPort | None,
+    os_mod: Any,
+    time_mod: TimePort,
+    random_mod: RandomPort,
+) -> Any:
     """Bind lock dependencies once for one core facade instance."""
-    def bound_safe_lock(path, **kwargs):
+    def bound_safe_lock(path: Any, **kwargs: Any) -> Any:
         return safe_lock(
             path,
             fcntl_mod=fcntl_mod,
@@ -315,7 +345,7 @@ def bind_locking(
             **kwargs,
         )
 
-    def bound_cache_lock(key):
+    def bound_cache_lock(key: Any) -> Any:
         return cache_lock(
             key,
             cache_lock_path=cache_lock_path,

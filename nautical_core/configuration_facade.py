@@ -121,29 +121,13 @@ def sync_exports(
 ) -> bool:
     if not initial_sync:
         return False
-    value_for = getattr(core_config, "loaded_config_value", None)
-    config_keys = {
-        "WRAND_SALT": "wrand_salt",
-        "LOCAL_TZ_NAME": "tz",
-        "SEASON_HEMISPHERE": "season_hemisphere",
-        "SEASON_MODE": "season_mode",
-        "ANCHOR_FILE_DIR": "anchor_file_dir",
-        "OMIT_FILE_DIR": "omit_file_dir",
-        "ANCHOR_PRESETS": "anchor_presets",
-        "OMIT_PRESETS": "omit_presets",
-        "BUSINESS_CALENDAR_CONFIG": "business_calendar",
-        "ASTRONOMY_CONFIG": "astronomy",
-    }
     for name in names:
         config_name = name if not name.startswith("_") else name[1:]
         if name != "SEASON_HEMISPHERE" or not season_override:
-            fallback = getattr(core_config, config_name)
-            key = config_keys.get(config_name, config_name.lower())
-            namespace[name] = (
-                value_for(key, fallback)
-                if callable(value_for)
-                else fallback
-            )
+            # ``core_config`` has already applied schema normalization here
+            # (for example integer bounds and UDA-field filtering).  Copy its
+            # effective exports rather than raw values from ``_CONF``.
+            namespace[name] = getattr(core_config, config_name)
     return True
 
 

@@ -105,7 +105,11 @@ def enqueue_spawn_intent(ports: SpawnIntentPorts, plan) -> tuple[bool, str]:
     )
     if result.ok:
         return True, ""
-    return False, result.reason or "lifecycle outbox staging failed"
+    reason = str(result.reason or "").strip()
+    if reason:
+        return False, reason
+    kind = getattr(result.kind, "value", str(result.kind))
+    return False, f"lifecycle outbox staging returned {kind}"
 
 
 def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict, child: dict):

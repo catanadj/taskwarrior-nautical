@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -178,7 +179,11 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
         staged, reason = services.stage_recovery_plan(plan.plan)
     except Exception as exc:
         services.diag(f"expiration lifecycle staging failed: {exc}")
-        render_recovery_warning(task, "The expired successor could not be staged for lifecycle drain.", services=services)
+        reason = "The expired successor could not be staged for lifecycle drain."
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            detail = str(exc).strip() or type(exc).__name__
+            reason = f"{reason} [{type(exc).__name__}: {detail}]"
+        render_recovery_warning(task, reason, services=services)
         return True
     if staged:
         _render_recovery_panel(

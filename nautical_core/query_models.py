@@ -35,6 +35,14 @@ HARD_MAX_FILE_SKIPS = 10000
 
 QueryStatus = Literal["found", "empty", "exhausted", "absent", "unavailable", "invalid"]
 OmissionPolicy = Literal["exclude", "include", "report"]
+OMISSION_POLICIES = frozenset(("exclude", "include", "report"))
+
+
+def validate_omission_policy(value: object) -> OmissionPolicy:
+    """Validate and narrow omission policy values at the public boundary."""
+    if value not in OMISSION_POLICIES:
+        raise QueryContractError("omission_policy must be exclude, include, or report")
+    return cast(OmissionPolicy, value)
 
 
 class QueryContractError(ValueError):
@@ -268,8 +276,7 @@ class OccurrenceQueryRequest:
             raise QueryContractError("occurrence query requires an end boundary or count")
         count = None if self.count is None else _positive_int(self.count, "count", HARD_MAX_OCCURRENCES)
         start_inclusive = _bool(self.start_inclusive, "start_inclusive")
-        if self.omission_policy not in {"exclude", "include", "report"}:
-            raise QueryContractError("omission_policy must be exclude, include, or report")
+        validate_omission_policy(self.omission_policy)
         normalized_limits: dict[str, int] = {}
         for field, value, maximum in (
             ("max_tasks", self.max_tasks, HARD_MAX_TASKS),

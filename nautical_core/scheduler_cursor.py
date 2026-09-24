@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from .query_models import OmissionPolicy
+from .query_models import OmissionPolicy, validate_omission_policy
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,8 +60,10 @@ class OccurrenceRangeRequest:
             raise TypeError("Occurrence range end must be a datetime.")
         if isinstance(self.limit, bool) or not isinstance(self.limit, int) or self.limit < 0:
             raise ValueError("Occurrence range limit must be a non-negative integer.")
-        if self.omission_policy not in {"exclude", "include", "report"}:
-            raise ValueError("Occurrence omission policy must be exclude, include, or report.")
+        try:
+            validate_omission_policy(self.omission_policy)
+        except ValueError as exc:
+            raise ValueError("Occurrence omission policy must be exclude, include, or report.") from exc
         if isinstance(self.max_iterations, bool) or not isinstance(self.max_iterations, int) or self.max_iterations <= 0:
             raise ValueError("Occurrence range iteration limit must be positive.")
         if isinstance(self.max_file_skips, bool) or not isinstance(self.max_file_skips, int) or self.max_file_skips <= 0:

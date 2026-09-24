@@ -702,7 +702,10 @@ def _reset_navigator_runtime_state() -> None:
 
 def _show_config_drift_warning() -> bool:
     """Warn before forecasts when the loaded config no longer matches disk."""
-    drift = core.configuration_drift()
+    try:
+        drift = core.configuration_drift()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise RuntimeError(f"Navigator configuration drift inspection failed: {exc}") from exc
     if not drift.get("changed"):
         return False
     _reset_navigator_runtime_state()
@@ -3461,7 +3464,11 @@ def main():
         console.print(f"[{COLORS['error']}]Error: {_format_runtime_error(exc)}[/]")
         sys.exit(2)
 
-    config_drifted = _show_config_drift_warning()
+    try:
+        config_drifted = _show_config_drift_warning()
+    except (OSError, RuntimeError, ValueError) as exc:
+        console.print(f"[{COLORS['error']}]Error: {_format_runtime_error(exc)}[/]")
+        sys.exit(2)
 
     if args.self_check or args.explain or args.validate:
         code = 0

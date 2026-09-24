@@ -555,9 +555,17 @@ class TaskReadRepository:
         *,
         statuses: Sequence[str] = ALL_TASK_STATUSES,
         expected_prev_link: str = "",
+        complete_chain_history: bool = False,
         refresh: bool = False,
     ) -> TaskRead[TaskRow]:
-        read = self._slot_read(TaskQueryKind.CHILD_SLOT, chain_id, link, statuses=statuses, refresh=refresh)
+        read = self._slot_read(
+            TaskQueryKind.CHILD_SLOT,
+            chain_id,
+            link,
+            statuses=statuses,
+            refresh=refresh,
+            require_complete_history=complete_chain_history,
+        )
         expected = str(expected_prev_link or "").strip().lower()
         if not expected or not isinstance(read, Found):
             return read
@@ -580,7 +588,7 @@ class TaskReadRepository:
         chain_id: str,
         link: int,
         *,
-        statuses: Sequence[str] = ("completed", "deleted"),
+        statuses: Sequence[str] = (TaskStatus.COMPLETED.value, TaskStatus.DELETED.value),
         refresh: bool = False,
     ) -> TaskRead[TaskRow]:
         return self._slot_read(
@@ -732,7 +740,11 @@ class TaskReadRepository:
     def lifecycle_candidates(
         self,
         *,
-        statuses: Sequence[str] = ("completed", "deleted", "pending"),
+        statuses: Sequence[str] = (
+            TaskStatus.COMPLETED.value,
+            TaskStatus.DELETED.value,
+            TaskStatus.PENDING.value,
+        ),
         scope_filter: str | None = None,
         bounded: bool = False,
         refresh: bool = False,

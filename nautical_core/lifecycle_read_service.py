@@ -25,7 +25,7 @@ from .integration_models import (
 )
 from .task_read_repository import AuthoritativeTaskSnapshot
 from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
-from .task_models import TaskObservation
+from .task_models import TaskObservation, TaskStatus
 
 TaskRow: TypeAlias = TaskObservation
 ChainSnapshotValue = AuthoritativeTaskSnapshot | tuple[TaskRow, ...]
@@ -270,7 +270,7 @@ class LifecycleReadService:
             return Absent(f"chain:{chain_id}", "task has no preceding links")
 
         def pick_best(candidates: list[TaskRow]) -> TaskRow | None:
-            for status in ("pending", "completed", "deleted"):
+            for status in (TaskStatus.PENDING.value, TaskStatus.COMPLETED.value, TaskStatus.DELETED.value):
                 for task in candidates:
                     if str(task.get("status") or "").strip().lower() == status:
                         return task
@@ -453,7 +453,7 @@ class LifecycleReadService:
             raise RuntimeError("typed lifecycle task repository is unavailable")
         read = repository.chain_snapshot(
             chain_id,
-            statuses=("completed", "deleted", "pending", "recurring", "waiting"),
+            statuses=tuple(status.value for status in TaskStatus),
             complete_history=True,
             refresh=False,
         )

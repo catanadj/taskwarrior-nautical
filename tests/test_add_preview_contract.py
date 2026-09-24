@@ -60,6 +60,36 @@ class AddPreviewCompositionTests(unittest.TestCase):
             "w:sun",
         )
 
+    def test_preview_dnf_propagates_unexpected_description_failures(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "description failed"):
+            add_anchor_preview.anchor_preview_prepare_dnf(
+                {"anchor_mode": "skip"},
+                "w:mon",
+                datetime(2026, 1, 5, 9, tzinfo=UTC),
+                [],
+                SimpleNamespace(add_ms=lambda *_args: None),
+                core=SimpleNamespace(describe_anchor_dnf=lambda *_args: (_ for _ in ()).throw(RuntimeError("description failed"))),
+                validate_anchor_syntax_strict=lambda _value: ([[]], None),
+                validate_anchor_mode=lambda value: (value or "skip", None),
+                error_and_exit=lambda _rows: None,
+            )
+
+    def test_preview_omit_propagates_unexpected_lint_failures(self) -> None:
+        core = SimpleNamespace(
+            _import_sibling=lambda _name: SimpleNamespace(normalize_omit_expr=lambda value: value),
+            _parser_api=SimpleNamespace(resolve_omit_presets=lambda value: value),
+            describe_anchor_expr=lambda value: value,
+            lint_anchor_expr=lambda _value: (_ for _ in ()).throw(RuntimeError("lint failed")),
+        )
+        with self.assertRaisesRegex(RuntimeError, "lint failed"):
+            add_anchor_preview.anchor_preview_prepare_omit_dnf(
+                {"omit": "w:sun"},
+                [],
+                core=core,
+                validate_omit_syntax_strict=lambda _value: ([[]], None),
+                error_and_exit=lambda _rows: None,
+            )
+
     def test_compact_anchor_preview_requests_only_its_first_occurrence(self):
         self.assertEqual(add_anchor_preview._initial_occurrence_limit(200, True), 1)
         self.assertEqual(add_anchor_preview._initial_occurrence_limit(3, False), 19)

@@ -162,14 +162,14 @@ def anchor_preview_prepare_dnf(
         rows.append(("Pattern", f"[white]{anchor_str}[/]  {tag}"))
     try:
         rows.append(("Natural", f"[white]{core.describe_anchor_dnf(dnf, task)}[/]"))
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         pass
     try:
         selection = core._import_sibling("position_selection")
         advice = selection.selection_advice_for_dnf(dnf)
         if advice:
             rows.append(("Advice", f"[yellow]{' '.join(advice)}[/]"))
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         pass
     return dnf, mode
 
@@ -201,17 +201,17 @@ def anchor_preview_prepare_omit_dnf(
             anchor_omit = core._import_sibling("anchor_omit")
             omit_expr = core._parser_api.resolve_omit_presets(omit_str)
             omit_norm = anchor_omit.normalize_omit_expr(omit_expr)
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             omit_norm = omit_str
         try:
             rows.append(("Except", f"[white]{core.describe_anchor_expr(omit_norm)}[/]"))
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             pass
         try:
             _fatal, warns = core.lint_anchor_expr(omit_norm)
             for w in warns or []:
                 rows.append(("Warning", f"[yellow]{w}[/]"))
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             pass
     if omit_file:
         try:
@@ -228,7 +228,7 @@ def anchor_preview_prepare_omit_dnf(
     try:
         anchor_omit = core._import_sibling("anchor_omit")
         return anchor_omit.combine_omit_state(omit_dnf=omit_dnf, omit_dates=omit_dates)
-    except Exception:
+    except (KeyError, TypeError, ValueError):
         if omit_dates:
             return {"dnf": omit_dnf, "dates": frozenset(omit_dates)}
         return omit_dnf
@@ -453,7 +453,7 @@ def _preview_omit_label(
         return "omitted"
     try:
         text = str(omit_description_for_task_date(task, item_local.date()) or "").strip()
-    except Exception:
+    except (KeyError, TypeError, ValueError):
         text = ""
     if not text:
         return "omitted"

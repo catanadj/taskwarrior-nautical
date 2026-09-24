@@ -832,6 +832,10 @@ bridge verification now completes the normal enforced budget with exit code 0
 and all 78 workload results present; the full suite remains 1318 passed with 3
 skipped.
 
+The extended workflow profile was then rerun in the environment with Astral
+3.2 and completed successfully: exit code 0, 33 workload results, and no
+failures.
+
 ### Post-WP7 typing hardening follow-up
 
 - [x] Replace the highest-value callback-boundary `Any` annotations with small

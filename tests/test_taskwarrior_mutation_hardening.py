@@ -15,6 +15,7 @@ from nautical_core.integration_models import (
     MutationOperation,
     MutationOutcomeKind,
     MutationRequest,
+    ParentLinkPayload,
     TaskCommand,
     Unavailable,
 )
@@ -24,6 +25,92 @@ from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
 
 class MutationHardeningTests(unittest.TestCase):
+    def test_batch_postverification_fails_closed_for_untrusted_snapshots(self) -> None:
+        from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+
+        parent_uuid = "00000000-0000-4000-8000-000000000930"
+        child_uuid = "00000000-0000-4000-8000-000000000931"
+        parent = {
+            "uuid": parent_uuid, "status": "completed", "chain": "on",
+            "chainID": "batch-verify", "link": 1,
+            "modified": "20260813T120000Z", "cp": "1d",
+            "nextLink": child_uuid[:8],
+        }
+        child = {
+            "uuid": child_uuid, "chainID": "batch-verify", "link": 2,
+            "prevLink": parent_uuid[:8], "status": "pending", "chain": "on",
+            "cp": "1d",
+        }
+        guard = MutationGuard(
+            task_uuid=parent_uuid, status=parent["status"], chain_id=parent["chainID"],
+            link=parent["link"], recurrence_identity=recurrence_fingerprint(parent),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+            expected_mutation_epoch=0, chain="on",
+        )
+        child_payload = ChildImportPayload(
+            parent_uuid=parent_uuid, child_uuid=child_uuid,
+            chain_id=child["chainID"], target_link=2, fields=tuple(child.items()),
+        )
+        child_request = MutationRequest(MutationOperation.CHILD_IMPORT, guard, child_payload)
+        parent_request = MutationRequest(
+            MutationOperation.PARENT_LINK,
+            guard,
+            ParentLinkPayload(parent_uuid, child_uuid[:8]),
+        )
+
+        class Repository:
+            def __init__(self, mode):
+                self.mode = mode
+
+            def read_uuid_set(self, request):
+                if self.mode == "unavailable":
+                    evidence = FailureEvidence(
+                        TaskCommand(("task", "export"), "verify", 1.0),
+                        CommandFailureKind.BUSY, 1, 1, 0.01, True, "lock active",
+                    )
+                    return SetReadResult(
+                        SetReadStatus.UNAVAILABLE, request.uuids, failures=(evidence,),
+                    )
+                if self.mode == "malformed":
+                    return SetReadResult(
+                        SetReadStatus.MALFORMED, request.uuids, evidence=("malformed",),
+                    )
+                found = {child_uuid: dict(child), parent_uuid: dict(parent)}
+                if self.mode == "stale":
+                    found[child_uuid]["link"] = 99
+                    found[parent_uuid]["nextLink"] = "stale00"
+                return SetReadResult(
+                    SetReadStatus.DUPLICATE if self.mode == "duplicate" else SetReadStatus.COMPLETE,
+                    request.uuids,
+                    found=found,
+                    complete_for_requested_identities=self.mode != "duplicate",
+                    evidence=("duplicate identity",) if self.mode == "duplicate" else (),
+                )
+
+        for mode, expected in (
+            ("unavailable", MutationOutcomeKind.RETRYABLE),
+            ("malformed", MutationOutcomeKind.MANUAL_REVIEW),
+            ("stale", MutationOutcomeKind.MANUAL_REVIEW),
+            ("duplicate", MutationOutcomeKind.MANUAL_REVIEW),
+        ):
+            with self.subTest(snapshot=mode):
+                service = TaskwarriorMutationService(SimpleNamespace(
+                    repository=Repository(mode), mutation_epoch=0,
+                ))
+                child_outcome = service.verify_lifecycle_children((child_request,))[child_uuid]
+                parent_outcome = service.verify_lifecycle_parents((parent_request,))[parent_uuid]
+                self.assertIs(child_outcome.kind, expected)
+                self.assertIs(parent_outcome.kind, expected)
+
+        from nautical_core.taskwarrior_mutations import _child_import_matches
+
+        null_payload = ChildImportPayload(
+            parent_uuid=parent_uuid, child_uuid=child_uuid,
+            chain_id=child["chainID"], target_link=2,
+            fields=tuple(dict(child, anchor_file="null").items()),
+        )
+        self.assertTrue(_child_import_matches(child, null_payload, parent_uuid))
+
     def test_lifecycle_child_prefetch_reuses_authoritative_uuid_set_read(self) -> None:
         from nautical_core.task_set_reads import SetReadResult, SetReadStatus
 

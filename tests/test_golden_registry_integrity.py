@@ -11,7 +11,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "343b18604cb108b3fafb8ce3ec4e7b0f4196f874f3b6126ce7ea20345ab78ae8"
+    "877e143e1bb10fb7e7b96c01b4d4b147e60ab1dac2584632bdb271bf0aba41fb"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -41,8 +41,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "a50c35653dfee14b2039017f576824e9f9bc24103d475290190f6fef7ff0b08e",
     ),
     "lifecycle and durable mutation": (
-        31,
-        "5bb26e9bbe91908483bfd733b9598793fca96e7e76852f0f19697d9b1c3172cc",
+        30,
+        "956b0aeeab094fde5d16906d84699ae22f3af4abe037dd01647ceb1429844900",
     ),
     "operator/query/Doctor/Navigator": (
         30,
@@ -121,6 +121,7 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_child_import_rejects_incomplete_existing_rows",
         "test_lifecycle_child_prefetch_reuses_authoritative_uuid_set_read",
         "test_lifecycle_batch_prefetch_uses_one_union_uuid_set_read",
+        "test_batch_postverification_fails_closed_for_untrusted_snapshots",
         "test_modify_lifecycle_activation_requires_complete_root_identity",
         "test_moon_phase_source_and_filter_compose_with_weekday",
         "test_moon_phase_source_emits_once_per_phase_window",
@@ -639,8 +640,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         performance = importlib.import_module("dev_tools.golden_tests.performance")
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
-        self.assertEqual(len(top_level), 347)
-        self.assertEqual(len(registered), 396)
+        self.assertEqual(len(top_level), 346)
+        self.assertEqual(len(registered), 395)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(hooks.TESTS), 5)
         self.assertEqual(len(operator.TESTS), 4)
@@ -649,7 +650,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(lifecycle.TESTS), 15)
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 472)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 473)
 
     def test_retained_cases_have_a_stable_exclusive_acceptance_inventory(self):
         registered = [fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)]

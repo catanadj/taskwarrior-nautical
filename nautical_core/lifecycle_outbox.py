@@ -1753,25 +1753,12 @@ class _LifecycleOutboxRepository:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
-            with self._transaction(conn):
-                rows = conn.execute(
-                    "SELECT intent_id FROM lifecycle_outbox "
-                    "WHERE processing_state=? AND acknowledged_at > 0 AND acknowledged_at <= ? "
-                    "ORDER BY acknowledged_at ASC, intent_id ASC LIMIT ?",
-                    (OutboxProcessingState.ACKNOWLEDGED.value, cutoff, int(limit)),
-                ).fetchall()
-                removed = 0
-                for row in rows:
-                    result = conn.execute(
-                        "DELETE FROM lifecycle_outbox WHERE intent_id=? AND processing_state=? "
-                        "AND acknowledged_at > 0 AND acknowledged_at <= ?",
-                        (str(row[0]), OutboxProcessingState.ACKNOWLEDGED.value, cutoff),
-                    )
-                    removed += int(result.rowcount or 0)
-            checkpoint_state = "not_requested"
-            if checkpoint:
-                checkpoint_row = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-                checkpoint_state = "completed" if checkpoint_row is not None else "unavailable"
+            from .lifecycle_outbox_maintenance import checkpoint_wal, prune_acknowledged_rows
+
+            removed = prune_acknowledged_rows(
+                conn, cutoff=cutoff, limit=int(limit), transaction=self._transaction
+            )
+            checkpoint_state = checkpoint_wal(conn, requested=checkpoint)
             return OutboxMaintenanceResult(
                 OutboxResultKind.APPLIED,
                 removed=removed,
@@ -1848,69 +1835,27 @@ class _LifecycleOutboxRepository:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
-            with self._transaction(conn):
-                conn.execute(
-                    "CREATE TABLE IF NOT EXISTS lifecycle_maintenance ("
-                    "key TEXT PRIMARY KEY, value REAL NOT NULL)"
-                )
-                previous = conn.execute(
-                    "SELECT value FROM lifecycle_maintenance WHERE key='housekeeping_last_attempt'"
-                ).fetchone()
-                last_attempt = float(previous[0]) if previous is not None else 0.0
-                eligible = int(
-                    conn.execute(
-                        "SELECT COUNT(*) FROM lifecycle_outbox "
-                        "WHERE processing_state=? AND acknowledged_at > 0 AND acknowledged_at <= ?",
-                        (OutboxProcessingState.ACKNOWLEDGED.value, cutoff),
-                    ).fetchone()[0]
-                    or 0
-                )
-                db_size = int(self.path.stat().st_size) if self.path.exists() else 0
-                if last_attempt > 0 and now - last_attempt < interval:
-                    return OutboxMaintenanceResult(
-                        OutboxResultKind.APPLIED,
-                        cutoff=cutoff,
-                        retention_seconds=retention,
-                        skipped=True,
-                        reason="cooldown",
-                    )
-                if eligible == 0 and db_size < size_threshold:
-                    return OutboxMaintenanceResult(
-                        OutboxResultKind.APPLIED,
-                        cutoff=cutoff,
-                        retention_seconds=retention,
-                        skipped=True,
-                        reason="no_work",
-                    )
-                conn.execute(
-                    "INSERT INTO lifecycle_maintenance(key, value) VALUES('housekeeping_last_attempt', ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                    (now,),
-                )
-                rows = conn.execute(
-                    "SELECT intent_id FROM lifecycle_outbox "
-                    "WHERE processing_state=? AND acknowledged_at > 0 AND acknowledged_at <= ? "
-                    "ORDER BY acknowledged_at ASC, intent_id ASC LIMIT ?",
-                    (OutboxProcessingState.ACKNOWLEDGED.value, cutoff, row_limit),
-                ).fetchall()
-                removed = 0
-                for row in rows:
-                    result = conn.execute(
-                        "DELETE FROM lifecycle_outbox WHERE intent_id=? AND processing_state=? "
-                        "AND acknowledged_at > 0 AND acknowledged_at <= ?",
-                        (str(row[0]), OutboxProcessingState.ACKNOWLEDGED.value, cutoff),
-                    )
-                    removed += int(result.rowcount or 0)
-            checkpoint_state = "not_requested"
-            if checkpoint and removed:
-                checkpoint_row = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-                checkpoint_state = "completed" if checkpoint_row is not None else "unavailable"
+            from .lifecycle_outbox_maintenance import housekeeping_rows
+
+            outcome = housekeeping_rows(
+                conn,
+                now=now,
+                cutoff=cutoff,
+                interval_seconds=interval,
+                size_threshold_bytes=size_threshold,
+                limit=row_limit,
+                checkpoint=checkpoint,
+                database_size=lambda: self.path.stat().st_size if self.path.exists() else 0,
+                transaction=self._transaction,
+            )
             return OutboxMaintenanceResult(
                 OutboxResultKind.APPLIED,
-                removed=removed,
+                removed=outcome.removed,
                 cutoff=cutoff,
                 retention_seconds=retention,
-                checkpoint=checkpoint_state,
+                checkpoint=outcome.checkpoint,
+                skipped=outcome.skipped,
+                reason=outcome.reason,
             )
         except sqlite3.OperationalError as exc:
             return OutboxMaintenanceResult(

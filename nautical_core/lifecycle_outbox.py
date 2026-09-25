@@ -17,7 +17,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import time
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence, cast
 
 from nautical_core.lifecycle_models import ExecutionStage, LifecyclePlan
 from nautical_core.lifecycle_outbox_codec import (
@@ -1585,98 +1585,69 @@ class _LifecycleOutboxRepository:
                     f"outbox schema v{version} is incompatible with v{OUTBOX_SCHEMA_VERSION}"
                 )
             self._validate_schema(conn)
-            integrity_row = conn.execute("PRAGMA quick_check").fetchone()
-            integrity = str(integrity_row[0] if integrity_row else "unknown")
-            empty["integrity"] = integrity
-            states = {
-                str(row[0]): int(row[1])
-                for row in conn.execute(
-                    "SELECT processing_state, COUNT(*) FROM lifecycle_outbox GROUP BY processing_state"
-                )
-            }
-            stale_after = max(0.0, float(stale_after))
-            empty["stale_claims"] = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM lifecycle_outbox "
-                    "WHERE processing_state=? AND lease_expires_at <= ?",
-                    (OutboxProcessingState.CLAIMED.value, now - stale_after),
-                ).fetchone()[0]
-                or 0
-            )
-            empty["max_attempts"] = int(
-                conn.execute("SELECT COALESCE(MAX(attempts), 0) FROM lifecycle_outbox").fetchone()[0] or 0
-            )
             retention = float(retention_seconds)
             if retention < 0 or retention != retention or retention in {float("inf"), float("-inf")}:
                 raise LifecycleOutboxError("retention_seconds must be finite and non-negative")
-            retention_cutoff = now - retention
-            retention_row = conn.execute(
-                "SELECT COUNT(*), COALESCE(MIN(acknowledged_at), 0), "
-                "SUM(CASE WHEN acknowledged_at > 0 AND acknowledged_at <= ? THEN 1 ELSE 0 END) "
-                "FROM lifecycle_outbox WHERE processing_state=?",
-                (retention_cutoff, OutboxProcessingState.ACKNOWLEDGED.value),
-            ).fetchone()
-            oldest_ack = float(retention_row[1] or 0)
-            empty["retention"] = {
-                "retention_seconds": retention,
-                "acknowledged": int(retention_row[0] or 0),
-                "eligible": int(retention_row[2] or 0),
-                "oldest_age_s": max(0, int(now - oldest_ack)) if oldest_ack else 0,
-            }
-            records = []
-            if intent_id:
-                rows = conn.execute(
-                    "SELECT * FROM lifecycle_outbox WHERE intent_id=?",
-                    (str(intent_id).strip(),),
-                )
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM lifecycle_outbox "
-                    "ORDER BY CASE processing_state "
-                    "WHEN 'manual_review' THEN 0 WHEN 'quarantined' THEN 1 "
-                    "WHEN 'retry' THEN 2 WHEN 'claimed' THEN 3 WHEN 'ready' THEN 4 "
-                    "ELSE 5 END, updated_at ASC, intent_id ASC LIMIT ?",
-                    (max(0, int(limit)),),
-                )
-            for row in rows:
+            from .lifecycle_outbox_queries import StatusLifecycleRecord, StatusRowPoison, status_summary
+
+            def decode_status_row(row: sqlite3.Row) -> StatusLifecycleRecord:
                 try:
-                    record = self._from_row(row)
-                    records.append(
-                        {
-                            "intent_id": record.intent_id,
-                            "state": record.state.value,
-                            "stage": record.stage.value,
-                            "attempts": record.attempts,
-                            "lease_expires_at": record.lease_expires_at,
-                            "lease_age_s": (
-                                max(0, int(now - record.lease_expires_at))
-                                if record.lease_expires_at
-                                else 0
-                            ),
-                            "failure": None if record.failure is None else {
-                                "code": record.failure.code,
-                                "message": record.failure.message,
-                            },
-                            "plan": {
-                                "schema_version": 2,
-                                "action": record.plan.action.value,
-                                "event": record.plan.identity.event.value,
-                                "chainID": record.plan.identity.chain_id,
-                                "parent_uuid": record.plan.identity.parent_uuid,
-                                "source_link": record.plan.identity.source_link,
-                                "target_link": record.plan.identity.target_link,
-                                "parent_guard": record.plan.parent_guard.to_dict(),
-                                "child_uuid": record.plan.child_dict().get("uuid"),
-                            },
-                        }
-                    )
+                    return cast(StatusLifecycleRecord, self._from_row(row))
                 except LifecycleOutboxError as exc:
-                    records.append(
-                        {"intent_id": str(row["intent_id"]), "state": "poison", "reason": str(exc)}
-                    )
-            empty["states"] = states
-            empty["records"] = records
+                    raise StatusRowPoison(str(exc)) from exc
+
+            summary = status_summary(
+                conn,
+                now=now,
+                limit=limit,
+                stale_after=stale_after,
+                retention_seconds=retention,
+                intent_id=intent_id,
+                decode_row=decode_status_row,
+            )
+            empty["integrity"] = summary.integrity
+            empty["states"] = dict(summary.states)
+            empty["stale_claims"] = summary.stale_claims
+            empty["max_attempts"] = summary.max_attempts
+            empty["retention"] = {
+                "retention_seconds": summary.retention_seconds,
+                "acknowledged": summary.acknowledged,
+                "eligible": summary.eligible,
+                "oldest_age_s": summary.oldest_age_s,
+            }
+            def project_status_record(row: Any) -> dict[str, Any]:
+                if row.state == "poison":
+                    return {"intent_id": row.intent_id, "state": "poison", "reason": row.reason}
+                if row.plan is None or row.stage is None:
+                    raise LifecycleOutboxError("outbox status summary is missing decoded record fields")
+                return {
+                    "intent_id": row.intent_id,
+                    "state": row.state,
+                    "stage": row.stage,
+                    "attempts": row.attempts,
+                    "lease_expires_at": row.lease_expires_at,
+                    "lease_age_s": row.lease_age_s,
+                    "failure": None if row.failure is None else {
+                        "code": row.failure.code,
+                        "message": row.failure.message,
+                    },
+                    "plan": {
+                        "schema_version": row.plan.schema_version,
+                        "action": row.plan.action,
+                        "event": row.plan.event,
+                        "chainID": row.plan.chainID,
+                        "parent_uuid": row.plan.parent_uuid,
+                        "source_link": row.plan.source_link,
+                        "target_link": row.plan.target_link,
+                        "parent_guard": dict(row.plan.parent_guard),
+                        "child_uuid": row.plan.child_uuid,
+                    },
+                }
+
+            empty["records"] = [project_status_record(row) for row in summary.records]
             return OutboxResult(OutboxResultKind.APPLIED), empty
+        except ValueError as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), empty
         except LifecycleOutboxError as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), empty
         except sqlite3.OperationalError as exc:
@@ -1712,30 +1683,38 @@ class _LifecycleOutboxRepository:
                 )
             self._validate_schema(conn)
             from .integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
+            from .lifecycle_outbox_queries import snapshot_rows
 
-            records: list[Any] = []
-            for row in conn.execute("SELECT * FROM lifecycle_outbox ORDER BY intent_id ASC"):
+            def decode_lifecycle_row(row: sqlite3.Row) -> LifecycleOutboxRecord:
                 try:
-                    if str(row["work_kind"] or "lifecycle") == "integrity":
-                        encoded = str(row["plan_json"] or "")
-                        envelope = IntegrityOutboxEnvelope.from_dict(json.loads(encoded))
-                        if hashlib.sha256(encoded.encode("utf-8")).hexdigest() != str(row["plan_fingerprint"] or ""):
-                            raise LifecycleOutboxError("integrity envelope fingerprint mismatch")
-                        records.append(IntegrityOutboxRecord(
-                            envelope,
-                            OutboxProcessingState(str(row["processing_state"] or "")),
-                            ExecutionStage(str(row["lifecycle_stage"] or "")),
-                            str(row["lease_owner"] or ""),
-                            float(row["lease_expires_at"] or 0.0),
-                            int(row["attempts"] or 0),
-                        ))
-                    else:
-                        records.append(self._from_row(row))
-                except LifecycleOutboxError as exc:
-                    return OutboxResult(OutboxResultKind.REJECTED, reason=f"poison outbox row: {exc}"), ()
+                    return self._from_row(row)
                 except Exception as exc:
-                    return OutboxResult(OutboxResultKind.REJECTED, reason=f"poison outbox row: {type(exc).__name__}: {exc}"), ()
-            return OutboxResult(OutboxResultKind.APPLIED), tuple(records)
+                    detail = str(exc) if isinstance(exc, LifecycleOutboxError) else f"{type(exc).__name__}: {exc}"
+                    raise LifecycleOutboxError(f"poison outbox row: {detail}") from exc
+
+            def decode_integrity_row(row: sqlite3.Row) -> IntegrityOutboxRecord:
+                try:
+                    encoded = str(row["plan_json"] or "")
+                    envelope = IntegrityOutboxEnvelope.from_dict(json.loads(encoded))
+                    if hashlib.sha256(encoded.encode("utf-8")).hexdigest() != str(row["plan_fingerprint"] or ""):
+                        raise LifecycleOutboxError("integrity envelope fingerprint mismatch")
+                    return IntegrityOutboxRecord(
+                        envelope,
+                        OutboxProcessingState(str(row["processing_state"] or "")),
+                        ExecutionStage(str(row["lifecycle_stage"] or "")),
+                        str(row["lease_owner"] or ""),
+                        float(row["lease_expires_at"] or 0.0),
+                        int(row["attempts"] or 0),
+                    )
+                except Exception as exc:
+                    detail = str(exc) if isinstance(exc, LifecycleOutboxError) else f"{type(exc).__name__}: {exc}"
+                    raise LifecycleOutboxError(f"poison outbox row: {detail}") from exc
+
+            return OutboxResult(OutboxResultKind.APPLIED), snapshot_rows(
+                conn,
+                decode_lifecycle_row=decode_lifecycle_row,
+                decode_integrity_row=decode_integrity_row,
+            )
         except sqlite3.OperationalError as exc:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()
         except LifecycleOutboxError as exc:

@@ -269,6 +269,166 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             self.assertEqual(payload["schema_version"], 2)
             self.assertFalse((Path(directory) / ".nautical-state").exists())
 
+    def test_status_filters_and_orders_records_by_state_then_update_time_and_id(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 100.0)
+            intents = {}
+            for state in ("ready", "retry", "claimed", "quarantined", "manual_review"):
+                plan = self._plan(f"status-{state}")
+                intent_id = plan.identity.idempotency_key
+                intents[state] = intent_id
+                self.assertTrue(repository.enqueue(
+                    plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+                ).ok)
+                with sqlite3.connect(repository.path) as connection:
+                    connection.execute(
+                        "UPDATE lifecycle_outbox SET processing_state=?, lifecycle_stage=?, updated_at=?, "
+                        "lease_owner=?, lease_expires_at=? WHERE intent_id=?",
+                        (state, "finalized" if state == "manual_review" else "planned", 10.0,
+                         "owner" if state == "claimed" else "", 200.0 if state == "claimed" else 0.0, intent_id),
+                    )
+            tied_ready = self._plan("status-ready-tie")
+            tied_ready_id = tied_ready.identity.idempotency_key
+            self.assertTrue(repository.enqueue(
+                tied_ready, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_outbox SET updated_at=10.0 WHERE intent_id=?", (tied_ready_id,)
+                )
+
+            result, payload = repository.status(limit=2)
+            self.assertTrue(result.ok)
+            self.assertEqual(
+                [(row["state"], row["intent_id"]) for row in payload["records"]],
+                [("manual_review", intents["manual_review"]), ("quarantined", intents["quarantined"])],
+            )
+            filtered, filtered_payload = repository.status(intent_id=intents["retry"])
+            self.assertTrue(filtered.ok)
+            self.assertEqual([row["intent_id"] for row in filtered_payload["records"]], [intents["retry"]])
+            all_result, all_payload = repository.status(limit=10)
+            self.assertTrue(all_result.ok)
+            self.assertEqual(
+                [row["intent_id"] for row in all_payload["records"][-2:]],
+                sorted((intents["ready"], tied_ready_id)),
+            )
+
+    def test_snapshot_is_sorted_and_rejects_lifecycle_and_integrity_poison(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            plans = (self._plan("snapshot-z"), self._plan("snapshot-a"))
+            for plan in plans:
+                repository.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            result, records = repository.snapshot_records()
+            self.assertTrue(result.ok)
+            self.assertEqual(
+                [record.intent_id for record in records],
+                sorted(plan.identity.idempotency_key for plan in plans),
+            )
+
+        for poison_kind in ("lifecycle", "integrity"):
+            with self.subTest(poison_kind=poison_kind), TemporaryDirectory() as directory:
+                repository = _LifecycleOutboxRepository(Path(directory))
+                plans = (self._plan(f"snapshot-healthy-{poison_kind}"), self._plan(f"snapshot-poison-{poison_kind}"))
+                for plan in plans:
+                    repository.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+                poison_id = plans[1].identity.idempotency_key
+                with sqlite3.connect(repository.path) as connection:
+                    if poison_kind == "integrity":
+                        connection.execute(
+                            "UPDATE lifecycle_outbox SET work_kind='integrity', plan_json='{' WHERE intent_id=?",
+                            (poison_id,),
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE lifecycle_outbox SET plan_json='{' WHERE intent_id=?", (poison_id,)
+                        )
+                result, records = repository.snapshot_records()
+                self.assertEqual(result.kind, OutboxResultKind.REJECTED)
+                self.assertEqual(records, ())
+
+    def test_status_and_snapshot_reject_newer_schema_and_retry_on_locked_database(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            plan = self._plan("read-errors")
+            repository.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION + 1}")
+            status_result, _ = repository.status()
+            snapshot_result, snapshot = repository.snapshot_records()
+            self.assertEqual(status_result.kind, OutboxResultKind.REJECTED)
+            self.assertEqual(snapshot_result.kind, OutboxResultKind.REJECTED)
+            self.assertEqual(snapshot, ())
+
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION}")
+            from unittest.mock import patch
+
+            with patch("nautical_core.lifecycle_outbox.sqlite3.connect", side_effect=sqlite3.OperationalError("database is locked")):
+                status_result, _ = repository.status()
+                snapshot_result, snapshot = repository.snapshot_records()
+            self.assertEqual((status_result.kind, status_result.lock_busy), (OutboxResultKind.RETRYABLE, True))
+            self.assertEqual((snapshot_result.kind, snapshot_result.lock_busy), (OutboxResultKind.RETRYABLE, True))
+            self.assertEqual(snapshot, ())
+
+    def test_housekeeping_respects_cooldown_bounds_and_preserves_non_acknowledged_rows(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 1_000.0)
+            states = ("ready", "retry", "claimed", "manual_review", "quarantined", "acknowledged")
+            intents = {}
+            for index, state in enumerate(states):
+                plan = self._plan(f"housekeeping-{state}")
+                intent_id = plan.identity.idempotency_key
+                intents[state] = intent_id
+                repository.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+                with sqlite3.connect(repository.path) as connection:
+                    connection.execute(
+                        "UPDATE lifecycle_outbox SET processing_state=?, acknowledged_at=?, updated_at=?, "
+                        "lifecycle_stage=?, lease_owner=?, lease_expires_at=? WHERE intent_id=?",
+                        (state, 1.0 if state == "acknowledged" else 0.0, float(index),
+                         "finalized" if state == "acknowledged" else "planned",
+                         "owner" if state == "claimed" else "", 2_000.0 if state == "claimed" else 0.0,
+                         intent_id),
+                    )
+                if state == "ready":
+                    no_work = repository.opportunistic_housekeeping(
+                        retention_seconds=10.0, interval_seconds=100.0, size_threshold_bytes=2**31
+                    )
+                    self.assertTrue(no_work.skipped)
+                    self.assertEqual(no_work.reason, "no_work")
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "INSERT INTO lifecycle_maintenance(key, value) VALUES('housekeeping_last_attempt', 999.0) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+                )
+
+            cooldown = repository.opportunistic_housekeeping(
+                retention_seconds=10.0, interval_seconds=100.0, size_threshold_bytes=0, limit=1
+            )
+            self.assertTrue(cooldown.skipped)
+            self.assertEqual(cooldown.reason, "cooldown")
+
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_maintenance SET value=0 WHERE key='housekeeping_last_attempt'"
+                )
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT processing_state, acknowledged_at FROM lifecycle_outbox WHERE intent_id=?",
+                        (intents["acknowledged"],),
+                    ).fetchone(),
+                    ("acknowledged", 1.0),
+                )
+            result = repository.opportunistic_housekeeping(
+                retention_seconds=10.0, interval_seconds=0.0, size_threshold_bytes=0, limit=1, checkpoint=True
+            )
+            self.assertTrue(result.ok)
+            self.assertEqual(result.removed, 1, result)
+            self.assertIn(result.checkpoint, {"completed", "unavailable"})
+            with sqlite3.connect(repository.path) as connection:
+                remaining = {row[0] for row in connection.execute("SELECT intent_id FROM lifecycle_outbox")}
+            self.assertEqual(remaining, {intents[state] for state in states if state != "acknowledged"})
+
     def test_outbox_transaction_boundary_has_no_taskwarrior_dependency(self) -> None:
         import ast
 

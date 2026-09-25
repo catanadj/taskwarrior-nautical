@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-NAUTICAL_VERSION = "7.6.0"
+NAUTICAL_VERSION = "7.6.1"
 COMMANDS = {
     "install": ROOT / "nautical_core" / "tools" / "nautical_install.py",
     "runtime-clean": ROOT / "nautical_core" / "tools" / "nautical_runtime_cleanup.py",
@@ -28,6 +28,19 @@ ALIASES = {
     "queue": "queue-status",
     "nav": "navigator",
 }
+COMMAND_DESCRIPTIONS = (
+    ("install", "Install hooks, runtime files, and configuration."),
+    ("runtime-clean", "Remove obsolete managed runtime files safely."),
+    ("doctor", "Inspect installation, configuration, and runtime health."),
+    ("queue-status", "Show pending lifecycle and manual-review queue status."),
+    ("queue-review", "Interactively review queued manual-review items."),
+    ("review", "Alias for queue-review with the same interactive review flow."),
+    ("backup", "Create a verified backup of Nautical data."),
+    ("restore", "Restore Nautical data from a verified backup."),
+    ("reconcile", "Plan or apply chain and lifecycle reconciliation."),
+    ("query", "Query tasks through the public Nautical query API."),
+    ("navigator", "Open the interactive task navigator."),
+)
 
 
 def _checkout_root() -> Path | None:
@@ -66,7 +79,12 @@ def _has_source_argument(arguments: list[str]) -> bool:
 def _print_help() -> None:
     print(f"Nautical {NAUTICAL_VERSION}")
     print("usage: nautical [--help | --version] <command> [options]")
-    print("commands: install, runtime-clean, doctor, queue-status, queue-review, review, backup, restore, reconcile, query, navigator")
+    print("commands:")
+    for command, description in COMMAND_DESCRIPTIONS:
+        print(f"  {command:<15} {description}")
+    print("aliases:")
+    print("  queue           alias for queue-status")
+    print("  nav             alias for navigator")
     print("global options:")
     print("  -h, --help       show this help message")
     print("  --version        show the Nautical version")

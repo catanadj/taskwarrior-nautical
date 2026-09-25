@@ -238,6 +238,104 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertEqual(result.removed, 1)
 
+    def test_retention_prune_preserves_live_evidence_and_recovers_from_interruption(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 1_000.0)
+
+            def acknowledged_plan(chain: str, *, acknowledged_at: float, owner: str) -> str:
+                plan = self._plan(chain)
+                intent_id = plan.identity.idempotency_key
+                self.assertTrue(repository.enqueue(
+                    plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+                ).ok)
+                claimed = repository.claim_intent(owner=owner, lease_seconds=300, intent_id=intent_id)
+                self.assertTrue(claimed.ok)
+                for stage in (ExecutionStage.CHILD_PRESENT, ExecutionStage.PARENT_LINKED, ExecutionStage.VERIFIED):
+                    self.assertTrue(repository.advance_stage(intent_id=intent_id, owner=owner, stage=stage).ok)
+                self.assertTrue(repository.acknowledge(intent_id=intent_id, owner=owner).ok)
+                with sqlite3.connect(repository.path) as connection:
+                    connection.execute(
+                        "UPDATE lifecycle_outbox SET acknowledged_at=?, updated_at=? WHERE intent_id=?",
+                        (acknowledged_at, acknowledged_at, intent_id),
+                    )
+                return intent_id
+
+            acknowledged_plan("retention-old", acknowledged_at=900.0, owner="ack")
+            retry = self._plan("retention-retry")
+            repository.enqueue(retry, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            retry_id = retry.identity.idempotency_key
+            self.assertTrue(repository.claim_intent(owner="retry", lease_seconds=30, intent_id=retry_id).ok)
+            self.assertTrue(repository.release_retry(
+                intent_id=retry_id, owner="retry", failure=OutboxFailure("busy", "retry later")
+            ).ok)
+
+            claimed_plan = self._plan("retention-claimed")
+            repository.enqueue(claimed_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            claimed_id = claimed_plan.identity.idempotency_key
+            self.assertTrue(repository.claim_intent(owner="live", lease_seconds=300, intent_id=claimed_id).ok)
+
+            review_plan = self._plan("retention-review")
+            repository.enqueue(review_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            review_id = review_plan.identity.idempotency_key
+            self.assertTrue(repository.claim_intent(owner="review", lease_seconds=30, intent_id=review_id).ok)
+            self.assertTrue(repository.manual_review(
+                intent_id=review_id, owner="review", failure=OutboxFailure("review", "inspect")
+            ).ok)
+
+            result = repository.prune_acknowledged(retention_seconds=50.0, limit=1)
+            self.assertTrue(result.ok)
+            self.assertEqual(result.removed, 1)
+            status_result, status = repository.status()
+            self.assertTrue(status_result.ok)
+            self.assertEqual(
+                status["states"], {"retry": 1, "claimed": 1, "manual_review": 1}
+            )
+            self.assertEqual(status["states"].get("acknowledged", 0), 0)
+
+            acknowledged_plan("retention-boundary", acknowledged_at=950.0, owner="boundary")
+            boundary_status, boundary_payload = repository.status(retention_seconds=50.0)
+            self.assertTrue(boundary_status.ok)
+            self.assertEqual(boundary_payload["retention"]["eligible"], 1)
+            self.assertEqual(repository.prune_acknowledged(retention_seconds=50.0).removed, 1)
+
+            concurrent = acknowledged_plan("retention-concurrent", acknowledged_at=900.0, owner="concurrent")
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                status_future = pool.submit(repository.status, retention_seconds=50.0)
+                prune_future = pool.submit(repository.prune_acknowledged, retention_seconds=50.0, limit=10)
+                concurrent_status, concurrent_payload = status_future.result(timeout=5)
+                concurrent_prune = prune_future.result(timeout=5)
+            self.assertTrue(concurrent_status.ok)
+            self.assertIsInstance(concurrent_payload, dict)
+            self.assertTrue(concurrent_prune.ok)
+            self.assertEqual(concurrent_prune.removed, 1)
+
+            interrupted = acknowledged_plan("retention-interrupted", acknowledged_at=900.0, owner="interrupted")
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "CREATE TRIGGER reject_outbox_delete BEFORE DELETE ON lifecycle_outbox "
+                    "BEGIN SELECT RAISE(ABORT, 'simulated interrupted cleanup'); END"
+                )
+            interrupted_result = repository.prune_acknowledged(retention_seconds=50.0, limit=10)
+            self.assertFalse(interrupted_result.ok)
+            retained_status, retained_payload = repository.status(retention_seconds=50.0)
+            self.assertTrue(retained_status.ok)
+            self.assertEqual(retained_payload["retention"]["acknowledged"], 1)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute("DROP TRIGGER reject_outbox_delete")
+            recovered = repository.opportunistic_housekeeping(
+                retention_seconds=50.0, interval_seconds=0.0, limit=1, checkpoint=False
+            )
+            self.assertTrue(recovered.ok)
+            self.assertEqual(recovered.removed, 1)
+            with sqlite3.connect(repository.path) as connection:
+                remaining = {row[0] for row in connection.execute("SELECT intent_id FROM lifecycle_outbox")}
+            self.assertNotIn(interrupted, remaining)
+            cooldown = repository.opportunistic_housekeeping(retention_seconds=50.0, checkpoint=False)
+            self.assertTrue(cooldown.skipped)
+            self.assertEqual(cooldown.reason, "cooldown")
+
     def test_repository_rejects_invalid_claim_and_transition_arguments(self) -> None:
         with TemporaryDirectory() as directory:
             repository = _LifecycleOutboxRepository(Path(directory))

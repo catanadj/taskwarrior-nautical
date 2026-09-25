@@ -1767,131 +1767,6 @@ print(json.dumps({"semantic_key": record.plan.semantic_key(), "stage": record.st
         expect(any("parent guard differs" in reason for reason in reasons), f"integrity reason was not preserved: {status}")
 
 
-def test_lifecycle_outbox_prunes_only_expired_acknowledged_rows():
-    """Explicit retention removes old acknowledgements and preserves live evidence."""
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository, OutboxFailure, OutboxProcessingState
-
-    now = [1000.0]
-
-    def plan_for(link: int) -> LifecyclePlan:
-        parent_uuid = f"00000000-0000-4000-8000-{link:012d}"
-        child_uuid = f"10000000-0000-4000-8000-{link:012d}"
-        return _plan_from_values(
-            identity=LifecycleIdentity("retention-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
-            action=LifecycleAction.SPAWN_CHILD,
-            parent_guard=ParentGuard("completed", "on", "retention-chain", link, f"rf-{link}"),
-            child_payload={"uuid": child_uuid, "chainID": "retention-chain", "link": link + 1, "prevLink": parent_uuid[:8]},
-            parent_patch={"nextLink": child_uuid[:8]},
-            expected_postconditions=("child_present", "parent_linked", "verified"),
-        )
-
-    with tempfile.TemporaryDirectory() as td:
-        repo = _LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
-        acknowledged = plan_for(1)
-        expect(repo.enqueue(acknowledged, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "ack enqueue failed")
-        claimed, records = repo.claim_batch(owner="ack-worker", lease_seconds=30, limit=1)
-        expect(claimed.ok and records, "ack claim failed")
-        intent_id = records[0].intent_id
-        for stage in ("child_present", "parent_linked", "verified"):
-            expect(repo.advance_stage(intent_id=intent_id, owner="ack-worker", stage=stage).ok, f"stage {stage} failed")
-        expect(repo.acknowledge(intent_id=intent_id, owner="ack-worker").ok, "acknowledgement failed")
-
-        retry_plan = plan_for(2)
-        expect(repo.enqueue(retry_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "retry enqueue failed")
-        _, retry_records = repo.claim_batch(owner="retry-worker", lease_seconds=30, limit=1)
-        expect(retry_records, "retry claim failed")
-        expect(repo.release_retry(intent_id=retry_records[0].intent_id, owner="retry-worker", failure=OutboxFailure("busy", "lock")).ok, "retry release failed")
-
-        claimed_plan = plan_for(3)
-        expect(repo.enqueue(claimed_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "claimed enqueue failed")
-        _, claimed_records = repo.claim_batch(owner="live-worker", lease_seconds=300, limit=1)
-        expect(claimed_records, "live claim failed")
-
-        review_plan = plan_for(4)
-        expect(repo.enqueue(review_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "review enqueue failed")
-        _, review_records = repo.claim_batch(owner="review-worker", lease_seconds=30, limit=1)
-        expect(review_records, "review claim failed")
-        expect(repo.manual_review(intent_id=review_records[0].intent_id, owner="review-worker", failure=OutboxFailure("review", "inspect")).ok, "manual review failed")
-
-        now[0] += 100.0
-        status_result, status = repo.status(limit=20, retention_seconds=50.0)
-        expect(status_result.ok, "retention status failed before cleanup")
-        retention = status.get("retention") or {}
-        expect(retention.get("acknowledged") == 1, f"acknowledged retention count was wrong: {status}")
-        expect(retention.get("eligible") == 1, f"eligible retention count was wrong: {status}")
-        expect(retention.get("oldest_age_s") == 100, f"oldest retention age was wrong: {status}")
-        cleaned = repo.prune_acknowledged(retention_seconds=50.0, limit=10)
-        expect(cleaned.ok and cleaned.removed == 1, f"unexpected retention result: {cleaned}")
-        status_result, status = repo.status(limit=20)
-        expect(status_result.ok, "status after retention failed")
-        expect((status.get("retention") or {}).get("eligible") == 0, f"expired retention remained eligible: {status}")
-        states = status.get("states", {})
-        expect(states.get(OutboxProcessingState.RETRY.value) == 1, f"retry evidence was pruned: {states}")
-        expect(states.get(OutboxProcessingState.CLAIMED.value) == 1, f"claimed evidence was pruned: {states}")
-        expect(states.get(OutboxProcessingState.MANUAL_REVIEW.value) == 1, f"manual review evidence was pruned: {states}")
-        expect(states.get(OutboxProcessingState.ACKNOWLEDGED.value, 0) == 0, f"old acknowledgement remained: {states}")
-
-        # The retention boundary is inclusive: an acknowledgement exactly at
-        # the cutoff is eligible, while all non-terminal evidence remains.
-        boundary_plan = plan_for(5)
-        expect(repo.enqueue(boundary_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "boundary enqueue failed")
-        _, boundary_records = repo.claim_batch(owner="boundary-worker", lease_seconds=30, limit=1)
-        expect(boundary_records, "boundary claim failed")
-        boundary_id = boundary_records[0].intent_id
-        for stage in ("child_present", "parent_linked", "verified"):
-            expect(repo.advance_stage(intent_id=boundary_id, owner="boundary-worker", stage=stage).ok, f"boundary stage {stage} failed")
-        expect(repo.acknowledge(intent_id=boundary_id, owner="boundary-worker").ok, "boundary acknowledgement failed")
-        with sqlite3.connect(str(repo.path)) as conn:
-            conn.execute("UPDATE lifecycle_outbox SET acknowledged_at=? WHERE intent_id=?", (1050.0, boundary_id))
-        status_result, status = repo.status(retention_seconds=50.0)
-        expect(status_result.ok and (status.get("retention") or {}).get("eligible") == 1, f"cutoff boundary was not eligible: {status}")
-
-        # A read-only status call may race an explicit cleanup without
-        # observing a malformed or partially deleted row set.
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            status_future = pool.submit(repo.status, retention_seconds=50.0)
-            prune_future = pool.submit(repo.prune_acknowledged, retention_seconds=50.0, limit=10)
-            concurrent_status, concurrent_data = status_future.result(timeout=5)
-            concurrent_prune = prune_future.result(timeout=5)
-        expect(concurrent_status.ok and isinstance(concurrent_data, dict), "concurrent retention status failed")
-        expect(concurrent_prune.ok and concurrent_prune.removed == 1, f"concurrent retention cleanup failed: {concurrent_prune}")
-
-        # An interrupted delete must roll back atomically and leave the
-        # acknowledgement available for a later maintenance attempt.
-        interrupted_plan = plan_for(6)
-        expect(repo.enqueue(interrupted_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "interrupted enqueue failed")
-        _, interrupted_records = repo.claim_batch(owner="interrupted-worker", lease_seconds=30, limit=1)
-        expect(interrupted_records, "interrupted claim failed")
-        interrupted_id = interrupted_records[0].intent_id
-        for stage in ("child_present", "parent_linked", "verified"):
-            expect(repo.advance_stage(intent_id=interrupted_id, owner="interrupted-worker", stage=stage).ok, f"interrupted stage {stage} failed")
-        expect(repo.acknowledge(intent_id=interrupted_id, owner="interrupted-worker").ok, "interrupted acknowledgement failed")
-        with sqlite3.connect(str(repo.path)) as conn:
-            conn.execute("UPDATE lifecycle_outbox SET acknowledged_at=? WHERE intent_id=?", (1000.0, interrupted_id))
-            conn.execute(
-                "CREATE TRIGGER reject_outbox_delete BEFORE DELETE ON lifecycle_outbox "
-                "BEGIN SELECT RAISE(ABORT, 'simulated interrupted cleanup'); END"
-            )
-        interrupted = repo.prune_acknowledged(retention_seconds=50.0, limit=10)
-        expect(not interrupted.ok, "interrupted cleanup unexpectedly succeeded")
-        status_result, status = repo.status(retention_seconds=50.0)
-        expect(status_result.ok and (status.get("retention") or {}).get("acknowledged") == 1, f"interrupted cleanup lost evidence: {status}")
-        with sqlite3.connect(str(repo.path)) as conn:
-            conn.execute("DROP TRIGGER reject_outbox_delete")
-        automatic = repo.opportunistic_housekeeping(
-            retention_seconds=50.0,
-            interval_seconds=0.0,
-            limit=1,
-            checkpoint=False,
-        )
-        expect(automatic.ok and automatic.removed == 1, f"automatic housekeeping did not prune: {automatic}")
-        deferred = repo.opportunistic_housekeeping(retention_seconds=50.0, checkpoint=False)
-        expect(deferred.ok and deferred.skipped and deferred.reason == "cooldown", f"housekeeping cooldown was ignored: {deferred}")
-
-
 def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema():
     """First-open races are bounded, WAL-backed, and never silently downgrade schema."""
     import threading
@@ -14915,7 +14790,6 @@ TESTS = [
     test_lifecycle_batch_prefetch_uses_one_union_set_read,
     test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
-    test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
     test_lifecycle_outbox_bulk_compare_and_set_operations_isolate_rows,
     test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows,

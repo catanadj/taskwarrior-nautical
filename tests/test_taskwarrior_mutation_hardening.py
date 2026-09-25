@@ -24,6 +24,89 @@ from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
 
 class MutationHardeningTests(unittest.TestCase):
+    def test_existing_child_is_acknowledged_only_when_complete_and_matching(self) -> None:
+        parent = {
+            "uuid": "00000000-0000-4000-8000-000000000926",
+            "status": "completed", "chain": "on", "chainID": "child-check",
+            "link": 4, "modified": "20260813T110000Z",
+        }
+        child = {
+            "uuid": "00000000-0000-4000-8000-000000000927",
+            "chainID": "child-check", "link": 5, "prevLink": parent["uuid"][:8],
+            "status": "pending", "chain": "on", "cp": "1d", "description": "child",
+            "due": "20260814T090000Z",
+        }
+        payload = ChildImportPayload(
+            parent_uuid=parent["uuid"], child_uuid=child["uuid"],
+            chain_id=child["chainID"], target_link=5, fields=tuple(child.items()),
+        )
+        guard = MutationGuard(
+            task_uuid=parent["uuid"], status=parent["status"], chain_id=parent["chainID"],
+            link=parent["link"], recurrence_identity=recurrence_fingerprint(parent),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+            expected_mutation_epoch=0, chain="on",
+        )
+
+        class Repository:
+            def __init__(self, existing):
+                self.rows = {parent["uuid"]: dict(parent), child["uuid"]: existing}
+
+            def by_uuid(self, uuid_value, *, refresh=False):
+                del refresh
+                row = self.rows.get(uuid_value)
+                if row is None:
+                    return Absent(f"uuid:{uuid_value}", "not present")
+                return Found(TaskObservation.from_mapping(row, source_query="uuid"), "uuid")
+
+            def exact_child_slot(self, chain_id, link, **_kwargs):
+                row = next((item for item in self.rows.values()
+                            if item.get("chainID") == chain_id and int(item.get("link", 0)) == link), None)
+                if row is None:
+                    return Absent("slot", "not present")
+                return Found(TaskObservation.from_mapping(row, source_query="slot"), "slot")
+
+        class Client:
+            def execute(self, *_args, **_kwargs):
+                raise AssertionError("an existing child must not trigger a mutation")
+
+        def apply(existing, payload_values=None):
+            request_payload = payload
+            if payload_values is not None:
+                request_payload = ChildImportPayload(
+                    parent_uuid=parent["uuid"], child_uuid=child["uuid"],
+                    chain_id=str(payload_values["chainID"]), target_link=int(payload_values["link"]),
+                    fields=tuple(payload_values.items()),
+                )
+            repository = Repository(existing)
+            service = TaskwarriorMutationService(SimpleNamespace(
+                context=SimpleNamespace(mutation_capable=True), repository=repository,
+                client=Client(), mutation_epoch=0, record_mutation=lambda **_kwargs: 1,
+            ))
+            return service.apply(MutationRequest(MutationOperation.CHILD_IMPORT, guard, request_payload))
+
+        invalid_rows = (
+            ("missing prevLink", {key: value for key, value in child.items() if key != "prevLink"}),
+            ("wrong status", dict(child, status="completed")),
+            ("disabled chain", dict(child, chain="off")),
+            ("changed recurrence metadata", dict(child, cp="2d")),
+            ("sync replacement", dict(child, chainID="replacement-chain", link=99)),
+            ("future deleted child", dict(child, status="deleted", until="29990101T000000Z")),
+        )
+        for label, existing in invalid_rows:
+            with self.subTest(existing=label):
+                outcome = apply(existing)
+                self.assertIs(outcome.kind, MutationOutcomeKind.CONFLICT)
+                self.assertFalse(outcome.postconditions)
+
+        expired_values = dict(child, status="deleted", until="20000101T000000Z")
+        expired = apply(expired_values, payload_values=expired_values)
+        self.assertIs(expired.kind, MutationOutcomeKind.ALREADY_APPLIED, expired)
+        future_values = dict(child, status="deleted", until="29990101T000000Z")
+        future = apply(future_values, payload_values=future_values)
+        self.assertIs(future.kind, MutationOutcomeKind.CONFLICT)
+        valid = apply(dict(child))
+        self.assertIs(valid.kind, MutationOutcomeKind.ALREADY_APPLIED)
+
     def test_child_import_refuses_ambiguous_slot_before_dispatch(self) -> None:
         parent = {
             "uuid": "11111111-1111-4111-8111-111111111111",

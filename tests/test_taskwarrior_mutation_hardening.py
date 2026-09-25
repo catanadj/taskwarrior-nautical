@@ -83,6 +83,59 @@ class MutationHardeningTests(unittest.TestCase):
         self.assertIn(child_uuid.lower(), service._prefetched_children)
         self.assertEqual(service._prefetched_parents.get(parent_uuid), parent)
 
+    def test_lifecycle_batch_prefetch_uses_one_union_uuid_set_read(self) -> None:
+        from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+
+        parent_uuids = tuple(f"00000000-0000-4000-8000-00000000093{i}" for i in range(3))
+        child_uuids = tuple(f"00000000-0000-4000-8000-00000000094{i}" for i in range(3))
+        parents = {
+            uuid: {
+                "uuid": uuid, "status": "completed", "chain": "on",
+                "chainID": "prefetch-batch", "link": index + 1,
+                "modified": "20260813T120000Z",
+            }
+            for index, uuid in enumerate(parent_uuids)
+        }
+        payloads = tuple(
+            ChildImportPayload(
+                parent_uuid=parent_uuid,
+                child_uuid=child_uuid,
+                chain_id="prefetch-batch",
+                target_link=index + 2,
+                fields=(("uuid", child_uuid), ("chainID", "prefetch-batch"),
+                        ("link", index + 2), ("prevLink", parent_uuid[:8])),
+            )
+            for index, (parent_uuid, child_uuid) in enumerate(zip(parent_uuids, child_uuids))
+        )
+
+        class Repository:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def read_uuid_set(self, request):
+                self.requests.append(request)
+                return SetReadResult(
+                    SetReadStatus.COMPLETE,
+                    request.uuids,
+                    found=parents,
+                    absent=tuple(identity for identity in request.uuids if identity not in parents),
+                    complete_for_requested_identities=True,
+                )
+
+        repository = Repository()
+        service = TaskwarriorMutationService(SimpleNamespace(
+            repository=repository, mutation_epoch=0,
+        ))
+        service.preflight_lifecycle_batch(
+            payloads,
+            parent_expectations=tuple(
+                (uuid, f"{index + 2:08x}") for index, uuid in enumerate(parent_uuids)
+            ),
+        )
+
+        self.assertEqual(len(repository.requests), 1)
+        self.assertEqual(set(repository.requests[0].uuids), set(parent_uuids + child_uuids))
+
     def test_existing_child_is_acknowledged_only_when_complete_and_matching(self) -> None:
         parent = {
             "uuid": "00000000-0000-4000-8000-000000000926",

@@ -719,24 +719,11 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         )
 
     service = TaskwarriorMutationService(uow)
-    snapshot_parent = dict(parent)
-    stale_request = request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 0)
-    parent["modified"] = "20260813T100001Z"
-    stale = service.apply(stale_request)
-    expect(stale.kind is MutationOutcomeKind.CONFLICT, f"modified parent was not rejected: {stale}")
-    expect(not uow.client.calls, "stale parent guard reached the mutation command")
-    parent.clear()
-    parent.update(snapshot_parent)
     uow.repository.rows.pop(parent_uuid)
     deleted = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 0))
     expect(deleted.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE}, f"deleted parent was applied: {deleted}")
     expect(not uow.client.calls, "deleted parent reached the mutation command")
     uow.repository.rows[parent_uuid] = parent
-    parent["status"] = "pending"
-    completion_changed = service.apply(stale_request)
-    expect(completion_changed.kind is MutationOutcomeKind.CONFLICT, f"changed completion state was not rejected: {completion_changed}")
-    expect(not uow.client.calls, "changed completion state reached the mutation command")
-    parent["status"] = "completed"
 
     child = _child_payload_from_values(
         {
@@ -759,7 +746,6 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     replay = service.apply(request(MutationOperation.CHILD_IMPORT, child, 1))
     expect(replay.kind is MutationOutcomeKind.ALREADY_APPLIED, f"numeric child link replay was not normalized: {replay}")
     link_payload = ParentLinkPayload(parent_uuid, child_uuid[:8])
-    baseline_parent_link = request(MutationOperation.PARENT_LINK, link_payload, 1)
 
     # Child identity replacement race: an existing UUID with changed chain
     # identity or UUID payload is not treated as the requested child.
@@ -779,38 +765,6 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
             uow.repository.rows[child_uuid].pop(field, None)
         else:
             uow.repository.rows[child_uuid][field] = original
-
-    # User-edit race matrix: every guarded parent identity change must stop a
-    # stale mutation before it reaches Taskwarrior.
-    parent_guard_fields = (
-        ("status", "pending"),
-        ("chain", "off"),
-        ("chainID", "user-chain"),
-        ("link", 8),
-        ("anchor", "w:tue"),
-        ("cp", "2d"),
-        ("modified", "20260813T100002Z"),
-    )
-    for field, value in parent_guard_fields:
-        original = parent.get(field)
-        parent[field] = value
-        calls_before = len(uow.client.calls)
-        raced = service.apply(baseline_parent_link)
-        expect(raced.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE},
-               f"user edit of parent {field} was not rejected: {raced}")
-        expect(len(uow.client.calls) == calls_before, f"parent {field} race reached Taskwarrior")
-        if original is None:
-            parent.pop(field, None)
-        else:
-            parent[field] = original
-
-    parent["nextLink"] = "user-edit"
-    calls_before = len(uow.client.calls)
-    raced_link = service.apply(baseline_parent_link)
-    expect(raced_link.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE},
-           f"user edit of parent nextLink was not rejected: {raced_link}")
-    expect(len(uow.client.calls) == calls_before, "parent nextLink race reached Taskwarrior")
-    parent.pop("nextLink", None)
 
     linked = service.apply(request(MutationOperation.PARENT_LINK, link_payload, 1))
     expect(linked.kind is MutationOutcomeKind.APPLIED, f"parent link was not applied: {linked}")

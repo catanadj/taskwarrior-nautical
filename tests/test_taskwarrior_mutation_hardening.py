@@ -25,6 +25,69 @@ from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
 
 class MutationHardeningTests(unittest.TestCase):
+    def test_parent_guard_changes_never_dispatch_a_link_mutation(self) -> None:
+        parent = {
+            "uuid": "00000000-0000-4000-8000-000000000924",
+            "status": "completed", "chain": "on", "chainID": "chain-guard",
+            "link": 7, "modified": "20260813T100000Z", "anchor": "w:mon", "cp": "1d",
+        }
+        child_short_uuid = "00000000"
+        guard = MutationGuard(
+            task_uuid=parent["uuid"], status=parent["status"], chain_id=parent["chainID"],
+            link=parent["link"], recurrence_identity=recurrence_fingerprint(parent),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+            expected_mutation_epoch=0, chain="on",
+        )
+        request = MutationRequest(
+            MutationOperation.PARENT_LINK, guard,
+            ParentLinkPayload(parent["uuid"], child_short_uuid),
+        )
+
+        class Repository:
+            def by_uuid(self, uuid_value, *, refresh=False):
+                del refresh
+                if uuid_value != parent["uuid"]:
+                    return Absent(f"uuid:{uuid_value}", "not present")
+                observation = TaskObservation.from_mapping(parent, source_query="mutation-guard-test")
+                return Found(observation, f"uuid:{uuid_value}")
+
+        class Client:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def execute(self, *_args, **_kwargs):
+                self.calls.append(_args)
+                raise AssertionError("stale parent guard must stop before Taskwarrior dispatch")
+
+        client = Client()
+        service = TaskwarriorMutationService(SimpleNamespace(
+            context=SimpleNamespace(mutation_capable=True),
+            repository=Repository(), client=client, mutation_epoch=0,
+            record_mutation=lambda **_kwargs: 1,
+        ))
+        changed_fields = (
+            ("status", "pending"),
+            ("chain", "off"),
+            ("chainID", "user-chain"),
+            ("link", 8),
+            ("anchor", "w:tue"),
+            ("cp", "2d"),
+            ("modified", "20260813T100001Z"),
+            ("nextLink", "user-edit"),
+        )
+
+        for field, value in changed_fields:
+            with self.subTest(field=field):
+                original = parent.get(field)
+                parent[field] = value
+                outcome = service.apply(request)
+                self.assertIs(outcome.kind, MutationOutcomeKind.CONFLICT)
+                self.assertEqual(client.calls, [])
+                if original is None:
+                    parent.pop(field)
+                else:
+                    parent[field] = original
+
     def test_batch_postverification_fails_closed_for_untrusted_snapshots(self) -> None:
         from nautical_core.task_set_reads import SetReadResult, SetReadStatus
 

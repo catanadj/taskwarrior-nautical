@@ -615,6 +615,81 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         ]
         self.assertFalse(any("taskwarrior" in name.lower() for name in imports))
 
+    def test_lifecycle_mutation_gateway_runs_outside_sqlite_transaction(self) -> None:
+        from nautical_core.integration_models import (
+            MutationOperation,
+            MutationOutcome,
+            MutationOutcomeKind,
+            MutationPostcondition,
+        )
+        from nautical_core.lifecycle_application import (
+            LifecycleApplicationOutcomeKind,
+            LifecycleApplicationService,
+        )
+        from tests.support.lifecycle_execution import LifecycleExecutionFixture
+
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+
+            class MutationGateway:
+                def __init__(self) -> None:
+                    self.operations: list[MutationOperation] = []
+
+                def apply(self, request):
+                    connection = repository._session_conn
+                    self.assert_transaction_closed(connection)
+                    self.operations.append(request.operation)
+                    postcondition = {
+                        MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
+                        MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
+                    }[request.operation]
+                    return MutationOutcome(
+                        request.operation,
+                        MutationOutcomeKind.APPLIED,
+                        request.guard,
+                        (postcondition,),
+                    )
+
+                @staticmethod
+                def assert_transaction_closed(connection) -> None:
+                    if connection is None or connection.in_transaction:
+                        raise AssertionError("Taskwarrior mutation ran inside an outbox transaction")
+
+                def compensate_imported_child(self, _request):
+                    raise AssertionError("successful lifecycle execution must not compensate")
+
+            gateway = MutationGateway()
+            execution = LifecycleExecutionFixture(gateway)
+            service = LifecycleApplicationService(
+                unit_of_work=SimpleNamespace(mutation_epoch=0),
+                mutations=gateway,
+                execution=execution,
+                outbox=repository,
+                owner="transaction-boundary",
+            )
+            plan = self._plan("transaction-boundary")
+            self.assertTrue(repository.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+
+            result = service.drain(
+                limit=1,
+                configuration_fingerprint="cfg",
+                schedule_fingerprint="sch",
+            )
+
+            self.assertTrue(result.claim.ok)
+            self.assertEqual(len(result.outcomes), 1)
+            self.assertIs(result.outcomes[0].kind, LifecycleApplicationOutcomeKind.APPLIED)
+            self.assertEqual(
+                gateway.operations,
+                [MutationOperation.CHILD_IMPORT, MutationOperation.PARENT_LINK],
+            )
+            self.assertIsNone(repository._session_conn)
+            status, payload = repository.status()
+            self.assertTrue(status.ok)
+            self.assertEqual(payload["states"].get("acknowledged"), 1)
+
     def test_claim_lease_port_exposes_only_cas_operations(self) -> None:
         from nautical_core.lifecycle_outbox_claims import RepositoryClaimLeasePort
 

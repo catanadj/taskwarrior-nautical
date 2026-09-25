@@ -50,6 +50,11 @@ class HookSubprocessFixture(unittest.TestCase):
         timeout: float = 15.0,
         coverage_file: str | Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        if coverage_file is None:
+            shared_coverage_dir = os.environ.get("NAUTICAL_SUBPROCESS_COVERAGE_DIR")
+            if shared_coverage_dir:
+                coverage_name = Path(os.environ.get("COVERAGE_FILE", ".coverage")).name
+                coverage_file = Path(shared_coverage_dir) / coverage_name
         environment = os.environ.copy()
         environment.update(
             {

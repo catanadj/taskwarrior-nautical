@@ -123,16 +123,29 @@ jobs:
 
       - name: Run unit suite with branch-coverage floor
         env:
-          COVERAGE_FILE: /tmp/nautical-coverage-data
+          COVERAGE_FILE: ${{ runner.temp }}/nautical-coverage-data
+          NAUTICAL_SUBPROCESS_COVERAGE_DIR: ${{ runner.temp }}/nautical-subprocess-coverage
         run: >-
           PYTHONPATH=.
           PYTHONPYCACHEPREFIX=/tmp/nautical-readiness-pycache
           python3 -m coverage run -m unittest discover -s tests -q
 
-      - name: Enforce branch-coverage floor and write XML report
+      - name: Combine hook subprocess coverage
+        if: always()
         env:
-          COVERAGE_FILE: /tmp/nautical-coverage-data
+          COVERAGE_FILE: ${{ runner.temp }}/nautical-coverage-data
+          NAUTICAL_SUBPROCESS_COVERAGE_DIR: ${{ runner.temp }}/nautical-subprocess-coverage
         run: |
+          if [ -d "$NAUTICAL_SUBPROCESS_COVERAGE_DIR" ]; then
+            python3 -m coverage combine --append "$NAUTICAL_SUBPROCESS_COVERAGE_DIR"
+          fi
+
+      - name: Enforce branch-coverage floor and write XML report
+        if: always()
+        env:
+          COVERAGE_FILE: ${{ runner.temp }}/nautical-coverage-data
+        run: |
+          test -f "$COVERAGE_FILE" || exit 0
           python3 -m coverage report --fail-under=60 --show-missing
           python3 -m coverage xml -o coverage.xml
 

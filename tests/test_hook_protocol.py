@@ -2,12 +2,37 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 
 from nautical_core import hook_protocol
 
 
 class HookProtocolTests(unittest.TestCase):
+    def test_protocol_file_load_does_not_import_the_core_package(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        protocol = root / "nautical_core" / "hook_protocol.py"
+        code = (
+            "import importlib.util,sys;"
+            "spec=importlib.util.spec_from_file_location('_nautical_protocol_isolated',sys.argv[1]);"
+            "mod=importlib.util.module_from_spec(spec);"
+            "spec.loader.exec_module(mod);"
+            "assert 'nautical_core' not in sys.modules"
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(protocol)],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_hook_failure_carries_boundary_message_and_exit_code(self) -> None:
         from nautical_core.hook_results import HookFailure
 

@@ -570,25 +570,6 @@ def test_on_modify_ignores_unsafe_core_path_override():
             os.environ["NAUTICAL_TRUST_CORE_PATH"] = prev_trust
 
 
-def test_hook_protocol_loads_without_core_package():
-    """The lightweight protocol gate must not import the nautical_core package."""
-    path = os.path.join(ROOT, "nautical_core", "hook_protocol.py")
-    code = (
-        "import importlib.util,sys;"
-        "spec=importlib.util.spec_from_file_location('_nautical_protocol_isolated',sys.argv[1]);"
-        "mod=importlib.util.module_from_spec(spec);"
-        "spec.loader.exec_module(mod);"
-        "assert 'nautical_core' not in sys.modules"
-    )
-    proc = subprocess.run(
-        [sys.executable, "-c", code, path],
-        text=True,
-        capture_output=True,
-        timeout=5.0,
-    )
-    expect(proc.returncode == 0, f"protocol gate imported core: {proc.stderr!r}")
-
-
 def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     """Named mutations re-read, verify, classify replay, and preserve failures."""
     from nautical_core.integration_models import (
@@ -14367,45 +14348,6 @@ def test_on_modify_missing_taskdata_uses_tw_dir():
     )
 
 
-def test_hooks_no_direct_subprocess_run():
-    """Hooks should not call subprocess.run outside _run_task."""
-    import ast
-
-    def _bad_calls(path: str) -> list[tuple[int, str]]:
-        src = Path(path).read_text(encoding="utf-8")
-        tree = ast.parse(src, filename=path)
-        bad = []
-        stack = []
-
-        class Visitor(ast.NodeVisitor):
-            def visit_FunctionDef(self, node):
-                stack.append(node.name)
-                self.generic_visit(node)
-                stack.pop()
-
-            def visit_AsyncFunctionDef(self, node):
-                stack.append(node.name)
-                self.generic_visit(node)
-                stack.pop()
-
-            def visit_Call(self, node):
-                func = node.func
-                if isinstance(func, ast.Attribute) and func.attr == "run":
-                    if isinstance(func.value, ast.Name) and func.value.id == "subprocess":
-                        current_fn = stack[-1] if stack else ""
-                        if current_fn != "_run_task":
-                            bad.append((node.lineno, current_fn or "<module>"))
-                self.generic_visit(node)
-
-        Visitor().visit(tree)
-        return bad
-
-    for hook_name in ("on-add.nautical", "on-modify.nautical"):
-        path = _find_hook_file(hook_name)
-        bad = _bad_calls(path)
-        expect(not bad, f"Direct subprocess.run found in {hook_name}: {bad}")
-
-
 def test_on_add_position_selection_renders_semantic_advice():
     """The on-add preview should include one advice row without disturbing hook JSON."""
     hook = _find_hook_file("on-add.nautical")
@@ -14967,7 +14909,6 @@ TESTS = [
     test_hook_on_modify_timeline_cp_sequence_labels_future_intervals,
     test_hook_on_modify_timeline_cp_random_labels_selected_intervals,
     *HOOK_TESTS,
-    test_hook_protocol_loads_without_core_package,
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_child_import_rejects_incomplete_existing_rows,
     test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot,
@@ -15182,7 +15123,6 @@ TESTS = [
     test_on_modify_state_files_use_dedicated_dir,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
     test_on_modify_missing_taskdata_uses_tw_dir,
-    test_hooks_no_direct_subprocess_run,
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
     test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,

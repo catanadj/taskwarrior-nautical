@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import tempfile
 import unittest
 import re
@@ -19,6 +20,44 @@ from nautical_core.add_anchor_preview import (
 
 
 class ArchitectureContractTests(unittest.TestCase):
+    def test_hooks_do_not_call_subprocess_run_outside_task_execution(self) -> None:
+        root = Path(__file__).parents[1]
+
+        class Visitor(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.functions: list[str] = []
+                self.violations: list[tuple[int, str]] = []
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                self.functions.append(node.name)
+                self.generic_visit(node)
+                self.functions.pop()
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+                self.functions.append(node.name)
+                self.generic_visit(node)
+                self.functions.pop()
+
+            def visit_Call(self, node: ast.Call) -> None:
+                func = node.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "run"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "subprocess"
+                ):
+                    current = self.functions[-1] if self.functions else "<module>"
+                    if current != "_run_task":
+                        self.violations.append((node.lineno, current))
+                self.generic_visit(node)
+
+        for hook_name in ("on-add.nautical", "on-modify.nautical"):
+            with self.subTest(hook=hook_name):
+                path = root / hook_name
+                visitor = Visitor()
+                visitor.visit(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+                self.assertEqual(visitor.violations, [], hook_name)
+
     def test_extracted_model_modules_have_explicit_domain_ownership(self) -> None:
         self.assertEqual(architecture_contract.module_layer("common.py"), architecture_contract.DOMAIN)
         self.assertEqual(architecture_contract.module_layer("hint_models.py"), architecture_contract.DOMAIN)

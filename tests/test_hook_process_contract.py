@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import textwrap
 import unittest
+from unittest.mock import patch
 
 import coverage
 
@@ -12,6 +14,37 @@ from tests.support.hook_process import HookSubprocessFixture
 
 
 class HookProcessContractTests(HookSubprocessFixture):
+    def test_shared_coverage_opt_in_records_hook_execution(self) -> None:
+        coverage_directory = Path(
+            os.environ.get("NAUTICAL_SUBPROCESS_COVERAGE_DIR")
+            or Path(self.taskdata) / "shared-coverage"
+        )
+        payload = json.dumps(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000802",
+                "description": "shared coverage opt in",
+                "status": "pending",
+            }
+        )
+        with patch.dict(
+            os.environ,
+            {"NAUTICAL_SUBPROCESS_COVERAGE_DIR": str(coverage_directory)},
+        ):
+            coverage_name = Path(os.environ.get("COVERAGE_FILE", ".coverage")).name
+            process = self.run_hook("on-add.nautical", payload)
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        shared_data = list(coverage_directory.glob(f"{coverage_name}.*"))
+        self.assertGreaterEqual(len(shared_data), 1, shared_data)
+        measured_files: set[str] = set()
+        for data_file in shared_data:
+            measured_data = coverage.Coverage(data_file=str(data_file))
+            measured_data.load()
+            measured_files.update(
+                Path(path).name for path in measured_data.get_data().measured_files()
+            )
+        self.assertIn("hook_protocol.py", measured_files)
+
     def test_coverage_opt_in_records_lines_executed_by_on_add(self) -> None:
         coverage_file = Path(self.taskdata) / "coverage" / ".coverage"
         payload = json.dumps(

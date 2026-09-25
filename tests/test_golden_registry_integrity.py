@@ -10,6 +10,9 @@ import unittest
 
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
+EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
+    "2aba45f75ddf8d0026988edf05a1bc58b4e4ae925ad189ac1e206f12378f575c"
+)
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
         "lifecycle and durable mutation",
@@ -30,8 +33,8 @@ GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
 )
 EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
     "configuration and bootstrap": (
-        37,
-        "3c1bb1e0bc2694892e513013cf545adc5e64017fc8659a6b2444e768398b3d4d",
+        36,
+        "32295a185fe5998b52d9fd48ba4de8905087265955a237b56bfe78bb3e47f6bb",
     ),
     "install and deployment": (
         15,
@@ -54,8 +57,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "cb19880068ed0fe952886429d5e47c53516d9cffa740e4a1bbc6456c23af5568",
     ),
     "recurrence and hook integration": (
-        242,
-        "0c85656d7efb510d04bb3dac7e7928cd9479bf67cca7c3ee5872fb359fda854f",
+        241,
+        "7812e7e2a2743864040255a862550c1ded4b811d1977a581facbbc036f88512b",
     ),
     "storage and filesystem safety": (
         10,
@@ -110,6 +113,8 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_core_domain_configuration_validation_fails_closed",
         "test_completion_parent_guard_uses_persisted_terminal_timestamp",
         "test_taskwarrior_client_preserves_evidence_and_redacts_observation",
+        "test_hook_protocol_loads_without_core_package",
+        "test_hooks_no_direct_subprocess_run",
         "test_modify_lifecycle_activation_requires_complete_root_identity",
         "test_moon_phase_source_and_filter_compose_with_weekday",
         "test_moon_phase_source_emits_once_per_phase_window",
@@ -567,6 +572,11 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertTrue(all(callable(fn) for fn in registered))
         self.assertTrue(all(name.startswith("test_") for name in names))
 
+    def test_registered_order_matches_reviewed_inventory(self):
+        names = [fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)]
+        digest = hashlib.sha256("\n".join(names).encode("utf-8")).hexdigest()
+        self.assertEqual(digest, EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256)
+
     def test_live_top_level_tests_are_registered_or_explicitly_retired(self):
         registered = {
             fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)
@@ -623,8 +633,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         performance = importlib.import_module("dev_tools.golden_tests.performance")
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
-        self.assertEqual(len(top_level), 355)
-        self.assertEqual(len(registered), 404)
+        self.assertEqual(len(top_level), 353)
+        self.assertEqual(len(registered), 402)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(hooks.TESTS), 5)
         self.assertEqual(len(operator.TESTS), 4)
@@ -633,7 +643,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(lifecycle.TESTS), 15)
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 464)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 466)
 
     def test_retained_cases_have_a_stable_exclusive_acceptance_inventory(self):
         registered = [fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)]

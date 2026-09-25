@@ -33,7 +33,7 @@ from nautical_core.lifecycle_outbox import (
 
 class LifecycleOutboxContractTests(unittest.TestCase):
     @staticmethod
-    def _plan(chain: str = "contract") -> LifecyclePlan:
+    def _plan(chain: str = "contract", *, max_attempts: int = 3) -> LifecyclePlan:
         from dev_tools.nautical_golden_tests import _task_draft
 
         parent = "00000000-0000-4000-8000-000000001001"
@@ -49,6 +49,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             }),
             parent_patch={"nextLink": child[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
+            max_attempts=max_attempts,
         )
 
     def test_schema_versions_and_processing_states_are_explicit(self) -> None:
@@ -364,6 +365,69 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                 repository.acknowledge_many(intent_ids=(), owner="owner")[0].kind,
                 OutboxResultKind.REJECTED,
             )
+
+    def test_batch_claim_quarantines_exhausted_and_inconsistent_rows(self) -> None:
+        with TemporaryDirectory() as directory:
+            now = [1_000.0]
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: now[0])
+
+            exhausted = self._plan("claim-exhausted", max_attempts=1)
+            self.assertTrue(repository.enqueue(
+                exhausted, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            first, records = repository.claim_batch(owner="crashed", lease_seconds=5, limit=1)
+            self.assertTrue(first.ok)
+            self.assertEqual((len(records), records[0].attempts), (1, 1))
+            now[0] += 6
+            recovered, records = repository.claim_batch(owner="recovery", lease_seconds=5, limit=1)
+            self.assertTrue(recovered.ok)
+            self.assertEqual(records, ())
+            status_result, status = repository.status()
+            self.assertTrue(status_result.ok)
+            self.assertEqual(status["states"].get("quarantined"), 1)
+            exhausted_row = next(row for row in status["records"] if row["intent_id"] == exhausted.identity.idempotency_key)
+            self.assertEqual(exhausted_row["failure"]["code"], "retry_exhausted")
+
+            inconsistent = self._plan("claim-inconsistent")
+            self.assertTrue(repository.enqueue(
+                inconsistent, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_outbox SET processing_state='retry', lifecycle_stage='manual_review' "
+                    "WHERE intent_id=?",
+                    (inconsistent.identity.idempotency_key,),
+                )
+            claimed, records = repository.claim_batch(owner="poison", lease_seconds=5, limit=1)
+            self.assertTrue(claimed.ok)
+            self.assertEqual(records, ())
+            status_result, status = repository.status()
+            self.assertTrue(status_result.ok)
+            self.assertEqual(status["states"].get("quarantined"), 2)
+            inconsistent_row = next(
+                row for row in status["records"] if row["intent_id"] == inconsistent.identity.idempotency_key
+            )
+            self.assertIn("active outbox state", inconsistent_row["failure"]["message"])
+
+    def test_exact_claim_rejects_expired_lease_after_retry_budget_exhaustion(self) -> None:
+        with TemporaryDirectory() as directory:
+            now = [1_000.0]
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: now[0])
+            plan = self._plan("claim-single-exhausted", max_attempts=1)
+            intent_id = plan.identity.idempotency_key
+            self.assertTrue(repository.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            first = repository.claim_intent(owner="first", lease_seconds=5, intent_id=intent_id)
+            self.assertEqual(first.kind, OutboxResultKind.APPLIED)
+            assert first.record is not None
+            self.assertEqual(first.record.attempts, 1)
+            now[0] += 6
+
+            recovered = repository.claim_intent(owner="second", lease_seconds=5, intent_id=intent_id)
+
+            self.assertEqual(recovered.kind, OutboxResultKind.REJECTED)
+            self.assertIn("retry budget exhausted", recovered.reason)
 
     def test_status_on_missing_state_is_non_mutating(self) -> None:
         with TemporaryDirectory() as directory:

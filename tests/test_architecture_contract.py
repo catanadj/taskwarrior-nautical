@@ -7,6 +7,7 @@ import re
 import inspect
 from dataclasses import fields
 from pathlib import Path
+from unittest.mock import patch
 
 from dev_tools import nautical_deploy_sanity
 from nautical_core import architecture_contract
@@ -20,6 +21,95 @@ from nautical_core.add_anchor_preview import (
 
 
 class ArchitectureContractTests(unittest.TestCase):
+    def test_outbox_sql_and_connection_ownership_stay_in_their_modules(self) -> None:
+        core = Path(__file__).parents[1] / "nautical_core"
+        repository_source = (core / "lifecycle_outbox.py").read_text(encoding="utf-8")
+        query_source = (core / "lifecycle_outbox_queries.py").read_text(encoding="utf-8")
+        maintenance_source = (core / "lifecycle_outbox_maintenance.py").read_text(encoding="utf-8")
+
+        for query in (
+            "SELECT processing_state, COUNT(*) FROM lifecycle_outbox",
+            "SELECT * FROM lifecycle_outbox ORDER BY intent_id ASC",
+        ):
+            self.assertIn(query, query_source)
+        for query in (
+            "SELECT intent_id FROM lifecycle_outbox",
+            "DELETE FROM lifecycle_outbox",
+            "CREATE TABLE IF NOT EXISTS lifecycle_maintenance",
+            "PRAGMA wal_checkpoint(PASSIVE)",
+        ):
+            self.assertIn(query, maintenance_source)
+
+        tree = ast.parse(repository_source)
+        repository_class = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "_LifecycleOutboxRepository"
+        )
+        for method_name in ("status", "snapshot_records", "prune_acknowledged", "opportunistic_housekeeping"):
+            method = next(
+                node for node in repository_class.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == method_name
+            )
+            sql_literals = [
+                node.value for node in ast.walk(method)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and node.value.lstrip().upper().startswith(("SELECT", "UPDATE", "DELETE", "CREATE TABLE"))
+            ]
+            self.assertEqual(sql_literals, [], method_name)
+
+        self.assertIn("def _connect(", repository_source)
+        self.assertIn("def _transaction(", repository_source)
+        self.assertIn("_secure_state_files()", repository_source)
+        for owner_source in (query_source, maintenance_source):
+            self.assertNotIn("_secure_state_files", owner_source)
+            self.assertNotIn("BEGIN IMMEDIATE", owner_source)
+
+    def test_outbox_repository_delegates_each_read_and_maintenance_owner_once(self) -> None:
+        from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+        from nautical_core import lifecycle_outbox_maintenance, lifecycle_outbox_queries
+
+        with tempfile.TemporaryDirectory(prefix="nautical-outbox-owner-contract-") as td:
+            repository = LifecycleOutboxRepository(Path(td))
+            self.assertTrue(repository.open().ok)
+
+            with patch.object(
+                lifecycle_outbox_queries, "status_summary", wraps=lifecycle_outbox_queries.status_summary
+            ) as status_query:
+                status_result, payload = repository.status()
+            self.assertTrue(status_result.ok)
+            self.assertIn("retention", payload)
+            self.assertIn("records", payload)
+            status_query.assert_called_once()
+
+            with patch.object(
+                lifecycle_outbox_queries, "snapshot_rows", wraps=lifecycle_outbox_queries.snapshot_rows
+            ) as snapshot_query:
+                snapshot_result, snapshot = repository.snapshot_records()
+            self.assertTrue(snapshot_result.ok)
+            self.assertEqual(snapshot, ())
+            snapshot_query.assert_called_once()
+
+            with patch.object(
+                lifecycle_outbox_maintenance, "prune_acknowledged_rows",
+                wraps=lifecycle_outbox_maintenance.prune_acknowledged_rows,
+            ) as prune_query:
+                prune_result = repository.prune_acknowledged()
+            self.assertTrue(prune_result.ok)
+            self.assertEqual(prune_result.removed, 0)
+            prune_query.assert_called_once()
+
+            with patch.object(
+                lifecycle_outbox_maintenance, "housekeeping_rows",
+                wraps=lifecycle_outbox_maintenance.housekeeping_rows,
+            ) as housekeeping_query:
+                housekeeping_result = repository.opportunistic_housekeeping(
+                    size_threshold_bytes=2**31
+                )
+            self.assertTrue(housekeeping_result.ok)
+            self.assertTrue(housekeeping_result.skipped)
+            self.assertEqual(housekeeping_result.reason, "no_work")
+            housekeeping_query.assert_called_once()
+
     def test_hooks_do_not_call_subprocess_run_outside_task_execution(self) -> None:
         root = Path(__file__).parents[1]
 

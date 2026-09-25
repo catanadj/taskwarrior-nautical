@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import sqlite3
 from typing import Callable, Mapping, Protocol, TypeVar
 
+from .lifecycle_outbox_schema import OUTBOX_SCHEMA_VERSION
+
 
 class StatusRowPoison(Exception):
     """A lifecycle row failed its repository decoder but remains reportable."""
@@ -172,7 +174,7 @@ def status_summary(
             lease_age_s=max(0, int(float(now) - record.lease_expires_at)) if record.lease_expires_at else 0,
             failure=failure,
             plan=OutboxStatusPlanSummary(
-                schema_version=2,
+                schema_version=OUTBOX_SCHEMA_VERSION,
                 action=plan.action.value,
                 event=plan.identity.event.value,
                 chainID=plan.identity.chain_id,

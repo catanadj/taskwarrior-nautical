@@ -24,6 +24,65 @@ from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
 
 class MutationHardeningTests(unittest.TestCase):
+    def test_lifecycle_child_prefetch_reuses_authoritative_uuid_set_read(self) -> None:
+        from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+
+        parent_uuid = "00000000-0000-4000-8000-000000000928"
+        child_uuid = "00000000-0000-4000-8000-000000000929"
+        parent = {
+            "uuid": parent_uuid, "status": "completed", "chain": "on",
+            "chainID": "prefetch-chain", "link": 1,
+            "modified": "20260813T120000Z",
+        }
+        payload = ChildImportPayload(
+            parent_uuid=parent_uuid,
+            child_uuid=child_uuid,
+            chain_id="prefetch-chain",
+            target_link=2,
+            fields=(("uuid", child_uuid), ("chainID", "prefetch-chain"),
+                    ("link", 2), ("prevLink", parent_uuid[:8])),
+        )
+
+        class Repository:
+            def __init__(self) -> None:
+                self.requests = []
+                self.uuid_reads = []
+                self.broad_reads = 0
+
+            def read_uuid_set(self, request):
+                self.requests.append(request)
+                return SetReadResult(
+                    SetReadStatus.COMPLETE,
+                    request.uuids,
+                    found={parent_uuid: parent},
+                    absent=tuple(identity for identity in request.uuids if identity != parent_uuid),
+                    complete_for_requested_identities=True,
+                )
+
+            def by_uuid(self, uuid_value, *, refresh=False):
+                del refresh
+                self.uuid_reads.append(uuid_value)
+                return Found(parent, f"uuid:{uuid_value}")
+
+            def broad_snapshot(self, **_kwargs):
+                self.broad_reads += 1
+                return Unavailable("unexpected broad read")
+
+        repository = Repository()
+        service = TaskwarriorMutationService(SimpleNamespace(
+            repository=repository, mutation_epoch=0,
+        ))
+        service.preflight_lifecycle_batch(
+            (payload,), parent_expectations=((parent_uuid, child_uuid[:8]),),
+        )
+
+        self.assertEqual(len(repository.requests), 1)
+        self.assertEqual(set(repository.requests[0].uuids), {parent_uuid, child_uuid})
+        self.assertEqual(repository.uuid_reads, [])
+        self.assertEqual(repository.broad_reads, 0)
+        self.assertIn(child_uuid.lower(), service._prefetched_children)
+        self.assertEqual(service._prefetched_parents.get(parent_uuid), parent)
+
     def test_existing_child_is_acknowledged_only_when_complete_and_matching(self) -> None:
         parent = {
             "uuid": "00000000-0000-4000-8000-000000000926",

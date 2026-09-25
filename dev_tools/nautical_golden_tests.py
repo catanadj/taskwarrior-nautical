@@ -943,107 +943,6 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     expect(len(uow.client.calls) == 7, f"unexpected Taskwarrior mutation count: {uow.client.calls}")
 
 
-def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
-    """Batch child-absence checks avoid duplicate pre-import UUID exports safely."""
-    from nautical_core.integration_models import (
-        Absent, Found, GuardTimestamp, GuardTimestampField,
-        MutationGuard,
-    )
-    from nautical_core.lifecycle_models import recurrence_fingerprint
-    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
-
-    parent_uuid = "00000000-0000-4000-8000-000000000928"
-    child_uuid = "00000000-0000-4000-8000-000000000929"
-    parent = {
-        "uuid": parent_uuid,
-        "status": "completed",
-        "chain": "on",
-        "chainID": "prefetch-chain",
-        "link": 1,
-        "due": "20260703T110000Z",
-        "modified": "20260813T120000Z",
-    }
-    child = {
-        "uuid": child_uuid,
-        "chainID": "prefetch-chain",
-        "link": 2,
-        "prevLink": parent_uuid[:8],
-        "status": "pending",
-        "chain": "on",
-        "cp": "1d",
-    }
-    payload = _child_payload_from_values(child, parent_uuid=parent_uuid)
-
-    class Snapshot:
-        def uuid_matches(self, uuid_value):
-            return (parent,) if str(uuid_value).lower() == parent_uuid else ()
-
-    class Repo:
-        def __init__(self):
-            self.uuid_calls = []
-            self.broad_calls = 0
-            self.set_calls = 0
-
-        def by_uuid(self, uuid_value, *, refresh=False):
-            del refresh
-            self.uuid_calls.append(str(uuid_value))
-            row = parent if str(uuid_value).lower() == parent_uuid else None
-            return Found(row, f"uuid:{uuid_value}") if row is not None else Absent(f"uuid:{uuid_value}", "not present")
-
-        def broad_snapshot(self, **kwargs):
-            self.broad_calls += 1
-            del kwargs
-            return Found(Snapshot(), "broad:lifecycle-child-prefetch")
-
-        def read_uuid_set(self, request):
-            from nautical_core.task_set_reads import SetReadResult, SetReadStatus
-
-            self.set_calls += 1
-            return SetReadResult(
-                SetReadStatus.COMPLETE,
-                request.uuids,
-                found={parent_uuid: parent},
-                absent=tuple(identity for identity in request.uuids if identity != parent_uuid),
-                complete_for_requested_identities=True,
-            )
-
-    class Uow:
-        def __init__(self):
-            self.repository = Repo()
-            self.mutation_epoch = 0
-            self.client = None
-
-        def record_mutation(self, *, uncertain=False):
-            del uncertain
-            self.mutation_epoch += 1
-            return self.mutation_epoch
-
-    uow = Uow()
-    service = TaskwarriorMutationService(uow)
-    service.preflight_lifecycle_batch((payload,), parent_expectations=((parent_uuid, child_uuid[:8]),))
-    guard = MutationGuard(
-        parent_uuid,
-        "completed",
-        "prefetch-chain",
-        1,
-        recurrence_fingerprint(parent),
-        (GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
-        0,
-        "on",
-    )
-    expect(
-        child_uuid.lower() in service._prefetched_children,
-        "authoritative absent child was not retained for the import decision",
-    )
-    expect(
-        service._prefetched_parents.get(parent_uuid) == parent,
-        "pre-mutation parent row was not retained for the guarded link decision",
-    )
-    expect(uow.repository.set_calls == 1, f"prefetch used {uow.repository.set_calls} targeted set reads")
-    expect(uow.repository.broad_calls == 0, f"prefetch used {uow.repository.broad_calls} broad reads")
-    expect(uow.repository.uuid_calls == [], f"child UUID was redundantly exported: {uow.repository.uuid_calls}")
-
-
 def test_lifecycle_batch_prefetch_uses_one_union_set_read():
     """All child slots and parent guards share one bounded set read."""
     from nautical_core.integration_models import ChildImportPayload
@@ -14506,7 +14405,6 @@ TESTS = [
     test_hook_on_modify_timeline_cp_random_labels_selected_intervals,
     *HOOK_TESTS,
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
-    test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot,
     test_lifecycle_batch_prefetch_uses_one_union_set_read,
     test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,

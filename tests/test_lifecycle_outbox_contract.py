@@ -209,6 +209,11 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             )
             self.assertTrue(staged.ok)
             self.assertEqual(set(staged_rows), set(ids))
+            isolated, isolated_rows = repository.renew_leases(
+                intent_ids=(ids[0], "missing-intent"), owner="wrong-owner", lease_seconds=30
+            )
+            self.assertTrue(isolated.ok)
+            self.assertEqual(isolated_rows[ids[0]].kind, OutboxResultKind.CONFLICT)
             for stage in (ExecutionStage.PARENT_LINKED, ExecutionStage.VERIFIED):
                 staged, _ = repository.advance_stages(
                     stages={intent_id: stage for intent_id in ids}, owner="bulk-owner"

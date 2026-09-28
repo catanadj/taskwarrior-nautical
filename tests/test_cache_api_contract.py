@@ -324,6 +324,40 @@ class CacheApiContractTests(unittest.TestCase):
                 os.close(fd)
             self.assertTrue(binding.cache_save("locked", {"natural": "released"}))
 
+    def test_unexpected_fcntl_error_propagates_and_closes_lock_file(self) -> None:
+        class BrokenFcntl:
+            LOCK_EX = fcntl.LOCK_EX
+            LOCK_NB = fcntl.LOCK_NB
+            LOCK_UN = fcntl.LOCK_UN
+
+            def __init__(self) -> None:
+                self.file_descriptor: int | None = None
+
+            def flock(self, file_descriptor: int, _operation: int) -> None:
+                self.file_descriptor = file_descriptor
+                raise OSError("simulated flock I/O failure")
+
+        with tempfile.TemporaryDirectory() as td:
+            lock_driver = BrokenFcntl()
+            namespace = vars(core).copy()
+            namespace.update(
+                _CACHE_DIR=td,
+                _CACHE_LOAD_MEM=OrderedDict(),
+                fcntl=lock_driver,
+                os=os,
+                time=_Clock(),
+                random=__import__("random"),
+            )
+            binding = cache_api.for_core(namespace=namespace, module=core)
+
+            with self.assertRaisesRegex(OSError, "simulated flock I/O failure"):
+                with binding._cache_lock("broken"):
+                    self.fail("a failed flock must not yield an acquired lock")
+
+            self.assertIsNotNone(lock_driver.file_descriptor)
+            with self.assertRaises(OSError):
+                os.fstat(lock_driver.file_descriptor)
+
     def test_unicode_payload_is_written_unescaped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

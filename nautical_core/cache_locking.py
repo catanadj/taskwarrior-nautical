@@ -145,16 +145,17 @@ def safe_lock_fcntl_context(
         except Exception:
             pass
         lf = os_mod.fdopen(fd, "a", encoding="utf-8")
-        for _ in range(tries):
-            try:
-                fcntl_mod.flock(lf.fileno(), fcntl_mod.LOCK_EX | fcntl_mod.LOCK_NB)
-                acquired = True
-                break
-            except Exception:
-                safe_lock_sleep_once(sleep_base, jitter)
     except Exception:
         lf = None
     try:
+        if lf is not None:
+            for _ in range(tries):
+                try:
+                    fcntl_mod.flock(lf.fileno(), fcntl_mod.LOCK_EX | fcntl_mod.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    safe_lock_sleep_once(sleep_base, jitter)
         yield acquired
     finally:
         try:

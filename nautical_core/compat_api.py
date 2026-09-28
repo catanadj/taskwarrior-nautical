@@ -1,8 +1,4 @@
-"""Stable public export contract for the Nautical core facade.
-
-The explicit ``normalize_task_business_calendar_in_place`` name is the public
-mutator.  Its shorter predecessor remains a facade-only compatibility alias.
-"""
+"""Stable public export contract for the Nautical core facade."""
 
 from __future__ import annotations
 
@@ -213,9 +209,6 @@ PUBLIC_EXPORT_CATEGORIES = {
     )
     for name in PUBLIC_EXPORTS
 }
-PUBLIC_EXPORT_CATEGORIES["normalize_task_business_calendar"] = "legacy_compatibility_alias"
-
-
 PUBLIC_MODEL_NAMES = (
     "AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF", "AnchorValidationResult",
     "ParseError", "YearTokenFormatError", "AndTermUnsatisfiable", "OccurrenceSearchExhausted",
@@ -233,14 +226,6 @@ _PUBLIC_CALL_PARAMETERS = {
     "local_naive_to_utc": ("dt_local_naive",),
     "parse_dt_any": ("s",),
 }
-LEGACY_COMPATIBILITY_ALIASES = {
-    "normalize_task_business_calendar": (
-        "business_calendar_api",
-        "normalize_task_business_calendar_in_place",
-    ),
-}
-
-
 def ensure_public_models(
     namespace: dict[str, Any],
     package_name: str,

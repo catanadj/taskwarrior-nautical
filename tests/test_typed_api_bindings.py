@@ -120,12 +120,8 @@ class ApiBindingContractTests(unittest.TestCase):
         wildcard: dict[str, object] = {}
         exec("from nautical_core import *", {}, wildcard)
         self.assertEqual(set(wildcard), set(compat_api.PUBLIC_EXPORTS))
-        self.assertTrue(callable(facade.normalize_task_business_calendar))
         self.assertTrue(callable(facade.normalize_task_business_calendar_in_place))
-        self.assertEqual(
-            inspect.signature(facade.normalize_task_business_calendar),
-            inspect.signature(facade.normalize_task_business_calendar_in_place),
-        )
+        self.assertFalse(hasattr(facade, "normalize_task_business_calendar"))
 
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES
@@ -146,14 +142,12 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertEqual(owners["fcntl"], "fcntl")
         self.assertEqual(owners["tempfile"], "tempfile")
 
-    def test_public_surface_categories_cover_exports_and_legacy_alias(self) -> None:
+    def test_public_surface_categories_cover_exports_without_legacy_aliases(self) -> None:
         categories = compat_api.PUBLIC_EXPORT_CATEGORIES
-        self.assertEqual(set(categories), set(compat_api.PUBLIC_EXPORTS) | {
-            "normalize_task_business_calendar",
-        })
-        allowed = {"supported_public_api", "installed_runtime", "test_seam", "legacy_compatibility_alias"}
+        self.assertEqual(set(categories), set(compat_api.PUBLIC_EXPORTS))
+        allowed = {"supported_public_api", "installed_runtime", "test_seam"}
         self.assertTrue(set(categories.values()) <= allowed)
-        self.assertEqual(categories["normalize_task_business_calendar"], "legacy_compatibility_alias")
+        self.assertNotIn("normalize_task_business_calendar", categories)
         self.assertEqual(categories["diag"], "installed_runtime")
         self.assertEqual(categories["_build_anchor_atom_dnf"], "test_seam")
 
@@ -163,7 +157,7 @@ class ApiBindingContractTests(unittest.TestCase):
             with self.subTest(module=module_name):
                 self.assertIsNotNone(importlib.import_module(module_name))
 
-    def test_legacy_alias_and_public_wrappers_preserve_callable_contracts(self) -> None:
+    def test_public_wrappers_preserve_callable_contracts_without_legacy_aliases(self) -> None:
         import nautical_core as facade
 
         for name in (
@@ -175,10 +169,7 @@ class ApiBindingContractTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(facade, name)))
-        self.assertEqual(
-            inspect.signature(facade.normalize_task_business_calendar),
-            inspect.signature(facade.normalize_task_business_calendar_in_place),
-        )
+        self.assertFalse(hasattr(facade, "normalize_task_business_calendar"))
 
     def test_public_facade_exports_only_supported_symbols_with_stable_signatures(self) -> None:
         import nautical_core as facade

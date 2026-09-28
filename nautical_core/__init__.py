@@ -914,10 +914,6 @@ _business_calendar_api = _LazyApiBundle(
         "get_configured_business_calendar",
         "business_calendar_for_task",
         "normalize_task_business_calendar_in_place",
-        (
-            "normalize_task_business_calendar",
-            _compat_api.LEGACY_COMPATIBILITY_ALIASES["normalize_task_business_calendar"][1],
-        ),
         "business_calendar_fingerprint",
         "use_business_calendar",
         "use_task_business_calendar",

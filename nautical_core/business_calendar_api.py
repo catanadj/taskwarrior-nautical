@@ -100,10 +100,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             task["bc"] = business_calendar.name
         return business_calendar
 
-    # Compatibility name retained for integrations; the explicit name makes
-    # the in-place mutation visible to new callers.
-    normalize_task_business_calendar = normalize_task_business_calendar_in_place
-
     def business_calendar_fingerprint(business_calendar: Any = None) -> str:
         business_calendar = core["_business_calendar"].effective_business_calendar(
             business_calendar
@@ -128,7 +124,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         get_configured_business_calendar=get_configured_business_calendar,
         business_calendar_for_task=business_calendar_for_task,
         normalize_task_business_calendar_in_place=normalize_task_business_calendar_in_place,
-        normalize_task_business_calendar=normalize_task_business_calendar,
         business_calendar_fingerprint=business_calendar_fingerprint,
         use_business_calendar=use_business_calendar,
         use_task_business_calendar=use_task_business_calendar,

@@ -104,11 +104,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 115)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 115)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 113)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 113)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "5b46984dc0d8330adf4bf82f81d4408c25a7d4958d5677532d4c1e195f651344",
+            "24f2b627c0240a2a01ef50c8058944797cf50667362370646ec42309c9dcd153",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -122,6 +122,8 @@ class ApiBindingContractTests(unittest.TestCase):
             self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)
         for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):
             self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("_fatal_bad_colon_in_year_tail", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("_warn_rate_limited_any", compat_api.PUBLIC_EXPORTS)
 
         import nautical_core as facade
 
@@ -143,6 +145,8 @@ class ApiBindingContractTests(unittest.TestCase):
         for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):
             self.assertFalse(hasattr(facade, name))
             self.assertTrue(hasattr(hint_models, name))
+        self.assertFalse(hasattr(facade, "_fatal_bad_colon_in_year_tail"))
+        self.assertFalse(hasattr(facade, "_warn_rate_limited_any"))
 
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES
@@ -152,6 +156,8 @@ class ApiBindingContractTests(unittest.TestCase):
             self.assertNotIn(name, owners)
         for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):
             self.assertNotIn(name, owners)
+        self.assertNotIn("_fatal_bad_colon_in_year_tail", owners)
+        self.assertNotIn("_warn_rate_limited_any", owners)
         self.assertEqual(owners["OccurrenceSearchExhausted"], "nautical_core.scheduler_models")
         self.assertEqual(owners["effective_config_snapshot"], "nautical_core.core_config")
         self.assertEqual(owners["cache_load"], "nautical_core.cache_api")

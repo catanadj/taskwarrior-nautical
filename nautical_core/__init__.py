@@ -143,7 +143,6 @@ _load_config = _config_call("_load_config")
 _nautical_cache_dir = _config_call("nautical_cache_dir")
 _warn_once_per_day = _config_call("warn_once_per_day")
 _warn_once_per_day_any = _config_call("warn_once_per_day_any")
-_warn_rate_limited_any = _config_call("warn_rate_limited_any")
 _warn_toml_parse_error = _config_call("_warn_toml_parse_error")
 _get_config = _config_call("_get_config")
 def effective_config_snapshot() -> dict:
@@ -821,7 +820,6 @@ _parser_support_api = _LazyApiBundle(
         "_parse_y_token_cached",
         "_parse_y_token",
         "_rewrite_year_month_aliases_in_context",
-        "_fatal_bad_colon_in_year_tail",
         "_raise_on_bad_colon_year_tokens",
         "_skip_ws_pos",
         "_raise_if_comma_joined_anchors",

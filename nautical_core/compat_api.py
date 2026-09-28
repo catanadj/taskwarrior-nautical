@@ -12,7 +12,7 @@ from .core_context import CoreContext
 
 PUBLIC_EXPORTS = (
     'AnchorMods', 'AnchorAtom', 'AnchorTerm', 'AnchorDNF',
-    'AnchorValidationResult', 'HintMetaCfg', 'HintMeta',
+    'HintMetaCfg', 'HintMeta',
     'HintPerYear', 'HintLimits', 'AnchorHintsPayload', 'ParseError',
     'YearTokenFormatError', 'AndTermUnsatisfiable', 'OccurrenceSearchExhausted', 'BusinessCalendarConfigError',
     'ANCHOR_CACHE_DIR_OVERRIDE', 'BUSINESS_CALENDAR_CONFIG', 'ASTRONOMY_CONFIG',
@@ -68,7 +68,6 @@ PUBLIC_OWNER_MODULES.update({
     "AnchorAtom": "nautical_core.parsing.parser_models",
     "AnchorTerm": "nautical_core.parsing.parser_models",
     "AnchorDNF": "nautical_core.parsing.parser_models",
-    "AnchorValidationResult": "nautical_core.parsing.parser_models",
     "ParseError": "nautical_core.parsing.parser_models",
     "YearTokenFormatError": "nautical_core.parsing.parser_models",
     "AndTermUnsatisfiable": "nautical_core.parsing.parser_models",
@@ -205,7 +204,7 @@ PUBLIC_EXPORT_CATEGORIES = {
     for name in PUBLIC_EXPORTS
 }
 PUBLIC_MODEL_NAMES = (
-    "AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF", "AnchorValidationResult",
+    "AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF",
     "ParseError", "YearTokenFormatError", "AndTermUnsatisfiable", "OccurrenceSearchExhausted",
 )
 _PUBLIC_CALL_PARAMETERS = {

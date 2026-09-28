@@ -369,7 +369,7 @@ def scheduling_configuration_error() -> str:
 configured_business_calendars: Callable[[], Any]
 
 
-def validate_scheduling_configuration() -> None:
+def _validate_scheduling_configuration() -> None:
     _configuration_facade.validate_scheduling(
         core_config=_core_config,
         astronomy_config=ASTRONOMY_CONFIG,
@@ -437,7 +437,7 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResu
     globals()["_CONF"] = _core_config._CONF
     CONFIG_ERROR = _core_config.configuration_error()
     _refresh_timezone()
-    validate_scheduling_configuration()
+    _validate_scheduling_configuration()
     _configure_season_support()
     error = scheduling_configuration_error()
     if error:

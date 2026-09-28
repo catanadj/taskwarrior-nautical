@@ -1071,7 +1071,6 @@ _cache_api = _LazyApiBundle(
         "_safe_lock_stale_pid",
         "_safe_lock_fcntl_context",
         "_safe_lock_excl_context",
-        "safe_lock",
         "_cache_lock",
         "_is_atom_like",
         "_is_dnf_like",

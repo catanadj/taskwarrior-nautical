@@ -39,6 +39,22 @@ from tests.support.lifecycle_execution import LifecycleExecutionFixture
 from nautical_core.query_service import OccurrenceQueryRuntime
 from nautical_core.cache_locking import safe_lock as _owner_safe_lock
 from nautical_core.panel_colours import chain_colour_root
+
+try:
+    import fcntl as _fcntl_mod
+except ImportError:
+    _fcntl_mod = None
+
+
+def _owner_safe_lock_context(path, **kwargs):
+    return _owner_safe_lock(
+        path,
+        fcntl_mod=_fcntl_mod,
+        os_mod=os,
+        time_mod=time,
+        random_mod=random,
+        **kwargs,
+    )
 from dev_tools.golden_tests.recurrence import TESTS as RECURRENCE_TESTS
 from dev_tools.golden_tests.hooks import TESTS as HOOK_TESTS
 from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
@@ -1774,10 +1790,8 @@ def test_hook_files_are_private_permissions():
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
         try:
-            core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-            mod_core = _load_hook_module(core_path, "_nautical_core_perm_test")
             lock_path = os.path.join(td, ".nautical_perm_test.lock")
-            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
+            with _owner_safe_lock_context(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
                 expect(ok, "safe_lock did not acquire")
                 mode = stat.S_IMODE(os.stat(lock_path).st_mode)
                 expect((mode & 0o077) == 0, f"lock file has group/other perms: {oct(mode)}")
@@ -1802,8 +1816,6 @@ def test_safe_lock_fcntl_contention():
         import fcntl  # noqa: F401
     except ImportError:
         return
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    mod_core = _load_hook_module(core_path, "_nautical_core_lock_fcntl_test")
     with tempfile.TemporaryDirectory() as td:
         lock_path = os.path.join(td, ".nautical_fcntl.lock")
         ready_path = os.path.join(td, ".nautical_fcntl.ready")
@@ -1829,11 +1841,11 @@ def test_safe_lock_fcntl_contention():
                     break
                 _time.sleep(0.02)
             expect(os.path.exists(ready_path), "lock holder did not start")
-            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
+            with _owner_safe_lock_context(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
                 expect(not ok, "safe_lock should not acquire while locked")
         finally:
             p.wait(timeout=3.0)
-        with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
+        with _owner_safe_lock_context(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
             expect(ok, "safe_lock should acquire after lock release")
 
 def test_safe_lock_fallback_contention():

@@ -22,7 +22,6 @@ import importlib
 import types
 from types import MappingProxyType
 from . import compat_api as _compat_api
-from .hint_models import AnchorHintsPayload, HintLimits, HintMeta, HintMetaCfg, HintPerYear
 _PKG_BASENAME = os.path.basename(os.path.dirname(__file__))
 _PKG_DIR = os.path.dirname(__file__)
 

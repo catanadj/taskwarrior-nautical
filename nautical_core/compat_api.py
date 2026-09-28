@@ -11,8 +11,7 @@ from .api_bindings import ApiBinding
 from .core_context import CoreContext
 
 PUBLIC_EXPORTS = (
-    'HintMetaCfg', 'HintMeta',
-    'HintPerYear', 'HintLimits', 'AnchorHintsPayload', 'ParseError',
+    'ParseError',
     'YearTokenFormatError', 'AndTermUnsatisfiable', 'OccurrenceSearchExhausted', 'BusinessCalendarConfigError',
     'ANCHOR_CACHE_DIR_OVERRIDE', 'BUSINESS_CALENDAR_CONFIG', 'ASTRONOMY_CONFIG',
     'effective_config_snapshot', 'effective_config_fingerprint', 'reload_taskdata_config',
@@ -179,11 +178,6 @@ PUBLIC_OWNER_MODULES.update({
     "anchor_preset_display": "nautical_core.parser_api",
     "omit_preset_display": "nautical_core.parser_api",
     "resolve_task_data_context": "nautical_core.runtime",
-    "HintMetaCfg": "nautical_core.hint_models",
-    "HintMeta": "nautical_core.hint_models",
-    "HintPerYear": "nautical_core.hint_models",
-    "HintLimits": "nautical_core.hint_models",
-    "AnchorHintsPayload": "nautical_core.hint_models",
 })
 
 # Every exported name is deliberately classified before any compatibility

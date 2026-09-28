@@ -104,11 +104,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 120)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 120)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 115)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 115)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "b161664af473ce08973402eb971f901286b72ef97b2824631ae63e35b3030c59",
+            "5b46984dc0d8330adf4bf82f81d4408c25a7d4958d5677532d4c1e195f651344",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -119,6 +119,8 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertNotIn("TaskDict", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("AnchorValidationResult", compat_api.PUBLIC_EXPORTS)
         for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
+            self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)
+        for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):
             self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)
 
         import nautical_core as facade
@@ -137,12 +139,18 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertFalse(hasattr(facade, "AnchorValidationResult"))
         for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
             self.assertFalse(hasattr(facade, name))
+        hint_models = importlib.import_module("nautical_core.hint_models")
+        for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):
+            self.assertFalse(hasattr(facade, name))
+            self.assertTrue(hasattr(hint_models, name))
 
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES
         self.assertEqual(set(owners), set(compat_api.PUBLIC_EXPORTS))
         self.assertEqual(owners["parse_anchor_expr_to_dnf"], "nautical_core.parser_api")
         for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
+            self.assertNotIn(name, owners)
+        for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):
             self.assertNotIn(name, owners)
         self.assertEqual(owners["OccurrenceSearchExhausted"], "nautical_core.scheduler_models")
         self.assertEqual(owners["effective_config_snapshot"], "nautical_core.core_config")

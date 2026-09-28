@@ -104,11 +104,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 124)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 124)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 120)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 120)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "325ead4998fdc59573a5421fee71dbc932809486df4b449c7ee92fcff5b50d8f",
+            "b161664af473ce08973402eb971f901286b72ef97b2824631ae63e35b3030c59",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -118,6 +118,8 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertNotIn("safe_lock", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("TaskDict", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("AnchorValidationResult", compat_api.PUBLIC_EXPORTS)
+        for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
+            self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)
 
         import nautical_core as facade
 
@@ -133,12 +135,15 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertFalse(hasattr(facade, "safe_lock"))
         self.assertFalse(hasattr(facade, "TaskDict"))
         self.assertFalse(hasattr(facade, "AnchorValidationResult"))
+        for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
+            self.assertFalse(hasattr(facade, name))
 
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES
         self.assertEqual(set(owners), set(compat_api.PUBLIC_EXPORTS))
         self.assertEqual(owners["parse_anchor_expr_to_dnf"], "nautical_core.parser_api")
-        self.assertEqual(owners["AnchorDNF"], "nautical_core.parsing.parser_models")
+        for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
+            self.assertNotIn(name, owners)
         self.assertEqual(owners["OccurrenceSearchExhausted"], "nautical_core.scheduler_models")
         self.assertEqual(owners["effective_config_snapshot"], "nautical_core.core_config")
         self.assertEqual(owners["cache_load"], "nautical_core.cache_api")

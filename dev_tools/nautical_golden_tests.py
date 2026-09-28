@@ -10038,38 +10038,6 @@ def test_on_modify_completion_chain_snapshot_modes_and_query():
         mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
 
 
-def test_on_modify_completion_snapshot_malformed_json_is_unavailable():
-    """Malformed completion exports must not become loaded empty snapshots."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_completion_snapshot_malformed_test")
-    from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
-
-    saved = (mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY)
-    command = TaskCommand(("task", "export"), "completion snapshot", 3.0)
-    unavailable = Unavailable(
-        "chain snapshot",
-        FailureEvidence(command, CommandFailureKind.INVALID_RESPONSE, 0, 1, 0.001, False, "malformed JSON"),
-    )
-    repository = SimpleNamespace(
-        chain_snapshot=lambda *_args, **_kwargs: unavailable,
-        exact_child_slot=lambda *_args, **_kwargs: unavailable,
-    )
-    try:
-        mod.core.PANEL_MODE = "line"
-        mod._SHOW_ANALYTICS = False
-        mod._CHECK_CHAIN_INTEGRITY = False
-        snapshot = mod._completion_effects.chain_snapshot("malformed01", 1, 2, repository)
-        expect(snapshot.is_unavailable, f"malformed snapshot was accepted: {snapshot!r}")
-        expect(not snapshot.loaded and snapshot.rows == [], f"malformed snapshot changed lookup state: {snapshot!r}")
-        panels = []
-        mod._panel = lambda title, rows, **_kwargs: panels.append((title, rows))
-        mod._print_task = lambda _task: None
-        allowed = mod._completion_effects.existing_next_or_fail({}, 2, snapshot, repository)
-        expect(not allowed and panels and "unavailable" in panels[0][0].lower(), "unavailable snapshot did not stop spawn")
-    finally:
-        mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
-
-
 def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     """scheduled-only cp chains should preserve scheduled wall clock on completion."""
     hook = _find_hook_file("on-modify.nautical")
@@ -14267,7 +14235,6 @@ TESTS = [
     test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_chain_snapshot_modes_and_query,
-    test_on_modify_completion_snapshot_malformed_json_is_unavailable,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_timezone,

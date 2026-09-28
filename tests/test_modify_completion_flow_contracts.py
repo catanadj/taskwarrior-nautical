@@ -5,9 +5,48 @@ from types import SimpleNamespace
 import unittest
 
 from nautical_core import modify_completion_flow as flow
+from nautical_core.integration_models import (
+    CommandFailureKind,
+    FailureEvidence,
+    TaskCommand,
+    Unavailable,
+)
+from nautical_core.modify_completion_effects import SnapshotPorts, chain_snapshot
+from nautical_core.modify_models import CompletionChainSnapshot
+from nautical_core.task_models import TaskObservation
 
 
 class ModifyCompletionFlowContracts(unittest.TestCase):
+    def test_unavailable_chain_export_is_not_loaded_as_empty_snapshot(self) -> None:
+        command = TaskCommand(("task", "export"), "completion snapshot", 3.0)
+        unavailable = Unavailable(
+            "chain snapshot",
+            FailureEvidence(
+                command,
+                CommandFailureKind.INVALID_RESPONSE,
+                0,
+                1,
+                0.001,
+                False,
+                "malformed JSON",
+            ),
+        )
+        ports = SnapshotPorts(
+            repository=SimpleNamespace(
+                chain_snapshot=lambda _chain_id: unavailable,
+            ),
+            mode=lambda: "full",
+            models=SimpleNamespace(CompletionChainSnapshot=CompletionChainSnapshot),
+            task_observation=TaskObservation,
+        )
+
+        snapshot = chain_snapshot(ports, "malformed01", 1, 2)
+
+        self.assertFalse(snapshot.loaded)
+        self.assertEqual(snapshot.rows, [])
+        self.assertTrue(snapshot.is_unavailable)
+        self.assertIn("malformed JSON", snapshot.error)
+
     def test_failed_preflight_stops_before_compute_and_chain_reads(self) -> None:
         events = []
         chain_reads = []

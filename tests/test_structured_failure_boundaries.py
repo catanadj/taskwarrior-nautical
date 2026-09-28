@@ -87,7 +87,8 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
         )
 
     def test_panel_file_warnings_report_empty_sources_and_unmatched_patterns(self) -> None:
-        from nautical_core import anchor_files, omit_files
+        import nautical_core.anchor_files as anchor_files
+        import nautical_core.omit_files as omit_files
 
         with TemporaryDirectory() as directory:
             Path(directory, "weekend.csv").write_text(

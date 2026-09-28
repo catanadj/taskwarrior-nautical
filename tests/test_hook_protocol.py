@@ -7,7 +7,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from nautical_core import hook_protocol
+import nautical_core.hook_protocol as hook_protocol
 
 
 class HookProtocolTests(unittest.TestCase):

@@ -67,7 +67,7 @@ class _Core:
     @staticmethod
     def _import_sibling(name):
         if name == "task_codec":
-            from nautical_core import task_codec
+            import nautical_core.task_codec as task_codec
 
             return task_codec
         raise AssertionError(name)

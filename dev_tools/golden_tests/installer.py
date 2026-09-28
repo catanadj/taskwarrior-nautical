@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 
-from nautical_core import install_runtime
+import nautical_core.install_runtime as install_runtime
 
 
 def test_installer_initializes_explicit_timezone_config():

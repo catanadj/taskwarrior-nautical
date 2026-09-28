@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import hook_support, modify_command_effects, runtime_command
+import nautical_core.hook_support as hook_support
+import nautical_core.modify_command_effects as modify_command_effects
+import nautical_core.runtime_command as runtime_command
 from nautical_core.integration_models import (
     CommandFailureKind,
     TaskCommand,

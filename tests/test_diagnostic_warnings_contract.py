@@ -10,8 +10,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from unittest.mock import patch
 
-from nautical_core import diagnostic_warnings
-from nautical_core import diagnostic_models, runtime
+import nautical_core.diagnostic_warnings as diagnostic_warnings
+import nautical_core.diagnostic_models as diagnostic_models
+import nautical_core.runtime as runtime
 
 
 class DiagnosticWarningsContractTests(unittest.TestCase):

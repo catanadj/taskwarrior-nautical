@@ -1075,7 +1075,7 @@ def test_reconcile_candidate_and_plan_paths():
     """Hookless-completion repair should target only active completed orphans."""
     from datetime import datetime, timezone
     import nautical_core as core
-    from nautical_core import reconcile_report
+    import nautical_core.reconcile_report as reconcile_report
     import nautical_core.chain_integrity_lifecycle as reconcile
     from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
 

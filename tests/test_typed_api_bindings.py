@@ -11,7 +11,7 @@ from pathlib import Path
 import unittest
 
 from nautical_core.api_bindings import ApiBinding, core_namespace
-from nautical_core import compat_api
+import nautical_core.compat_api as compat_api
 from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES
 
 

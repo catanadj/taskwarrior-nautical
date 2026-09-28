@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import unittest
 
-from nautical_core import add_validation, native_until
+import nautical_core.add_validation as add_validation
+import nautical_core.native_until as native_until
 
 
 class NativeUntilContracts(unittest.TestCase):

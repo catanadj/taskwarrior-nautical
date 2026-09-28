@@ -104,7 +104,8 @@ class EffectBoundaryTests(unittest.TestCase):
         self.assertEqual(core.describe_anchor_expr("malformed"), "")
 
     def test_modify_command_boundary_has_no_legacy_text_wrappers(self) -> None:
-        from nautical_core import modify_command_effects, modify_queries
+        import nautical_core.modify_command_effects as modify_command_effects
+        import nautical_core.modify_queries as modify_queries
 
         self.assertFalse(hasattr(modify_queries, "task_text"))
         self.assertFalse(hasattr(modify_queries, "tw_get"))
@@ -292,7 +293,7 @@ class EffectBoundaryTests(unittest.TestCase):
         self.assertEqual(result.to_dict(), before)
 
     def test_production_feedback_paths_use_shared_renderer(self) -> None:
-        from nautical_core import modify_feedback
+        import nautical_core.modify_feedback as modify_feedback
 
         rendered: list[PanelView] = []
 

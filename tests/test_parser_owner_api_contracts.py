@@ -6,7 +6,11 @@ import unittest
 from datetime import date
 
 import nautical_core as core
-from nautical_core import acf_api, description_aliases, expansion_api, quarter_api, satisfiability
+import nautical_core.acf_api as acf_api
+import nautical_core.description_aliases as description_aliases
+import nautical_core.expansion_api as expansion_api
+import nautical_core.quarter_api as quarter_api
+import nautical_core.satisfiability as satisfiability
 
 
 class ParserOwnerApiContractTests(unittest.TestCase):
@@ -203,7 +207,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             RecurrenceContext(chain_id="")
 
     def test_time_list_and_composable_schedule_parser_metadata_round_trip(self) -> None:
-        from nautical_core import anchor_files
+        import nautical_core.anchor_files as anchor_files
 
         parsed = core.parse_anchor_expr_to_dnf("w:mon@t=9,12:30,18")
         self.assertEqual(parsed[0][0]["mods"]["t"], [(9, 0), (12, 30), (18, 0)])
@@ -432,7 +436,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             core.parse_anchor_expr_to_dnf("m:2nd-mon + y:q1..q2")
 
     def test_astronomical_time_tokens_are_shared_by_parser_and_runtime(self) -> None:
-        from nautical_core import astronomy
+        import nautical_core.astronomy as astronomy
 
         for event in sorted(astronomy.EVENT_NAMES):
             with self.subTest(event=event):

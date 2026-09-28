@@ -29,7 +29,7 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(commands[0][-2:], ["_get", "abc.status"])
 
     def test_diagnostic_operations_have_host_free_signatures(self) -> None:
-        from nautical_core import modify_diagnostics_effects as diagnostics
+        import nautical_core.modify_diagnostics_effects as diagnostics
 
         for name in (
             "lateness_stats",

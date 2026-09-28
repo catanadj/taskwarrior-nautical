@@ -3656,7 +3656,7 @@ def test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch():
 
 def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
     """Local installs should validate before mutation and safely reuse identical releases."""
-    from nautical_core import install_runtime
+    import nautical_core.install_runtime as install_runtime
 
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td) / "taskdata"
@@ -3758,7 +3758,7 @@ def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
 
 def test_installer_navigator_dependency_failure_is_actionable():
     """Navigator smoke failures should identify missing requirements without a traceback."""
-    from nautical_core import install_runtime
+    import nautical_core.install_runtime as install_runtime
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -3788,7 +3788,7 @@ def test_installer_navigator_dependency_failure_is_actionable():
 
 def test_installer_upgrade_rollback_restores_active_runtime():
     """A failed upgrade should restore its pointer and every managed wrapper."""
-    from nautical_core import install_runtime
+    import nautical_core.install_runtime as install_runtime
 
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td) / "taskdata"
@@ -3852,7 +3852,7 @@ def test_installer_upgrade_rollback_restores_active_runtime():
 
 def test_installer_migrates_legacy_core_and_rolls_back_first_switch():
     """Legacy migration should preserve config and restore the directory on failure."""
-    from nautical_core import install_runtime
+    import nautical_core.install_runtime as install_runtime
 
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td) / "taskdata"
@@ -3896,7 +3896,7 @@ def test_installer_migrates_legacy_core_and_rolls_back_first_switch():
 
 def test_installer_lock_and_duplicate_hook_guards():
     """Concurrent installs and pre-existing duplicate Nautical hooks should fail closed."""
-    from nautical_core import install_runtime
+    import nautical_core.install_runtime as install_runtime
 
     with tempfile.TemporaryDirectory() as td:
         lock_path = Path(td) / "install.lock"
@@ -3928,7 +3928,7 @@ def test_installer_lock_and_duplicate_hook_guards():
 
 def test_installer_cli_and_doctor_managed_runtime_diagnostics():
     """Installer JSON and Doctor should expose active, abandoned, and broken runtime state."""
-    from nautical_core import install_runtime
+    import nautical_core.install_runtime as install_runtime
 
     install_tool = Path(ROOT) / "nautical_core/tools/nautical_install.py"
     doctor_path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
@@ -4035,7 +4035,7 @@ def test_doctor_reports_retired_queue_state_without_migrating_it():
 
 def test_runtime_cleanup_preserves_active_and_rollback_releases():
     """Runtime cleanup must retain the active release and newest rollback."""
-    from nautical_core import install_runtime
+    import nautical_core.install_runtime as install_runtime
 
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td) / "taskdata"
@@ -4053,7 +4053,7 @@ def test_runtime_cleanup_preserves_active_and_rollback_releases():
 
 def test_retained_release_can_be_selected_with_dry_run_then_applied():
     """Rollback selection must validate the retained tree before switching."""
-    from nautical_core import install_runtime
+    import nautical_core.install_runtime as install_runtime
 
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td) / "taskdata"
@@ -13708,7 +13708,8 @@ def test_astronomical_season_selection_scheduler_uses_transition_dates():
             "from datetime import date\n"
             "import nautical_core as c\n"
             "c.reload_taskdata_config(os.environ['TASKDATA'])\n"
-            "from nautical_core import position_selection, season_support\n"
+            "import nautical_core.position_selection as position_selection\n"
+            "import nautical_core.season_support as season_support\n"
             "dnf = c.validate_anchor_expr_strict('(w:mon)@in-season=1st')\n"
             "refs = [date(2026, 1, 1), date(2026, 3, 23), date(2026, 6, 22), date(2026, 9, 28), date(2026, 12, 21)]\n"
             "dates = [c.next_after_expr(dnf, ref, default_seed=date(2026, 1, 1))[0].isoformat() for ref in refs]\n"

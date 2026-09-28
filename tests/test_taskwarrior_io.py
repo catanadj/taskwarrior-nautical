@@ -5,7 +5,8 @@ import io
 import json
 import unittest
 
-from nautical_core import hook_protocol, hook_results
+import nautical_core.hook_protocol as hook_protocol
+import nautical_core.hook_results as hook_results
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.taskwarrior_io import TaskDocument
 

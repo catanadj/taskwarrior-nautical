@@ -4,7 +4,7 @@ import unittest
 from datetime import date, timedelta, timezone
 
 import nautical_core as core
-from nautical_core import cp_parser
+import nautical_core.cp_parser as cp_parser
 
 
 class CpSequenceContractTests(unittest.TestCase):

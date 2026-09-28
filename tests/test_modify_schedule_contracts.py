@@ -7,7 +7,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import modify_completion_compute, modify_runtime, modify_schedule_effects
+import nautical_core.modify_completion_compute as modify_completion_compute
+import nautical_core.modify_runtime as modify_runtime
+import nautical_core.modify_schedule_effects as modify_schedule_effects
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 from nautical_core.task_datetime import parser_for_core
 from nautical_core.timeutil import compare_datetimes

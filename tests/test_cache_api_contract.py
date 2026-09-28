@@ -16,8 +16,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import cache_api
-from nautical_core import cache_support
+import nautical_core.cache_api as cache_api
+import nautical_core.cache_support as cache_support
 
 
 class _Clock:

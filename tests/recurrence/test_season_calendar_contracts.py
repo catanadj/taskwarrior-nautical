@@ -7,13 +7,11 @@ import unittest
 from datetime import date, datetime, timedelta
 
 import nautical_core as core
-from nautical_core import (
-    acf_support,
-    astronomical_seasons,
-    cache_payload,
-    position_selection,
-    season_support,
-)
+import nautical_core.acf_support as acf_support
+import nautical_core.astronomical_seasons as astronomical_seasons
+import nautical_core.cache_payload as cache_payload
+import nautical_core.position_selection as position_selection
+import nautical_core.season_support as season_support
 
 
 class SeasonCalendarContractTests(unittest.TestCase):

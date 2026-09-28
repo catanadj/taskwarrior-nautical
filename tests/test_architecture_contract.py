@@ -10,7 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dev_tools import nautical_deploy_sanity
-from nautical_core import architecture_contract
+import nautical_core.architecture_contract as architecture_contract
+from nautical_core.compat_api import PUBLIC_EXPORTS
 from nautical_core.modify_timeline import TimelineFormattingServices, TimelineProjectionServices
 from nautical_core.add_anchor_preview import (
     AnchorExpressionPreviewServices,
@@ -21,6 +22,29 @@ from nautical_core.add_anchor_preview import (
 
 
 class ArchitectureContractTests(unittest.TestCase):
+    def test_repository_consumers_import_internal_modules_from_their_owners(self) -> None:
+        root = Path(__file__).parents[1]
+        violations: list[str] = []
+        for directory in ("nautical_core", "tests", "dev_tools"):
+            for path in sorted((root / directory).rglob("*.py")):
+                if path.name == "__init__.py" and directory == "nautical_core":
+                    continue
+                if path.relative_to(root).as_posix() == "tests/test_navigator_view_models.py":
+                    continue  # Navigator is excluded from this refactor scope.
+                try:
+                    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                except (OSError, SyntaxError) as exc:
+                    self.fail(f"could not inspect {path.relative_to(root)}: {exc}")
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.ImportFrom) or node.module != "nautical_core":
+                        continue
+                    for alias in node.names:
+                        if alias.name not in PUBLIC_EXPORTS:
+                            violations.append(
+                                f"{path.relative_to(root)}:{node.lineno}: {alias.name}"
+                            )
+        self.assertEqual(violations, [], "internal modules must be imported from their owners")
+
     def test_outbox_sql_and_connection_ownership_stay_in_their_modules(self) -> None:
         core = Path(__file__).parents[1] / "nautical_core"
         repository_source = (core / "lifecycle_outbox.py").read_text(encoding="utf-8")
@@ -66,7 +90,8 @@ class ArchitectureContractTests(unittest.TestCase):
 
     def test_outbox_repository_delegates_each_read_and_maintenance_owner_once(self) -> None:
         from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-        from nautical_core import lifecycle_outbox_maintenance, lifecycle_outbox_queries
+        import nautical_core.lifecycle_outbox_maintenance as lifecycle_outbox_maintenance
+        import nautical_core.lifecycle_outbox_queries as lifecycle_outbox_queries
 
         with tempfile.TemporaryDirectory(prefix="nautical-outbox-owner-contract-") as td:
             repository = LifecycleOutboxRepository(Path(td))

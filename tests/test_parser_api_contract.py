@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 import nautical_core as core
-from nautical_core import parser_api
+import nautical_core.parser_api as parser_api
 from nautical_core.parsing import parser_frontend
 from nautical_core.parsing import parser_support_api
 

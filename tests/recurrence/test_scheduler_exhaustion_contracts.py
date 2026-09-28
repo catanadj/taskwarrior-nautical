@@ -6,7 +6,7 @@ from datetime import date
 import unittest
 
 import nautical_core as core
-from nautical_core import scheduler_expr
+import nautical_core.scheduler_expr as scheduler_expr
 
 
 class SchedulerExhaustionContractTests(unittest.TestCase):

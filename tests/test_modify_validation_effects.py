@@ -2,7 +2,8 @@ import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from nautical_core import modify_lifecycle, modify_ordinary
+import nautical_core.modify_lifecycle as modify_lifecycle
+import nautical_core.modify_ordinary as modify_ordinary
 
 from nautical_core.modify_validation_effects import AnchorValidationPorts, validate_anchor
 from nautical_core.modify_datetime_effects import (

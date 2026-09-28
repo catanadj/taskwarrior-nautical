@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import core_config
+import nautical_core.core_config as core_config
 
 
 class RuntimeConfigContracts(unittest.TestCase):

@@ -4,8 +4,8 @@ from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
 import nautical_core as core
-from nautical_core import business_calendar_config
-from nautical_core import timeutil
+import nautical_core.business_calendar_config as business_calendar_config
+import nautical_core.timeutil as timeutil
 
 
 class BusinessCalendarConfigContractTests(unittest.TestCase):
@@ -208,7 +208,8 @@ class TimeUtilContractTests(unittest.TestCase):
         self.assertEqual((local.hour, local.minute), (12, 0))
 
     def test_schedule_and_completion_share_the_time_comparator(self):
-        from nautical_core import modify_completion_effects, modify_schedule_effects
+        import nautical_core.modify_completion_effects as modify_completion_effects
+        import nautical_core.modify_schedule_effects as modify_schedule_effects
 
         self.assertIs(modify_schedule_effects.compare_datetimes, timeutil.compare_datetimes)
         self.assertIs(modify_completion_effects.compare_datetimes, timeutil.compare_datetimes)

@@ -149,7 +149,7 @@ class OnAddHookRouteTests(HookSubprocessFixture):
                     )
 
     def test_anchor_file_unicode_values_keep_json_stdout_for_implicit_due(self) -> None:
-        from nautical_core import anchor_files
+        import nautical_core.anchor_files as anchor_files
 
         records: list[tuple[date, tuple[int, int], str]] = []
         specs = anchor_files.load_anchor_file_occurrence_specs(

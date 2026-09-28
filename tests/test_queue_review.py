@@ -8,7 +8,7 @@ from io import StringIO
 import sys
 from unittest.mock import patch
 
-from nautical_core import queue_status_service
+import nautical_core.queue_status_service as queue_status_service
 from nautical_core.queue_status_service import QueueStatusService
 from nautical_core.tools import nautical_queue_review
 

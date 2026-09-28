@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import nautical_core as core
-from nautical_core import natural_language_api
+import nautical_core.natural_language_api as natural_language_api
 from nautical_core.precompute import build_and_cache_hints
 
 

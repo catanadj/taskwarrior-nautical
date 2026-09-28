@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import add_anchor_compute
-from nautical_core import astronomy
-from nautical_core import scheduler_expr
+import nautical_core.add_anchor_compute as add_anchor_compute
+import nautical_core.astronomy as astronomy
+import nautical_core.scheduler_expr as scheduler_expr
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 

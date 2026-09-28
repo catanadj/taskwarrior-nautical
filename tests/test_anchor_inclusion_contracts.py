@@ -5,7 +5,8 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import anchor_inclusion, anchor_omit
+import nautical_core.anchor_inclusion as anchor_inclusion
+import nautical_core.anchor_omit as anchor_omit
 from nautical_core.occurrence_provider import Occurrence
 
 

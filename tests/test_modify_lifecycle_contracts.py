@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core import modify_lifecycle
+import nautical_core.modify_lifecycle as modify_lifecycle
 
 
 class ModifyLifecycleContractTests(unittest.TestCase):

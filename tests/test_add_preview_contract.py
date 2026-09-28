@@ -2,7 +2,10 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from nautical_core import add_anchor_compute, add_anchor_preview, add_preview_composition, anchor_omit
+import nautical_core.add_anchor_compute as add_anchor_compute
+import nautical_core.add_anchor_preview as add_anchor_preview
+import nautical_core.add_preview_composition as add_preview_composition
+import nautical_core.anchor_omit as anchor_omit
 from nautical_core.occurrence_provider import Occurrence, OccurrenceBatch
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 

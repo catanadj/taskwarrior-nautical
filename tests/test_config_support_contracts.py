@@ -13,7 +13,7 @@ try:
 except ImportError:  # pragma: no cover - supported Python 3.10 fallback
     import tomli as tomllib
 
-from nautical_core import config_support
+import nautical_core.config_support as config_support
 
 
 class ConfigSupportContractTests(unittest.TestCase):

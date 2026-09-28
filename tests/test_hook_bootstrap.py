@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from nautical_core import hook_bootstrap
+import nautical_core.hook_bootstrap as hook_bootstrap
 from nautical_core.hook_runtime import HookModuleAccess
 
 

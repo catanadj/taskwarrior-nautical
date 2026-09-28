@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nautical_core import backup_service
+import nautical_core.backup_service as backup_service
 from nautical_core.tools import nautical_backup
 
 

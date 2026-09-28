@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import scheduler_atom, scheduler_api
+import nautical_core.scheduler_atom as scheduler_atom
+import nautical_core.scheduler_api as scheduler_api
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.parsing.parser_models import ParseError
 from nautical_core.schedule_utils import roll_apply

@@ -7,7 +7,7 @@ import os
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import ui
+import nautical_core.ui as ui
 
 
 class PanelRendererContractTests(unittest.TestCase):

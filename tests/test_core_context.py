@@ -4,7 +4,7 @@ import types
 import unittest
 
 from nautical_core.core_context import CacheState, CoreContext, ParserDependencies
-from nautical_core import parser_api
+import nautical_core.parser_api as parser_api
 
 
 class CoreContextTests(unittest.TestCase):

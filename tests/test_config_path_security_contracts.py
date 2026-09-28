@@ -7,7 +7,8 @@ import unittest
 from contextlib import redirect_stderr
 from unittest.mock import patch
 
-from nautical_core import config_support, runtime
+import nautical_core.config_support as config_support
+import nautical_core.runtime as runtime
 
 
 class ConfigPathSecurityContractTests(unittest.TestCase):

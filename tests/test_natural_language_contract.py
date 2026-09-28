@@ -6,7 +6,7 @@ import unittest
 
 import nautical_core as core
 import nautical_core.natural_language as natural_language
-from nautical_core import natural_language_api
+import nautical_core.natural_language_api as natural_language_api
 
 
 class NaturalLanguageContractTests(unittest.TestCase):

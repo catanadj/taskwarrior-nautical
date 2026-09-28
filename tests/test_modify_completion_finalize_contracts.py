@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
 
-from nautical_core import modify_completion_flow as flow
+import nautical_core.modify_completion_flow as flow
 from nautical_core.modify_models import CompletionLifecycleResult, CompletionSpawnResult
 
 

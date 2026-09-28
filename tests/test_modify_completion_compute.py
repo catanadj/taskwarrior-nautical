@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import nautical_core as core
-from nautical_core import add_validation
+import nautical_core.add_validation as add_validation
 from nautical_core.modify_completion_compute import completion_compute_child_due, completion_compute_next_and_limits
 from nautical_core.modify_models import CompletionComputeServices, CompletionLifecycleResult
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
@@ -36,7 +36,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         self.assertEqual(panels[0][1], [("Reason", reason)])
 
     def test_date_and_search_exhaustion_never_produce_child_tuples(self) -> None:
-        from nautical_core import modify_completion_compute as compute
+        import nautical_core.modify_completion_compute as compute
 
         terminal = OccurrenceSearchExhausted(
             "anchor scheduling", reference=date(9999, 12, 31), limit=2
@@ -80,7 +80,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         self.assertEqual(panels[-1], ("terminal", [("kind", "search_limit")], {}))
 
     def test_completion_caps_include_exact_boundary_and_stop_after_it(self) -> None:
-        from nautical_core import modify_completion_compute as compute
+        import nautical_core.modify_completion_compute as compute
 
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         summaries = []
@@ -125,7 +125,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         )
 
     def test_completion_caps_choose_earliest_limit_without_dropping_estimates(self) -> None:
-        from nautical_core import modify_completion_compute as compute
+        import nautical_core.modify_completion_compute as compute
 
         child_due = datetime(2026, 1, 2, 9, tzinfo=timezone.utc)
         until = child_due + timedelta(days=10)
@@ -237,7 +237,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         self.assertEqual(result[2], ["end_chain_summary", "panel", "print_task"])
 
     def test_effect_compute_orchestration_uses_explicit_ports(self) -> None:
-        from nautical_core import modify_completion_compute as compute
+        import nautical_core.modify_completion_compute as compute
         from nautical_core.modify_completion_effects import (
             CompletionComputePorts,
             CompletionLifecyclePlanPorts,

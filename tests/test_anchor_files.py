@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from nautical_core import anchor_files
+import nautical_core.anchor_files as anchor_files
 
 
 class AnchorFileOccurrenceCacheTests(unittest.TestCase):

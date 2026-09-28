@@ -10,7 +10,7 @@ import unittest
 
 class ModifyPresentationPortTests(unittest.TestCase):
     def test_presentation_operations_do_not_accept_hook_host(self) -> None:
-        from nautical_core import modify_presentation_effects as presentation
+        import nautical_core.modify_presentation_effects as presentation
 
         operation_names = (
             "chain_colour_for_task",

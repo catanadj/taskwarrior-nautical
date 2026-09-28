@@ -104,11 +104,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 126)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 126)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 125)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 125)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "6e37aecab53e4f732362301838cbb8fca288f34311b7575b528489a3249a398a",
+            "e7a7a94e3c5298ef29af43a91ed7db23be8934ee826614825313e437dc123529",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -116,6 +116,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertNotIn("fcntl", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("chain_colour_root", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("safe_lock", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("TaskDict", compat_api.PUBLIC_EXPORTS)
 
         import nautical_core as facade
 
@@ -129,6 +130,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertFalse(hasattr(facade, "fcntl"))
         self.assertFalse(hasattr(facade, "chain_colour_root"))
         self.assertFalse(hasattr(facade, "safe_lock"))
+        self.assertFalse(hasattr(facade, "TaskDict"))
 
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES
@@ -141,7 +143,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertEqual(owners["business_calendar_for_task"], "nautical_core.business_calendar_api")
         self.assertEqual(owners["business_calendar_displacement_for_date"], "nautical_core.business_calendar")
         self.assertEqual(owners["build_local_datetime"], "nautical_core.time_api")
-        self.assertEqual(owners["TaskDict"], "nautical_core.task_models")
+        self.assertNotIn("TaskDict", owners)
         self.assertEqual(owners["render_panel"], "nautical_core.ui")
         self.assertEqual(owners["_build_anchor_atom_dnf"], "nautical_core.parser_api")
         self.assertEqual(owners["_weeks_between"], "nautical_core.scheduler_api")
@@ -149,6 +151,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertNotIn("fcntl", owners)
         self.assertNotIn("chain_colour_root", owners)
         self.assertNotIn("safe_lock", owners)
+        self.assertNotIn("TaskDict", owners)
         self.assertNotIn("tempfile", owners)
 
     def test_public_surface_categories_cover_exports_without_legacy_aliases(self) -> None:

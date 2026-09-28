@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import os, re, sys
 from collections import OrderedDict
-from typing import Any, Callable, Mapping, TYPE_CHECKING, TypeAlias, cast
+from typing import Any, Callable, Mapping, TYPE_CHECKING, cast
 from functools import partial
 
 if TYPE_CHECKING:
@@ -95,9 +95,6 @@ if TYPE_CHECKING:
     expand_weekly_cached: Any
     _cache_key_for_task_cached: Any
     _selection_inner_matcher: Any
-
-
-TaskDict: TypeAlias = dict[str, Any]
 
 
 # ==============================================================================

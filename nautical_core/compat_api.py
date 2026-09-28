@@ -11,7 +11,7 @@ from .api_bindings import ApiBinding
 from .core_context import CoreContext
 
 PUBLIC_EXPORTS = (
-    'AnchorMods', 'AnchorAtom', 'AnchorTerm', 'AnchorDNF', 'TaskDict',
+    'AnchorMods', 'AnchorAtom', 'AnchorTerm', 'AnchorDNF',
     'AnchorValidationResult', 'HintMetaCfg', 'HintMeta',
     'HintPerYear', 'HintLimits', 'AnchorHintsPayload', 'ParseError',
     'YearTokenFormatError', 'AndTermUnsatisfiable', 'OccurrenceSearchExhausted', 'BusinessCalendarConfigError',
@@ -142,7 +142,6 @@ PUBLIC_OWNER_MODULES.update({
     "_normalize_spec_for_acf_cached": "nautical_core.cache_api",
     "parse_anchor_expr_to_dnf_cached": "nautical_core.cache_api",
     "build_and_cache_hints": "nautical_core.hint_builder_api",
-    "TaskDict": "nautical_core.task_models",
     "DiagnosticEvent": "nautical_core.diagnostic_models",
     "RecurrenceModeResult": "nautical_core.recurrence_evaluator",
     "build_local_datetime": "nautical_core.time_api",

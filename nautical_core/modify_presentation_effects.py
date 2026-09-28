@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .panel_colours import chain_colour_root
 from .task_models import TaskPayload
 
 
@@ -16,14 +17,12 @@ class LifecycleResultPort:
 @dataclass(frozen=True, slots=True)
 class ChainStylePorts:
     root_uuid: Any
-    chain_colour_root: Any
     per_chain: bool
 
 
 def chain_style_ports_for(host: Any) -> ChainStylePorts:
     return ChainStylePorts(
         root_uuid=host._module("modify_task_fields").root_uuid,
-        chain_colour_root=host.core.chain_colour_root,
         per_chain=host._CHAIN_COLOR_PER_CHAIN,
     )
 
@@ -37,7 +36,7 @@ def lifecycle_result_port_for(host: Any) -> LifecycleResultPort:
 
 def chain_colour_for_task(ports: ChainStylePorts, task: TaskPayload, kind: str) -> str:
     """Resolve the configured presentation colour for a chain root."""
-    return ports.chain_colour_root(kind, ports.root_uuid(task))
+    return chain_colour_root(kind, ports.root_uuid(task))
 
 
 def future_style_for_chain(ports: ChainStylePorts, task: TaskPayload, kind: str) -> str:

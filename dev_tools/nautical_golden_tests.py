@@ -38,6 +38,7 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 from tests.support.lifecycle_execution import LifecycleExecutionFixture
 from nautical_core.query_service import OccurrenceQueryRuntime
 from nautical_core.cache_locking import safe_lock as _owner_safe_lock
+from nautical_core.panel_colours import chain_colour_root
 from dev_tools.golden_tests.recurrence import TESTS as RECURRENCE_TESTS
 from dev_tools.golden_tests.hooks import TESTS as HOOK_TESTS
 from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
@@ -4476,7 +4477,8 @@ def test_core_import_defers_panel_colour_module():
     probe = (
         "import sys, nautical_core; "
         "assert 'nautical_core.panel_colours' not in sys.modules; "
-        "nautical_core.chain_colour_root('chain', 'root'); "
+        "from nautical_core.panel_colours import chain_colour_root; "
+        "chain_colour_root('chain', 'root'); "
         "assert 'nautical_core.panel_colours' in sys.modules"
     )
     result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, env=env, capture_output=True, text=True)
@@ -6340,19 +6342,19 @@ def test_chain_colour_uses_complete_root_identity():
 
     root = "12345678-1234-4234-8234-00000000abcd"
     expect(
-        hook.core.chain_colour_root("anchor", root) == hook.core.chain_colour_root("anchor", root),
+        chain_colour_root("anchor", root) == chain_colour_root("anchor", root),
         "chain colour should replay deterministically",
     )
     expect(
-        hook.core.chain_colour_root("anchor", root.upper()) == hook.core.chain_colour_root("anchor", root),
+        chain_colour_root("anchor", root.upper()) == chain_colour_root("anchor", root),
         "UUID case should not change the chain colour",
     )
     expect(
-        hook.core.chain_colour_root("anchor", "") == "bright_cyan",
+        chain_colour_root("anchor", "") == "bright_cyan",
         "empty anchor roots should retain the existing fallback colour",
     )
     expect(
-        hook.core.chain_colour_root("cp", "") == "orange_red1",
+        chain_colour_root("cp", "") == "orange_red1",
         "empty cp roots should retain the existing fallback colour",
     )
 
@@ -6361,11 +6363,11 @@ def test_chain_colour_uses_complete_root_identity():
         for idx in range(256)
     ]
     anchor_colours = {
-        hook.core.chain_colour_root("anchor", candidate)
+        chain_colour_root("anchor", candidate)
         for candidate in same_suffix_roots
     }
     cp_colours = {
-        hook.core.chain_colour_root("cp", candidate)
+        chain_colour_root("cp", candidate)
         for candidate in same_suffix_roots
     }
     expect(
@@ -6379,11 +6381,11 @@ def test_chain_colour_uses_complete_root_identity():
 
     legacy = "legacy/root identifier"
     expect(
-        hook.core.chain_colour_root("anchor", legacy) == hook.core.chain_colour_root("anchor", legacy),
+        chain_colour_root("anchor", legacy) == chain_colour_root("anchor", legacy),
         "non-UUID legacy roots should remain deterministic",
     )
     expect(
-        hook.core.chain_colour_root("anchor", root) != hook.core.chain_colour_root("cp", root),
+        chain_colour_root("anchor", root) != chain_colour_root("cp", root),
         "anchor and cp colour domains should remain separated",
     )
 
@@ -6402,7 +6404,7 @@ def test_on_add_preview_uses_configured_chain_colour():
         hook.core.render_panel = lambda *_args, **kwargs: captured.update(kwargs)
         hook.core.CHAIN_COLOR_PER_CHAIN = True
         hook._panel("Preview", [("Pattern", "w:mon")], kind="preview_anchor", task=task)
-        expected = hook.core.chain_colour_root("anchor", "12345678")
+        expected = chain_colour_root("anchor", "12345678")
         theme = captured.get("themes", {}).get("preview_anchor", {})
         expect(theme.get("border") == expected, f"unexpected on-add border colour: {theme!r}")
         expect(theme.get("title") == expected, f"unexpected on-add title colour: {theme!r}")

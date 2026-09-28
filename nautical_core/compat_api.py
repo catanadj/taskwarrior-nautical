@@ -12,7 +12,7 @@ from .core_context import CoreContext
 
 PUBLIC_EXPORTS = (
     'AnchorMods', 'AnchorAtom', 'AnchorTerm', 'AnchorDNF', 'TaskDict',
-    'AnchorValidationResult', 'chain_colour_root', 'HintMetaCfg', 'HintMeta',
+    'AnchorValidationResult', 'HintMetaCfg', 'HintMeta',
     'HintPerYear', 'HintLimits', 'AnchorHintsPayload', 'ParseError',
     'YearTokenFormatError', 'AndTermUnsatisfiable', 'OccurrenceSearchExhausted', 'BusinessCalendarConfigError',
     'ANCHOR_CACHE_DIR_OVERRIDE', 'BUSINESS_CALENDAR_CONFIG', 'ASTRONOMY_CONFIG',
@@ -156,7 +156,6 @@ PUBLIC_OWNER_MODULES.update({
     "coerce_int": "nautical_core.common",
     "short_uuid": "nautical_core.common",
     "pick_hhmm_from_dnf_for_date": "nautical_core.schedule_utils",
-    "chain_colour_root": "nautical_core.panel_colours",
     "strip_rich_markup": "nautical_core.ui",
     "term_width_stderr": "nautical_core.ui",
     "panel_line": "nautical_core.ui",

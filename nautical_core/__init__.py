@@ -223,13 +223,6 @@ panel_line_from_rows = _lazy_ui_call("panel_line_from_rows")
 panel_line = _lazy_ui_call("panel_line")
 panel_themes = _lazy_ui_call("panel_themes")
 
-_panel_colours = _LazySibling("panel_colours")
-
-
-def chain_colour_root(*args: Any, **kwargs: Any) -> Any:
-    return _panel_colours.chain_colour_root(*args, **kwargs)
-
-
 def render_panel(*args: Any, **kwargs: Any) -> Any:
     ui = _ui._resolve()
     ui.panel_line = panel_line

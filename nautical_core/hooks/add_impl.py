@@ -435,7 +435,9 @@ def _panel(title: str, rows: Any, kind: str = "info", task: dict | None = None) 
         task_view = _module("modify_models").TaskView.from_mapping(task)
         theme = dict(themes[kind])
         colour_kind = "cp" if kind == "preview_cp" else "anchor"
-        colour = core.chain_colour_root(colour_kind, str(task_view.get("chainID") or ""))
+        from nautical_core.panel_colours import chain_colour_root
+
+        colour = chain_colour_root(colour_kind, str(task_view.get("chainID") or ""))
         theme["border"] = colour
         theme["title"] = colour
         themes[kind] = theme

@@ -1147,10 +1147,6 @@ def __getattr__(name: str) -> Any:
         value = _runtime.DIAG_LOG_REDACT_KEYS
         globals()[name] = value
         return value
-    if name == "tempfile":
-        value = importlib.import_module("tempfile")
-        globals()[name] = value
-        return value
     if name == "RecurrenceModeResult":
         value = _import_sibling("recurrence_evaluator").RecurrenceModeResult
         globals()[name] = value

@@ -104,14 +104,15 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 130)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 130)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 129)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 129)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "d246ffa075edc62eca043d324d362443217883880f9473e55e7d3b6e27e0d96d",
+            "1c3a7ad16f7438720d34fd44c46d45b4300e6e8227f7d1d9e0bc30781516b803",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("tempfile", compat_api.PUBLIC_EXPORTS)
 
         import nautical_core as facade
 
@@ -140,7 +141,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertEqual(owners["_weeks_between"], "nautical_core.scheduler_api")
         self.assertEqual(owners["resolve_task_data_context"], "nautical_core.runtime")
         self.assertEqual(owners["fcntl"], "fcntl")
-        self.assertEqual(owners["tempfile"], "tempfile")
+        self.assertNotIn("tempfile", owners)
 
     def test_public_surface_categories_cover_exports_without_legacy_aliases(self) -> None:
         categories = compat_api.PUBLIC_EXPORT_CATEGORIES
@@ -170,6 +171,7 @@ class ApiBindingContractTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(facade, name)))
         self.assertFalse(hasattr(facade, "normalize_task_business_calendar"))
+        self.assertFalse(hasattr(facade, "tempfile"))
 
     def test_public_facade_exports_only_supported_symbols_with_stable_signatures(self) -> None:
         import nautical_core as facade

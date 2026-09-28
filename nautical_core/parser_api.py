@@ -29,8 +29,8 @@ class ParserOwnerDependencies:
     max_terms: int
     parse_error: type[Exception]
     today: Callable[[], date]
-    parser_dnf: Any | None = None
-    resolve_presets: Callable[[str], str] | None = None
+    parser_dnf: Any
+    resolve_presets: Callable[[str], str]
 
 
 def _core_module() -> Any:
@@ -38,30 +38,10 @@ def _core_module() -> Any:
     return sys.modules.get(package) or importlib.import_module(package)
 
 
-def _parse_anchor_expr_to_dnf_impl(module: Any, s: str, deps: ParserOwnerDependencies | None = None) -> Any:
-    """Run the parser pipeline against one isolated deps facade."""
-    if deps is not None and deps.parser_dnf is not None and deps.resolve_presets is not None:
-        parser_dnf = deps.parser_dnf
-        resolve_presets = deps.resolve_presets
-    else:
-        resolve_presets = module.resolve_anchor_presets
-        parser_dnf = module.import_sibling("parsing.parser_dnf") if isinstance(module, CoreContext) else module._parser_dnf
-    s = resolve_presets(s)
-    deps = deps or ParserOwnerDependencies(
-        normalize_input=module._normalize_anchor_expr_input,
-        raise_bad_year_colons=module._raise_on_bad_colon_year_tokens,
-        parse_atom=module._parse_anchor_atom_at,
-        parse_mods=module._parse_atom_mods,
-        skip_ws=module._skip_ws_pos,
-        rewrite_quarters=module._rewrite_quarters_in_context,
-        rewrite_year_month=module._rewrite_year_month_aliases_in_context,
-        validate_year_tokens=module._validate_year_tokens_in_dnf,
-        validate_satisfiable=module._validate_and_terms_satisfiable,
-        max_terms=module.MAX_ANCHOR_DNF_TERMS,
-        parse_error=module.ParseError,
-        today=date.today,
-    )
-    return parser_dnf.parse_anchor_expr_to_dnf(
+def _parse_anchor_expr_to_dnf_impl(s: str, deps: ParserOwnerDependencies) -> Any:
+    """Run the pure DNF parser using its explicit owner dependencies."""
+    s = deps.resolve_presets(s)
+    return deps.parser_dnf.parse_anchor_expr_to_dnf(
         s,
         normalize_anchor_expr_input=deps.normalize_input,
         raise_on_bad_colon_year_tokens=deps.raise_bad_year_colons,
@@ -446,7 +426,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             parser_dnf=parser_dnf,
             resolve_presets=resolve_anchor_presets,
         )
-        return _parse_anchor_expr_to_dnf_impl(module, s, owner_deps)
+        return _parse_anchor_expr_to_dnf_impl(s, owner_deps)
 
     return ApiBinding.from_kwargs(
         build_acf=lambda expr: module._build_acf_impl(expr),
@@ -502,7 +482,7 @@ def resolve_omit_presets(expr: str, *, _seen: Any = None) -> str:
 
 
 def parse_anchor_expr_to_dnf(s: str) -> Any:
-    return _parse_anchor_expr_to_dnf_impl(_core_module(), s)
+    return for_core(module=_core_module()).parse_anchor_expr_to_dnf(s)
 
 
 def parse_anchor_expr_to_dnf_cached(s: str) -> Any:

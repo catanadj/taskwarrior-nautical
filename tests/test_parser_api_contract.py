@@ -1,3 +1,4 @@
+from datetime import date
 import functools
 import re
 import unittest
@@ -5,7 +6,9 @@ from types import SimpleNamespace
 
 import nautical_core as core
 import nautical_core.parser_api as parser_api
+from nautical_core.parser_api import ParserOwnerDependencies, _parse_anchor_expr_to_dnf_impl
 from nautical_core.parsing import parser_frontend
+from nautical_core.parsing import parser_dnf
 from nautical_core.parsing import parser_support_api
 
 
@@ -202,6 +205,34 @@ class ParserPresetContractTests(unittest.TestCase):
             binding.omit_preset_display("@spring"),
             ("Omit preset", "@spring → y:apr"),
         )
+
+
+class ParserOwnerDNFContractTests(unittest.TestCase):
+    def test_dnf_owner_parses_with_explicit_dependencies_and_no_facade(self):
+        def parse_atom(expression, index, length):
+            self.assertEqual(expression[index:length], "w:mon")
+            return [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {}}]], length
+
+        dependencies = ParserOwnerDependencies(
+            normalize_input=lambda expression: expression,
+            raise_bad_year_colons=lambda _expression: None,
+            parse_atom=parse_atom,
+            parse_mods=lambda _mods: {},
+            skip_ws=lambda _expression, index, _length: index,
+            rewrite_quarters=lambda dnf: dnf,
+            rewrite_year_month=lambda dnf: dnf,
+            validate_year_tokens=lambda dnf: dnf,
+            validate_satisfiable=lambda _dnf, *, ref_d: None,
+            max_terms=10,
+            parse_error=ValueError,
+            today=lambda: date(2026, 9, 28),
+            parser_dnf=parser_dnf,
+            resolve_presets=lambda expression: expression,
+        )
+
+        actual = _parse_anchor_expr_to_dnf_impl("w:mon", dependencies)
+
+        self.assertEqual(actual, [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {}}]])
 
 
 if __name__ == "__main__":

@@ -324,6 +324,24 @@ class CacheApiContractTests(unittest.TestCase):
                 os.close(fd)
             self.assertTrue(binding.cache_save("locked", {"natural": "released"}))
 
+    def test_cache_lock_uses_owner_fallback_when_fcntl_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            namespace = vars(core).copy()
+            namespace.update(
+                _CACHE_DIR=td,
+                _CACHE_LOAD_MEM=OrderedDict(),
+                fcntl=None,
+                os=os,
+                time=_Clock(),
+                random=__import__("random"),
+            )
+            binding = cache_api.for_core(namespace=namespace, module=core)
+
+            with binding._cache_lock("fallback") as acquired:
+                self.assertTrue(acquired)
+                with binding._cache_lock("fallback") as competing:
+                    self.assertFalse(competing)
+
     def test_unexpected_fcntl_error_propagates_and_closes_lock_file(self) -> None:
         class BrokenFcntl:
             LOCK_EX = fcntl.LOCK_EX

@@ -37,6 +37,7 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 
 from tests.support.lifecycle_execution import LifecycleExecutionFixture
 from nautical_core.query_service import OccurrenceQueryRuntime
+from nautical_core.cache_locking import safe_lock as _owner_safe_lock
 from dev_tools.golden_tests.recurrence import TESTS as RECURRENCE_TESTS
 from dev_tools.golden_tests.hooks import TESTS as HOOK_TESTS
 from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
@@ -1796,10 +1797,12 @@ def test_hook_files_are_private_permissions():
 
 def test_safe_lock_fcntl_contention():
     """safe_lock should fail to acquire when another process holds the lock."""
+    try:
+        import fcntl  # noqa: F401
+    except ImportError:
+        return
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     mod_core = _load_hook_module(core_path, "_nautical_core_lock_fcntl_test")
-    if getattr(mod_core, "fcntl", None) is None:
-        return
     with tempfile.TemporaryDirectory() as td:
         lock_path = os.path.join(td, ".nautical_fcntl.lock")
         ready_path = os.path.join(td, ".nautical_fcntl.ready")
@@ -1834,55 +1837,39 @@ def test_safe_lock_fcntl_contention():
 
 def test_safe_lock_fallback_contention():
     """safe_lock should fail to acquire when fallback lockfile exists."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    mod_core = _load_hook_module(core_path, "_nautical_core_lock_fallback_test")
-    prev_fcntl = getattr(mod_core, "fcntl", None)
-    mod_core.fcntl = None
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            lock_path = os.path.join(td, ".nautical_fallback.lock")
-            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
-                expect(ok, "fallback safe_lock did not acquire")
-                with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok2:
-                    expect(not ok2, "fallback safe_lock should not acquire when locked")
-            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok3:
-                expect(ok3, "fallback safe_lock should acquire after release")
-    finally:
-        mod_core.fcntl = prev_fcntl
+    with tempfile.TemporaryDirectory() as td:
+        lock_path = os.path.join(td, ".nautical_fallback.lock")
+        with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
+                              retries=2, sleep_base=0.01, jitter=0.0) as ok:
+            expect(ok, "fallback safe_lock did not acquire")
+            with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
+                                  retries=2, sleep_base=0.01, jitter=0.0) as ok2:
+                expect(not ok2, "fallback safe_lock should not acquire when locked")
+        with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
+                              retries=2, sleep_base=0.01, jitter=0.0) as ok3:
+            expect(ok3, "fallback safe_lock should acquire after release")
 
 def test_safe_lock_fallback_stale_cleanup():
     """safe_lock fallback should clear stale lockfiles."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    mod_core = _load_hook_module(core_path, "_nautical_core_lock_stale_test")
-    prev_fcntl = getattr(mod_core, "fcntl", None)
-    mod_core.fcntl = None
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            lock_path = os.path.join(td, ".nautical_stale.lock")
-            with open(lock_path, "w", encoding="utf-8") as f:
-                f.write("999999 0\n")
-            os.utime(lock_path, (1, 1))
-            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0, stale_after=1.0) as ok:
-                expect(ok, "stale fallback lock was not cleared")
-    finally:
-        mod_core.fcntl = prev_fcntl
+    with tempfile.TemporaryDirectory() as td:
+        lock_path = os.path.join(td, ".nautical_stale.lock")
+        with open(lock_path, "w", encoding="utf-8") as f:
+            f.write("999999 0\n")
+        os.utime(lock_path, (1, 1))
+        with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
+                              retries=2, sleep_base=0.01, jitter=0.0, stale_after=1.0) as ok:
+            expect(ok, "stale fallback lock was not cleared")
 
 def test_safe_lock_fallback_stale_pid_cleanup():
     """safe_lock fallback should clear lockfiles with dead PIDs."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    mod_core = _load_hook_module(core_path, "_nautical_core_lock_pid_stale_test")
-    prev_fcntl = getattr(mod_core, "fcntl", None)
-    mod_core.fcntl = None
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            lock_path = os.path.join(td, ".nautical_pid.lock")
-            with open(lock_path, "w", encoding="utf-8") as f:
-                f.write("999999 0\n")
-            os.utime(lock_path, (1, 1))
-            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0, stale_after=1.0) as ok:
-                expect(ok, "stale PID lock was not cleared")
-    finally:
-        mod_core.fcntl = prev_fcntl
+    with tempfile.TemporaryDirectory() as td:
+        lock_path = os.path.join(td, ".nautical_pid.lock")
+        with open(lock_path, "w", encoding="utf-8") as f:
+            f.write("999999 0\n")
+        os.utime(lock_path, (1, 1))
+        with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
+                              retries=2, sleep_base=0.01, jitter=0.0, stale_after=1.0) as ok:
+            expect(ok, "stale PID lock was not cleared")
 
 def test_diag_log_rotation_bounds():
     """Persistent diag log should rotate when exceeding max size."""
@@ -2014,15 +2001,6 @@ def test_core_cache_lock_contention_matches_safe_lock():
             expect(ok, "cache lock did not acquire")
             with mod._cache_lock("contend") as ok2:
                 expect(not ok2, "cache lock should not acquire when already locked")
-        prev = getattr(mod, "fcntl", None)
-        mod.fcntl = None
-        try:
-            with mod._cache_lock("contend2") as ok3:
-                expect(ok3, "fallback cache lock did not acquire")
-                with mod._cache_lock("contend2") as ok4:
-                    expect(not ok4, "fallback cache lock should not acquire when locked")
-        finally:
-            mod.fcntl = prev
 
 
 def test_core_cache_dir_rejects_symlink_override():

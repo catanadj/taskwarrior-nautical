@@ -104,15 +104,16 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 129)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 129)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 128)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 128)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "1c3a7ad16f7438720d34fd44c46d45b4300e6e8227f7d1d9e0bc30781516b803",
+            "80ca9ae3f12b783b61bdc23baae803613908ab164317605b6f85003b20235438",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("tempfile", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("fcntl", compat_api.PUBLIC_EXPORTS)
 
         import nautical_core as facade
 
@@ -123,6 +124,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertEqual(set(wildcard), set(compat_api.PUBLIC_EXPORTS))
         self.assertTrue(callable(facade.normalize_task_business_calendar_in_place))
         self.assertFalse(hasattr(facade, "normalize_task_business_calendar"))
+        self.assertFalse(hasattr(facade, "fcntl"))
 
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES
@@ -140,7 +142,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertEqual(owners["_build_anchor_atom_dnf"], "nautical_core.parser_api")
         self.assertEqual(owners["_weeks_between"], "nautical_core.scheduler_api")
         self.assertEqual(owners["resolve_task_data_context"], "nautical_core.runtime")
-        self.assertEqual(owners["fcntl"], "fcntl")
+        self.assertNotIn("fcntl", owners)
         self.assertNotIn("tempfile", owners)
 
     def test_public_surface_categories_cover_exports_without_legacy_aliases(self) -> None:

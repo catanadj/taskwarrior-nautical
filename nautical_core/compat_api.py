@@ -41,7 +41,7 @@ PUBLIC_EXPORTS = (
     'business_calendar_definitions', 'cache_key_for_task', 'cache_load', 'cache_save',
     'cache_gc', 'capture_business_calendar_displacements', 'coerce_int',
     'describe_anchor_dnf', 'describe_anchor_expr', 'DiagnosticEvent', 'RecurrenceModeResult', 'diag',
-    'fcntl', 'fmt_dt_local', 'fmt_isoz',
+    'fmt_dt_local', 'fmt_isoz',
     'configured_business_calendars', 'get_configured_business_calendar',
     'lint_anchor_expr', 'normalize_task_business_calendar_in_place', 'now_utc',
     'omit_preset_display', 'panel_line', 'parse_anchor_expr_to_dnf',
@@ -193,7 +193,6 @@ PUBLIC_OWNER_MODULES.update({
     "HintPerYear": "nautical_core.hint_models",
     "HintLimits": "nautical_core.hint_models",
     "AnchorHintsPayload": "nautical_core.hint_models",
-    "fcntl": "fcntl",
 })
 
 # Every exported name is deliberately classified before any compatibility
@@ -202,7 +201,7 @@ PUBLIC_OWNER_MODULES.update({
 # public API until a documented deprecation changes that status.
 PUBLIC_EXPORT_CATEGORIES = {
     name: (
-        "test_seam" if name.startswith("_") or name in {"fcntl", "tempfile"}
+        "test_seam" if name.startswith("_") or name == "tempfile"
         else "installed_runtime" if name in {"diag", "resolve_task_data_context"}
         else "supported_public_api"
     )

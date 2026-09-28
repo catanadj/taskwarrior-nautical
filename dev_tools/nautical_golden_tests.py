@@ -10070,42 +10070,6 @@ def test_on_modify_completion_snapshot_malformed_json_is_unavailable():
         mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
 
 
-def test_on_modify_completion_defers_chain_export_until_after_preflight():
-    """completion handling should not export the chain before preflight succeeds."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_preflight_export_deferral_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    called = {"chain_export": 0}
-    mod._module("modify_validation_effects").validate_cp = lambda *_a, **_k: None
-    mod._completion_effects.preflight_context = lambda *_a, **_k: None
-    mod._completion_effects.compute_next_and_limits = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("compute should not run after preflight failure"))
-    mod._SHOW_ANALYTICS = True
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHECK_CHAIN_INTEGRITY = False
-
-    old = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending", "cp": "P1D", "chainID": "abcd1234", "link": 1}
-    new = dict(old)
-    new["status"] = "completed"
-
-    import io
-    from contextlib import redirect_stdout, redirect_stderr
-
-    stdin_raw = json.dumps(old) + "\n" + json.dumps(new)
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    orig_stdin = sys.stdin
-    try:
-        sys.stdin = io.TextIOWrapper(io.BytesIO(stdin_raw.encode("utf-8")), encoding="utf-8")
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            _modify_effect(mod, "handle_completion", old, new, _test_operator_uow())
-    finally:
-        sys.stdin = orig_stdin
-
-    expect(called["chain_export"] == 0, f"expected no chain export before preflight success, got {called}")
-
-
 def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     """scheduled-only cp chains should preserve scheduled wall clock on completion."""
     hook = _find_hook_file("on-modify.nautical")
@@ -14304,7 +14268,6 @@ TESTS = [
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_chain_snapshot_modes_and_query,
     test_on_modify_completion_snapshot_malformed_json_is_unavailable,
-    test_on_modify_completion_defers_chain_export_until_after_preflight,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_timezone,

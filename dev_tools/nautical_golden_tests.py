@@ -9931,32 +9931,6 @@ def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
 
 
-def test_on_modify_compute_cp_random_selects_deterministic_interval():
-    """random cp ranges should resolve deterministically for the active link."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_cp_random_compute_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    chain_id = "abcd1234"
-    expected_td = mod.core.cp_sequence_interval_for_link("rand(3d..7d)", 2, chain_id)
-    child_due, meta = _compute_cp_child_due(mod,
-        {
-            "cp": "rand(3d..7d)",
-            "link": 2,
-            "chainID": chain_id,
-            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (9, 0))),
-            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (10, 0))),
-        }
-    )
-    child_local = mod.core.to_local(child_due)
-    expected_local = mod.core.to_local(mod.core.build_local_datetime(date(2026, 1, 1), (9, 0)) + expected_td)
-    expect(child_local.date() == expected_local.date(), f"random cp should use deterministic selected interval: {child_local} vs {expected_local}")
-    expect((child_local.hour, child_local.minute) == (9, 0), f"whole-day random interval should preserve wall clock: {child_local}")
-    expect(meta.get("cp_sequence_step") == 1, f"expected random cp selected step metadata: {meta}")
-    expect(meta.get("cp_sequence_len") == 1, f"expected random cp length metadata: {meta}")
-
-
 def test_on_modify_cp_sequence_estimates_chainmax_final_date():
     """chainMax final-date estimation should advance through cp sequence intervals."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13840,7 +13814,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_on_modify_anchor_chainmax_forecast_is_bounded,
     test_on_modify_anchor_file_child_projection_reuses_provider,

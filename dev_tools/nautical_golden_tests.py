@@ -4758,58 +4758,6 @@ def test_on_exit_outcome_diagnostics_are_bounded():
     expect("suppressed 3 additional" in messages[2], f"suppression summary was not actionable: {messages!r}")
 
 
-def test_on_modify_chain_cache_thread_safety_smoke():
-    """Concurrent chain cache set/read paths should not crash or return invalid shapes."""
-    import threading
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_chain_cache_thread_safety_test")
-
-    full_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    mod._module("modify_composition").lifecycle_read_service_for(mod).replace_chain_cache(
-        "cid-a",
-        [{"uuid": full_uuid, "link": 1, "entry": "2026-01-01T00:00:00Z"}],
-    )
-    mod._task = lambda *_args, **_kwargs: "[]"
-
-    errs = []
-    hits = {"short": 0}
-
-    def _writer(chain_id: str):
-        try:
-            for i in range(300):
-                mod._module("modify_composition").lifecycle_read_service_for(mod).replace_chain_cache(
-                    chain_id,
-                    [{"uuid": full_uuid, "link": 1, "entry": f"2026-01-01T00:00:{i % 60:02d}Z"}],
-                )
-        except Exception as e:
-            errs.append(f"writer:{e}")
-
-    def _reader():
-        try:
-            for _ in range(600):
-                s, _chain_id = mod._module("modify_composition").lifecycle_read_service_for(mod).lookup_short("aaaaaaaa")
-                if s is not None:
-                    from nautical_core.task_models import TaskObservation
-                    expect(isinstance(s, TaskObservation), f"short cache read should return observation, got {type(s)}")
-                    hits["short"] += 1
-        except Exception as e:
-            errs.append(f"reader:{e}")
-
-    threads = [
-        threading.Thread(target=_writer, args=("cid-a",)),
-        threading.Thread(target=_writer, args=("cid-b",)),
-        threading.Thread(target=_reader),
-        threading.Thread(target=_reader),
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    expect(not errs, f"concurrent chain cache access raised errors: {errs}")
-    expect(hits["short"] > 0, f"expected cache hits, got {hits}")
-
 def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     """Filtered chain reads should use the in-memory chain cache before falling back to Taskwarrior export."""
     hook = _find_hook_file("on-modify.nautical")
@@ -12386,7 +12334,6 @@ TESTS = [
     test_on_modify_run_task_diag_bucket_stats,
     test_on_exit_diag_blocks_pretty_print,
     test_on_exit_outcome_diagnostics_are_bounded,
-    test_on_modify_chain_cache_thread_safety_smoke,
     test_on_modify_get_chain_export_filters_cached_chain_in_memory,
     test_on_modify_chain_cache_reads_through_typed_repository,
     test_on_modify_chain_cache_preserves_repository_unavailability,

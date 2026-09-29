@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import threading
 
 from nautical_core.lifecycle_read_service import ChainCacheStore, LifecycleReadService
 from nautical_core.task_models import TaskObservation
@@ -8,6 +9,56 @@ from nautical_core.integration_models import Absent
 
 
 class LifecycleReadServiceTests(unittest.TestCase):
+    def test_chain_cache_concurrent_reads_and_replacements_keep_typed_rows(self) -> None:
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda _value: [],
+            token_matcher=lambda _row, _token: True,
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            max_chain_walk=10,
+            cache_store=ChainCacheStore(),
+        )
+        full_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        errors: list[str] = []
+        hits = 0
+
+        def writer(chain_id: str) -> None:
+            try:
+                for index in range(300):
+                    service.replace_chain_cache(
+                        chain_id,
+                        [{"uuid": full_uuid, "link": 1, "entry": f"2026-01-01T00:00:{index % 60:02d}Z"}],
+                    )
+            except Exception as exc:
+                errors.append(f"writer: {exc}")
+
+        def reader() -> None:
+            nonlocal hits
+            try:
+                for _ in range(600):
+                    row, _chain_id = service.lookup_short("aaaaaaaa")
+                    if row is not None:
+                        if not isinstance(row, TaskObservation):
+                            errors.append(f"reader returned {type(row)}")
+                        hits += 1
+            except Exception as exc:
+                errors.append(f"reader: {exc}")
+
+        threads = [
+            threading.Thread(target=writer, args=("cid-a",)),
+            threading.Thread(target=writer, args=("cid-b",)),
+            threading.Thread(target=reader),
+            threading.Thread(target=reader),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, [])
+        self.assertGreater(hits, 0)
+
     def test_indexes_and_spawned_child_merge_preserve_chain_order_and_links(self) -> None:
         service = LifecycleReadService(
             coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,

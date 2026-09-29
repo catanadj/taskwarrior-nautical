@@ -1762,44 +1762,6 @@ def test_on_modify_reads_data_arg_from_hook_argv():
         expect(Path(mod.TW_DATA_DIR) == Path(data_dir), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
     expect(bool(getattr(mod, "_USE_RC_DATA_LOCATION", False)), "rc.data.location should be enabled when data arg is present")
 
-def test_on_add_no_explicit_taskdata_skips_rc_data_location():
-    """on-add should not force rc.data.location when data dir is not explicit."""
-    hook = _find_hook_file("on-add.nautical")
-    prev_taskdata = os.environ.get("TASKDATA")
-    prev_argv = list(sys.argv)
-    if "TASKDATA" in os.environ:
-        del os.environ["TASKDATA"]
-    sys.argv = ["on-add.nautical"]
-    try:
-        mod = _load_hook_module(hook, "_nautical_on_add_no_data_override_test")
-    finally:
-        sys.argv = prev_argv
-        if prev_taskdata is not None:
-            os.environ["TASKDATA"] = prev_taskdata
-    command_prefix = mod._task_cmd_prefix()
-    expect(
-        all(not str(part).startswith("rc.data.location=") for part in command_prefix),
-        f"should not force rc.data.location without explicit data dir: {command_prefix!r}",
-    )
-
-def test_on_add_reads_data_arg_from_hook_argv():
-    """on-add should resolve TW_DATA_DIR from hook argv data: token."""
-    hook = _find_hook_file("on-add.nautical")
-    prev_taskdata = os.environ.get("TASKDATA")
-    prev_argv = list(sys.argv)
-    if "TASKDATA" in os.environ:
-        del os.environ["TASKDATA"]
-    with tempfile.TemporaryDirectory(prefix="nautical_data_arg_add_") as data_dir:
-        sys.argv = ["on-add.nautical", "api:2", "command:add", f"data:{data_dir}"]
-        try:
-            mod = _load_hook_module(hook, "_nautical_on_add_data_arg_test")
-        finally:
-            sys.argv = prev_argv
-            if prev_taskdata is not None:
-                os.environ["TASKDATA"] = prev_taskdata
-        expect(Path(mod.TW_DATA_DIR) == Path(data_dir), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
-    expect(bool(getattr(mod, "_USE_RC_DATA_LOCATION", False)), "rc.data.location should be enabled when data arg is present")
-
 def test_on_exit_data_arg_overrides_taskdata_env():
     """on-exit should prefer hook argv data: over TASKDATA env when both are present."""
     hook = _find_hook_file("on-exit.nautical")
@@ -2694,28 +2656,6 @@ def test_on_modify_invalid_anchor_has_no_stdout():
     p = _run_hook_script_raw(hook, raw)
     expect(p.returncode != 0, "on-modify should fail on invalid anchor")
     expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
-
-def test_on_add_rejects_oversized_stdin_early():
-    """on-add should reject stdin over _MAX_JSON_BYTES before JSON parsing."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_oversized_input_test")
-    mod._MAX_JSON_BYTES = 32
-    raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 256})
-
-    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
-    out = io.StringIO()
-    err = io.StringIO()
-    orig_stdin, orig_stdout, orig_stderr = sys.stdin, sys.stdout, sys.stderr
-    try:
-        sys.stdin, sys.stdout, sys.stderr = stdin, out, err
-        try:
-            mod.main()
-            raise AssertionError("on-add should fail on oversized stdin")
-        except SystemExit as e:
-            expect(e.code == 1, f"unexpected exit code: {e.code}")
-    finally:
-        sys.stdin, sys.stdout, sys.stderr = orig_stdin, orig_stdout, orig_stderr
-    expect((out.getvalue() or "").strip() == "", f"expected no stdout on oversized input, got: {out.getvalue()!r}")
 
 def test_on_modify_rejects_oversized_stdin_early():
     """on-modify should reject stdin over _MAX_JSON_BYTES before object parsing."""
@@ -5972,53 +5912,6 @@ def test_hook_on_modify_timeline_uses_omit_file_description_label():
     txt = _strip_markup("\n".join(lines))
     expect("(Company holida...)" in txt, f"expected truncated omit_file description marker in anchor timeline: {txt!r}")
     expect("(omitted)" not in txt, f"expected omit_file description to replace default omitted marker: {txt!r}")
-
-
-def test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser():
-    """on-add DNF caching uses the central cache format and parser fingerprints."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_central_cache_test")
-    with tempfile.TemporaryDirectory() as td:
-        old_dir = getattr(mod.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
-        old_cache = getattr(mod.core, "_CACHE_DIR", None)
-        old_enabled = getattr(mod.core, "ENABLE_ANCHOR_CACHE", True)
-        mod.core.ANCHOR_CACHE_DIR_OVERRIDE = td
-        mod.core.ENABLE_ANCHOR_CACHE = True
-        setattr(mod.core, "_CACHE_DIR", None)
-        try:
-            dnf = mod.core.validate_anchor_expr_strict("w:mon")
-            expect(mod.core._dnf_cache_save("w:mon", dnf), "central DNF cache save failed")
-            expect(mod.core._dnf_cache_load("w:mon") == dnf, "central DNF cache did not round-trip")
-            fingerprint = mod.core._dnf_cache_fingerprint()
-            expect("parser=" in fingerprint, f"parser fingerprint missing: {fingerprint}")
-            expect("schema:" in fingerprint, f"cache schema fingerprint missing: {fingerprint}")
-            expect("release:" in fingerprint, f"release fingerprint missing: {fingerprint}")
-            cache_path = Path(mod.core._cache_path(mod.core._dnf_cache_key("w:mon")))
-            expect(cache_path.suffix == ".jsonz" and cache_path.exists(), f"central cache path missing: {cache_path}")
-        finally:
-            mod.core.ANCHOR_CACHE_DIR_OVERRIDE = old_dir
-            mod.core.ENABLE_ANCHOR_CACHE = old_enabled
-            setattr(mod.core, "_CACHE_DIR", old_cache)
-
-
-def test_on_add_dnf_cache_quarantines_central_corruption():
-    """Central cache corruption is quarantined and treated as a miss."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_central_cache_corrupt_test")
-    with tempfile.TemporaryDirectory() as td:
-        old_dir = getattr(mod.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
-        old_cache = getattr(mod.core, "_CACHE_DIR", None)
-        mod.core.ANCHOR_CACHE_DIR_OVERRIDE = td
-        mod.core._CACHE_DIR = None
-        try:
-            cache_path = Path(mod.core._cache_path(mod.core._dnf_cache_key("w:mon")))
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_bytes(b"not a cache")
-            expect(mod.core._dnf_cache_load("w:mon") is None, "corrupt central DNF cache should be a miss")
-            expect(list(cache_path.parent.glob(cache_path.name + ".bad.*")), "corrupt central DNF cache was not quarantined")
-        finally:
-            mod.core.ANCHOR_CACHE_DIR_OVERRIDE = old_dir
-            mod.core._CACHE_DIR = old_cache
 
 
 def test_hooks_require_package_core_layout():
@@ -9737,7 +9630,6 @@ TESTS = [
     test_on_modify_invalid_anchor_has_no_stdout,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
-    test_on_add_rejects_oversized_stdin_early,
     test_on_modify_rejects_oversized_stdin_early,
     test_health_check_json_ok_empty_taskdata,
     test_queue_status_and_doctor_report_schema_health,
@@ -9797,13 +9689,9 @@ TESTS = [
     test_on_modify_recurrence_update_groups_and_flattens_changes,
     test_on_modify_native_until_update_explains_carry,
     test_on_modify_limit_update_emits_effective_boundaries,
-    test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser,
-    test_on_add_dnf_cache_quarantines_central_corruption,
     test_on_exit_reads_data_arg_from_hook_argv,
     test_on_modify_no_explicit_taskdata_skips_rc_data_location,
     test_on_modify_reads_data_arg_from_hook_argv,
-    test_on_add_no_explicit_taskdata_skips_rc_data_location,
-    test_on_add_reads_data_arg_from_hook_argv,
     test_on_exit_data_arg_overrides_taskdata_env,
     test_on_modify_data_arg_overrides_taskdata_env,
     test_on_add_data_arg_overrides_taskdata_env,

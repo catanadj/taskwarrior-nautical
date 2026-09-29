@@ -660,6 +660,48 @@ class CacheApiContractTests(unittest.TestCase):
 
             self.assertNotEqual(before, after)
 
+    def test_dnf_cache_uses_central_api_and_fingerprints_parser(self) -> None:
+        dnf = [[
+            {
+                "typ": "w",
+                "spec": "mon",
+                "ival": 1,
+                "mods": {
+                    "t": None,
+                    "roll": None,
+                    "wd": None,
+                    "bd": False,
+                    "day_offset": 0,
+                    "business_day_offset": 0,
+                },
+            }
+        ]]
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding(Path(td))
+
+            self.assertTrue(binding._dnf_cache_save("w:mon", dnf))
+            self.assertEqual(binding._dnf_cache_load("w:mon"), dnf)
+            fingerprint = binding._dnf_cache_fingerprint()
+            self.assertIn("parser=", fingerprint)
+            self.assertIn("schema:", fingerprint)
+            self.assertIn("release:", fingerprint)
+            cache_path = Path(binding._cache_path(binding._dnf_cache_key("w:mon")))
+            self.assertEqual(cache_path.suffix, ".jsonz")
+            self.assertTrue(cache_path.exists())
+
+    def test_dnf_cache_quarantines_invalid_central_payload(self) -> None:
+        dnf_key_payload = {"kind": "anchor-dnf", "dnf": "invalid DNF"}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            binding = self._binding(root)
+            key = binding._dnf_cache_key("w:mon")
+            cache_path = Path(binding._cache_path(key))
+
+            self.assertTrue(binding.cache_save(key, dnf_key_payload))
+            self.assertIsNone(binding._dnf_cache_load("w:mon"))
+            self.assertFalse(cache_path.exists())
+            self.assertEqual(len(list(root.glob(cache_path.name + ".bad.*"))), 1)
+
     def test_dnf_fingerprint_tracks_parser_frontend_source(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             binding = self._binding(Path(td))

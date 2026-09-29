@@ -172,3 +172,22 @@ class OnAddPreviewHookContractTests(unittest.TestCase):
         result = json.loads(stdout.getvalue())
         self.assertEqual(result["uuid"], "00000000-0000-4000-8000-000000000111")
         self.assertEqual(result["description"], "panic-add")
+
+    def test_on_add_rejects_oversized_stdin_early(self) -> None:
+        if self._run_isolated:
+            self._run_in_child_process()
+            return
+
+        self.hook._MAX_JSON_BYTES = 32
+        raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 128})
+        failure = RuntimeError("hook rejected oversized input")
+        with (
+            patch.object(self.hook, "_fail_and_exit", side_effect=failure) as fail,
+            patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")),
+            self.assertRaisesRegex(RuntimeError, "rejected oversized input"),
+        ):
+            self.hook._read_on_add_task(self.hook._NoopProfiler())
+
+        fail.assert_called_once()
+        self.assertEqual(fail.call_args.args[0], "Invalid input")
+        self.assertIn("exceeds 32 bytes", fail.call_args.args[1])

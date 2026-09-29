@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -393,6 +394,75 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertIn("Invalid Nautical configuration", result.stderr)
         self.assertIn("Recursive omit", result.stderr)
         self.assertIn("preset reference detected", result.stderr)
+
+    def test_rolled_business_day_preview_keeps_each_timed_slot(self) -> None:
+        task = self._task(
+            entry="20260412T111500Z",
+            anchor="y:04-25@nbd@t=12:00,17:00",
+            anchor_mode="skip",
+        )
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["anchor"], task["anchor"])
+        self.assertGreaterEqual(
+            len(set(re.findall(r"\b\d{4}-\d{2}-\d{2} 12:00\b", process.stderr))), 2
+        )
+        self.assertGreaterEqual(
+            len(set(re.findall(r"\b\d{4}-\d{2}-\d{2} 17:00\b", process.stderr))), 1
+        )
+
+    def test_positive_day_offset_preview_keeps_timed_slot(self) -> None:
+        task = self._task(
+            entry="20260412T111500Z",
+            anchor="y:04-25@+10d@t=12:00",
+            anchor_mode="skip",
+        )
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["anchor"], task["anchor"])
+        self.assertGreaterEqual(
+            len(set(re.findall(r"\b\d{4}-\d{2}-\d{2} 12:00\b", process.stderr))), 2
+        )
+
+    def test_negative_day_offset_preview_keeps_timed_slot(self) -> None:
+        task = self._task(
+            entry="20260412T111500Z",
+            anchor="y:04-25@-2d@t=12:00",
+            anchor_mode="skip",
+        )
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["anchor"], task["anchor"])
+        self.assertGreaterEqual(
+            len(set(re.findall(r"\b\d{4}-\d{2}-\d{2} 12:00\b", process.stderr))), 2
+        )
+
+    def test_timed_omit_expression_is_rejected(self) -> None:
+        self._assert_invalid(
+            self._task(
+                entry="20250108T000000Z",
+                anchor="w:mon,wed,fri",
+                omit="w:wed@t=09:00",
+                anchor_mode="skip",
+                due="20250108T090000Z",
+            ),
+            ("omit does not support time modifiers (@t).", "date-based only."),
+        )
+
+    def test_omit_file_paths_are_rejected(self) -> None:
+        self._assert_invalid(
+            self._task(
+                entry="20250108T000000Z",
+                anchor="w:mon,wed,fri",
+                omit_file="../holidays.csv",
+                anchor_mode="skip",
+                due="20250108T090000Z",
+            ),
+            ("omit_file must be a file name, not a path.",),
+        )
 
     def _assert_dst_window_slot_occurs_once(
         self, anchor: str, entry: str, due: str, expected_slot: str

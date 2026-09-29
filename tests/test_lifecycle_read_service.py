@@ -59,6 +59,30 @@ class LifecycleReadServiceTests(unittest.TestCase):
         self.assertEqual(calls, ["cid"])
         self.assertEqual([row.get("link") for row in selected or []], [2])
 
+    def test_chain_cache_filters_cached_rows_in_memory(self) -> None:
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda value: str(value).split(),
+            token_matcher=lambda row, token: token == f"status:{row.get('status')}",
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            max_chain_walk=10,
+            cache_store=ChainCacheStore(),
+        )
+        service.replace_chain_cache(
+            "cid",
+            [
+                {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1, "status": "completed"},
+                {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2, "status": "pending"},
+                {"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "link": 2, "status": "deleted"},
+            ],
+        )
+
+        selected = service.get_chain_export("cid", extra="status:pending")
+
+        self.assertEqual([row.get("link") for row in selected or []], [2])
+        self.assertEqual([row.get("status") for row in selected or []], ["pending"])
+
     def test_chain_cache_preserves_repository_unavailability(self) -> None:
         command = TaskCommand(("task", "export"), "test chain read", 1.0)
         evidence = FailureEvidence(

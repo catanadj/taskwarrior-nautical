@@ -4758,28 +4758,6 @@ def test_on_exit_outcome_diagnostics_are_bounded():
     expect("suppressed 3 additional" in messages[2], f"suppression summary was not actionable: {messages!r}")
 
 
-def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
-    """Filtered chain reads should use the in-memory chain cache before falling back to Taskwarrior export."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_get_chain_export_cached_filter_test")
-    mod._reset_modify_runtime_state()
-
-    mod._module("modify_composition").lifecycle_read_service_for(mod).replace_chain_cache(
-        "cid-1",
-        [
-            {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1, "status": "completed", "entry": "2026-01-01T00:00:00Z"},
-            {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2, "status": "pending", "entry": "2026-01-02T00:00:00Z"},
-            {"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "link": 2, "status": "deleted", "entry": "2026-01-03T00:00:00Z"},
-        ],
-    )
-
-    rows = mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export(
-        "cid-1", extra="link:2 status.not:deleted"
-    )
-    expect(len(rows) == 1, f"expected exactly one filtered cached row, got {rows}")
-    expect(rows[0].get("uuid") == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f"unexpected filtered row: {rows}")
-
-
 def test_core_invalid_timezone_warns_and_falls_back_to_utc():
     """Invalid timezone config should fall back to UTC and emit diagnostic warning when enabled."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
@@ -12233,7 +12211,6 @@ TESTS = [
     test_on_modify_run_task_diag_bucket_stats,
     test_on_exit_diag_blocks_pretty_print,
     test_on_exit_outcome_diagnostics_are_bounded,
-    test_on_modify_get_chain_export_filters_cached_chain_in_memory,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_modify_completion_advances_past_second_dst_fold,
     test_modify_overnight_window_advances_past_second_dst_fold,

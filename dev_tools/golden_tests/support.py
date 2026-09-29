@@ -486,6 +486,59 @@ def doctor_hook_installation(mod, findings, *, hooks_dir, env):
     return validated
 
 
+def write_fake_task_for_doctor(path: Path) -> None:
+    path.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+if args and args[-1] == "--version":
+    print("3.4.2")
+    raise SystemExit(0)
+if len(args) >= 2 and args[-2] == "_get":
+    key = args[-1]
+    if key == "rc.hooks.location":
+        print(os.environ.get("FAKE_HOOKS", ""))
+        raise SystemExit(0)
+    if key == "rc.data.location":
+        print(os.environ.get("FAKE_DATA_DIR", ""))
+        raise SystemExit(0)
+    if key.startswith("rc.uda.") and key.endswith(".type"):
+        name = key[len("rc.uda."):-len(".type")]
+        expected = {
+            "cp": "string", "chain": "string", "anchor": "string", "bc": "string",
+            "anchor_file": "string", "anchor_mode": "string",
+            "omit": "string", "omit_file": "string",
+            "chainMax": "numeric", "chainUntil": "date",
+            "prevLink": "string", "nextLink": "string",
+            "link": "numeric", "chainID": "string",
+        }
+        if name == os.environ.get("FAKE_WRONG_UDA"):
+            print("date")
+        else:
+            print(expected.get(name, ""))
+        raise SystemExit(0)
+if "export" in args:
+    print(os.environ.get("FAKE_EXPORT", "[]"))
+    raise SystemExit(0)
+print("unsupported", file=sys.stderr)
+raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def install_doctor_hook_wrappers(hooks_dir: Path, root: Path | None = None) -> None:
+    import shutil
+
+    root = root or Path(__file__).resolve().parents[2]
+    for name in ("on-add.nautical", "on-modify.nautical", "on-exit.nautical"):
+        shutil.copy2(root / name, hooks_dir / name)
+
+
 def doctor_obsolete_queue_state(mod, findings, taskdata):
     paths = sorted(str(root / name) for root in (taskdata, taskdata / ".nautical-state") for name in mod._OBSOLETE_QUEUE_STATE_NAMES if os.path.lexists(root / name))
     findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.obsolete_queue_findings(taskdata, mod._OBSOLETE_QUEUE_STATE_NAMES))

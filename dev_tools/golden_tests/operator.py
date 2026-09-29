@@ -13,7 +13,14 @@ import subprocess
 import sys
 import tempfile
 
-from dev_tools.golden_tests.support import expect, load_hook_module
+from dev_tools.golden_tests.support import (
+    doctor_findings,
+    doctor_hook_installation,
+    expect,
+    install_doctor_hook_wrappers,
+    load_hook_module,
+    write_fake_task_for_doctor,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEV_TOOLS = ROOT / "dev_tools"
@@ -281,12 +288,203 @@ def test_doctor_installation_json_and_verifier_contract():
         expect(canonical_report.get("status") == "passed", f"healthy canonical evidence was rejected: {canonical_report!r}")
 
 
+def test_operator_queue_status_json_ok_empty_taskdata():
+    """installed queue status should work from nautical_core/tools."""
+    path = CORE_TOOLS / "nautical_queue_status.py"
+    with tempfile.TemporaryDirectory() as td:
+        process = subprocess.run(
+            [sys.executable, str(path), "--taskdata", td, "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(process.returncode == 0, f"operator queue status returned {process.returncode}: {process.stderr!r}")
+        payload = json.loads((process.stdout or "").strip() or "{}")
+        expect(payload.get("status") == "ok", f"unexpected operator queue status: {payload}")
+
+
+def test_queue_status_warns_on_stale_processing_and_dead_letters():
+    """Lifecycle outbox status should report expired leases and retry work."""
+    path = DEV_TOOLS / "nautical_queue_status.py"
+    with tempfile.TemporaryDirectory() as td:
+        state_dir = Path(td) / ".nautical-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        db = state_dir / ".nautical_lifecycle_outbox.db"
+        with sqlite3.connect(str(db)) as connection:
+            connection.execute("PRAGMA user_version = 2")
+            connection.execute(
+                """
+                CREATE TABLE lifecycle_outbox (
+                    intent_id TEXT PRIMARY KEY,
+                    work_kind TEXT NOT NULL DEFAULT 'lifecycle',
+                    plan_json TEXT NOT NULL,
+                    plan_fingerprint TEXT NOT NULL,
+                    parent_guard_json TEXT NOT NULL,
+                    configuration_fingerprint TEXT NOT NULL,
+                    schedule_fingerprint TEXT NOT NULL,
+                    lifecycle_stage TEXT NOT NULL,
+                    processing_state TEXT NOT NULL,
+                    lease_owner TEXT NOT NULL DEFAULT '',
+                    lease_expires_at REAL NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    failure_json TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    acknowledged_at REAL NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO lifecycle_outbox "
+                "(intent_id, work_kind, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, "
+                "schedule_fingerprint, lifecycle_stage, processing_state, lease_owner, lease_expires_at, "
+                "attempts, failure_json, created_at, updated_at) "
+                "VALUES (?, 'lifecycle', '{}', 'pf', '{}', 'cf', 'sf', 'planned', 'claimed', 'old-worker', 1.0, 3, '', 1.0, 1.0)",
+                ("outbox-stale",),
+            )
+            connection.commit()
+        process = subprocess.run(
+            [sys.executable, str(path), "--taskdata", td, "--stale-after-seconds", "10", "--limit", "3", "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(process.returncode == 1, f"expected warn exit 1, got {process.returncode}: {process.stderr!r}")
+        payload = json.loads((process.stdout or "").strip() or "{}")
+        expect(payload.get("status") in {"warn", "attention"}, f"unexpected queue status: {payload}")
+        outbox = payload.get("outbox") or {}
+        states = outbox.get("states") or {}
+        expect(int(states.get("claimed") or 0) == 1, f"unexpected outbox states: {outbox}")
+        expect(int(outbox.get("stale_claims") or 0) == 1, f"unexpected stale count: {outbox}")
+        expect(int(outbox.get("max_attempts") or 0) == 3, f"unexpected max attempts: {outbox}")
+        expect(len(outbox.get("sample") or []) >= 1, f"expected sample rows: {outbox}")
+
+
+def test_doctor_reports_healthy_installation():
+    """doctor should report ok for a complete installation with clean chain state."""
+    path = DEV_TOOLS / "nautical_doctor.py"
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        hooks = td_path / "hooks"
+        hooks.mkdir()
+        install_doctor_hook_wrappers(hooks, ROOT)
+        (td_path / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
+        fake_task = td_path / "task"
+        write_fake_task_for_doctor(fake_task)
+        rows = [
+            {
+                "uuid": "aaaaaaaa-0000-4000-8000-000000000901",
+                "status": "completed",
+                "chain": "on",
+                "cp": "1d",
+                "chainID": "cid",
+                "link": 1,
+                "nextLink": "bbbbbbbb",
+            },
+            {
+                "uuid": "bbbbbbbb-0000-4000-8000-000000000902",
+                "status": "pending",
+                "chain": "on",
+                "cp": "1d",
+                "chainID": "cid",
+                "link": 2,
+                "prevLink": "aaaaaaaa",
+            },
+        ]
+        env = os.environ.copy()
+        env["NAUTICAL_CORE_PATH"] = str(ROOT)
+        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
+        env["FAKE_HOOKS"] = str(hooks)
+        env["FAKE_EXPORT"] = json.dumps(rows)
+        process = subprocess.run(
+            [sys.executable, str(path), "--taskdata", td, "--task-bin", str(fake_task), "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        expect(process.returncode == 0, f"doctor returned {process.returncode}: {process.stderr!r} {process.stdout!r}")
+        payload = json.loads((process.stdout or "").strip() or "{}")
+        expect(payload.get("status") == "ok", f"unexpected doctor status: {payload}")
+        expect((payload.get("counts") or {}).get("chains") == 1, f"unexpected doctor counts: {payload}")
+        findings = doctor_findings(payload)
+        expect(
+            any(item.get("id") == "uda.registration" and item.get("severity") == "ok" for item in findings),
+            f"healthy UDA registration evidence is missing: {payload}",
+        )
+
+
+def test_doctor_hook_inventory_allows_third_party_and_symlink_install():
+    """Doctor should validate symlinked Nautical hooks without rejecting unrelated hooks."""
+    module = load_hook_module(str(CORE_TOOLS / "nautical_doctor.py"), "_nautical_doctor_hook_symlink_test")
+    with tempfile.TemporaryDirectory() as td:
+        hooks = Path(td) / "hooks"
+        hooks.mkdir()
+        (hooks / "on-add").symlink_to(ROOT / "on-add.nautical")
+        for name in ("on-modify.nautical", "on-exit.nautical"):
+            (hooks / name).symlink_to(ROOT / name)
+        third_party = hooks / "on-add-third-party"
+        third_party.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        third_party.chmod(0o755)
+        findings = []
+        runtimes = doctor_hook_installation(
+            module,
+            findings,
+            hooks_dir=hooks,
+            env={"NAUTICAL_CORE_PATH": str(ROOT), "NAUTICAL_TRUST_CORE_PATH": "1"},
+        )
+    expect(set(runtimes) == {"on-add", "on-modify", "on-exit"}, f"missing validated hooks: {findings!r}")
+    expect(not any(item.get("severity") == "error" for item in findings), f"valid symlink install failed: {findings!r}")
+    expect(
+        Path(runtimes["on-modify"]["implementation"]) == ROOT / "nautical_core/hooks/modify_impl.py",
+        f"wrong on-modify implementation selected: {runtimes!r}",
+    )
+
+
+def test_doctor_hook_inventory_rejects_duplicates_without_counting_backups():
+    """Doctor should reject duplicate active Nautical hooks but ignore non-executable backups."""
+    module = load_hook_module(str(CORE_TOOLS / "nautical_doctor.py"), "_nautical_doctor_hook_duplicate_test")
+    with tempfile.TemporaryDirectory() as td:
+        hooks = Path(td) / "hooks"
+        hooks.mkdir()
+        install_doctor_hook_wrappers(hooks, ROOT)
+        backup = hooks / "on-add-nautical-old.py"
+        shutil.copy2(ROOT / "on-add.nautical", backup)
+        env = {"NAUTICAL_CORE_PATH": str(ROOT), "NAUTICAL_TRUST_CORE_PATH": "1"}
+        findings = []
+        runtimes = doctor_hook_installation(module, findings, hooks_dir=hooks, env=env)
+        ids = {item.get("id") for item in findings}
+        expect("hook.on-add.duplicate" in ids, f"active duplicate was not detected: {findings!r}")
+        expect("on-add" not in runtimes, f"ambiguous on-add runtime should not be selected: {runtimes!r}")
+        backup.chmod(0o644)
+        findings = []
+        runtimes = doctor_hook_installation(module, findings, hooks_dir=hooks, env=env)
+        ids = {item.get("id") for item in findings}
+        expect("hook.on-add.duplicate" not in ids, f"inactive backup counted as active: {findings!r}")
+        expect("on-add" in runtimes, f"active on-add wrapper was not selected: {findings!r}")
+    with tempfile.TemporaryDirectory() as td:
+        hooks = Path(td) / "hooks"
+        hooks.mkdir()
+        third_party = hooks / "on-add-third-party"
+        third_party.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        third_party.chmod(0o755)
+        findings = []
+        doctor_hook_installation(module, findings, hooks_dir=hooks, env={})
+        ids = {item.get("id") for item in findings}
+        expect("hook.on-add.missing" in ids, f"third-party hook falsely satisfied Nautical: {findings!r}")
+
+
 TESTS = (
     test_health_check_json_ok_empty_taskdata,
     test_queue_status_and_doctor_report_schema_health,
     test_queue_status_json_ok_empty_taskdata,
     test_queue_status_explicit_prune_reports_maintenance_result,
     test_doctor_installation_json_and_verifier_contract,
+    test_operator_queue_status_json_ok_empty_taskdata,
+    test_queue_status_warns_on_stale_processing_and_dead_letters,
+    test_doctor_reports_healthy_installation,
+    test_doctor_hook_inventory_allows_third_party_and_symlink_install,
+    test_doctor_hook_inventory_rejects_duplicates_without_counting_backups,
     test_query_process_boundary_emits_one_json_document,
     test_operator_processes_concurrent_contracts_share_taskdata_safely,
     test_query_installed_layout_runs_outside_checkout,

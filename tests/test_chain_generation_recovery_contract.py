@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import unittest
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import nautical_core as core
+import nautical_core.anchor_inclusion as anchor_inclusion
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
 from nautical_core.cp_parser import cp_sequence_interval_for_token, parse_cp_sequence_tokens
 from nautical_core.integration_models import MutationOperation
+from nautical_core.occurrence_provider import Occurrence
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import NauticalTask
@@ -200,6 +202,44 @@ class ChainGenerationContractTests(unittest.TestCase):
         child_local = core.to_local(child_due)
         self.assertEqual(child_local.date(), date(2026, 7, 4))
         self.assertEqual((child_local.hour, child_local.minute), (14, 0))
+
+    def test_anchor_file_projection_reuses_one_provider(self):
+        builders = []
+        occurrence = Occurrence(
+            date(2026, 8, 4),
+            9,
+            0,
+            source="anchor_file",
+            local_datetime=core.to_local(
+                core.build_local_datetime(date(2026, 8, 4), (9, 0))
+            ),
+        )
+
+        def build_provider(*_args, **_kwargs):
+            provider = SimpleNamespace(
+                next_after=lambda after_local, **_kwargs: (
+                    occurrence if occurrence.local_datetime > after_local else None
+                )
+            )
+            builders.append(provider)
+            return provider
+
+        due = core.build_local_datetime(date(2026, 8, 3), (9, 0))
+        parent = _task(
+            anchor="w:mon@t=09:00",
+            anchor_file="calendar.csv@t=09:00",
+            anchor_mode="all",
+            cp=None,
+            due=fmt_isoz(due),
+            end=fmt_isoz(due + timedelta(hours=1)),
+        )
+        service = ChainGenerationService.from_core(core)
+
+        with patch.object(anchor_inclusion, "_build_anchor_file_provider", build_provider):
+            child_due, _metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        self.assertEqual(len(builders), 1)
+        self.assertEqual(core.to_local(child_due).hour, 9)
 
     def test_hook_adapter_uses_shared_generation_service_without_legacy_helpers(self) -> None:
         class Hook:

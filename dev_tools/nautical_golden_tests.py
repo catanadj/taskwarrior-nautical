@@ -9911,50 +9911,6 @@ def test_on_modify_completion_chain_snapshot_modes_and_query():
         mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
 
 
-def test_on_modify_anchor_file_child_projection_reuses_provider():
-    """Combined all-mode child projection should build one anchor-file provider."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_file_session_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-    anchor_inclusion = mod.core._import_sibling("anchor_inclusion")
-    occurrence_provider = mod.core._import_sibling("occurrence_provider")
-    original_builder = anchor_inclusion._build_anchor_file_provider
-    builders = []
-
-    def build_provider(*_args, **_kwargs):
-        provider = type("Provider", (), {})()
-        occurrence = occurrence_provider.Occurrence(
-            date(2026, 8, 4), 9, 0, source="anchor_file",
-            local_datetime=mod.core.to_local(mod.core.build_local_datetime(date(2026, 8, 4), (9, 0))),
-        )
-        provider.next_after = lambda after_local, **_kwargs: (
-            occurrence
-            if occurrence.local_datetime is not None and occurrence.local_datetime > after_local
-            else None
-        )
-        builders.append(provider)
-        return provider
-
-    anchor_inclusion._build_anchor_file_provider = build_provider
-    try:
-        due = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
-        child_due, _meta, _dnf = _compute_anchor_child_due(mod,
-            {
-                "anchor": "w:mon@t=09:00",
-                "anchor_file": "calendar.csv@t=09:00",
-                "anchor_mode": "all",
-                "chainID": "anchor-file-session",
-                "due": mod.core.fmt_isoz(due),
-                "end": mod.core.fmt_isoz(due + timedelta(hours=1)),
-            }
-        )
-    finally:
-        anchor_inclusion._build_anchor_file_provider = original_builder
-    expect(len(builders) == 1, f"child projection rebuilt anchor-file provider {len(builders)} times")
-    expect(mod.core.to_local(child_due).strftime("%H:%M") == "09:00", f"unexpected projected child due: {child_due!r}")
-
-
 def test_on_modify_pure_anchor_file_projection_reuses_provider():
     """File-only child projection should use the shared provider session."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13670,7 +13626,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_on_modify_anchor_file_child_projection_reuses_provider,
     test_on_modify_pure_anchor_file_projection_reuses_provider,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,

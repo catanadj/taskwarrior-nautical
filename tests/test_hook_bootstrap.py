@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import nautical_core.hook_bootstrap as hook_bootstrap
@@ -9,6 +10,42 @@ from nautical_core.hook_runtime import HookModuleAccess
 
 
 class HookBootstrapTrustTests(unittest.TestCase):
+    def test_light_taskdata_resolution_matches_hook_precedence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env_dir = root / "env-data"
+            arg_dir = root / "arg-data"
+            env_dir.mkdir()
+            arg_dir.mkdir()
+            env = {"TASKDATA": str(env_dir)}
+            path_support = SimpleNamespace(
+                validated_user_dir=lambda value, **_kwargs: str(value),
+                normalized_abspath=lambda value: str(Path(value).resolve()),
+            )
+
+            from_env = hook_bootstrap.resolve_task_data_context_light(
+                path_support=path_support,
+                argv=[],
+                env=env,
+                tw_dir=str(root),
+            )
+            from_argv = hook_bootstrap.resolve_task_data_context_light(
+                path_support=path_support,
+                argv=[f"data.location:{arg_dir}"],
+                env=env,
+                tw_dir=str(root),
+            )
+            fallback = hook_bootstrap.resolve_task_data_context_light(
+                path_support=path_support,
+                argv=[],
+                env={},
+                tw_dir=str(root),
+            )
+
+        self.assertEqual(from_env, (str(env_dir), True, "env"))
+        self.assertEqual(from_argv, (str(arg_dir), True, "argv"))
+        self.assertEqual(fallback, (str(root), False, "fallback"))
+
     def test_optional_and_required_module_failures_preserve_import_detail(self) -> None:
         access = HookModuleAccess(
             {},

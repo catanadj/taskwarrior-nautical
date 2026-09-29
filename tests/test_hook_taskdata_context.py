@@ -37,6 +37,9 @@ _CONTEXT_SCRIPT = textwrap.dedent(
     hook = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hook)
     hook._load_core()
+    context = hook._INTEGRATION_CONTEXT
+    request_context = hook._build_hook_runtime_context()
+    second_context = hook._build_hook_runtime_context()
     command_prefix = getattr(hook, "_task_cmd_prefix", None)
     if callable(command_prefix):
         command_prefix = command_prefix()
@@ -47,6 +50,11 @@ _CONTEXT_SCRIPT = textwrap.dedent(
         "tw_dir": str(hook.TW_DIR),
         "uses_rc_data_location": bool(hook._USE_RC_DATA_LOCATION),
         "command_prefix": command_prefix,
+        "access": context.access.value,
+        "integration_identity_preserved": request_context.integration is context,
+        "request_reads_empty": request_context.uow.reads.size == 0,
+        "request_contexts_isolated": second_context.uow is not request_context.uow
+            and second_context.uow.reads is not request_context.uow.reads,
     }))
     """
 )
@@ -78,6 +86,23 @@ class OnAddTaskdataContextTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result.stdout)
+
+    def test_full_hooks_receive_one_explicit_integration_context(self) -> None:
+        from nautical_core.integration_context import IntegrationAccess
+
+        expected = {
+            "on-add": IntegrationAccess.READ_ONLY.value,
+            "on-modify": IntegrationAccess.READ_ONLY.value,
+            "on-exit": IntegrationAccess.MUTATION.value,
+        }
+        with tempfile.TemporaryDirectory(prefix="nautical_hook_context_") as taskdata:
+            for hook_name, access in expected.items():
+                with self.subTest(hook=hook_name):
+                    result = self._resolve(hook_name, (f"data:{taskdata}",))
+                    self.assertEqual(result["access"], access)
+                    self.assertTrue(result["integration_identity_preserved"])
+                    self.assertTrue(result["request_reads_empty"])
+                    self.assertTrue(result["request_contexts_isolated"])
 
     def test_on_add_no_explicit_taskdata_skips_rc_data_location(self) -> None:
         result = self._resolve("on-add", ())

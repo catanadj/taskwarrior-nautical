@@ -1,5 +1,6 @@
 """Direct contracts for astronomy configuration and moon-phase semantics."""
 
+import importlib
 import os
 import unittest
 from datetime import date, timedelta
@@ -13,6 +14,10 @@ import nautical_core.astronomy as astronomy
 import nautical_core.scheduler_expr as scheduler_expr
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
+
+
+def _import_core_sibling(name: str):
+    return importlib.import_module(f"nautical_core.{name}")
 
 try:
     from astral import Observer, moon, sun  # noqa: F401
@@ -31,7 +36,7 @@ class AstronomyContractTests(unittest.TestCase):
             _scheduler_api = SimpleNamespace()
             factor_matches_on = staticmethod(lambda *_args, **_kwargs: True)
             dnf_has_counted_random = staticmethod(lambda _dnf: False)
-            _import_sibling = staticmethod(core._import_sibling)
+            _import_sibling = staticmethod(_import_core_sibling)
             build_local_datetime = staticmethod(
                 lambda day, hhmm: datetime(
                     day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc
@@ -74,7 +79,7 @@ class AstronomyContractTests(unittest.TestCase):
             MAX_ANCHOR_ITER = 4
             _scheduler_api = SimpleNamespace()
             dnf_has_counted_random = staticmethod(lambda _dnf: False)
-            _import_sibling = staticmethod(core._import_sibling)
+            _import_sibling = staticmethod(_import_core_sibling)
             build_local_datetime = staticmethod(
                 lambda day, hhmm: datetime(
                     day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc
@@ -123,7 +128,7 @@ class AstronomyContractTests(unittest.TestCase):
             MAX_ANCHOR_ITER = 4
             _scheduler_api = SimpleNamespace()
             dnf_has_counted_random = staticmethod(lambda _dnf: False)
-            _import_sibling = staticmethod(core._import_sibling)
+            _import_sibling = staticmethod(_import_core_sibling)
             build_local_datetime = staticmethod(
                 lambda day, hhmm: datetime(
                     day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc

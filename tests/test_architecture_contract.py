@@ -21,39 +21,125 @@ from nautical_core.add_anchor_preview import (
 )
 
 
+def _private_facade_accesses(source: str, filename: str) -> list[tuple[int, str]]:
+    tree = ast.parse(source, filename=filename)
+    aliases = {
+        alias.asname or alias.name.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "nautical_core"
+    }
+    accesses: list[tuple[int, str]] = []
+
+    def record(node: ast.AST, name: str) -> None:
+        if name.startswith("_") and not (name.startswith("__") and name.endswith("__")):
+            accesses.append((node.lineno, name))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "nautical_core":
+            for alias in node.names:
+                record(node, alias.name)
+        elif (
+            isinstance(node, ast.Attribute)
+            and node.attr.startswith("_")
+            and not (node.attr.startswith("__") and node.attr.endswith("__"))
+            and isinstance(node.value, ast.Name)
+            and node.value.id in aliases
+        ):
+            record(node, node.attr)
+        elif (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in aliases
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+        ):
+            record(node, node.slice.value)
+        elif isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in aliases
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            ):
+                record(node, node.args[1].value)
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "object"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "patch"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in aliases
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            ):
+                record(node, node.args[1].value)
+    return sorted(accesses)
+
+
 class ArchitectureContractTests(unittest.TestCase):
     def test_owner_contracts_do_not_access_private_facade_exports(self) -> None:
         tests = Path(__file__).parent
-        private_reads = []
-        for filename in (
-            "test_parser_owner_api_contracts.py",
-            "test_scheduler_api_contract.py",
-            "test_runtime_config_contracts.py",
-            "recurrence/test_yearly_token_migration.py",
-            "recurrence/test_parser_fuzz_contracts.py",
-            "recurrence/test_cp_sequence_contracts.py",
-            "recurrence/test_scheduler_cross_path_conformance.py",
-            "test_astronomy_contracts.py",
-            "test_cache_api_contract.py",
-        ):
-            path = tests / filename
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            facade_aliases = {
-                alias.asname or alias.name.split(".", 1)[0]
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Import)
-                for alias in node.names
-                if alias.name == "nautical_core"
-            }
-            private_reads.extend(
-                f"{path.name}:{node.lineno}: {node.value.id}.{node.attr}"
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Attribute)
-                and node.attr.startswith("_")
-                and isinstance(node.value, ast.Name)
-                and node.value.id in facade_aliases
+        private_reads: dict[str, list[str]] = {}
+        for path in sorted(tests.rglob("*.py")):
+            relative = path.relative_to(tests).as_posix()
+            if relative == "test_navigator_view_models.py":
+                continue  # Navigator is excluded from this refactor scope.
+            accesses = _private_facade_accesses(
+                path.read_text(encoding="utf-8"), str(path)
             )
-        self.assertEqual(private_reads, [], "owner contracts must use owner APIs directly")
+            if accesses:
+                private_reads[relative] = [name for _, name in accesses]
+        # These contracts deliberately verify behavior that exists at the
+        # facade boundary; exact access inventories prevent new exceptions.
+        approved_facade_contracts = {
+            "recurrence/test_season_calendar_contracts.py": [
+                "_refresh_facade_config_exports",
+                "_refresh_facade_config_exports",
+            ],
+            "recurrence/test_scheduler_cross_path_conformance.py": [
+                "_LOCAL_TZ",
+                "_LOCAL_TZ",
+            ],
+            "test_precompute_contract.py": ["_next_for_or"],
+            "test_cache_api_contract.py": ["_clear_all_caches"],
+        }
+        private_reads = {path: names for path, names in private_reads.items() if names}
+        approved_facade_contracts = dict(sorted(approved_facade_contracts.items()))
+        private_reads = dict(sorted(private_reads.items()))
+        self.assertEqual(
+            private_reads,
+            approved_facade_contracts,
+            "test consumers must use owner APIs except for named facade contracts",
+        )
+
+    def test_private_facade_detector_catches_dynamic_access_forms(self) -> None:
+        source = """\
+import nautical_core as facade
+from unittest.mock import patch
+from nautical_core import _private_import
+
+facade._private_attribute()
+facade["_private_item"]
+getattr(facade, "_private_getattr")
+patch.object(facade, "_private_patch")
+facade.__all__
+"""
+        self.assertEqual(
+            [name for _, name in _private_facade_accesses(source, "synthetic.py")],
+            [
+                "_private_import",
+                "_private_attribute",
+                "_private_item",
+                "_private_getattr",
+                "_private_patch",
+            ],
+        )
 
     def test_repository_consumers_import_internal_modules_from_their_owners(self) -> None:
         root = Path(__file__).parents[1]

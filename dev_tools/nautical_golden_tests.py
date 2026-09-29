@@ -10840,34 +10840,6 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
     expect(any("Timezone data unavailable" in str(v) for k, v in fb if k == "Integrity"), f"missing timezone fallback warning: {fb}")
 
 
-def test_on_add_preview_hard_cap():
-    """on-add preview loop should respect hard cap even with large preview setting."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_preview_cap_test")
-
-    mod.UPCOMING_PREVIEW = 1000
-    mod._PREVIEW_HARD_CAP = 3
-
-    first_date_local = date(2025, 1, 6)
-    first_hhmm = (9, 0)
-
-    def _step_once(prev_date):
-        return prev_date + timedelta(days=7)
-
-    preview = []
-    cur_dt = core.to_local(core.build_local_datetime(first_date_local, first_hhmm))
-    for i in range(mod._PREVIEW_HARD_CAP + 5):
-        if i >= mod._PREVIEW_HARD_CAP:
-            break
-        nxt_date = _step_once(cur_dt.date())
-        cur_dt = core.to_local(core.build_local_datetime(nxt_date, first_hhmm))
-        preview.append(core.fmt_dt_local(cur_dt.astimezone(timezone.utc)))
-
-    preview_limit = max(0, min(mod.UPCOMING_PREVIEW, 10**9, 10**9, mod._PREVIEW_HARD_CAP))
-    expect(preview_limit == 3, f"unexpected preview limit: {preview_limit}")
-    expect(len(preview) == 3, "preview hard cap should limit preview length")
-
-
 def test_on_add_flushes_stdout():
     """on-add should flush stdout after emitting JSON."""
     hook = _find_hook_file("on-add.nautical")
@@ -12543,7 +12515,6 @@ TESTS = [
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_completion_spawn_exception_is_retryable_with_reason,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
-    test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,
     test_on_add_profiler_lazy_init,
     test_on_modify_panel_fallback,

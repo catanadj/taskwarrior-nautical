@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "dc6656fd2f93c64e8dca80e11d016813e9eca614141e4452a2839b5665516b44"
+    "3e9e060a48dc69df76420fde8511cd65eeccdc742db4d8e86a673cd730b1fa71"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -59,8 +59,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "cb19880068ed0fe952886429d5e47c53516d9cffa740e4a1bbc6456c23af5568",
     ),
     "recurrence and hook integration": (
-        201,
-        "33e87c58f3da01dd0090e9bda4ad8f341263f5abdb5ce2fc77e2fb8d1e30c915",
+        200,
+        "eb4b958c905b65114ac8298dc0359028ca02f510b5fcd561d6b5e8f2bea7722d",
     ),
     "storage and filesystem safety": (
         2,
@@ -88,6 +88,7 @@ REMOVED_INEFFECTIVE_TESTS = frozenset(
         "test_hook_run_task_falls_back_when_core_load_fails",
         "test_on_add_run_task_falls_back_when_core_load_fails",
         "test_performance_large_expressions",
+        "test_on_add_preview_hard_cap",
     }
 )
 MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
@@ -716,7 +717,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         }
         self.assertFalse(REMOVED_INEFFECTIVE_TESTS & registered)
         self.assertFalse(REMOVED_INEFFECTIVE_TESTS & top_level)
-        self.assertEqual(len(REMOVED_INEFFECTIVE_TESTS), 3)
+        self.assertEqual(len(REMOVED_INEFFECTIVE_TESTS), 4)
 
     def test_registry_inventory_counts_match_documented_snapshot(self):
         registered = [*self.golden.TESTS, *self.golden.DEEP_TESTS]
@@ -733,8 +734,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
-        self.assertEqual(len(top_level), 293)
-        self.assertEqual(len(registered), 343)
+        self.assertEqual(len(top_level), 292)
+        self.assertEqual(len(registered), 342)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(hooks.TESTS), 5)
         self.assertEqual(len(operator.TESTS), 4)

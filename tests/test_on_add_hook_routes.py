@@ -129,6 +129,36 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertEqual(json.loads(result.stdout)["anchor"], expression)
         self.assertIn("2 days later at 09:00", result.stderr)
 
+    def test_multitime_preview_emits_all_explicit_slots(self) -> None:
+        expression = "w:wed@t=06:00,12:00,22:00"
+        task = self._task(
+            description="multitime preview",
+            entry="20251217T000000Z",
+            anchor=expression,
+            anchor_mode="skip",
+            due="20251217T060000Z",
+        )
+        result = self._run(task)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["due"], task["due"])
+        self.assertIn("12:00", result.stderr)
+        self.assertIn("22:00", result.stderr)
+
+    def test_time_window_preview_emits_only_bounded_slots(self) -> None:
+        task = self._task(
+            description="time-window preview",
+            entry="20251217T000000Z",
+            anchor="w:wed@t=06..17/3h",
+            anchor_mode="skip",
+            due="20251217T060000Z",
+        )
+        result = self._run(task)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["uuid"], task["uuid"])
+        self.assertIn("09:00", result.stderr)
+        self.assertIn("15:00", result.stderr)
+        self.assertNotIn("17:00 UTC", result.stderr)
+
     def test_yearly_positional_anchor_preview_supports_post_selection_offset(self) -> None:
         expression = "(w:mon)@in-year=last@+7d@t=09:00"
         result = self._run(

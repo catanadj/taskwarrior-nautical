@@ -5248,92 +5248,6 @@ def test_taskdata_reload_exposes_consistent_validated_fingerprints():
         expect(payload["drift"]["status"] == "ok", f"identical reload left configuration drifted: {payload!r}")
 
 
-def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
-    """changing bc to an unknown name should fail before recurrence is evaluated."""
-    hook = _find_hook_file('on-modify.nautical')
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / 'config-nautical.toml'
-        config_path.write_text(
-            '[business_calendar.work]\n'
-            'anchor = "w:mon..fri"\n',
-            encoding='utf-8',
-        )
-        old = {
-            'uuid': '00000000-0000-4000-8000-000000000123',
-            'description': 'change business calendar',
-            'status': 'pending',
-            'anchor': 'w:mon',
-            'bc': 'work',
-        }
-        new = dict(old, bc='missing')
-        proc = _run_hook_script_raw(
-            hook,
-            json.dumps(old) + '\n' + json.dumps(new) + '\n',
-            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
-        )
-        expect(proc.returncode != 0, 'on-modify should reject an unknown business calendar')
-        expect(not proc.stdout.strip(), f'failing hook should not emit stdout: {proc.stdout[:500]!r}')
-        stderr_text = _strip_markup(proc.stderr)
-        expect('Invalid business calendar' in stderr_text, f'missing error title: {stderr_text[:500]!r}')
-        expect(
-            'configured calendars:' in stderr_text and 'work.' in stderr_text,
-            f'missing available-calendar hint: {stderr_text[:500]!r}',
-        )
-
-
-def test_hook_on_modify_rejects_invalid_timezone_for_nautical_task():
-    """A bad timezone must block recurrence mutation instead of using UTC silently."""
-    hook = _find_hook_file("on-modify.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / "config-nautical.toml"
-        config_path.write_text('tz = "Invalid/Timezone"\n', encoding="utf-8")
-        old = {
-            "uuid": "00000000-0000-4000-8000-000000000128",
-            "description": "invalid timezone modify",
-            "status": "pending",
-            "anchor": "w:mon",
-        }
-        new = dict(old, status="completed", end="20260808T120000Z", modified="20260808T120000Z")
-        proc = _run_hook_script_raw(
-            hook,
-            json.dumps(old) + "\n" + json.dumps(new) + "\n",
-            env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config_path)},
-        )
-    expect(proc.returncode != 0, "invalid timezone should block Nautical on-modify")
-    stderr_text = _strip_markup(proc.stderr)
-    expect("Invalid Nautical configuration" in stderr_text, f"missing config error title: {stderr_text[:800]!r}")
-    expect("timezone" in stderr_text.lower(), f"timezone cause missing: {stderr_text[:800]!r}")
-
-
-def test_on_modify_spawned_child_preserves_business_calendar():
-    """completion spawning should copy the parent's canonical bc value unchanged."""
-    hook = _find_hook_file('on-modify.nautical')
-    mod = _load_hook_module(hook, '_nautical_on_modify_business_calendar_child_test')
-    child_due = mod.core.build_local_datetime(date(2026, 7, 18), (9, 0))
-    parent = {
-        'uuid': '00000000-0000-4000-8000-000000000124',
-        'description': 'weekend chain',
-        'status': 'completed',
-        'due': mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 12), (9, 0))),
-        'anchor': 'm:1bd',
-        'anchor_mode': 'skip',
-        'bc': 'weekend',
-        'chainID': 'calendar-chain',
-        'link': 1,
-    }
-    child = _build_child_draft_for_test(mod,
-        parent,
-        child_due,
-        'due',
-        2,
-        '00000000',
-        'anchor',
-        0,
-        None,
-    )
-    expect(child.get('bc') == 'weekend', f'child lost its business calendar: {child!r}')
-
-
 def test_modifier_boundary_paths_agree_and_advance_strictly():
     """Rolled and shifted anchors should agree across preview, completion, timeline, and omit."""
     import nautical_core.anchor_omit as anchor_omit
@@ -5506,56 +5420,6 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
 
 
 # -------- Runner --------------------------------------------------------------
-
-def test_hook_on_add_multitime_preview_emits_all_slots():
-    """on-add must accept @t=HH:MM list and preview intra-day slots when due is explicit."""
-    hook = _find_hook_file("on-add.nautical")
-    # Disable ANSI colors for deterministic output.
-    env = {"NO_COLOR": "1"}
-    expr = "w:wed@t=06:00,12:00,22:00"
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000111",
-        "description": "hook test on-add multitime",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20251217T000000Z",
-        "anchor": expr,
-        "anchor_mode": "skip",
-        # Explicit due so the preview is deterministic independent of 'now'
-        "due": "20251217T060000Z",
-    }
-    p = _run_hook_script(hook, task, env_extra=env)
-    if p.returncode != 0:
-        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
-    out_task = _extract_last_json(p.stdout)
-    # The hook should not override an explicit due.
-    if out_task.get("due") != task["due"]:
-        raise AssertionError(f"on-add changed explicit due: got {out_task.get('due')!r}, want {task['due']!r}")
-    # Preview should show other intra-day slots (12:00 and 22:00) on the same date.
-    stderr_txt = _strip_markup(p.stderr)
-    if "12:00" not in stderr_txt or "22:00" not in stderr_txt:
-        raise AssertionError(f"on-add preview missing expected intra-day times. stderr={stderr_txt[:500]!r}")
-
-
-def test_hook_on_add_time_window_preview_emits_bounded_slots():
-    """on-add should preview generated window slots without forcing its end bound."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000112",
-        "description": "hook test time window",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20251217T000000Z",
-        "anchor": "w:wed@t=06..17/3h",
-        "anchor_mode": "skip",
-        "due": "20251217T060000Z",
-    }
-    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": ""})
-    expect(proc.returncode == 0, f"on-add window hook failed: {proc.stderr[:500]!r}")
-    stderr_txt = _strip_markup(proc.stderr)
-    expect("09:00" in stderr_txt and "15:00" in stderr_txt, f"window preview omitted generated slots: {stderr_txt[:700]!r}")
-    expect("17:00 EET" not in stderr_txt, f"non-divisible window bound was shown as an occurrence: {stderr_txt[:700]!r}")
-
 
 def test_hook_on_add_overnight_window_keeps_json_and_next_day_preview():
     """The real on-add hook should accept overnight anchors without polluting JSON stdout."""
@@ -11360,15 +11224,10 @@ TESTS = [
     test_business_calendar_toml_section_resolves_lazily,
     test_discovered_malformed_config_blocks_taskdata_reload,
     test_taskdata_reload_exposes_consistent_validated_fingerprints,
-    test_hook_on_modify_rejects_unknown_business_calendar_cleanly,
-    test_hook_on_modify_rejects_invalid_timezone_for_nautical_task,
-    test_on_modify_spawned_child_preserves_business_calendar,
     test_modifier_boundary_paths_agree_and_advance_strictly,
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_hook_on_add_multitime_preview_emits_all_slots,
-    test_hook_on_add_time_window_preview_emits_bounded_slots,
     test_hook_on_add_overnight_window_keeps_json_and_next_day_preview,
     test_hook_on_add_random_time_window_keeps_json_and_preview,
     test_on_modify_time_window_completion_advances_within_same_day,

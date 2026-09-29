@@ -491,6 +491,15 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertNotIn("id", payload)
         self.assertEqual(draft.target.value, datetime(2026, 1, 3, 10, tzinfo=timezone.utc))
 
+    def test_child_draft_preserves_parent_business_calendar(self):
+        parent = _task(anchor="w:sun", cp=None, bc="weekend")
+        draft = self.service.build_child_draft(
+            parent,
+            datetime(2026, 1, 4, 9, tzinfo=timezone.utc),
+            "due", 2, "11111111", "anchor", 0, None,
+        )
+        self.assertEqual(draft.to_mapping()["bc"], "weekend")
+
     def test_child_draft_reports_unrecoverable_relative_carry(self):
         parent = _task(wait="2026-01-02T08:00:00Z", due=None, scheduled=None)
         with self.assertRaisesRegex(RuntimeError, "wait carry failed"):

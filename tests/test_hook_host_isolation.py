@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from nautical_core.modify_composition import hook_host
 
@@ -61,6 +62,19 @@ class HookHostIsolationTests(unittest.TestCase):
 
         profiler = HookProfiler(level=0)
         self.assertFalse(profiler.enabled)
+
+    def test_on_add_does_not_register_profiler_when_disabled(self) -> None:
+        from nautical_core.hooks import add_impl
+
+        registered = []
+        with (
+            patch.object(add_impl, "_PROFILE_LEVEL", 0),
+            patch.object(add_impl.atexit, "register", side_effect=registered.append),
+        ):
+            profiler = add_impl._build_profiler()
+
+        self.assertFalse(profiler.enabled)
+        self.assertEqual(registered, [])
 
     def test_shared_diagnostic_block_is_bounded_and_opt_in(self) -> None:
         from nautical_core.hook_runtime import emit_diagnostic_block

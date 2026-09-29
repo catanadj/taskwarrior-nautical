@@ -44,6 +44,7 @@ _CONTEXT_SCRIPT = textwrap.dedent(
         command_prefix = hook._INTEGRATION_CONTEXT.command_prefix
     print(json.dumps({
         "taskdata": str(hook.TW_DATA_DIR),
+        "tw_dir": str(hook.TW_DIR),
         "uses_rc_data_location": bool(hook._USE_RC_DATA_LOCATION),
         "command_prefix": command_prefix,
     }))
@@ -147,3 +148,39 @@ class OnAddTaskdataContextTests(unittest.TestCase):
         self.assertEqual(Path(result["taskdata"]), Path(data_dir))
         self.assertTrue(result["uses_rc_data_location"])
         self.assertIn(f"rc.data.location={data_dir}", result["command_prefix"])
+
+    def test_on_exit_data_arg_overrides_taskdata_env(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nautical_env_exit_") as env_dir:
+            with tempfile.TemporaryDirectory(prefix="nautical_arg_exit_") as arg_dir:
+                result = self._resolve(
+                    "on-exit",
+                    ("api:2", "command:modify", f"data:{arg_dir}"),
+                    taskdata_env=env_dir,
+                )
+
+        self.assertEqual(Path(result["taskdata"]), Path(arg_dir))
+        self.assertIn(f"rc.data.location={arg_dir}", result["command_prefix"])
+
+    def test_on_modify_missing_taskdata_uses_tw_dir(self) -> None:
+        result = self._resolve("on-modify", ())
+
+        self.assertEqual(result["taskdata"], result["tw_dir"])
+
+    def test_on_modify_ignores_unsafe_core_path_override(self) -> None:
+        import importlib.util
+        from unittest.mock import patch
+
+        source = ROOT / "nautical_core" / "hooks" / "modify_impl.py"
+        spec = importlib.util.spec_from_file_location("_nautical_modify_unsafe_path_contract", source)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+
+        with tempfile.TemporaryDirectory() as unsafe_path:
+            Path(unsafe_path).chmod(0o777)
+            with patch.dict(os.environ, {"NAUTICAL_CORE_PATH": unsafe_path}):
+                os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
+                resolved = hook._trusted_core_base(Path(hook.TW_DIR))
+
+        self.assertEqual(Path(resolved).resolve(), Path(hook.TW_DIR).resolve())

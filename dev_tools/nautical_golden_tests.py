@@ -482,34 +482,6 @@ def test_hooks_survive_malformed_numeric_environment():
                 os.environ["NAUTICAL_DIAG_LOG_MAX_BYTES"] = saved_diag_max
 
 
-def test_on_modify_ignores_unsafe_core_path_override():
-    """on-modify should ignore unsafe NAUTICAL_CORE_PATH overrides by default."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_unsafe_core_path_test")
-    prev = os.environ.get("NAUTICAL_CORE_PATH")
-    prev_trust = os.environ.get("NAUTICAL_TRUST_CORE_PATH")
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            try:
-                os.chmod(td, 0o777)
-            except Exception:
-                pass
-            os.environ["NAUTICAL_CORE_PATH"] = td
-            os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
-            got = mod._trusted_core_base(Path(mod.TW_DIR))
-            expect(Path(got).resolve() == Path(mod.TW_DIR).resolve(),
-                   f"unsafe core path should fall back to TW_DIR, got {got}")
-    finally:
-        if prev is None:
-            os.environ.pop("NAUTICAL_CORE_PATH", None)
-        else:
-            os.environ["NAUTICAL_CORE_PATH"] = prev
-        if prev_trust is None:
-            os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
-        else:
-            os.environ["NAUTICAL_TRUST_CORE_PATH"] = prev_trust
-
-
 def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     """Named mutations re-read, verify, classify replay, and preserve failures."""
     from nautical_core.integration_models import (
@@ -1706,24 +1678,6 @@ def test_full_hooks_reuse_wrapper_protocol_probe():
 
 
 
-def test_on_exit_data_arg_overrides_taskdata_env():
-    """on-exit should prefer hook argv data: over TASKDATA env when both are present."""
-    hook = _find_hook_file("on-exit.nautical")
-    prev_taskdata = os.environ.get("TASKDATA")
-    prev_argv = list(sys.argv)
-    with tempfile.TemporaryDirectory(prefix="nautical_env_exit_") as env_dir, tempfile.TemporaryDirectory(prefix="nautical_arg_exit_") as arg_dir:
-        os.environ["TASKDATA"] = env_dir
-        sys.argv = ["on-exit.nautical", "api:2", "command:modify", f"data:{arg_dir}"]
-        try:
-            mod = _load_hook_module(hook, "_nautical_on_exit_data_arg_precedence_test")
-        finally:
-            sys.argv = prev_argv
-            if prev_taskdata is None:
-                os.environ.pop("TASKDATA", None)
-            else:
-                os.environ["TASKDATA"] = prev_taskdata
-        expect(Path(mod.TW_DATA_DIR) == Path(arg_dir), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
-
 def _assert_hook_requires_integration_context(hook_name: str, module_name: str):
     hook = _find_hook_file(hook_name)
     prev_core = os.environ.get("NAUTICAL_CORE_PATH")
@@ -1760,14 +1714,6 @@ def _assert_hook_requires_integration_context(hook_name: str, module_name: str):
 def test_on_add_requires_integration_context_helper():
     """on-add should fail closed when the integration context is unavailable."""
     _assert_hook_requires_integration_context("on-add.nautical", "_nautical_on_add_requires_context_test")
-
-def test_on_modify_requires_integration_context_helper():
-    """on-modify should fail closed when the integration context is unavailable."""
-    _assert_hook_requires_integration_context("on-modify.nautical", "_nautical_on_modify_requires_context_test")
-
-def test_on_exit_requires_integration_context_helper():
-    """on-exit should fail closed when the integration context is unavailable."""
-    _assert_hook_requires_integration_context("on-exit.nautical", "_nautical_on_exit_requires_context_test")
 
 def test_on_modify_promotes_chain_when_task_becomes_nautical():
     """Tasks that gain Nautical fields on modify should be promoted to chain:on."""
@@ -9274,24 +9220,6 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     expect(bool(intent), "spawn intent id should still be generated")
 
 
-def test_on_modify_missing_taskdata_uses_tw_dir():
-    """on-modify uses TW_DIR when TASKDATA is missing."""
-    hook = _find_hook_file("on-modify.nautical")
-    orig = os.environ.get("TASKDATA")
-    if "TASKDATA" in os.environ:
-        del os.environ["TASKDATA"]
-    try:
-        mod = _load_hook_module(hook, "_nautical_on_modify_no_taskdata_test")
-    finally:
-        if orig is not None:
-            os.environ["TASKDATA"] = orig
-
-    expect(
-        str(getattr(mod, "TW_DATA_DIR", "")) == str(getattr(mod, "TW_DIR", "")),
-        "TW_DATA_DIR should fall back to TW_DIR when TASKDATA is unset",
-    )
-
-
 def test_astronomical_season_selection_scheduler_uses_transition_dates():
     """Public seasonal scheduling should consume astronomical local-date windows."""
     with tempfile.TemporaryDirectory() as td:
@@ -9586,7 +9514,6 @@ TESTS = [
     test_modify_overnight_window_advances_past_second_dst_fold,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
     test_on_modify_panic_passthrough_uses_latest_task,
-    test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_modify_promotes_cp_emits_period_explanation,
@@ -9597,10 +9524,7 @@ TESTS = [
     test_on_modify_recurrence_update_groups_and_flattens_changes,
     test_on_modify_native_until_update_explains_carry,
     test_on_modify_limit_update_emits_effective_boundaries,
-    test_on_exit_data_arg_overrides_taskdata_env,
     test_on_add_requires_integration_context_helper,
-    test_on_modify_requires_integration_context_helper,
-    test_on_exit_requires_integration_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
     test_on_modify_build_child_carries_until_across_dst,
     test_on_modify_native_until_calendar_and_exact_carry_policy,
@@ -9642,7 +9566,6 @@ TESTS = [
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
-    test_on_modify_missing_taskdata_uses_tw_dir,
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
     test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,

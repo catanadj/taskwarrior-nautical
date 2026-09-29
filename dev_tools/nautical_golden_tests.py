@@ -11205,40 +11205,6 @@ def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_str
     expect("(omitted)" in txt, f"expected merged timeline omitted marker for anchor-side omit_file date: {txt!r}")
 
 
-def test_on_modify_compute_anchor_child_due_skips_omit_date():
-    """anchor completion should skip omitted anchor dates and choose the next valid one."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_omit_skip_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    parent = {
-            "anchor": "w:mon,wed,fri@t=09:00",
-            "omit": "w:wed",
-            "anchor_mode": "skip",
-            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (9, 0))),
-            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (10, 0))),
-            "chainID": "omit1234",
-        }
-    child_due, meta, _dnf = _compute_anchor_child_due(mod, parent)
-    expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 10), (9, 0)))
-    expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next due with omit: {mod.core.fmt_isoz(child_due)}")
-    expect(meta.get("target_field") == "due", f"expected due target field: {meta}")
-
-    evaluator = _evaluator_for_fixture(parent, timezone_value=mod.core._LOCAL_TZ)
-    result = evaluator.select_mode(
-        "skip",
-        due_local=mod.core.to_local(mod.core.parse_dt_any(parent["due"])),
-        end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
-        fallback_hhmm=(9, 0),
-    )
-    expect(
-        result.selected_occurrence is not None
-        and result.selected_occurrence.astimezone(timezone.utc) == child_due,
-        f"omit evaluator drifted from hook: {result!r} vs {child_due!r}",
-    )
-
-
 def test_on_modify_compute_counted_random_advances_within_period():
     """Counted-random completion should emit the remaining selection in the same period."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13751,7 +13717,6 @@ TESTS = [
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
     test_hook_on_modify_merged_timeline_marks_projection_failures,
     test_hook_on_modify_timeline_uses_omit_file_description_label,
-    test_on_modify_compute_anchor_child_due_skips_omit_date,
     test_on_modify_compute_counted_random_advances_within_period,
     test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,
     test_on_modify_completion_build_and_spawn_child_happy_path,

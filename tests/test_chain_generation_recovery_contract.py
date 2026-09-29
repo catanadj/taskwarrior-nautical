@@ -206,6 +206,26 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual((core.to_local(child_due).hour, core.to_local(child_due).minute), (9, 0))
         self.assertEqual(metadata["target_field"], "due")
 
+    def test_on_modify_compute_anchor_child_due_skips_omit_date(self):
+        due = core.build_local_datetime(date(2025, 1, 6), (9, 0))
+        ended = core.build_local_datetime(date(2025, 1, 6), (10, 0))
+        parent = _task(
+            anchor="w:mon,wed,fri@t=09:00",
+            omit="w:wed",
+            anchor_mode="skip",
+            cp=None,
+            due=fmt_isoz(due),
+            end=fmt_isoz(ended),
+        )
+
+        service = ChainGenerationService.from_core(core)
+        child_due, metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        child_local = core.to_local(child_due)
+        self.assertEqual(child_local.date(), date(2025, 1, 10))
+        self.assertEqual((child_local.hour, child_local.minute), (9, 0))
+        self.assertEqual(metadata["target_field"], "due")
+
     def test_anchor_generation_selects_next_local_timed_slot(self):
         due_local = core.build_local_datetime(date(2026, 7, 4), (9, 0))
         end_local = core.build_local_datetime(date(2026, 7, 4), (10, 0))

@@ -5,7 +5,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import nautical_core as core
 import nautical_core.hook_support as hook_support
 import nautical_core.modify_command_effects as modify_command_effects
 import nautical_core.runtime_command as runtime_command
@@ -87,9 +86,9 @@ class TaskCommandContractTests(unittest.TestCase):
         self.assertEqual(single_attempt.attempt, 1)
 
 
-class RuntimeFacadeCommandTests(unittest.TestCase):
+class RuntimeCommandTests(unittest.TestCase):
     def test_run_task_result_preserves_text_input_with_temporary_output(self) -> None:
-        result = core.run_task_result(
+        result = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
             input_text="hello\n",
             timeout=2.0,
@@ -101,7 +100,7 @@ class RuntimeFacadeCommandTests(unittest.TestCase):
         self.assertEqual(result.stdout, "hello\n")
 
     def test_run_task_result_classifies_temporary_output_timeout(self) -> None:
-        result = core.run_task_result(
+        result = runtime_command.run_task_result(
             [sys.executable, "-c", "import time; time.sleep(0.25); print('late')"],
             timeout=0.05,
             retries=1,
@@ -112,7 +111,7 @@ class RuntimeFacadeCommandTests(unittest.TestCase):
         self.assertIs(result.kind, CommandFailureKind.TIMEOUT)
 
     def test_run_task_result_preserves_metadata_and_retry_policy(self) -> None:
-        success = core.run_task_result(
+        success = runtime_command.run_task_result(
             [sys.executable, "-c", "print('typed')"], timeout=2.0, retries=1
         )
         self.assertTrue(success.ok, success)
@@ -120,7 +119,7 @@ class RuntimeFacadeCommandTests(unittest.TestCase):
         self.assertEqual(success.attempt, 1)
         self.assertEqual(success.command.timeout, 2.0)
 
-        busy = core.run_task_result(
+        busy = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(3)"],
             timeout=1.0,
             retries=3,
@@ -130,7 +129,7 @@ class RuntimeFacadeCommandTests(unittest.TestCase):
         self.assertIs(busy.kind, CommandFailureKind.BUSY)
         self.assertEqual(busy.attempt, 3)
 
-        rejected = core.run_task_result(
+        rejected = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; print('invalid task', file=sys.stderr); sys.exit(3)"],
             timeout=1.0,
             retries=3,
@@ -145,7 +144,7 @@ class RuntimeFacadeCommandTests(unittest.TestCase):
             "nautical_core.taskwarrior_client.tempfile.TemporaryFile",
             side_effect=OSError("tempfile unavailable"),
         ):
-            result = core.run_task_result(
+            result = runtime_command.run_task_result(
                 [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
                 input_text="abc ✓\n",
                 timeout=1.0,

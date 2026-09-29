@@ -213,7 +213,7 @@ class HookCommandBoundaryTests(unittest.TestCase):
         self.assertFalse(failed.ok)
         self.assertEqual(failed.returncode, 3)
 
-    def test_modify_command_effects_records_success_and_nonzero_failure(self) -> None:
+    def test_modify_command_effects_records_success_nonzero_and_timeout(self) -> None:
         counters = []
         records = []
         host = SimpleNamespace(
@@ -234,11 +234,21 @@ class HookCommandBoundaryTests(unittest.TestCase):
             timeout=2.0,
             retries=1,
         )
+        timed_out = modify_command_effects.run_task_result(
+            ports,
+            [sys.executable, "-c", "import time; time.sleep(2)"],
+            timeout=0.02,
+            retries=1,
+        )
 
         self.assertTrue(succeeded.ok)
         self.assertFalse(failed.ok)
-        self.assertEqual(len(records), 2)
-        self.assertIn(("run_task_failures",), counters)
+        self.assertFalse(timed_out.ok)
+        self.assertIs(timed_out.kind, CommandFailureKind.TIMEOUT)
+        self.assertEqual(len(records), 3)
+        self.assertFalse(records[-1][1]["ok"])
+        self.assertEqual(counters.count(("run_task_calls",)), 3)
+        self.assertEqual(counters.count(("run_task_failures",)), 2)
 
 
 if __name__ == "__main__":

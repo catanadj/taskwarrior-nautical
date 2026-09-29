@@ -60,6 +60,7 @@ from dev_tools.golden_tests.hooks import TESTS as HOOK_TESTS
 from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
 from dev_tools.golden_tests.installer import TESTS as INSTALLER_TESTS
 from dev_tools.golden_tests.performance import TESTS as PERFORMANCE_TESTS
+from dev_tools.golden_tests.storage import TESTS as STORAGE_TESTS
 from dev_tools.golden_tests.lifecycle import TESTS as LIFECYCLE_TESTS
 from dev_tools.golden_tests.reconcile import TESTS as RECONCILE_TESTS
 from dev_tools.golden_tests.support import (
@@ -1809,44 +1810,6 @@ def test_hook_files_are_private_permissions():
                 os.environ.pop("TASKDATA", None)
             else:
                 os.environ["TASKDATA"] = prev_taskdata
-
-def test_safe_lock_fcntl_contention():
-    """safe_lock should fail to acquire when another process holds the lock."""
-    try:
-        import fcntl  # noqa: F401
-    except ImportError:
-        return
-    with tempfile.TemporaryDirectory() as td:
-        lock_path = os.path.join(td, ".nautical_fcntl.lock")
-        ready_path = os.path.join(td, ".nautical_fcntl.ready")
-        script = (
-            "import os, time\n"
-            "import fcntl\n"
-            "lp = os.environ['LOCK_PATH']\n"
-            "rp = os.environ['READY_PATH']\n"
-            "fd = os.open(lp, os.O_CREAT | os.O_RDWR, 0o600)\n"
-            "f = os.fdopen(fd, 'a', encoding='utf-8')\n"
-            "fcntl.flock(f.fileno(), fcntl.LOCK_EX)\n"
-            "with open(rp, 'w', encoding='utf-8') as r:\n"
-            "    r.write('ready')\n"
-            "time.sleep(1.0)\n"
-        )
-        p = subprocess.Popen(
-            [sys.executable, "-c", script],
-            env={**os.environ, "LOCK_PATH": lock_path, "READY_PATH": ready_path},
-        )
-        try:
-            for _ in range(50):
-                if os.path.exists(ready_path):
-                    break
-                _time.sleep(0.02)
-            expect(os.path.exists(ready_path), "lock holder did not start")
-            with _owner_safe_lock_context(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
-                expect(not ok, "safe_lock should not acquire while locked")
-        finally:
-            p.wait(timeout=3.0)
-        with _owner_safe_lock_context(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
-            expect(ok, "safe_lock should acquire after lock release")
 
 def test_diag_log_rotation_bounds():
     """Persistent diag log should rotate when exceeding max size."""
@@ -13178,7 +13141,7 @@ TESTS = [
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hooks_survive_malformed_numeric_environment,
     test_hook_files_are_private_permissions,
-    test_safe_lock_fcntl_contention,
+    *STORAGE_TESTS,
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
     test_hook_diag_redact_msg_masks_sensitive_json_fields,

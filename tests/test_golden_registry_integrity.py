@@ -697,7 +697,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         performance = importlib.import_module("dev_tools.golden_tests.performance")
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
-        self.assertEqual(len(top_level), 311)
+        storage = importlib.import_module("dev_tools.golden_tests.storage")
+        self.assertEqual(len(top_level), 310)
         self.assertEqual(len(registered), 360)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(hooks.TESTS), 5)
@@ -706,8 +707,16 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(performance.TESTS), 2)
         self.assertEqual(len(lifecycle.TESTS), 15)
         self.assertEqual(len(reconcile.TESTS), 33)
+        self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
         self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 508)
+
+    def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
+        storage = importlib.import_module("dev_tools.golden_tests.storage")
+        self.assertEqual(
+            tuple(test.__name__ for test in storage.TESTS),
+            ("test_safe_lock_fcntl_contention",),
+        )
 
     def test_retained_cases_have_a_stable_exclusive_acceptance_inventory(self):
         registered = [fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)]

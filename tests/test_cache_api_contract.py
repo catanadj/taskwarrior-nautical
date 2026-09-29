@@ -469,6 +469,52 @@ class CacheApiContractTests(unittest.TestCase):
                     lock_mode = stat.S_IMODE(lock_path.stat().st_mode)
                     self.assertEqual(lock_mode & 0o077, 0)
 
+    def test_cache_directory_selection_rejects_symlink_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "real-cache"
+            symlink = root / "cache-link"
+            target.mkdir()
+            symlink.symlink_to(target, target_is_directory=True)
+            cache_dir = root / "xdg" / "nautical"
+            namespace = vars(core).copy()
+            namespace.update(
+                _CACHE_DIR=None,
+                _CACHE_LOAD_MEM=OrderedDict(),
+                ANCHOR_CACHE_DIR_OVERRIDE=str(symlink),
+                os=os,
+                time=_Clock(),
+                random=__import__("random"),
+                _import_sibling=_import_core_sibling,
+            )
+            binding = cache_api.for_core(namespace=namespace, module=core)
+            ensure_cache_dir = cache_support.ensure_cache_dir
+
+            def ensure_temporary_cache_dir(path: str) -> bool:
+                if not Path(path).is_relative_to(root):
+                    return False
+                return ensure_cache_dir(path)
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "NAUTICAL_TRUST_CACHE_PATH": "1",
+                        "XDG_CACHE_HOME": str(root / "xdg"),
+                        "TASKDATA": "",
+                        "NAUTICAL_ALLOW_TMP_CACHE": "",
+                    },
+                ),
+                patch.object(
+                    cache_support,
+                    "ensure_cache_dir",
+                    side_effect=ensure_temporary_cache_dir,
+                ),
+            ):
+                self.assertEqual(Path(binding._cache_dir()), cache_dir)
+                self.assertTrue(cache_dir.is_dir())
+                self.assertFalse(cache_dir.is_symlink())
+
     def test_unexpected_fcntl_error_propagates_and_closes_lock_file(self) -> None:
         class BrokenFcntl:
             LOCK_EX = fcntl.LOCK_EX

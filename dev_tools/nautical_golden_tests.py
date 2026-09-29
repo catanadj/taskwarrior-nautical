@@ -1901,38 +1901,6 @@ def test_hook_diag_redact_msg_masks_sensitive_json_fields():
     expect(obj_exit.get("safe") == "ok", f"on-exit non-sensitive key changed: {obj_exit}")
 
 
-def test_core_cache_dir_rejects_symlink_override():
-    """_cache_dir should reject symlink override paths and choose a real directory."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        target = os.path.join(td, "real-cache")
-        symlink = os.path.join(td, "cache-link")
-        os.makedirs(target, exist_ok=True)
-        os.symlink(target, symlink)
-
-        prev_xdg = os.environ.get("XDG_CACHE_HOME")
-        prev_tmp = os.environ.get("NAUTICAL_ALLOW_TMP_CACHE")
-        os.environ["XDG_CACHE_HOME"] = td
-        os.environ["NAUTICAL_ALLOW_TMP_CACHE"] = "1"
-        try:
-            mod = _load_hook_module(core_path, "_nautical_core_cache_symlink_guard_test")
-            mod._CACHE_DIR = None
-            mod.ANCHOR_CACHE_DIR_OVERRIDE = symlink
-            chosen = mod._cache_dir()
-            expect(chosen != symlink, f"symlink override should be rejected, got {chosen}")
-            expect(chosen and os.path.isdir(chosen), f"cache dir should fall back to valid dir, got {chosen!r}")
-            expect(not os.path.islink(chosen), f"cache dir should not be symlink, got {chosen}")
-        finally:
-            if prev_xdg is None:
-                os.environ.pop("XDG_CACHE_HOME", None)
-            else:
-                os.environ["XDG_CACHE_HOME"] = prev_xdg
-            if prev_tmp is None:
-                os.environ.pop("NAUTICAL_ALLOW_TMP_CACHE", None)
-            else:
-                os.environ["NAUTICAL_ALLOW_TMP_CACHE"] = prev_tmp
-
-
 def test_on_exit_reads_data_arg_from_hook_argv():
     """on-exit should resolve TW_DATA_DIR from hook argv data: token."""
     hook = _find_hook_file("on-exit.nautical")
@@ -13103,7 +13071,6 @@ TESTS = [
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
     test_hook_diag_redact_msg_masks_sensitive_json_fields,
-    test_core_cache_dir_rejects_symlink_override,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_read_two_invalid_trailing,
     test_on_modify_read_two_array_uuid_mismatch_fails,

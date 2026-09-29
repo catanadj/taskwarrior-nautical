@@ -31,6 +31,7 @@ class ArchitectureContractTests(unittest.TestCase):
             "test_runtime_config_contracts.py",
             "recurrence/test_yearly_token_migration.py",
             "recurrence/test_parser_fuzz_contracts.py",
+            "recurrence/test_cp_sequence_contracts.py",
         ):
             path = tests / filename
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

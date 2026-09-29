@@ -2,9 +2,11 @@
 
 import unittest
 from datetime import date, timedelta, timezone
+import zoneinfo
 
 import nautical_core as core
 import nautical_core.cp_parser as cp_parser
+import nautical_core.timezone_facade as timezone_facade
 
 
 class CpSequenceContractTests(unittest.TestCase):
@@ -129,7 +131,10 @@ class CpSequenceContractTests(unittest.TestCase):
         self.assertTrue(all(11 <= value <= 14 for value in chain_a + chain_b))
 
     def test_whole_day_step_preserves_local_wall_clock_across_dst(self) -> None:
-        if core._LOCAL_TZ is None:
+        resolved_timezone, _error = timezone_facade.resolve(
+            core.LOCAL_TZ_NAME, zoneinfo, lambda _key, _message: None
+        )
+        if resolved_timezone is None:
             self.skipTest("timezone data is unavailable; core is in UTC-only mode")
 
         start_local = core.build_local_datetime(date(2026, 3, 28), (10, 0))

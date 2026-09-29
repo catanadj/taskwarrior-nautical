@@ -326,9 +326,9 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
         # Force lazy timezone configuration before capturing the context.
         due_utc = core.build_local_datetime(date(2026, 8, 3), (9, 0))
         end_utc = core.build_local_datetime(date(2026, 8, 3), (10, 0))
-        local_timezone = core._LOCAL_TZ
         due_local = core.to_local(due_utc)
         end_local = core.to_local(end_utc)
+        local_timezone = due_local.tzinfo
         for index, expression in enumerate(cases):
             with self.subTest(expression=expression):
                 chain_id = f"time-mode-parity-{index}"
@@ -432,8 +432,8 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
             def is_business_day(self, value: date) -> bool:
                 return value in {date(2026, 1, 2), date(2026, 1, 7)}
 
-        core.to_local(datetime(2026, 1, 1, tzinfo=timezone.utc))
-        local_timezone = core._LOCAL_TZ
+        timezone_probe = core.to_local(datetime(2026, 1, 1, tzinfo=timezone.utc))
+        local_timezone = timezone_probe.tzinfo
         policy = SetCalendar()
         due_utc = core.build_local_datetime(date(2026, 1, 1), (9, 0))
         end_utc = core.build_local_datetime(date(2026, 1, 1), (10, 0))

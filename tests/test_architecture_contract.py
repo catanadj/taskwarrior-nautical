@@ -32,6 +32,7 @@ class ArchitectureContractTests(unittest.TestCase):
             "recurrence/test_yearly_token_migration.py",
             "recurrence/test_parser_fuzz_contracts.py",
             "recurrence/test_cp_sequence_contracts.py",
+            "recurrence/test_scheduler_cross_path_conformance.py",
             "test_astronomy_contracts.py",
         ):
             path = tests / filename

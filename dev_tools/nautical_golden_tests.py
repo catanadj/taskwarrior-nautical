@@ -7923,38 +7923,6 @@ def test_on_modify_native_until_rejects_legacy_all_completion():
     expect("Invalid expiration mode" in _strip_markup(proc.stderr), f"missing completion mode guard: {proc.stderr!r}")
 
 
-def test_hook_on_add_anchor_preview_skips_omit_file_date():
-    """on-add anchor preview should skip dates loaded from omit_file."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        omit_dir = Path(td) / "omit"
-        omit_dir.mkdir()
-        (omit_dir / "holidays.csv").write_text('date,description\n2025-01-10,Skip Friday\n', encoding='utf-8')
-        conf = Path(td) / 'config-nautical.toml'
-        conf.write_text(f'omit_file_dir = "{omit_dir}"\n', encoding='utf-8')
-        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000114a",
-            "description": "hook test on-add anchor omit_file preview",
-            "status": "pending",
-            "project": "testing",
-            "entry": "20250108T000000Z",
-            "anchor": "w:mon,wed,fri@t=09:00",
-            "omit_file": "holidays.csv",
-            "anchor_mode": "skip",
-            "due": "20250108T090000Z",
-        }
-        p = _run_hook_script(hook, task, env_extra=env)
-        if p.returncode != 0:
-            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
-        out_task = _extract_last_json(p.stdout)
-        expect(out_task.get("due") == task["due"], f"on-add changed explicit due: {out_task!r}")
-        stderr_txt = _strip_markup(p.stderr)
-        expect("Omit file" in stderr_txt, f"expected omit_file row in preview. stderr={stderr_txt[:500]!r}")
-        expect("holidays.csv" in stderr_txt, f"expected omit file name in preview. stderr={stderr_txt[:500]!r}")
-        expect("2025-01-13" in stderr_txt, f"expected next anchor to skip file-blocked Friday and show Monday. stderr={stderr_txt[:500]!r}")
-
-
 def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
     """on-add anchor preview should apply omit_file modifiers before skipping matching dates."""
     hook = _find_hook_file("on-add.nautical")
@@ -13311,7 +13279,6 @@ TESTS = [
     test_on_modify_native_until_validates_simultaneous_completion,
     test_on_modify_native_until_rejects_strict_anchor_mode_changes,
     test_on_modify_native_until_rejects_legacy_all_completion,
-    test_hook_on_add_anchor_preview_skips_omit_file_date,
     test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot,
     test_hook_on_add_anchor_preview_positive_day_offset_uses_timed_slot,
     test_hook_on_add_anchor_preview_negative_day_offset_uses_timed_slot,

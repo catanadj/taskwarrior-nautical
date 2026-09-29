@@ -5,7 +5,14 @@ import threading
 
 from nautical_core.lifecycle_read_service import ChainCacheStore, LifecycleReadService
 from nautical_core.task_models import TaskObservation
-from nautical_core.integration_models import Absent, Found
+from nautical_core.integration_models import (
+    Absent,
+    CommandFailureKind,
+    FailureEvidence,
+    Found,
+    TaskCommand,
+    Unavailable,
+)
 
 
 class LifecycleReadServiceTests(unittest.TestCase):
@@ -51,6 +58,35 @@ class LifecycleReadServiceTests(unittest.TestCase):
 
         self.assertEqual(calls, ["cid"])
         self.assertEqual([row.get("link") for row in selected or []], [2])
+
+    def test_chain_cache_preserves_repository_unavailability(self) -> None:
+        command = TaskCommand(("task", "export"), "test chain read", 1.0)
+        evidence = FailureEvidence(
+            command,
+            CommandFailureKind.INVALID_RESPONSE,
+            0,
+            1,
+            0.0,
+            False,
+            "malformed JSON",
+        )
+
+        class Repository:
+            def chain_snapshot(self, _chain_id, **_kwargs):
+                return Unavailable("chain:cid", evidence)
+
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda _value: [],
+            token_matcher=lambda _row, _token: True,
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            repository=Repository(),
+            max_chain_walk=10,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "malformed JSON"):
+            service.get_chain_export("cid")
 
     def test_chain_cache_concurrent_reads_and_replacements_keep_typed_rows(self) -> None:
         service = LifecycleReadService(

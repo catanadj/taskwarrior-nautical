@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "304eba5605927612b778ca0a632a845758a4ed67866f0cd9db1a506fe3778d31"
+    "0dd4207115521cde7a99c52b9ea5a2414778b9e5b76810371ddb776c6036d7df"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -35,8 +35,8 @@ GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
 )
 EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
     "configuration and bootstrap": (
-        30,
-        "3bb780a5b384f883b893dc4de00165a877bf3dfc959385de89b64df315fc785d",
+        28,
+        "e59fce92bc2500e9abe0e6b7c9f03b48c326b27db750492ea8cfd1d2104e4da4",
     ),
     "install and deployment": (
         15,
@@ -59,8 +59,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "cb19880068ed0fe952886429d5e47c53516d9cffa740e4a1bbc6456c23af5568",
     ),
     "recurrence and hook integration": (
-        148,
-        "f9052b5e7fdd82308a8a05093eb043c09a81320d8890deaf15f146d027abd1f9",
+        145,
+        "a7a4df2a461b75bf1f28f1b4337965f7df1bd6e825807f037e772e9c931585a5",
     ),
     "storage and filesystem safety": (
         2,
@@ -171,6 +171,11 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_hook_on_add_counted_random_preview_uses_group_time",
         "test_hook_on_add_accepts_group_date_modifiers",
         "test_hook_on_add_anchor_unknown_preset_fails_cleanly",
+        "test_hook_on_add_anchor_composed_preset_resolves_from_config",
+        "test_hook_on_add_anchor_recursive_preset_fails_cleanly",
+        "test_hook_on_add_omit_preset_resolves_from_config",
+        "test_hook_on_add_omit_unknown_preset_fails_cleanly",
+        "test_hook_on_add_omit_recursive_preset_fails_cleanly",
         "test_on_add_profiler_lazy_init",
         "test_on_add_flushes_stdout",
         "test_on_modify_chain_cache_thread_safety_smoke",
@@ -789,8 +794,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
-        self.assertEqual(len(top_level), 237)
-        self.assertEqual(len(registered), 287)
+        self.assertEqual(len(top_level), 232)
+        self.assertEqual(len(registered), 282)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(hooks.TESTS), 5)
         self.assertEqual(len(operator.TESTS), 4)
@@ -800,7 +805,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 580)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 585)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
         storage = importlib.import_module("dev_tools.golden_tests.storage")

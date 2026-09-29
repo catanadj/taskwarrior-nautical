@@ -312,6 +312,88 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertIn("Invalid anchor", result.stderr)
         self.assertIn("Unknown anchor preset '@missing'", result.stderr)
 
+    def test_composed_anchor_preset_resolves_before_preview(self) -> None:
+        task = self._task(
+            description="composed anchor preset",
+            entry="20260401T000000Z",
+            anchor="@workout + y:apr",
+            anchor_mode="skip",
+            due="20260401T090000Z",
+        )
+        result = self._run_with_config(
+            task, '[anchor_presets]\nworkout = "w:mon,wed,fri"\n'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["anchor"], task["anchor"])
+        self.assertNotIn("Invalid anchor", result.stderr)
+        self.assertIn("Natural", result.stderr)
+        self.assertIn("Apr", result.stderr)
+
+    def test_recursive_anchor_preset_fails_with_guidance(self) -> None:
+        task = self._task(
+            description="recursive anchor preset",
+            entry="20260101T000000Z",
+            anchor="@a",
+            anchor_mode="skip",
+            due="20260101T090000Z",
+        )
+        result = self._run_with_config(
+            task, '[anchor_presets]\na = "@b"\nb = "@a"\n'
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Invalid Nautical configuration", result.stderr)
+        self.assertIn("Recursive", result.stderr)
+        self.assertIn("anchor preset reference detected", result.stderr)
+
+    def test_omit_preset_resolves_and_preserves_reference(self) -> None:
+        task = self._task(
+            description="omit preset",
+            entry="20260301T000000Z",
+            anchor="w:mon",
+            omit="@april",
+            anchor_mode="skip",
+            due="20260302T090000Z",
+        )
+        result = self._run_with_config(task, '[omit_presets]\napril = "y:apr"\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["omit"], "@april")
+        self.assertNotIn("Invalid omit", result.stderr)
+        self.assertIn("@april → y:apr", result.stderr)
+        self.assertIn("Except", result.stderr)
+        self.assertIn("Apr", result.stderr)
+
+    def test_unknown_omit_preset_fails_with_guidance(self) -> None:
+        task = self._task(
+            description="unknown omit preset",
+            entry="20260301T000000Z",
+            anchor="w:mon",
+            omit="@missing",
+            anchor_mode="skip",
+            due="20260302T090000Z",
+        )
+        result = self._run_with_config(task, "[omit_presets]\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Invalid omit", result.stderr)
+        self.assertIn("Unknown omit preset '@missing'", result.stderr)
+
+    def test_recursive_omit_preset_fails_with_guidance(self) -> None:
+        task = self._task(
+            description="recursive omit preset",
+            entry="20260301T000000Z",
+            anchor="w:mon",
+            omit="@a",
+            anchor_mode="skip",
+            due="20260302T090000Z",
+        )
+        result = self._run_with_config(task, '[omit_presets]\na = "@b"\nb = "@a"\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Invalid Nautical configuration", result.stderr)
+        self.assertIn("Recursive omit", result.stderr)
+        self.assertIn("preset reference detected", result.stderr)
+
     def _assert_dst_window_slot_occurs_once(
         self, anchor: str, entry: str, due: str, expected_slot: str
     ) -> None:
@@ -332,6 +414,15 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["uuid"], task["uuid"])
         self.assertEqual(result.stderr.count(expected_slot), 1, result.stderr)
+
+    def _run_with_config(self, task: dict[str, object], config_text: str):
+        config = self.taskdata.parent / "route-config.toml"
+        config.write_text(config_text, encoding="utf-8")
+        return self.run_hook(
+            "on-add.nautical",
+            json.dumps(task),
+            extra_environment={"NAUTICAL_CONFIG": str(config), "NO_COLOR": "1"},
+        )
 
     def test_yearly_positional_anchor_preview_supports_post_selection_offset(self) -> None:
         expression = "(w:mon)@in-year=last@+7d@t=09:00"

@@ -612,6 +612,98 @@ class OnAddHookRouteTests(HookSubprocessFixture):
                     ("Invalid expiration mode", "Remove until or use anchor_mode:skip"),
                 )
 
+    def test_expiration_preview_distinguishes_chain_endpoint(self) -> None:
+        base = {
+            "entry": "20260720T090000Z",
+            "due": "20260803T100000Z",
+            "until": "20260803T180000Z",
+            "chainUntil": "20991231T210000Z",
+            "chainMax": 3,
+        }
+        tasks = (
+            self._task(**base, cp="7d"),
+            self._task(**base, anchor="w:mon", anchor_mode="skip"),
+        )
+        for task in tasks:
+            with self.subTest(kind="cp" if task.get("cp") else "anchor"):
+                process = self._run(task)
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(json.loads(process.stdout).get("until"), task["until"])
+                for label in (
+                    "Expiration",
+                    "First expires",
+                    "Chain end point",
+                    "Last occurrence",
+                    "Future links",
+                    "Same day at 18:00",
+                    "2026-08-17",
+                ):
+                    self.assertIn(label, process.stderr)
+                self.assertNotIn("Final (until)", process.stderr)
+
+    def test_chain_endpoint_before_first_anchor_slot_is_rejected(self) -> None:
+        today = date.today()
+        days_to_monday = (0 - today.weekday()) % 7 or 7
+        first_due = datetime.combine(
+            today + timedelta(days=days_to_monday), time(9, 0), tzinfo=timezone.utc
+        )
+        now = datetime.now(timezone.utc)
+        self._assert_invalid(
+            self._task(
+                entry=now.strftime("%Y%m%dT%H%M%SZ"),
+                anchor="w:mon",
+                chain="on",
+                chainID="first-anchor-slot",
+                link=1,
+                chainUntil=(first_due - timedelta(seconds=1)).strftime("%Y%m%dT%H%M%SZ"),
+            ),
+            ("Invalid chainUntil",),
+        )
+
+    def test_timed_omit_preset_is_rejected(self) -> None:
+        task = self._task(
+            entry="20260301T000000Z",
+            anchor="w:mon",
+            omit="@timed",
+            anchor_mode="skip",
+            due="20260302T090000Z",
+        )
+        result = self._run_with_config(
+            task, '[omit_presets]\ntimed = "w:mon@t=09:00"\n'
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Invalid Nautical configuration", result.stderr)
+        self.assertIn("omit does not", result.stderr)
+        self.assertIn("support time modifiers", result.stderr)
+
+    def test_unsatisfiable_omit_fails_without_json_or_traceback(self) -> None:
+        process = self._run(
+            self._task(
+                entry="20990101T000000Z",
+                anchor="w:mon",
+                omit="w:mon",
+                anchor_mode="skip",
+            )
+        )
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "")
+        self.assertTrue(
+            "No valid anchor occurrences found after applying omit rules." in process.stderr
+            or "No matching anchor dates found." in process.stderr,
+            process.stderr,
+        )
+        self.assertNotIn("Traceback", process.stderr)
+
+    def test_cp_scheduled_only_add_preserves_missing_due(self) -> None:
+        task = self._task(cp="P7D", scheduled="20990101T090000Z")
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertNotIn("due", result)
+        self.assertEqual(result["scheduled"], task["scheduled"])
+        self.assertIn("First scheduled", process.stderr)
+
     def _assert_dst_window_slot_occurs_once(
         self, anchor: str, entry: str, due: str, expected_slot: str
     ) -> None:

@@ -5421,58 +5421,6 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
 
 # -------- Runner --------------------------------------------------------------
 
-def test_hook_on_add_cp_scheduled_only_preserves_no_due():
-    """scheduled-only recurring cp tasks should remain scheduled-only on add."""
-    hook = _find_hook_file("on-add.nautical")
-    env = {"NO_COLOR": "1"}
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000112",
-        "description": "hook test on-add cp scheduled-only",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20251217T000000Z",
-        "cp": "P7D",
-        "scheduled": "20251217T090000Z",
-    }
-    p = _run_hook_script(hook, task, env_extra=env)
-    if p.returncode != 0:
-        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
-    out_task = _extract_last_json(p.stdout)
-    expect(not out_task.get("due"), f"scheduled-only cp add should not set due: {out_task}")
-    expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
-    stderr_txt = _strip_markup(p.stderr)
-    expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
-
-
-def test_hook_on_add_omit_timed_preset_rejected():
-    """omit presets should remain date-based and reject timed expressions."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        conf = Path(td) / "config-nautical.toml"
-        conf.write_text('[omit_presets]\ntimed = "w:mon@t=09:00"\n', encoding="utf-8")
-        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000125",
-            "description": "hook test on-add timed omit preset",
-            "status": "pending",
-            "project": "testing",
-            "entry": "20260301T000000Z",
-            "anchor": "w:mon",
-            "omit": "@timed",
-            "anchor_mode": "skip",
-            "due": "20260302T090000Z",
-        }
-        p = _run_hook_script(hook, task, env_extra=env)
-        expect(p.returncode != 0, "on-add should fail for timed omit preset")
-        expect((p.stdout or "").strip() == "", f"expected no stdout on timed omit preset failure, got: {p.stdout!r}")
-        stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid Nautical configuration" in stderr_txt, f"expected invalid config panel. stderr={stderr_txt[:500]!r}")
-        expect(
-            "omit does not" in stderr_txt and "support time modifiers" in stderr_txt,
-            f"expected timed omit guidance. stderr={stderr_txt[:500]!r}",
-        )
-
-
 def test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance():
     """on-add should surface parser-specific guidance for malformed cp strings."""
     hook = _find_hook_file("on-add.nautical")
@@ -5561,53 +5509,6 @@ def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
     expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
     stderr_txt = _strip_markup(p.stderr)
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
-
-
-def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
-    """Add previews should distinguish native expiration from chain boundaries."""
-    hook = _find_hook_file("on-add.nautical")
-    base = {
-        "status": "pending",
-        "entry": "20260720T090000Z",
-        "due": "20260803T100000Z",
-        "until": "20260803T180000Z",
-        # Keep the chain bound in the future so this fixture remains valid
-        # as the calendar advances; chainMax still determines the last date.
-        "chainUntil": "20991231T210000Z",
-        "chainMax": 3,
-    }
-    cases = (
-        dict(base, uuid="00000000-0000-4000-8000-000000000141", description="CP expiry preview", cp="7d"),
-        dict(
-            base,
-            uuid="00000000-0000-4000-8000-000000000142",
-            description="Anchor expiry preview",
-            anchor="w:mon",
-            anchor_mode="skip",
-        ),
-    )
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / "config-nautical.toml"
-        config_path.write_text('tz = "UTC"\n', encoding="utf-8")
-        for task in cases:
-            proc = _run_hook_script(
-                hook,
-                task,
-                env_extra={
-                    "NO_COLOR": "1",
-                    "NAUTICAL_CONFIG": str(config_path),
-                    "NAUTICAL_TRUST_CONFIG_PATH": "1",
-                },
-            )
-            expect(proc.returncode == 0, f"preview failed: {proc.stderr!r}")
-            expect(_assert_stdout_json_only(proc.stdout).get("until") == task["until"], "native until changed")
-            panel = _strip_markup(proc.stderr)
-            for label in ("Expiration", "First expires", "Chain end point", "Last occurrence", "Future links"):
-                expect(label in panel, f"{label!r} missing from preview: {panel!r}")
-            expected_policy = "Same day at 18:00"
-            expect(expected_policy in panel, f"calendar expiration policy missing from preview: {panel!r}")
-            expect("2026-08-17" in panel, f"chainMax should determine the effective last occurrence: {panel!r}")
-            expect("Final (until)" not in panel, f"ambiguous legacy label remains: {panel!r}")
 
 
 def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
@@ -5727,43 +5628,6 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
 
     expect(task.get("due"), f"evaluator preview did not assign due: {captured!r}")
     expect(captured.get("title") == "⚓︎ Anchor Preview", f"evaluator preview did not render: {captured!r}")
-
-
-def test_on_add_chain_until_rejects_before_first_anchor_occurrence():
-    """An auto-due anchor must not be accepted when chainUntil precedes its first match."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_chain_until_first_match_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000133",
-        "description": "chain endpoint before first anchor",
-        "status": "pending",
-        "entry": mod.core.fmt_isoz(now_utc),
-        "anchor": "w:mon",
-        "chain": "on",
-        "chainID": "firstmatch133",
-        "link": 1,
-        "chainUntil": mod.core.fmt_isoz(now_utc + timedelta(hours=12)),
-    }
-    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
-    panels = []
-    original = mod._panel
-    try:
-        mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
-        try:
-            mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
-        except SystemExit as exc:
-            expect(exc.code == 1, f"unexpected chainUntil rejection code: {exc.code!r}")
-        else:
-            raise AssertionError("chainUntil before first anchor occurrence was accepted")
-    finally:
-        mod._panel = original
-    expect(
-        panels and any(label == "Invalid chainUntil" for label, _value in panels[-1][1]),
-        f"missing chainUntil guard panel: {panels!r}",
-    )
 
 
 def test_on_modify_native_until_rejects_invalid_window_changes():
@@ -6148,28 +6012,6 @@ def test_hook_on_add_anchor_file_time_padding_hint():
     stderr_txt = _strip_markup(p.stderr)
     expect("leading zero" in stderr_txt and "03:00" in stderr_txt, f"expected padding hint in error message. stderr={stderr_txt[:500]!r}")
 
-
-def test_hook_on_add_unsatisfiable_omit_fails_cleanly():
-    """on-add should fail cleanly when omit removes every future anchor date."""
-    hook = _find_hook_file("on-add.nautical")
-    env = {"NO_COLOR": "1"}
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000116",
-        "description": "hook test on-add unsat omit",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20250106T000000Z",
-        "anchor": "w:mon",
-        "omit": "w:mon",
-        "anchor_mode": "skip",
-        "due": "20250106T090000Z",
-    }
-    p = _run_hook_script(hook, task, env_extra=env)
-    expect(p.returncode != 0, "on-add should fail for unsatisfiable omit")
-    expect((p.stdout or "").strip() == "", f"expected no stdout on unsatisfiable omit failure, got: {p.stdout!r}")
-    stderr_txt = _strip_markup(p.stderr)
-    expect("No valid anchor occurrences found after applying omit rules." in stderr_txt or "No matching anchor dates found." in stderr_txt,
-           f"expected clean unsatisfiable omit failure. stderr={stderr_txt[:500]!r}")
 
 def test_hook_on_modify_timeline_multitime_includes_all_slots():
     """on-modify timeline generator must step occurrences (date+time), not only dates."""
@@ -10283,13 +10125,10 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_hook_on_add_omit_timed_preset_rejected,
     test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance,
-    test_on_add_preview_distinguishes_expiration_from_chain_end_point,
     test_on_add_preview_fails_closed_when_evaluator_initialization_fails,
     test_on_add_preview_reports_scheduler_exhaustion_actionably,
     test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows,
-    test_on_add_chain_until_rejects_before_first_anchor_occurrence,
     test_on_modify_native_until_rejects_invalid_window_changes,
     test_on_modify_native_until_follows_recurrence_target_move,
     test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts,
@@ -10300,7 +10139,6 @@ TESTS = [
     test_on_modify_native_until_validates_simultaneous_completion,
     test_on_modify_native_until_rejects_strict_anchor_mode_changes,
     test_on_modify_native_until_rejects_legacy_all_completion,
-    test_hook_on_add_unsatisfiable_omit_fails_cleanly,
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_on_modify_timeline_cp_sequence_labels_future_intervals,
     test_hook_on_modify_timeline_cp_random_labels_selected_intervals,
@@ -10326,7 +10164,6 @@ TESTS = [
     test_on_modify_expiration_wrapper_preserves_json_stdout,
     test_on_modify_manual_delete_persists_chain_off,
     test_on_modify_invalid_anchor_has_no_stdout,
-    test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
     test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor,

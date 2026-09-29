@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import io
 import subprocess
 import unittest
+from unittest.mock import patch
 
 from tests.support.hook_process import HookSubprocessFixture
 
@@ -77,6 +79,30 @@ class HookInputContractTests(HookSubprocessFixture):
         self.assertEqual(json.loads(process.stdout), task)
         self.assertNotIn("[nautical]", process.stdout)
         self.assertTrue(process.stderr == "" or "[nautical]" in process.stderr)
+
+    def test_on_add_flushes_stdout_after_passthrough(self) -> None:
+        import sys
+
+        from nautical_core.hooks import add_impl
+
+        task = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
+
+        class FlushIO(io.StringIO):
+            flushed = False
+
+            def flush(self) -> None:
+                self.flushed = True
+                super().flush()
+
+        stdout = FlushIO()
+        with (
+            patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(task).encode()))),
+            patch.object(sys, "stdout", stdout),
+            patch.object(sys, "stderr", io.StringIO()),
+        ):
+            add_impl.main()
+
+        self.assertTrue(stdout.flushed)
 
     def test_on_add_anchor_routes_keep_json_stdout_and_panel_stderr(self) -> None:
         task = {

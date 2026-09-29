@@ -10840,37 +10840,6 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
     expect(any("Timezone data unavailable" in str(v) for k, v in fb if k == "Integrity"), f"missing timezone fallback warning: {fb}")
 
 
-def test_on_add_flushes_stdout():
-    """on-add should flush stdout after emitting JSON."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_flush_test")
-
-    class _FlushIO(io.StringIO):
-        def __init__(self):
-            super().__init__()
-            self.flushed = False
-
-        def flush(self):
-            self.flushed = True
-            return super().flush()
-
-    task = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
-    raw = json.dumps(task)
-    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
-    stdout = _FlushIO()
-    stderr = io.StringIO()
-    orig_stdin, orig_stdout, orig_stderr = sys.stdin, sys.stdout, sys.stderr
-    try:
-        sys.stdin = stdin
-        sys.stdout = stdout
-        sys.stderr = stderr
-        mod.main()
-    finally:
-        sys.stdin, sys.stdout, sys.stderr = orig_stdin, orig_stdout, orig_stderr
-
-    expect(stdout.flushed, "stdout.flush should be called")
-
-
 def test_on_modify_panel_fallback():
     """on-modify panel should fall back to plain output on errors."""
     hook = _find_hook_file("on-modify.nautical")
@@ -12487,7 +12456,6 @@ TESTS = [
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_completion_spawn_exception_is_retryable_with_reason,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
-    test_on_add_flushes_stdout,
     test_on_modify_panel_fallback,
     test_on_modify_panel_forwards_live_duration,
     test_ui_live_test_term_guard_restores_environment,

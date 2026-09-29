@@ -88,6 +88,35 @@ class LifecycleReadServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "malformed JSON"):
             service.get_chain_export("cid")
 
+    def test_collect_prev_two_prefers_live_statuses_over_deleted(self) -> None:
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda _value: [],
+            token_matcher=lambda _row, _token: True,
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            max_chain_walk=10,
+        )
+        chain_by_link = {
+            2: [
+                {"uuid": "deleted-2", "status": "deleted", "link": 2},
+                {"uuid": "pending-2", "status": "pending", "link": 2},
+            ],
+            3: [
+                {"uuid": "deleted-3", "status": "deleted", "link": 3},
+                {"uuid": "completed-3", "status": "completed", "link": 3},
+            ],
+        }
+
+        result = service.collect_prev_two(
+            {"chainID": "cid", "link": 4},
+            get_chain_read=lambda _chain: self.fail("provided index should be used"),
+            chain_by_link=chain_by_link,
+        )
+
+        self.assertIsInstance(result, Found)
+        self.assertEqual([row.get("uuid") for row in result.value], ["pending-2", "completed-3"])
+
     def test_chain_cache_concurrent_reads_and_replacements_keep_typed_rows(self) -> None:
         service = LifecycleReadService(
             coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,

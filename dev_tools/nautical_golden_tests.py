@@ -5263,32 +5263,6 @@ def test_anchor_preview_explains_nonexistent_wall_time_adjustment():
     expect("02:15 -> 02:45" in panel, f"DST adjustment clocks are missing: {panel!r}")
 
 
-def test_on_modify_collect_prev_two_prefers_live_statuses():
-    """Previous-link lookup should prefer live tasks over deleted duplicates."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_collect_prev_two_test")
-    current = {"chainID": "abcd1234", "link": 4}
-    chain_by_link = {
-        2: [
-            {"uuid": "deleted-2", "status": "deleted", "link": 2},
-            {"uuid": "pending-2", "status": "pending", "link": 2},
-        ],
-        3: [
-            {"uuid": "deleted-3", "status": "deleted", "link": 3},
-            {"uuid": "completed-3", "status": "completed", "link": 3},
-        ],
-    }
-
-    reads = mod._module("modify_read_effects")
-    state = mod._modify_runtime_state()
-    ports = reads.PreviousChainPorts(
-        service=mod._module("modify_composition").lifecycle_read_service_for(mod),
-        panel_chain_by_link=state.panel_chain_by_link,
-        panel_chain_snapshot_loaded=state.panel_chain_snapshot_loaded,
-    )
-    prevs = reads.collect_prev_two(ports, current, chain_by_link=chain_by_link)
-    expect([t.get("uuid") for t in prevs] == ["pending-2", "completed-3"], f"unexpected prevs: {prevs}")
-
 def test_year_ordinals_hooks_modes_calendar_and_timeline():
     """Ordinal selectors should work through add, completion modes, named calendars, and timelines."""
     add_hook = _find_hook_file("on-add.nautical")
@@ -12264,7 +12238,6 @@ TESTS = [
     test_modify_completion_advances_past_second_dst_fold,
     test_modify_overnight_window_advances_past_second_dst_fold,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
-    test_on_modify_collect_prev_two_prefers_live_statuses,
     test_on_add_fail_and_exit_emits_json,
     test_on_add_panic_passthrough_emits_valid_json,
     test_on_modify_panic_passthrough_uses_latest_task,

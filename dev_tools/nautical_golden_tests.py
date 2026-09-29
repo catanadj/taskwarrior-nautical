@@ -5421,97 +5421,6 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
 
 # -------- Runner --------------------------------------------------------------
 
-def test_hook_on_add_overnight_window_keeps_json_and_next_day_preview():
-    """The real on-add hook should accept overnight anchors without polluting JSON stdout."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000119",
-        "description": "hook overnight window",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20260804T000000Z",
-        "anchor": "w:mon@t=22:30..06:30/7",
-        "anchor_mode": "skip",
-        "due": "20260810T193000Z",
-    }
-    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": ""})
-    expect(proc.returncode == 0, f"on-add overnight hook failed: {proc.stderr[:700]!r}")
-    out_task = _extract_last_json(proc.stdout)
-    expect(out_task.get("uuid") == task["uuid"], f"on-add overnight stdout lost task JSON: {out_task!r}")
-    stderr_txt = _strip_markup(proc.stderr)
-    expect("23:50" in stderr_txt and "01:10" in stderr_txt, f"overnight preview omitted next-day slots: {stderr_txt[:1000]!r}")
-
-
-def test_hook_on_add_random_time_window_keeps_json_and_preview():
-    """The add hook should resolve deterministic random slots without corrupting stdout JSON."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000120",
-        "description": "hook random window",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20260803T000000Z",
-        "anchor": "w:mon@t=rand(06..18/3)",
-        "anchor_mode": "skip",
-        "chainID": "randomhook1",
-        "due": "20260803T060000Z",
-    }
-    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": ""})
-    expect(proc.returncode == 0, f"on-add random hook failed: {proc.stderr[:700]!r}")
-    out_task = _extract_last_json(proc.stdout)
-    expect(out_task.get("anchor") == task["anchor"], f"random anchor was lost from stdout JSON: {out_task!r}")
-    stderr_txt = _strip_markup(proc.stderr)
-    expect("Upcoming" in stderr_txt, f"random preview did not render upcoming slots: {stderr_txt[:1000]!r}")
-
-
-def test_on_modify_time_window_completion_advances_within_same_day():
-    """Completion should advance to the next generated slot before moving to a new date."""
-    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_time_window_runtime_test")
-    local_due = mod.core.build_local_datetime(date(2025, 12, 17), (6, 0))
-    local_end = mod.core.build_local_datetime(date(2025, 12, 17), (6, 30))
-    parent = {
-        "uuid": "00000000-0000-4000-8000-000000000113",
-        "description": "window completion",
-        "anchor": "w:mon..sun@t=06..18/3h",
-        "anchor_mode": "skip",
-        "chain": "on",
-        "chainID": "window1234",
-        "link": 1,
-        "due": mod.core.fmt_isoz(local_due.astimezone(timezone.utc)),
-        "end": mod.core.fmt_isoz(local_end.astimezone(timezone.utc)),
-    }
-    child_due, meta, _dnf = _compute_anchor_child_due(mod, parent)
-    child_local = mod.core.to_local(child_due)
-    expect((child_local.date(), child_local.hour, child_local.minute) == (date(2025, 12, 17), 9, 0), f"window did not advance within day: {child_local}")
-    expect(meta.get("basis") == "after_end", f"unexpected window completion basis: {meta!r}")
-
-
-def test_on_modify_partitioned_window_completion_rolls_to_next_day():
-    """A partitioned window should use each slot once, then roll to the next day."""
-    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_partitioned_window_runtime_test")
-
-    def completed_parent(local_due, local_end):
-        return {
-            "uuid": "00000000-0000-4000-8000-000000000115",
-            "description": "partitioned completion",
-            "anchor": "w:mon..sun@t=04:30..19:30/3",
-            "anchor_mode": "skip",
-            "chain": "on",
-            "chainID": "partition123",
-            "link": 1,
-            "due": mod.core.fmt_isoz(local_due.astimezone(timezone.utc)),
-            "end": mod.core.fmt_isoz(local_end.astimezone(timezone.utc)),
-        }
-
-    first = mod.core.build_local_datetime(date(2025, 12, 17), (4, 30))
-    next_slot, _meta, _dnf = _compute_anchor_child_due(mod, completed_parent(first, first + timedelta(minutes=10)))
-    expect(mod.core.to_local(next_slot).strftime("%Y-%m-%d %H:%M") == "2025-12-17 12:00", "partitioned window skipped its middle slot")
-
-    last = mod.core.build_local_datetime(date(2025, 12, 17), (19, 30))
-    next_day, _meta, _dnf = _compute_anchor_child_due(mod, completed_parent(last, last + timedelta(minutes=10)))
-    expect(mod.core.to_local(next_day).strftime("%Y-%m-%d %H:%M") == "2025-12-18 04:30", "partitioned window did not roll to the next day")
-
-
 def test_on_modify_overnight_window_completion_uses_next_day_slots():
     """Completion across midnight should advance within the owning overnight window."""
     mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_overnight_window_runtime_test")
@@ -5791,34 +5700,6 @@ def test_hook_on_add_cp_scheduled_only_preserves_no_due():
     expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
     stderr_txt = _strip_markup(p.stderr)
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
-
-
-def test_hook_on_add_anchor_preset_resolves_from_config():
-    """on-add should resolve @anchor presets from config before validation/preview."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        conf = Path(td) / "config-nautical.toml"
-        conf.write_text('[anchor_presets]\npayday = "m:15"\n', encoding="utf-8")
-        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000118",
-            "description": "hook test on-add anchor preset",
-            "status": "pending",
-            "project": "testing",
-            "entry": "20260101T000000Z",
-            "anchor": "@payday",
-            "anchor_mode": "skip",
-            "due": "20260101T090000Z",
-        }
-        p = _run_hook_script(hook, task, env_extra=env)
-        if p.returncode != 0:
-            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:500]!r}")
-        out_task = _extract_last_json(p.stdout)
-        expect(out_task.get("anchor") == "@payday", f"anchor preset expression should be preserved: {out_task}")
-        stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid anchor" not in stderr_txt, f"preset should validate cleanly: {stderr_txt[:500]!r}")
-        expect("Preset" in stderr_txt and "@payday → m:15" in stderr_txt, f"preset preview should show expansion: {stderr_txt[:500]!r}")
-        expect("2026-01-15" in stderr_txt, f"preset preview should use resolved anchor expression: {stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_anchor_unknown_preset_fails_cleanly():
@@ -11228,10 +11109,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_hook_on_add_overnight_window_keeps_json_and_next_day_preview,
-    test_hook_on_add_random_time_window_keeps_json_and_preview,
-    test_on_modify_time_window_completion_advances_within_same_day,
-    test_on_modify_partitioned_window_completion_rolls_to_next_day,
     test_on_modify_overnight_window_completion_uses_next_day_slots,
     test_on_modify_random_time_window_completion_reuses_stable_slots,
     test_time_window_dst_gap_deduplicates_shifted_local_slot,
@@ -11241,7 +11118,6 @@ TESTS = [
     test_hook_on_add_live_panel_mode_preserves_captured_protocol,
     test_hook_on_add_counted_random_preview_uses_group_time,
     test_hook_on_add_accepts_group_date_modifiers,
-    test_hook_on_add_anchor_preset_resolves_from_config,
     test_hook_on_add_anchor_unknown_preset_fails_cleanly,
     test_hook_on_add_anchor_composed_preset_resolves_from_config,
     test_hook_on_add_anchor_recursive_preset_fails_cleanly,

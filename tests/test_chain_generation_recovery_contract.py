@@ -342,6 +342,37 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual(child_local.date(), date(2026, 7, 4))
         self.assertEqual((child_local.hour, child_local.minute), (14, 0))
 
+    def test_anchor_generation_advances_to_next_window_slot_after_completion(self):
+        due = datetime(2025, 12, 17, 6, tzinfo=timezone.utc)
+        ended = datetime(2025, 12, 17, 6, 30, tzinfo=timezone.utc)
+        parent = _task(
+            anchor="w:mon..sun@t=06..18/3h",
+            cp=None,
+            due=fmt_isoz(due),
+            end=fmt_isoz(ended),
+        )
+
+        child_due, metadata, _dnf = self.service.compute_anchor_child_due(parent)
+
+        child_local = self.service.core.to_local(child_due)
+        self.assertEqual(child_local, datetime(2025, 12, 17, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "after_end")
+
+    def test_partitioned_anchor_window_uses_remaining_slots_then_rolls_day(self):
+        def child_after(due_hour: int, due_minute: int):
+            due = datetime(2025, 12, 17, due_hour, due_minute, tzinfo=timezone.utc)
+            parent = _task(
+                anchor="w:mon..sun@t=04:30..19:30/3",
+                cp=None,
+                due=fmt_isoz(due),
+                end=fmt_isoz(due + timedelta(minutes=10)),
+            )
+            child_due, _metadata, _dnf = self.service.compute_anchor_child_due(parent)
+            return self.service.core.to_local(child_due)
+
+        self.assertEqual(child_after(4, 30), datetime(2025, 12, 17, 12, tzinfo=timezone.utc))
+        self.assertEqual(child_after(19, 30), datetime(2025, 12, 18, 4, 30, tzinfo=timezone.utc))
+
     def test_anchor_file_projection_reuses_one_provider(self):
         builders = []
         occurrence = Occurrence(

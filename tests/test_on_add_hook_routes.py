@@ -159,6 +159,58 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertIn("15:00", result.stderr)
         self.assertNotIn("17:00 UTC", result.stderr)
 
+    def test_overnight_window_preview_keeps_json_and_next_day_slots(self) -> None:
+        task = self._task(
+            description="overnight window preview",
+            entry="20260804T000000Z",
+            anchor="w:mon@t=22:30..06:30/7",
+            anchor_mode="skip",
+            due="20260810T193000Z",
+        )
+        result = self._run(task)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["uuid"], task["uuid"])
+        self.assertIn("23:50", result.stderr)
+        self.assertIn("01:10", result.stderr)
+
+    def test_random_window_preview_keeps_anchor_and_upcoming_panel(self) -> None:
+        expression = "w:mon@t=rand(06..18/3)"
+        task = self._task(
+            description="random window preview",
+            entry="20260803T000000Z",
+            anchor=expression,
+            anchor_mode="skip",
+            chainID="randomhook1",
+            due="20260803T060000Z",
+        )
+        result = self._run(task)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["anchor"], expression)
+        self.assertIn("Upcoming", result.stderr)
+
+    def test_anchor_preset_preview_preserves_reference_and_shows_expansion(self) -> None:
+        config = self.taskdata.parent / "preset-config.toml"
+        config.write_text('[anchor_presets]\npayday = "m:15"\n', encoding="utf-8")
+        task = self._task(
+            description="anchor preset preview",
+            entry="20260101T000000Z",
+            anchor="@payday",
+            anchor_mode="skip",
+            due="20260101T090000Z",
+        )
+        result = self.run_hook(
+            "on-add.nautical",
+            json.dumps(task),
+            extra_environment={"NAUTICAL_CONFIG": str(config), "NO_COLOR": "1"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["anchor"], "@payday")
+        self.assertNotIn("Invalid anchor", result.stderr)
+        self.assertIn("@payday → m:15", result.stderr)
+        self.assertIn("2026-01-15", result.stderr)
+
     def test_yearly_positional_anchor_preview_supports_post_selection_offset(self) -> None:
         expression = "(w:mon)@in-year=last@+7d@t=09:00"
         result = self._run(

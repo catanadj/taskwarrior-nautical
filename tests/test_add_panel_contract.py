@@ -24,6 +24,29 @@ class AddPanelContractTests(unittest.TestCase):
 
         self.assertEqual(task.get("chainID"), "12345678")
 
+    def test_recurring_root_rejects_chainid_derivation_failure(self) -> None:
+        task = {
+            "uuid": "12345678-1234-1234-1234-1234567890ab",
+            "anchor": "w:mon",
+        }
+        failure = RuntimeError("rejected")
+        captured = {}
+
+        def fail(title, message):
+            captured.update(title=title, message=message)
+            raise failure
+
+        core = SimpleNamespace(
+            short_uuid=lambda _value: (_ for _ in ()).throw(ValueError("UUID unavailable"))
+        )
+        with patch.object(add_impl, "core", core), patch.object(add_impl, "_fail_and_exit", fail):
+            with self.assertRaisesRegex(RuntimeError, "rejected"):
+                add_impl._stamp_chain_id_on_add(task)
+
+        self.assertEqual(captured.get("title"), "Chain identity unavailable")
+        self.assertIn("UUID unavailable", captured.get("message", ""))
+        self.assertNotIn("chainID", task)
+
     def test_on_add_preview_uses_configured_chain_colour(self) -> None:
         rendered = []
 

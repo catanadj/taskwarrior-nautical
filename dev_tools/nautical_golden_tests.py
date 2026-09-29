@@ -10678,39 +10678,6 @@ def test_navigator_reads_through_read_only_invocation_repository():
         navigator._UNIT_OF_WORK = None
         sys.modules.pop(module_name, None)
 
-def test_on_add_chainid_stamp_failure_rejects_recurring_root():
-    """A recurring root must not proceed when its mandatory chainID cannot be derived."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_chainid_failure_test")
-    task = {
-        "description": "chainid failure",
-        "uuid": "12345678-1234-1234-1234-1234567890ab",
-        "anchor": "w:mon",
-    }
-    captured = {}
-    original_fail = mod._fail_and_exit
-    original_short_uuid = mod.core.short_uuid
-    try:
-        def fail(title, message):
-            captured.update(title=title, message=message)
-            raise RuntimeError("rejected")
-
-        mod._fail_and_exit = fail
-        mod.core.short_uuid = lambda _value: (_ for _ in ()).throw(ValueError("UUID unavailable"))
-        try:
-            mod._stamp_chain_id_on_add(task)
-        except RuntimeError as exc:
-            expect(str(exc) == "rejected", f"unexpected chainID failure result: {exc}")
-        else:
-            raise AssertionError("chainID derivation failure was ignored")
-    finally:
-        mod._fail_and_exit = original_fail
-        mod.core.short_uuid = original_short_uuid
-    expect(captured.get("title") == "Chain identity unavailable", f"unexpected chainID failure panel: {captured}")
-    expect("UUID unavailable" in str(captured.get("message")), f"chainID failure detail was lost: {captured}")
-    expect(not task.get("chainID"), f"incomplete recurring root was left stamped: {task!r}")
-
-
 def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
     """on-add anchor_file preview should auto-assign due from the first future file occurrence and keep task-level time."""
     hook = _find_hook_file("on-add.nautical")
@@ -13603,7 +13570,6 @@ TESTS = [
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_chain_snapshot_modes_and_query,
     test_on_add_preview_and_completion_skip_choose_same_next_anchor,
-    test_on_add_chainid_stamp_failure_rejects_recurring_root,
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,
     test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match,
     test_on_modify_compute_anchor_child_due_from_anchor_file,

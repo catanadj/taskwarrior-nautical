@@ -4,15 +4,82 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
 
+import nautical_core
 import nautical_core.modify_feedback as modify_feedback
 from nautical_core.modify_models import (
     AnchorCompletionFeedbackModel,
+    CpCompletionFeedbackModel,
     CompletionLifecycleResult,
     TaskView,
 )
 
 
 class ModifyFeedbackContractTests(unittest.TestCase):
+    def test_cp_jitter_feedback_shows_the_selected_interval(self) -> None:
+        now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
+        panels = []
+        core = SimpleNamespace(
+            PANEL_MODE="panel",
+            SHOW_ANALYTICS=False,
+            humanize_delta=lambda *_args, **_kwargs: "in 15 days",
+            fmt_dt_local=lambda value: value.isoformat(),
+            coerce_int=lambda value, default: int(value) if value else default,
+            parse_cp_duration=nautical_core.parse_cp_duration,
+            parse_cp_sequence=nautical_core.parse_cp_sequence,
+            parse_cp_sequence_tokens=nautical_core.parse_cp_sequence_tokens,
+            cp_sequence_interval_for_token=nautical_core.cp_sequence_interval_for_token,
+            cp_sequence_interval_for_link=nautical_core.cp_sequence_interval_for_link,
+        )
+        services = SimpleNamespace(
+            core=core,
+            diag_enabled=False,
+            format_root_and_age=lambda *_args: "abcd1234",
+            append_next_wait_sched_rows=lambda *_args, **_kwargs: None,
+            timeline_lines=lambda *_args, **_kwargs: [],
+            show_timeline_gaps=False,
+            format_next_cp_rows=lambda rows: rows,
+            format_line_preview=lambda *_args, **_kwargs: "unused line preview",
+            panel_line=lambda *_args, **_kwargs: self.fail("panel mode must use the panel renderer"),
+            text_line=lambda *_args, **_kwargs: self.fail("panel mode must not use text output"),
+            panel=lambda _title, rows, **_kwargs: panels.append(list(rows)),
+            chain_color_per_chain=False,
+            chain_colour_for_task=lambda *_args: None,
+            human_delta=lambda *_args, **_kwargs: "in 15 days",
+        )
+        feedback = CpCompletionFeedbackModel(
+            new=TaskView.from_mapping(
+                {
+                    "cp": "15d~0d",
+                    "link": 2,
+                    "uuid": "00000000-0000-4000-8000-000000000111",
+                    "chainID": "abcd1234",
+                }
+            ),
+            child=TaskView.from_mapping({"uuid": "00000000-0000-4000-8000-000000000222"}),
+            child_due=now,
+            child_short="beeswax",
+            next_no=3,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=now,
+            until_dt=None,
+            until_cap_no=None,
+            meta={"cp_sequence_step": 1, "cp_sequence_len": 1},
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            lifecycle_result=CompletionLifecycleResult("applied"),
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=2,
+        )
+
+        modify_feedback.render_cp_completion_feedback(feedback=feedback, services=services)
+
+        self.assertEqual(len(panels), 1)
+        self.assertIn(("Step", "1/1 (15d)"), panels[0])
+
     def test_anchor_feedback_expands_presets_and_keeps_lifecycle_result_without_analytics(self) -> None:
         now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
         panels = []

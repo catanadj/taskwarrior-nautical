@@ -11079,54 +11079,6 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     )
 
 
-def test_on_modify_render_cp_completion_feedback_jitter_selected_interval():
-    """CP jitter completion feedback should show the selected interval, not the raw jitter expression."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_cp_jitter_feedback_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHAIN_COLOR_PER_CHAIN = False
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
-    mod._timeline_lines = lambda *_a, **_k: []
-
-    captured = {}
-    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
-    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
-
-    prev_panel_mode = mod.core.PANEL_MODE
-    try:
-        mod.core.PANEL_MODE = "panel"
-        mod._presentation_effects.render_cp_completion_feedback(
-            new={"cp": "15d~0d", "link": 2, "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-4000-8000-000000000222"},
-            child_due=mod.core.now_utc(),
-            child_short="beeswax",
-            next_no=3,
-            parent_short="00000000",
-            cap_no=None,
-            finals=[],
-            now_utc=mod.core.now_utc(),
-            until_dt=None,
-            until_cap_no=None,
-            meta={"cp_sequence_step": 1, "cp_sequence_len": 1},
-            deferred_spawn=False,
-            spawn_intent_id=None,
-            chain_by_short=None,
-            analytics_advice=None,
-            integrity_warnings=None,
-            base_no=2,
-        )
-    finally:
-        mod.core.PANEL_MODE = prev_panel_mode
-
-    step_rows = [v for k, v in captured.get("fb", []) if k == "Step"]
-    expect(step_rows, f"expected jitter cp step row: {captured}")
-    expect(str(step_rows[0]) == "1/1 (15d)", f"expected selected interval in jitter cp step row: {captured}")
-
-
 def test_on_modify_render_cp_completion_feedback_text_mode():
     """CP completion feedback should use concise ASCII text output in text mode."""
     hook = _find_hook_file("on-modify.nautical")
@@ -12889,7 +12841,6 @@ TESTS = [
     test_on_modify_completion_spawn_exception_is_retryable_with_reason,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_cp_completion_feedback_random_selected_interval,
-    test_on_modify_render_cp_completion_feedback_jitter_selected_interval,
     test_on_modify_render_cp_completion_feedback_text_mode,
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,

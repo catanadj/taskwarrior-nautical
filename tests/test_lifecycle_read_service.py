@@ -5,10 +5,53 @@ import threading
 
 from nautical_core.lifecycle_read_service import ChainCacheStore, LifecycleReadService
 from nautical_core.task_models import TaskObservation
-from nautical_core.integration_models import Absent
+from nautical_core.integration_models import Absent, Found
 
 
 class LifecycleReadServiceTests(unittest.TestCase):
+    def test_chain_cache_filters_typed_repository_snapshot_in_memory(self) -> None:
+        rows = (
+            TaskObservation.from_mapping(
+                {
+                    "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "chainID": "cid",
+                    "link": 1,
+                    "status": "completed",
+                },
+                source_query="chain:cid",
+            ),
+            TaskObservation.from_mapping(
+                {
+                    "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                    "chainID": "cid",
+                    "link": 2,
+                    "status": "pending",
+                },
+                source_query="chain:cid",
+            ),
+        )
+        calls = []
+
+        class Repository:
+            def chain_snapshot(self, chain_id, **_kwargs):
+                calls.append(chain_id)
+                return Found(rows, "chain:cid")
+
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda value: str(value).split(),
+            token_matcher=lambda row, token: token == f"status:{row.get('status')}",
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            repository=Repository(),
+            max_chain_walk=10,
+        )
+
+        selected = service.get_chain_export("cid", extra="status:pending")
+
+        self.assertEqual(calls, ["cid"])
+        self.assertEqual([row.get("link") for row in selected or []], [2])
+
     def test_chain_cache_concurrent_reads_and_replacements_keep_typed_rows(self) -> None:
         service = LifecycleReadService(
             coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,

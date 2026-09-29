@@ -4780,30 +4780,6 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     expect(rows[0].get("uuid") == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f"unexpected filtered row: {rows}")
 
 
-def test_on_modify_chain_cache_reads_through_typed_repository():
-    """Modify chain caches must filter one authoritative repository snapshot in memory."""
-    from nautical_core.integration_models import Found
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_modify_repository_chain_cache_test")
-    mod._reset_modify_runtime_state()
-    rows = (
-        {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "chainID": "cid", "link": 1, "status": "completed", "modified": "20250101T090000Z"},
-        {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "chainID": "cid", "link": 2, "status": "pending", "modified": "20250102T090000Z"},
-    )
-    calls = []
-
-    class Repository:
-        def chain_snapshot(self, chain_id, **_kwargs):
-            calls.append(chain_id)
-            return Found(_task_observations(rows), "chain:cid")
-
-    mod._modify_runtime_state().task_repository = Repository()
-    selected = mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export("cid", extra="status:pending")
-    expect(calls == ["cid"], f"expected one repository read, got {calls!r}")
-    expect([row.get("link") for row in selected] == [2], f"repository rows were not filtered: {selected!r}")
-
-
 def test_on_modify_chain_cache_preserves_repository_unavailability():
     """An unavailable repository chain read must never become an empty chain."""
     from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
@@ -12335,7 +12311,6 @@ TESTS = [
     test_on_exit_diag_blocks_pretty_print,
     test_on_exit_outcome_diagnostics_are_bounded,
     test_on_modify_get_chain_export_filters_cached_chain_in_memory,
-    test_on_modify_chain_cache_reads_through_typed_repository,
     test_on_modify_chain_cache_preserves_repository_unavailability,
     test_on_modify_predecessor_read_preserves_repository_unavailability,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,

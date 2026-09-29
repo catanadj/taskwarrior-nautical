@@ -7,6 +7,7 @@ import re
 import tempfile
 import unittest
 
+from nautical_core.cp_parser import cp_sequence_interval_for_link
 from tests.support.hook_process import HookSubprocessFixture
 
 
@@ -464,6 +465,58 @@ class OnAddHookRouteTests(HookSubprocessFixture):
             ("omit_file must be a file name, not a path.",),
         )
 
+    def test_cp_sequence_preview_preserves_string_periods(self) -> None:
+        task = self._task(cp="3d,20d,7d", due="20990101T090000Z")
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["cp"], "3d,20d,7d")
+        self.assertIn("Period", process.stderr)
+        self.assertIn("3d,20d,7d", process.stderr)
+        self.assertIn("1/3 (3d)", process.stderr)
+        for interval in ("(3d)", "(20d)", "(7d)"):
+            self.assertIn(interval, process.stderr)
+
+    def test_cp_random_preview_shows_selected_duration(self) -> None:
+        task = self._task(cp="rand(15d..15d)", due="20990101T090000Z")
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["cp"], task["cp"])
+        self.assertIn("1/1", process.stderr)
+        self.assertIn("(15d)", process.stderr)
+        self.assertNotIn("2w1d", process.stderr)
+        self.assertIn("Upcoming", process.stderr)
+        self.assertNotIn("(rand(", process.stderr)
+
+    def test_cp_random_preview_uses_new_root_chain_id(self) -> None:
+        cp = "rand(11d..14d)"
+        task = self._task(
+            uuid="12345678-0000-0000-0000-000000000115",
+            cp=cp,
+            due="20990101T090000Z",
+        )
+        chain_id = "12345678"
+        selected = cp_sequence_interval_for_link(cp, 1, chain_id)
+        other_chain = cp_sequence_interval_for_link(cp, 1, "chain-b")
+        self.assertNotEqual(selected, other_chain)
+
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["chainID"], chain_id)
+        selected_days = int(selected.total_seconds() // 86400)
+        self.assertIn(f"({selected_days}d)", process.stderr)
+
+    def test_cp_jitter_preview_shows_selected_duration(self) -> None:
+        task = self._task(cp="15d~0d", due="20990101T090000Z")
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["cp"], task["cp"])
+        self.assertIn("1/1 (15d)", process.stderr)
+        self.assertIn("15d~0d", process.stderr)
+
     def _assert_dst_window_slot_occurs_once(
         self, anchor: str, entry: str, due: str, expected_slot: str
     ) -> None:
@@ -864,7 +917,7 @@ class OnAddHookRouteTests(HookSubprocessFixture):
     def test_invalid_routes_fail_without_json_or_tracebacks(self) -> None:
         cases = (
             ("malformed cp reversed range", self._task(cp="rand(7d..3d)"), ("Invalid cp", "lower bound", "upper")),
-            ("malformed cp separator", self._task(cp="rand(3d-7d)"), ("Invalid cp", "expected rand(<duration>..<duration>)")),
+            ("malformed random cp separator", self._task(cp="rand(3d-7d)"), ("Invalid cp", "expected rand(<duration>..<duration>)")),
             ("malformed cp jitter bound", self._task(cp="14d~abc"), ("Invalid cp", "invalid", "bound")),
             ("malformed cp negative jitter", self._task(cp="2d~3d"), ("Invalid cp", "lower bound must be >= 0")),
             ("malformed cp empty sequence", self._task(cp="3d,,7d"), ("Invalid cp", "empty duration", "position 2")),

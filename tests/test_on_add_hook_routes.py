@@ -99,6 +99,22 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertIn("Advice", result.stderr)
         self.assertIn("ISO-week candidates by calendar year", result.stderr)
 
+    def test_positional_anchor_preview_preserves_expression_and_explains_rule(self) -> None:
+        expression = "(w:tue | w:thu)@in-month=last"
+        result = self._run(
+            self._task(
+                entry="20260701T090000Z",
+                due="20260730T090000Z",
+                anchor=expression,
+                anchor_mode="skip",
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["anchor"], expression)
+        self.assertEqual(payload["chain"], "on")
+        self.assertIn("last matching date", result.stderr)
+
     def test_valid_routes_preserve_or_mutate_the_expected_task_fields(self) -> None:
         explicit_due = "20990102T090000Z"
         routes = (

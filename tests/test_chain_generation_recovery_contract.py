@@ -186,6 +186,21 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual((due_local.hour, due_local.minute), (9, 0))
         self.assertEqual(metadata["target_field"], "scheduled")
 
+    def test_positional_anchor_generation_advances_to_next_selected_date(self):
+        parent = _task(
+            anchor="(w:tue | w:thu)@in-month=last",
+            anchor_mode="skip",
+            cp=None,
+            due="2026-07-30T09:00:00Z",
+            end="2026-07-30T10:00:00Z",
+        )
+
+        due, metadata, dnf = self.service.compute_anchor_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 8, 27, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "after_end")
+        self.assertEqual(dnf[0][0]["kind"], "select")
+
     def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due(self):
         due = core.build_local_datetime(date(2025, 1, 6), (9, 0))
         scheduled = core.build_local_datetime(date(2025, 1, 8), (12, 0))

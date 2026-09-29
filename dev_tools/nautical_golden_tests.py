@@ -11283,47 +11283,6 @@ def test_on_modify_missing_taskdata_uses_tw_dir():
     )
 
 
-def test_position_selection_on_add_and_modify_completion():
-    """Add preview and modify completion should agree on monthly positional anchors."""
-    expr = "(w:tue | w:thu)@in-month=last"
-    add_hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000777",
-        "description": "positional anchor integration",
-        "status": "pending",
-        "entry": "20260701T090000Z",
-        "due": "20260730T090000Z",
-        "anchor": expr,
-        "anchor_mode": "skip",
-    }
-    result = _run_hook_script(add_hook, task, env_extra={"NO_COLOR": "1"})
-    expect(result.returncode == 0, f"on-add rejected positional anchor: {result.stderr}")
-    out_task = _extract_last_json(result.stdout)
-    expect(out_task.get("anchor") == expr, f"on-add changed positional expression: {out_task}")
-    expect(out_task.get("chain") == "on", f"on-add did not enable chain: {out_task}")
-    expect(
-        "last matching date" in _strip_markup(result.stderr),
-        f"on-add preview omitted positional natural text: {result.stderr}",
-    )
-
-    modify_hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(modify_hook, "_nautical_position_selection_modify_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-    child_due, meta, child_dnf = _compute_anchor_child_due(mod,
-        {
-            "anchor": expr,
-            "anchor_mode": "skip",
-            "due": "20260730T090000Z",
-            "end": "20260730T100000Z",
-            "chainID": "abcd1234",
-        }
-    )
-    expect(mod.core.fmt_isoz(child_due) == "2026-08-27T09:00:00Z", f"bad child due: {child_due}")
-    expect(meta.get("basis") == "after_end", f"unexpected completion metadata: {meta}")
-    expect(child_dnf and child_dnf[0][0].get("kind") == "select", "completion lost selection DNF")
-
-
 def test_position_selection_modify_timeline_projects_future_dates():
     """Modify timelines should project future positional-selection occurrences."""
     mod = _hook
@@ -11732,7 +11691,6 @@ def test_position_selection_public_period_scopes_hooks():
 
 TESTS = [
     test_year_ordinals_hooks_modes_calendar_and_timeline,
-    test_position_selection_on_add_and_modify_completion,
     test_position_selection_modify_timeline_projects_future_dates,
     test_position_selection_post_modifiers_modify_completion,
     test_on_add_seasonal_selection_feedback,

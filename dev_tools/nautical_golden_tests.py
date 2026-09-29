@@ -6345,63 +6345,6 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
         verify(mod)
 
 
-def test_chain_colour_uses_complete_root_identity():
-    """Chain colours should hash the full root instead of its final UUID suffix."""
-    hook = _load_hook_module(
-        _find_hook_file("on-modify.nautical"),
-        "_nautical_chain_colour_full_identity_test",
-    )
-
-    root = "12345678-1234-4234-8234-00000000abcd"
-    expect(
-        chain_colour_root("anchor", root) == chain_colour_root("anchor", root),
-        "chain colour should replay deterministically",
-    )
-    expect(
-        chain_colour_root("anchor", root.upper()) == chain_colour_root("anchor", root),
-        "UUID case should not change the chain colour",
-    )
-    expect(
-        chain_colour_root("anchor", "") == "bright_cyan",
-        "empty anchor roots should retain the existing fallback colour",
-    )
-    expect(
-        chain_colour_root("cp", "") == "orange_red1",
-        "empty cp roots should retain the existing fallback colour",
-    )
-
-    same_suffix_roots = [
-        f"{idx:08x}-1234-4234-8234-00000000abcd"
-        for idx in range(256)
-    ]
-    anchor_colours = {
-        chain_colour_root("anchor", candidate)
-        for candidate in same_suffix_roots
-    }
-    cp_colours = {
-        chain_colour_root("cp", candidate)
-        for candidate in same_suffix_roots
-    }
-    expect(
-        len(anchor_colours) >= 16,
-        f"anchor colours still collapse roots sharing one suffix: {anchor_colours}",
-    )
-    expect(
-        len(cp_colours) >= 15,
-        f"cp colours still collapse roots sharing one suffix: {cp_colours}",
-    )
-
-    legacy = "legacy/root identifier"
-    expect(
-        chain_colour_root("anchor", legacy) == chain_colour_root("anchor", legacy),
-        "non-UUID legacy roots should remain deterministic",
-    )
-    expect(
-        chain_colour_root("anchor", root) != chain_colour_root("cp", root),
-        "anchor and cp colour domains should remain separated",
-    )
-
-
 def test_on_add_preview_uses_configured_chain_colour():
     """on-add should use the same chain colour as on-modify when enabled."""
     hook = _load_hook_module(
@@ -14004,7 +13947,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_chain_colour_uses_complete_root_identity,
     test_on_add_preview_uses_configured_chain_colour,
     test_cp_interval_helpers_agree_between_on_add_and_on_modify,
     test_on_modify_compute_cp_sequence_selects_interval_by_link,

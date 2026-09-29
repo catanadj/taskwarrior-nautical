@@ -1901,33 +1901,6 @@ def test_hook_diag_redact_msg_masks_sensitive_json_fields():
     expect(obj_exit.get("safe") == "ok", f"on-exit non-sensitive key changed: {obj_exit}")
 
 
-def test_core_cache_dir_and_lock_permissions():
-    """Core cache dir and lock files should have restricted permissions."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cache_dir = os.path.join(td, "cache")
-        mod = _load_hook_module(core_path, "_nautical_core_cache_perm_test")
-        mod._refresh_facade_config_exports()
-        mod.ANCHOR_CACHE_DIR_OVERRIDE = cache_dir
-        mod._cache_api._resolve()
-        previous_trust = os.environ.get("NAUTICAL_TRUST_CACHE_PATH")
-        os.environ["NAUTICAL_TRUST_CACHE_PATH"] = "1"
-        try:
-            path = mod._cache_dir()
-        finally:
-            if previous_trust is None:
-                os.environ.pop("NAUTICAL_TRUST_CACHE_PATH", None)
-            else:
-                os.environ["NAUTICAL_TRUST_CACHE_PATH"] = previous_trust
-        expect(path == cache_dir, f"cache dir mismatch: {path}")
-        mode = stat.S_IMODE(os.stat(path).st_mode)
-        expect((mode & 0o077) == 0, f"cache dir has group/other perms: {oct(mode)}")
-        lock_path = mod._cache_lock_path("permtest")
-        with mod._cache_lock("permtest") as ok:
-            expect(ok, "cache lock did not acquire")
-            lmode = stat.S_IMODE(os.stat(lock_path).st_mode)
-            expect((lmode & 0o077) == 0, f"cache lock has group/other perms: {oct(lmode)}")
-
 def test_core_cache_lock_contention_matches_safe_lock():
     """_cache_lock should block contention similarly to safe_lock."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
@@ -13145,7 +13118,6 @@ TESTS = [
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
     test_hook_diag_redact_msg_masks_sensitive_json_fields,
-    test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
     test_core_cache_dir_rejects_symlink_override,
     test_on_modify_invalid_json_passthrough,

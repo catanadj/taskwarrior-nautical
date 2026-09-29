@@ -435,6 +435,35 @@ class CacheApiContractTests(unittest.TestCase):
             ) as acquired:
                 self.assertFalse(acquired)
 
+    def test_cache_directory_and_lock_permissions_are_private(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            cache_dir = Path(temporary) / "cache"
+            namespace = vars(core).copy()
+            namespace.update(
+                _CACHE_DIR=None,
+                _CACHE_LOAD_MEM=OrderedDict(),
+                ANCHOR_CACHE_DIR_OVERRIDE=str(cache_dir),
+                _CACHE_LOCK_RETRIES=2,
+                _CACHE_LOCK_SLEEP_BASE=0,
+                _CACHE_LOCK_JITTER=0,
+                _CACHE_LOCK_STALE_AFTER=300,
+                os=os,
+                time=_Clock(),
+                random=__import__("random"),
+                _import_sibling=_import_core_sibling,
+            )
+            binding = cache_api.for_core(namespace=namespace, module=core)
+            with patch.dict(os.environ, {"NAUTICAL_TRUST_CACHE_PATH": "1"}):
+                self.assertEqual(Path(binding._cache_dir()), cache_dir)
+                cache_mode = stat.S_IMODE(cache_dir.stat().st_mode)
+                self.assertEqual(cache_mode & 0o077, 0)
+
+                lock_path = Path(binding._cache_lock_path("permissions"))
+                with binding._cache_lock("permissions") as acquired:
+                    self.assertTrue(acquired)
+                    lock_mode = stat.S_IMODE(lock_path.stat().st_mode)
+                    self.assertEqual(lock_mode & 0o077, 0)
+
     def test_unexpected_fcntl_error_propagates_and_closes_lock_file(self) -> None:
         class BrokenFcntl:
             LOCK_EX = fcntl.LOCK_EX

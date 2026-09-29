@@ -155,6 +155,20 @@ class HookInputContractTests(HookSubprocessFixture):
                 self.assertEqual(process.stdout, "")
                 self.assertEqual(process.stderr, "")
 
+    def test_on_exit_empty_input_keeps_stdout_empty_with_diagnostics(self) -> None:
+        process = self.run_hook(
+            "on-exit.nautical",
+            "",
+            diagnostics=True,
+            extra_environment={
+                "NAUTICAL_CONFIG": str(Path(self.taskdata) / "missing.toml"),
+                "NAUTICAL_TRUST_CONFIG_PATH": "1",
+            },
+        )
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(process.stdout, "")
+
     def test_unicode_task_payload_keeps_strict_json_stdout(self) -> None:
         task = {
             "uuid": "11111111-1111-1111-1111-111111111111",

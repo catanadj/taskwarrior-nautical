@@ -39,7 +39,6 @@ from tests.support.lifecycle_execution import LifecycleExecutionFixture
 from nautical_core.query_service import OccurrenceQueryRuntime
 from nautical_core.panel_colours import chain_colour_root
 from dev_tools.golden_tests.recurrence import TESTS as RECURRENCE_TESTS
-from dev_tools.golden_tests.hooks import TESTS as HOOK_TESTS
 from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
 from dev_tools.golden_tests.installer import TESTS as INSTALLER_TESTS
 from dev_tools.golden_tests.performance import TESTS as PERFORMANCE_TESTS
@@ -1623,128 +1622,6 @@ def _test_modify_engine_services(
         handle_non_completion=handle_non_completion,
         handle_completion=handle_completion,
         handle_deleted=handle_deleted,
-    )
-
-
-def test_on_modify_expiration_panel_explains_carry():
-    """The immediate expiration panel should explain the child's carry policy."""
-    from nautical_core.lifecycle_models import LifecycleAction
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_carry_panel_test")
-    expiration = mod._module("modify_expiration")
-    child_due = mod.core.build_local_datetime(date(2026, 7, 27), (9, 0)).astimezone(timezone.utc)
-    child_until = mod.core.build_local_datetime(date(2026, 8, 2), (23, 59)).astimezone(timezone.utc)
-    parent = {
-        "description": "Take the trash out",
-        "link": 1,
-    }
-    child_draft = _task_draft(
-        {
-            "uuid": "22222222-0000-4000-8000-000000000001",
-            "description": "Take the trash out",
-            "status": "pending",
-            "chain": "on",
-            "chainID": "expiration-panel",
-            "link": 2,
-            "cp": "1d",
-            "due": child_due,
-            "until": mod.core.fmt_isoz(child_until),
-        }
-    )
-    plan = SimpleNamespace(
-        plan=SimpleNamespace(
-            action=LifecycleAction.SPAWN_CHILD,
-            child_dict=lambda: {"until": mod.core.fmt_isoz(child_until)},
-        ),
-        child_due=child_due,
-        child_draft=child_draft,
-        next_link=2,
-        reason="expired link missing next link",
-    )
-    captured = {}
-    original_panel = mod._panel
-    try:
-        mod._panel = lambda title, rows, **kwargs: captured.update(title=title, rows=list(rows), kwargs=dict(kwargs))
-        expiration._render_recovery_panel(
-            parent,
-            plan,
-            services=_modify_effect(mod, "expiration_services"),
-            result="[green]Next occurrence created[/]",
-            child_short="22222222",
-        )
-    finally:
-        mod._panel = original_panel
-
-    add_validation = mod.core._import_sibling("add_validation")
-    expected = add_validation.describe_native_until_carry(child_until, child_due, to_local=mod.core.to_local)
-    expect(captured.get("title") == "⌛ Nautical occurrence expired", f"unexpected expiration panel: {captured!r}")
-    expect(("Expiration", expected) in (captured.get("rows") or []), f"missing carry policy: {captured!r}")
-    expect(any(label == "Next expires" for label, _value in (captured.get("rows") or [])), f"missing next expiration: {captured!r}")
-
-
-def test_on_modify_expiration_delegates_to_extracted_orchestration():
-    """The hook should leave expiration decisions to the focused orchestration module."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_extraction_test")
-    expiration = mod._module("modify_expiration")
-    captured = {}
-    original = expiration.handle_expired_deleted_modify
-    try:
-        def handle(task, *, services):
-            captured["task"] = task
-            captured["services"] = services
-            return True
-
-        expiration.handle_expired_deleted_modify = handle
-        task = {"uuid": "00000000-0000-4000-8000-000000000411"}
-        expect(_modify_effect(mod, "handle_expired_deleted", task), "extracted expiration handler result was lost")
-    finally:
-        expiration.handle_expired_deleted_modify = original
-
-    expect(captured.get("task") is task, f"expiration task was not delegated unchanged: {captured!r}")
-    services = captured.get("services")
-    expect(
-        services is not None and callable(services.stage_recovery_plan),
-        "expiration services were not wired to lifecycle staging",
-    )
-
-
-def test_on_modify_expiration_internal_failure_remains_recoverable():
-    """An internal expiration-path failure should warn without stopping or crashing the chain."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_failure_test")
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000416",
-        "status": "pending",
-        "description": "Recoverable expiration",
-        "cp": "7d",
-        "chain": "on",
-        "chainID": "expire16",
-        "link": 1,
-        "due": "20260720T090000Z",
-        "until": "20260726T235900Z",
-    }
-    new = dict(old, status="deleted", end="20260727T000000Z")
-    panels = []
-    stopped = []
-    expiration = mod._module("modify_expiration")
-    original = (expiration.handle_expired_deleted_modify, mod._panel, mod._diagnostics_effects.end_chain_summary)
-    try:
-        expiration.handle_expired_deleted_modify = (
-            lambda _task, *, services: (_ for _ in ()).throw(RuntimeError("missing module"))
-        )
-        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
-        mod._diagnostics_effects.end_chain_summary = lambda *_args, **_kwargs: stopped.append(True)
-        _modify_effect(mod, "handle_deleted", old, new, _test_operator_uow())
-    finally:
-        expiration.handle_expired_deleted_modify, mod._panel, mod._diagnostics_effects.end_chain_summary = original
-
-    expect(not stopped, "internal expiration failure must not be treated as an intentional deletion")
-    expect(new.get("chain") == "on" and not new.get("nextLink"), f"recovery evidence was lost: {new!r}")
-    expect(
-        panels and panels[0][2] == "warning"
-        and any(label == "Action" and "nautical reconcile --apply" in value for label, value in panels[0][1]),
-        f"missing recovery warning: {panels!r}",
     )
 
 
@@ -4928,23 +4805,6 @@ def test_hook_on_modify_timeline_uses_omit_file_description_label():
     txt = _strip_markup("\n".join(lines))
     expect("(Company holida...)" in txt, f"expected truncated omit_file description marker in anchor timeline: {txt!r}")
     expect("(omitted)" not in txt, f"expected omit_file description to replace default omitted marker: {txt!r}")
-
-
-def test_core_import_deterministic():
-    """Hooks should ignore TASKDATA unless NAUTICAL_DEV=1."""
-    with tempfile.TemporaryDirectory() as td:
-        bad_core = Path(td) / "nautical_core/__init__.py"
-        bad_core.parent.mkdir(parents=True, exist_ok=True)
-        bad_core.write_text("raise RuntimeError('bad core')\n", encoding="utf-8")
-        os.environ["TASKDATA"] = td
-        os.environ.pop("NAUTICAL_DEV", None)
-        try:
-            hook = _find_hook_file("on-add.nautical")
-            _ = _load_hook_module(hook, "_nautical_on_add_import_deterministic_test").core
-        finally:
-            os.environ.pop("TASKDATA", None)
-
-    expect(True, "core import should ignore TASKDATA when NAUTICAL_DEV is not set")
 
 
 def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
@@ -8551,14 +8411,10 @@ TESTS = [
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_on_modify_timeline_cp_sequence_labels_future_intervals,
     test_hook_on_modify_timeline_cp_random_labels_selected_intervals,
-    *HOOK_TESTS,
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
     *STORAGE_TESTS,
-    test_on_modify_expiration_panel_explains_carry,
-    test_on_modify_expiration_delegates_to_extracted_orchestration,
-    test_on_modify_expiration_internal_failure_remains_recoverable,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
     test_health_check_json_ok_empty_taskdata,
@@ -8645,7 +8501,6 @@ TESTS = [
     test_on_modify_panel_fallback,
     test_on_modify_panel_forwards_live_duration,
     test_ui_live_test_term_guard_restores_environment,
-    test_core_import_deterministic,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,

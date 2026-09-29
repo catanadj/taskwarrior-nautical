@@ -30,7 +30,7 @@ class GoldenRunnerContractTests(unittest.TestCase):
             "--only",
             "test_random_salt_namespaces_draws",
             "--only",
-            "test_hook_stdout_empty_on_exit",
+            "test_modifier_boundary_paths_agree_and_advance_strictly",
             "--verbose",
             "--shuffle-seed",
             "20260925",
@@ -42,7 +42,7 @@ class GoldenRunnerContractTests(unittest.TestCase):
             "--only",
             "test_random_salt_namespaces_draws",
             "--only",
-            "test_hook_stdout_empty_on_exit",
+            "test_modifier_boundary_paths_agree_and_advance_strictly",
             "--verbose",
         )
 
@@ -60,13 +60,13 @@ class GoldenRunnerContractTests(unittest.TestCase):
         )
         expected = {
             "test_random_salt_namespaces_draws",
-            "test_hook_stdout_empty_on_exit",
+            "test_modifier_boundary_paths_agree_and_advance_strictly",
         }
         self.assertEqual(set(first_names), expected)
         self.assertEqual(first_names, second_names)
         self.assertEqual(
             ordered_names,
-            ["test_random_salt_namespaces_draws", "test_hook_stdout_empty_on_exit"],
+            ["test_modifier_boundary_paths_agree_and_advance_strictly", "test_random_salt_namespaces_draws"],
         )
         self.assertIn("Total tests run: 2", first.stdout)
         self.assertIn("Passed: 2", first.stdout)

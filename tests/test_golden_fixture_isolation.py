@@ -9,9 +9,16 @@ import unittest
 
 class GoldenFixtureIsolationTests(unittest.TestCase):
     def test_domain_collections_are_immutable_tuples(self):
-        from dev_tools.golden_tests import hooks, lifecycle, reconcile
+        from dev_tools.golden_tests import (
+            installer,
+            lifecycle,
+            operator,
+            performance,
+            reconcile,
+            recurrence,
+        )
 
-        for module in (hooks, lifecycle, reconcile):
+        for module in (installer, lifecycle, operator, performance, reconcile, recurrence):
             self.assertIsInstance(module.TESTS, tuple)
             self.assertTrue(all(callable(test) for test in module.TESTS))
 

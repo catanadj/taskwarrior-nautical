@@ -14,12 +14,15 @@ from nautical_core.modify_models import (
 )
 
 
-def _render_cp_completion_feedback(cp: str) -> list[tuple[str, object]]:
+def _render_cp_completion_feedback(
+    cp: str, *, mode: str = "panel"
+) -> tuple[list[tuple[str, object]], str | None]:
     now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
     panels = []
     core = SimpleNamespace(
-        PANEL_MODE="panel",
+        PANEL_MODE=mode,
         SHOW_ANALYTICS=False,
+        strip_rich_markup=nautical_core.strip_rich_markup,
         humanize_delta=lambda *_args, **_kwargs: "in 15 days",
         fmt_dt_local=lambda value: value.isoformat(),
         coerce_int=lambda value, default: int(value) if value else default,
@@ -29,6 +32,7 @@ def _render_cp_completion_feedback(cp: str) -> list[tuple[str, object]]:
         cp_sequence_interval_for_token=nautical_core.cp_sequence_interval_for_token,
         cp_sequence_interval_for_link=nautical_core.cp_sequence_interval_for_link,
     )
+    text_lines = []
     services = SimpleNamespace(
         core=core,
         diag_enabled=False,
@@ -37,9 +41,9 @@ def _render_cp_completion_feedback(cp: str) -> list[tuple[str, object]]:
         timeline_lines=lambda *_args, **_kwargs: [],
         show_timeline_gaps=False,
         format_next_cp_rows=lambda rows: rows,
-        format_line_preview=lambda *_args, **_kwargs: "unused line preview",
+        format_line_preview=lambda *_args, **_kwargs: "00000000 ✓ next ⛓ · #2 · (due in 15 days)",
         panel_line=lambda *_args, **_kwargs: None,
-        text_line=lambda *_args, **_kwargs: None,
+        text_line=lambda line, **_kwargs: text_lines.append(line),
         panel=lambda _title, rows, **_kwargs: panels.append(list(rows)),
         chain_color_per_chain=False,
         chain_colour_for_task=lambda *_args: None,
@@ -75,20 +79,32 @@ def _render_cp_completion_feedback(cp: str) -> list[tuple[str, object]]:
     )
 
     modify_feedback.render_cp_completion_feedback(feedback=feedback, services=services)
-    return panels[0]
+    return (panels[0] if panels else [], text_lines[0] if text_lines else None)
 
 
 class ModifyFeedbackContractTests(unittest.TestCase):
     def test_cp_jitter_feedback_shows_the_selected_interval(self) -> None:
-        self.assertIn(("Step", "1/1 (15d)"), _render_cp_completion_feedback("15d~0d"))
+        rows, _text = _render_cp_completion_feedback("15d~0d")
+        self.assertIn(("Step", "1/1 (15d)"), rows)
 
     def test_cp_random_feedback_shows_the_chain_scoped_selected_interval(self) -> None:
         cp = "rand(11d..14d)"
-        rows = _render_cp_completion_feedback(cp)
+        rows, _text = _render_cp_completion_feedback(cp)
         selected = nautical_core.cp_sequence_interval_for_link(cp, 2, "abcd1234")
         selected_days = int(selected.total_seconds() // 86400)
 
         self.assertIn(("Step", f"1/1 ({selected_days}d)"), rows)
+
+    def test_cp_text_feedback_uses_stacked_ascii_output(self) -> None:
+        rows, text = _render_cp_completion_feedback("P1D", mode="text")
+
+        self.assertEqual(rows, [])
+        self.assertIsNotNone(text)
+        output = text or ""
+        self.assertGreaterEqual(output.count("\n"), 2)
+        self.assertIn("[bold yellow]Next[/]", output)
+        self.assertIn("[bold yellow]Period:[/] [white]P1D[/]", output)
+        self.assertIn("[bold cyan]Result:[/] [white]Applied now[/]", output)
 
     def test_anchor_feedback_expands_presets_and_keeps_lifecycle_result_without_analytics(self) -> None:
         now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)

@@ -11023,61 +11023,6 @@ def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundarie
     expect(not any(str(label).startswith("Final (") for label, _value in rows), f"legacy final label remains: {rows!r}")
 
 
-def test_on_modify_render_cp_completion_feedback_text_mode():
-    """CP completion feedback should use concise ASCII text output in text mode."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_cp_feedback_text_mode_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHAIN_COLOR_PER_CHAIN = False
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("wait-schedule rows should not be built in text mode"))
-    mod._format_root_and_age = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("root formatting should not run in text mode"))
-    mod._timeline_lines = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("timeline should not be built in text mode"))
-
-    captured = {}
-    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("panel line should not be used in text mode"))
-    mod._panel = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("panel should not be used in text mode"))
-    mod._text_line = lambda line, **_k: captured.update({"line": line, "kwargs": dict(_k)})
-
-    prev_panel_mode = mod.core.PANEL_MODE
-    try:
-        mod.core.PANEL_MODE = "text"
-        mod._presentation_effects.render_cp_completion_feedback(
-            new={"cp": "P1D", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-4000-8000-000000000222"},
-            child_due=mod.core.now_utc(),
-            child_short="beeswax",
-            next_no=2,
-            parent_short="00000000",
-            cap_no=None,
-            finals=[],
-            now_utc=mod.core.now_utc(),
-            until_dt=None,
-            until_cap_no=None,
-            meta={},
-            deferred_spawn=False,
-            spawn_intent_id=None,
-            chain_by_short=None,
-            analytics_advice=None,
-            integrity_warnings=None,
-            base_no=1,
-        )
-    finally:
-        mod.core.PANEL_MODE = prev_panel_mode
-
-    expect("line" in captured, f"expected text-mode line emission, got {captured}")
-    txt = mod.core.strip_rich_markup(str(captured["line"]))
-    expect("\n" in txt, f"expected stacked text payload, got {txt!r}")
-    expect("00000000 ✓" in txt, f"expected parent status line in text payload, got {txt!r}")
-    expect("Next ⛓ #2 beeswax" in txt, f"expected next-link line in text payload, got {txt!r}")
-    expect("Period: P1D" in txt, f"expected summary line in text payload, got {txt!r}")
-    expect("Result: Applied now" in txt, f"expected lifecycle result in text payload, got {txt!r}")
-    expect(captured.get("kwargs", {}).get("kind") == "preview_cp", f"unexpected text line kwargs: {captured}")
-    expect(captured.get("kwargs", {}).get("markup_body") is True, f"unexpected markup handling: {captured}")
-
-
 def test_on_add_preview_hard_cap():
     """on-add preview loop should respect hard cap even with large preview setting."""
     hook = _find_hook_file("on-add.nautical")
@@ -12784,7 +12729,6 @@ TESTS = [
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_completion_spawn_exception_is_retryable_with_reason,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
-    test_on_modify_render_cp_completion_feedback_text_mode,
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,
     test_on_add_profiler_lazy_init,

@@ -6,7 +6,6 @@ import base64
 from contextlib import contextmanager
 import hashlib
 import json
-import os
 import random
 import tempfile
 import time
@@ -29,12 +28,35 @@ class _CacheBindingContext:
     """Resolved dependencies and owned cache modules for one facade binding."""
 
     deps: CacheDependencies
+    runtime: "CacheRuntimeDependencies"
     import_sibling: Callable[[str], Any]
     cache_support: Any
     cache_locking: Any
     cache_payload: Any
     cache_dir_state: list[str | None]
+    source_file: str
+
+
+@dataclass(frozen=True, slots=True)
+class CacheRuntimeDependencies:
+    """Explicit runtime collaborators and mutable cache state for one binding."""
+
+    filesystem: Any
+    clock: Any
+    random: Any
+    fcntl: Any
+    json: Any
+    compression: Any
+    base64: Any
+    tempfile: Any
     cache_state: CacheState
+    atomic_replace_override: Callable[..., Any] | None
+    clone_payload_override: Callable[..., Any] | None
+    normalize_dnf_override: Callable[..., Any] | None
+    payload_shape_override: Callable[..., Any] | None
+    semantic_fingerprint_override: Callable[..., Any] | None
+    cache_lock_override: Callable[..., Any] | None
+    is_dnf_like_override: Callable[..., Any] | None
 
 
 def _binding_context(
@@ -54,18 +76,38 @@ def _binding_context(
         import_sibling = deps.get("_import_sibling")
         if not callable(import_sibling):
             raise TypeError("cache_api.for_core requires _import_sibling in its dependency snapshot")
+    cache_state = CacheState(
+        memory=deps["_CACHE_LOAD_MEM"],
+        max_entries=int(deps["_CACHE_LOAD_MEM_MAX"]),
+        ttl=float(deps["_CACHE_LOAD_MEM_TTL"]),
+    )
+    runtime = CacheRuntimeDependencies(
+        filesystem=deps["os"],
+        clock=deps.get("time", time),
+        random=deps.get("random", random),
+        fcntl=deps.get("fcntl", fcntl),
+        json=deps.get("json", json),
+        compression=deps.get("zlib", zlib),
+        base64=deps.get("base64", base64),
+        tempfile=tempfile,
+        cache_state=cache_state,
+        atomic_replace_override=deps.get("_cache_atomic_replace"),
+        clone_payload_override=deps.get("_clone_cache_payload"),
+        normalize_dnf_override=deps.get("_normalize_dnf_cached"),
+        payload_shape_override=deps.get("_cache_payload_shape_ok"),
+        semantic_fingerprint_override=deps.get("_cache_semantic_fingerprint"),
+        cache_lock_override=deps.get("_cache_lock"),
+        is_dnf_like_override=deps.get("_is_dnf_like"),
+    )
     return _CacheBindingContext(
         deps=deps,
+        runtime=runtime,
         import_sibling=import_sibling,
         cache_support=import_sibling("cache_support"),
         cache_locking=import_sibling("cache_locking"),
         cache_payload=import_sibling("cache_payload"),
         cache_dir_state=[None],
-        cache_state=CacheState(
-            memory=deps["_CACHE_LOAD_MEM"],
-            max_entries=int(deps["_CACHE_LOAD_MEM_MAX"]),
-            ttl=float(deps["_CACHE_LOAD_MEM_TTL"]),
-        ),
+        source_file=(context.source_file if context is not None else getattr(module, "__file__", "")) or "",
     )
 
 
@@ -73,12 +115,13 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     """Create cache APIs without sharing cache state across deps loaders."""
     binding = _binding_context(module, namespace=namespace, context=context)
     deps = binding.deps
+    runtime = binding.runtime
     import_sibling = binding.import_sibling
     cache_support = binding.cache_support
     cache_locking = binding.cache_locking
     cache_payload = binding.cache_payload
     cache_dir_state = binding.cache_dir_state
-    cache_state = binding.cache_state
+    cache_state = runtime.cache_state
 
     def is_atom_like(atom: Any) -> bool:
         return cache_payload.is_factor_like(atom)
@@ -96,36 +139,36 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def cache_payload_shape_ok(obj: dict) -> bool:
         return cache_payload.cache_payload_shape_ok(
             obj,
-            is_dnf_like=deps.get("_is_dnf_like", is_dnf_like),
+            is_dnf_like=runtime.is_dnf_like_override or is_dnf_like,
         )
 
     def cache_atomic_replace(src: str, dst: str) -> None:
-        cache_payload.cache_atomic_replace(src, dst, os_mod=deps["os"])
+        cache_payload.cache_atomic_replace(src, dst, os_mod=runtime.filesystem)
 
     def safe_lock_sleep_once(sleep_base: float, jitter: float) -> None:
         cache_locking.safe_lock_sleep_once(
             sleep_base,
             jitter,
-            time_mod=deps.get("time", time),
-            random_mod=deps.get("random", random),
+            time_mod=runtime.clock,
+            random_mod=runtime.random,
         )
 
     def safe_lock_ensure_parent(path_str: str, mkdir: bool) -> None:
-        cache_locking.safe_lock_ensure_parent(path_str, mkdir, os_mod=deps["os"])
+        cache_locking.safe_lock_ensure_parent(path_str, mkdir, os_mod=runtime.filesystem)
 
     def safe_lock_age(path_str: str) -> float | None:
         return cache_locking.safe_lock_age(
             path_str,
-            time_mod=deps.get("time", time),
-            os_mod=deps["os"],
+            time_mod=runtime.clock,
+            os_mod=runtime.filesystem,
         )
 
     def safe_lock_stale_pid(path_str: str, stale_after: float | None) -> bool:
         return cache_locking.safe_lock_stale_pid(
             path_str,
             stale_after,
-            time_mod=deps.get("time", time),
-            os_mod=deps["os"],
+            time_mod=runtime.clock,
+            os_mod=runtime.filesystem,
         )
 
     @contextmanager
@@ -147,8 +190,8 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             mkdir=mkdir,
             safe_lock_ensure_parent=safe_lock_ensure_parent,
             safe_lock_sleep_once=safe_lock_sleep_once,
-            fcntl_mod=deps.get("fcntl", fcntl),
-            os_mod=deps["os"],
+            fcntl_mod=runtime.fcntl,
+            os_mod=runtime.filesystem,
         ) as acquired:
             yield acquired
 
@@ -175,8 +218,8 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             safe_lock_stale_pid=safe_lock_stale_pid,
             safe_lock_age=safe_lock_age,
             safe_lock_sleep_once=safe_lock_sleep_once,
-            os_mod=deps["os"],
-            time_mod=deps.get("time", time),
+            os_mod=runtime.filesystem,
+            time_mod=runtime.clock,
         ) as acquired:
             yield acquired
 
@@ -199,10 +242,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             mode=mode,
             mkdir=mkdir,
             stale_after=stale_after,
-            fcntl_mod=deps.get("fcntl", fcntl),
-            os_mod=deps["os"],
-            time_mod=deps.get("time", time),
-            random_mod=deps.get("random", random),
+            fcntl_mod=runtime.fcntl,
+            os_mod=runtime.filesystem,
+            time_mod=runtime.clock,
+            random_mod=runtime.random,
         ) as acquired:
             yield acquired
 
@@ -233,7 +276,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
 
     def _source_signature(path: Any) -> str:
         try:
-            stat = os.stat(path)
+            stat = runtime.filesystem.stat(path)
             return f"{getattr(stat, 'st_mtime_ns', 0)}:{stat.st_size}"
         except Exception:
             return "unknown"
@@ -266,13 +309,17 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         cached = semantic_fingerprint_state[0]
         if cached is not None:
             return cached
-        source_file = context.source_file if context is not None else getattr(module, "__file__", "")
+        source_file = binding.source_file
         if not isinstance(source_file, str):
             source_file = ""
-        package_dir = os.path.dirname(os.path.abspath(source_file))
-        release_hint = str(deps.get("NAUTICAL_RELEASE_ID") or os.environ.get("NAUTICAL_RELEASE_ID") or "")
+        package_dir = runtime.filesystem.path.dirname(runtime.filesystem.path.abspath(source_file))
+        release_hint = str(
+            deps.get("NAUTICAL_RELEASE_ID")
+            or runtime.filesystem.environ.get("NAUTICAL_RELEASE_ID")
+            or ""
+        )
         source_parts = [
-            f"{name}:{_source_signature(os.path.join(package_dir, name))}"
+            f"{name}:{_source_signature(runtime.filesystem.path.join(package_dir, name))}"
             for name in semantic_source_files
         ]
         payload = "|".join(("nautical-hints|semantic-v1", f"release:{release_hint}", *source_parts))
@@ -286,7 +333,9 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         business_calendar_fingerprint: str = "",
     ) -> str:
         config_fingerprint = deps["scheduler_config_fingerprint"]()
-        semantic_fingerprint = deps.get("_cache_semantic_fingerprint", cache_semantic_fingerprint)()
+        semantic_fingerprint = (
+            runtime.semantic_fingerprint_override or cache_semantic_fingerprint
+        )()
         profile_fingerprint = (
             f"{business_calendar_fingerprint}|season:{deps['SEASON_HEMISPHERE']}"
             f"|config:{config_fingerprint}|semantic:{semantic_fingerprint}"
@@ -309,11 +358,11 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def quarantine_cache(key: str, path: str) -> bool:
         """Move a broken cache entry aside so future reads become clean misses."""
         try:
-            with deps.get("_cache_lock", cache_lock)(key) as locked:
-                if not locked or not deps["os"].path.exists(path):
+            with (runtime.cache_lock_override or cache_lock)(key) as locked:
+                if not locked or not runtime.filesystem.path.exists(path):
                     return False
-                target = f"{path}.bad.{deps['os'].getpid()}.{deps.get('time', time).time_ns()}"
-                deps["os"].replace(path, target)
+                target = f"{path}.bad.{runtime.filesystem.getpid()}.{runtime.clock.time_ns()}"
+                runtime.filesystem.replace(path, target)
                 cache_state.memory.pop(key, None)
                 return True
         except Exception:
@@ -325,19 +374,19 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             enable_anchor_cache=deps["ENABLE_ANCHOR_CACHE"],
             cache_path=cache_path,
             anchor_cache_ttl=deps["ANCHOR_CACHE_TTL"],
-            time_mod=deps.get("time", time),
+            time_mod=runtime.clock,
             cache_load_mem=cache_state.memory,
             cache_load_mem_ttl=cache_state.ttl,
-            clone_cache_payload=deps.get("_clone_cache_payload", clone_cache_payload),
-            normalize_dnf_cached=deps.get("_normalize_dnf_cached", normalize_dnf_cached),
-            cache_payload_shape_ok=deps.get("_cache_payload_shape_ok", cache_payload_shape_ok),
+            clone_cache_payload=runtime.clone_payload_override or clone_cache_payload,
+            normalize_dnf_cached=runtime.normalize_dnf_override or normalize_dnf_cached,
+            cache_payload_shape_ok=runtime.payload_shape_override or cache_payload_shape_ok,
             cache_load_mem_max=cache_state.max_entries,
             diag=deps["diag"],
             quarantine_cache=quarantine_cache,
-            os_mod=deps["os"],
-            json_mod=deps.get("json", json),
-            zlib_mod=deps.get("zlib", zlib),
-            base64_mod=deps.get("base64", base64),
+            os_mod=runtime.filesystem,
+            json_mod=runtime.json,
+            zlib_mod=runtime.compression,
+            base64_mod=runtime.base64,
         )
 
     def cache_save_impl(key: str, obj: dict) -> bool:
@@ -345,16 +394,16 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             key,
             obj,
             enable_anchor_cache=deps["ENABLE_ANCHOR_CACHE"],
-            json_mod=deps.get("json", json),
-            zlib_mod=deps.get("zlib", zlib),
-            base64_mod=deps.get("base64", base64),
+            json_mod=runtime.json,
+            zlib_mod=runtime.compression,
+            base64_mod=runtime.base64,
             cache_path=cache_path,
             cache_dir=cache_dir,
             cache_lock=cache_lock,
             diag=deps["diag"],
-            os_mod=deps["os"],
-            tempfile_mod=tempfile,
-            cache_atomic_replace=deps.get("_cache_atomic_replace", cache_atomic_replace),
+            os_mod=runtime.filesystem,
+            tempfile_mod=runtime.tempfile,
+            cache_atomic_replace=runtime.atomic_replace_override or cache_atomic_replace,
             cache_load_mem=cache_state.memory,
         )
 
@@ -374,8 +423,8 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             cache_lock=cache_lock,
             stale_lock_check=lambda path, age: safe_lock_stale_pid(path, age)
             and (safe_lock_age(path) or 0.0) >= float(age),
-            time_mod=deps.get("time", time),
-            os_mod=deps["os"],
+            time_mod=runtime.clock,
+            os_mod=runtime.filesystem,
         )
 
     ttl_lru_cache = deps["_ttl_lru_cache"]
@@ -407,7 +456,9 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     ) -> str:
         if calendar_fingerprint is None:
             calendar_fingerprint = deps["business_calendar_fingerprint"]()
-        semantic_fingerprint = deps.get("_cache_semantic_fingerprint", cache_semantic_fingerprint)()
+        semantic_fingerprint = (
+            runtime.semantic_fingerprint_override or cache_semantic_fingerprint
+        )()
         return cache_key_for_task_cached(
             anchor_expr or "",
             anchor_mode or "",
@@ -434,7 +485,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                 parser_parts.append(f"{module_name}:{_source_signature(getattr(sibling, '__file__', ''))}")
             except Exception:
                 parser_parts.append(f"{module_name}:unavailable")
-        release = _source_signature(context.source_file if context is not None else getattr(module, "__file__", ""))
+        release = _source_signature(binding.source_file)
         schema = getattr(cache_payload, "CACHE_SCHEMA_VERSION", "unknown")
         return f"parser={'|'.join(parser_parts)}|schema:{schema}|release:{release}"
 
@@ -450,7 +501,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
     def _dnf_cache_enabled() -> bool:
-        raw = str(deps["os"].environ.get("NAUTICAL_DNF_DISK_CACHE") or "1").strip().lower()
+        raw = str(runtime.filesystem.environ.get("NAUTICAL_DNF_DISK_CACHE") or "1").strip().lower()
         return bool(deps.get("ENABLE_ANCHOR_CACHE", True)) and raw in {"1", "true", "yes", "on"}
 
     def dnf_cache_load(expr: str) -> Any:
@@ -484,10 +535,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         sleep_base=deps["_CACHE_LOCK_SLEEP_BASE"],
         jitter=deps["_CACHE_LOCK_JITTER"],
         stale_after=deps["_CACHE_LOCK_STALE_AFTER"],
-        fcntl_mod=deps.get("fcntl", fcntl),
-        os_mod=deps["os"],
-        time_mod=deps.get("time", time),
-        random_mod=deps.get("random", random),
+        fcntl_mod=runtime.fcntl,
+        os_mod=runtime.filesystem,
+        time_mod=runtime.clock,
+        random_mod=runtime.random,
     )
     safe_lock = bound_locking.safe_lock
     cache_lock = bound_locking.cache_lock

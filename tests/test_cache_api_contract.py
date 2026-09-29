@@ -17,6 +17,8 @@ from unittest.mock import patch
 
 import nautical_core as core
 import nautical_core.cache_api as cache_api
+import nautical_core.cache_locking as cache_locking
+import nautical_core.cache_payload as cache_payload
 import nautical_core.cache_support as cache_support
 
 
@@ -36,6 +38,43 @@ class _Clock:
 
 class CacheApiContractTests(unittest.TestCase):
     _namespaces: list[dict] = []
+
+    def test_runtime_context_uses_explicit_filesystem_clock_and_lock(self) -> None:
+        fake_filesystem = SimpleNamespace()
+        fake_clock = _Clock()
+        fake_random = SimpleNamespace(uniform=lambda _start, _end: 0.0)
+        fake_lock = SimpleNamespace(LOCK_EX=1, LOCK_NB=2, LOCK_UN=4, flock=lambda *_args: None)
+        siblings = {
+            "cache_support": cache_support,
+            "cache_locking": cache_locking,
+            "cache_payload": cache_payload,
+        }
+        values = {
+            "_CACHE_LOAD_MEM": OrderedDict(),
+            "_CACHE_LOAD_MEM_MAX": 8,
+            "_CACHE_LOAD_MEM_TTL": 300,
+            "os": fake_filesystem,
+            "time": fake_clock,
+            "random": fake_random,
+            "fcntl": fake_lock,
+            "json": json,
+            "zlib": __import__("zlib"),
+            "base64": __import__("base64"),
+        }
+        context = cache_api.CoreContext(
+            namespace=values,
+            import_sibling=lambda name: siblings[name],
+        )
+
+        try:
+            runtime = cache_api._binding_context(None, namespace=None, context=context).runtime
+        except AttributeError as exc:
+            self.fail(f"cache binding does not expose an explicit runtime bundle: {exc}")
+
+        self.assertIs(runtime.filesystem, fake_filesystem)
+        self.assertIs(runtime.clock, fake_clock)
+        self.assertIs(runtime.random, fake_random)
+        self.assertIs(runtime.fcntl, fake_lock)
 
     def _binding(
         self,
@@ -202,7 +241,7 @@ class CacheApiContractTests(unittest.TestCase):
                         replacement.replace(path)
                 return original_stat(target, *args, **kwargs)
 
-            with patch.object(cache_api.os, "stat", side_effect=stat_with_publish):
+            with patch.object(os, "stat", side_effect=stat_with_publish):
                 loaded = binding.cache_load("stable-read")
 
             self.assertEqual(loaded, new_value, f"reader did not observe replacement after {calls} stats")
@@ -459,9 +498,9 @@ class CacheApiContractTests(unittest.TestCase):
 
                 return stat
 
-            with patch.object(cache_api.os, "stat", side_effect=parser_stat(1)):
+            with patch.object(os, "stat", side_effect=parser_stat(1)):
                 before = self._binding(Path(td))._cache_semantic_fingerprint()
-            with patch.object(cache_api.os, "stat", side_effect=parser_stat(2)):
+            with patch.object(os, "stat", side_effect=parser_stat(2)):
                 after = self._binding(Path(td))._cache_semantic_fingerprint()
 
             self.assertTrue(any(path.endswith("parsing/parser_dnf.py") for path in seen))
@@ -480,9 +519,9 @@ class CacheApiContractTests(unittest.TestCase):
 
                 return stat
 
-            with patch.object(cache_api.os, "stat", side_effect=stat_for(1)):
+            with patch.object(os, "stat", side_effect=stat_for(1)):
                 before = binding._dnf_cache_fingerprint()
-            with patch.object(cache_api.os, "stat", side_effect=stat_for(2)):
+            with patch.object(os, "stat", side_effect=stat_for(2)):
                 after = self._binding(Path(td))._dnf_cache_fingerprint()
 
             self.assertNotEqual(before, after)
@@ -500,9 +539,9 @@ class CacheApiContractTests(unittest.TestCase):
 
                 return stat
 
-            with patch.object(cache_api.os, "stat", side_effect=stat_for(1)):
+            with patch.object(os, "stat", side_effect=stat_for(1)):
                 before = binding._dnf_cache_fingerprint()
-            with patch.object(cache_api.os, "stat", side_effect=stat_for(2)):
+            with patch.object(os, "stat", side_effect=stat_for(2)):
                 after = self._binding(Path(td))._dnf_cache_fingerprint()
 
             self.assertNotEqual(before, after)

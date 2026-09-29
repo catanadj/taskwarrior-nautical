@@ -297,40 +297,6 @@ class _BoundDiagnosticsEffects:
         setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
 
 
-def test_on_add_fail_and_exit_emits_json():
-    """_fail_and_exit should fail-closed without emitting task JSON."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_fail_test")
-    task = {"uuid": "00000000-0000-4000-8000-000000000abc", "description": "fail test"}
-    mod._PARSED_TASK = dict(task)
-    mod._RAW_INPUT_TEXT = json.dumps(task, ensure_ascii=False)
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        try:
-            mod._fail_and_exit("Invalid anchor", "anchor syntax error: bad")
-        except SystemExit as e:
-            expect(e.code == 1, f"unexpected exit code: {e.code}")
-        else:
-            raise AssertionError("_fail_and_exit did not exit")
-    out = buf.getvalue().strip()
-    expect(out == "", f"expected no stdout on failure, got: {out!r}")
-
-
-def test_on_add_panic_passthrough_emits_valid_json():
-    """on-add panic passthrough should always emit a valid JSON object."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_panic_passthrough_test")
-    mod._PARSED_TASK = {"uuid": "00000000-0000-4000-8000-000000000111", "description": "panic-add"}
-    mod._RAW_INPUT_TEXT = "{not-json"
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        mod._panic_passthrough()
-    out = buf.getvalue().strip()
-    obj = json.loads(out or "{}")
-    expect(isinstance(obj, dict), f"panic passthrough must emit JSON object, got: {out!r}")
-    expect(obj.get("uuid") == "00000000-0000-4000-8000-000000000111", "parsed task should be preserved")
-
-
 def test_on_modify_panic_passthrough_uses_latest_task():
     """on-modify panic passthrough should emit the latest task object."""
     hook = _find_hook_file("on-modify.nautical")
@@ -5366,125 +5332,6 @@ def test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance():
             expect(part in stderr_txt, f"expected parser guidance fragment {part!r} for {cp_value!r}: {stderr_txt[:500]!r}")
 
 
-def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
-    """A shared evaluator failure must never fall back to legacy scheduling callbacks."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_evaluator_failure_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000143",
-        "description": "evaluator initialization failure",
-        "status": "pending",
-        "entry": mod.core.fmt_isoz(now_utc),
-        "anchor": "w:mon",
-        "anchor_mode": "skip",
-        "chain": "on",
-        "chainID": "00000000",
-    }
-    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
-    panels = []
-    service_cls = importlib.import_module("nautical_core.scheduler_service").SchedulerService
-    original_from_task = service_cls.__dict__["from_task"]
-    def fail_from_task(cls, *args, **kwargs):
-        raise RuntimeError("astronomy profile is unavailable")
-
-    try:
-        service_cls.from_task = classmethod(fail_from_task)
-        mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
-        try:
-            mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
-        except SystemExit as exc:
-            expect(exc.code == 1, f"unexpected evaluator failure exit code: {exc.code!r}")
-        else:
-            raise AssertionError("evaluator initialization failure was accepted")
-    finally:
-        service_cls.from_task = original_from_task
-
-    expect(panels and panels[-1][0] == "❌ Invalid Chain", f"missing evaluator error panel: {panels!r}")
-    rows = panels[-1][1]
-    expect(any(label == "Recurrence evaluator" for label, _value in rows), f"missing evaluator error detail: {rows!r}")
-    expect(any(label == "Fix" for label, _value in rows), f"missing evaluator remediation: {rows!r}")
-
-
-def test_on_add_preview_reports_scheduler_exhaustion_actionably():
-    """Scheduler exhaustion should become a clear panel, not a generic hook crash."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_scheduler_exhaustion_test")
-    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000144",
-        "description": "scheduler exhaustion",
-        "status": "pending",
-        "entry": mod.core.fmt_isoz(now_utc),
-        "anchor": "w:mon",
-        "anchor_mode": "skip",
-        "chain": "on",
-        "chainID": "00000000",
-    }
-    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
-    panels = []
-    preview = mod._module("add_anchor_preview")
-    original_preview = preview.handle_anchor_preview_on_add
-    expected = mod.core.OccurrenceSearchExhausted(
-        "test preview", reference=date(2026, 4, 12), limit=1
-    )
-
-    def fail_preview(**_kwargs):
-        raise expected
-
-    try:
-        preview.handle_anchor_preview_on_add = fail_preview
-        mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
-        try:
-            mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
-        except SystemExit as exc:
-            expect(exc.code == 1, f"unexpected scheduler exhaustion exit code: {exc.code!r}")
-        else:
-            raise AssertionError("scheduler exhaustion was accepted")
-    finally:
-        preview.handle_anchor_preview_on_add = original_preview
-
-    expect(panels and panels[-1][0] == "❌ Invalid Chain", f"missing scheduler error panel: {panels!r}")
-    rows = panels[-1][1]
-    expect(any(label == "Scheduler" and "test preview" in value for label, value in rows), rows)
-    expect(any(label == "Fix" and "less sparse" in value for label, value in rows), rows)
-
-
-def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
-    """Normal anchor previews must not invoke the legacy occurrence callbacks."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_evaluator_scheduler_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000144",
-        "description": "evaluator scheduler preview",
-        "status": "pending",
-        "entry": mod.core.fmt_isoz(now_utc),
-        "anchor": "w:mon",
-        "anchor_mode": "skip",
-        "chain": "on",
-        "chainID": "00000000",
-    }
-    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
-    captured = {}
-    original = (mod._fmt_local_for_task, mod._panel)
-    try:
-        mod._fmt_local_for_task = mod.core.fmt_isoz
-        mod._panel = lambda title, rows, **kwargs: captured.update({"title": title, "rows": list(rows)})
-        mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
-    finally:
-        mod._fmt_local_for_task, mod._panel = original
-
-    expect(task.get("due"), f"evaluator preview did not assign due: {captured!r}")
-    expect(captured.get("title") == "⚓︎ Anchor Preview", f"evaluator preview did not render: {captured!r}")
-
-
 def test_on_modify_native_until_rejects_invalid_window_changes():
     """Nautical modifications should reject target windows made invalid."""
     hook = _find_hook_file("on-modify.nautical")
@@ -9853,9 +9700,6 @@ TESTS = [
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
     test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance,
-    test_on_add_preview_fails_closed_when_evaluator_initialization_fails,
-    test_on_add_preview_reports_scheduler_exhaustion_actionably,
-    test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows,
     test_on_modify_native_until_rejects_invalid_window_changes,
     test_on_modify_native_until_follows_recurrence_target_move,
     test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts,
@@ -9941,8 +9785,6 @@ TESTS = [
     test_modify_completion_advances_past_second_dst_fold,
     test_modify_overnight_window_advances_past_second_dst_fold,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
-    test_on_add_fail_and_exit_emits_json,
-    test_on_add_panic_passthrough_emits_valid_json,
     test_on_modify_panic_passthrough_uses_latest_task,
     test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,

@@ -15,8 +15,15 @@ from nautical_core.modify_models import (
 
 
 def _render_cp_completion_feedback(
-    cp: str, *, mode: str = "panel"
-) -> tuple[list[tuple[str, object]], str | None]:
+    cp: str,
+    *,
+    mode: str = "panel",
+    link_no: int = 2,
+    next_no: int = 3,
+    base_no: int = 2,
+    sequence_step: int = 1,
+    sequence_len: int = 1,
+) -> tuple[str | None, list[tuple[str, object]], str | None]:
     now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
     panels = []
     core = SimpleNamespace(
@@ -44,7 +51,7 @@ def _render_cp_completion_feedback(
         format_line_preview=lambda *_args, **_kwargs: "00000000 ✓ next ⛓ · #2 · (due in 15 days)",
         panel_line=lambda *_args, **_kwargs: None,
         text_line=lambda line, **_kwargs: text_lines.append(line),
-        panel=lambda _title, rows, **_kwargs: panels.append(list(rows)),
+        panel=lambda title, rows, **_kwargs: panels.append((title, list(rows))),
         chain_color_per_chain=False,
         chain_colour_for_task=lambda *_args: None,
         human_delta=lambda *_args, **_kwargs: "in 15 days",
@@ -53,7 +60,7 @@ def _render_cp_completion_feedback(
         new=TaskView.from_mapping(
             {
                 "cp": cp,
-                "link": 2,
+                "link": link_no,
                 "uuid": "00000000-0000-4000-8000-000000000111",
                 "chainID": "abcd1234",
             }
@@ -61,25 +68,26 @@ def _render_cp_completion_feedback(
         child=TaskView.from_mapping({"uuid": "00000000-0000-4000-8000-000000000222"}),
         child_due=now,
         child_short="beeswax",
-        next_no=3,
+        next_no=next_no,
         parent_short="00000000",
         cap_no=None,
         finals=[],
         now_utc=now,
         until_dt=None,
         until_cap_no=None,
-        meta={"cp_sequence_step": 1, "cp_sequence_len": 1},
+        meta={"cp_sequence_step": sequence_step, "cp_sequence_len": sequence_len},
         deferred_spawn=False,
         spawn_intent_id=None,
         lifecycle_result=CompletionLifecycleResult("applied"),
         chain_by_short=None,
         analytics_advice=None,
         integrity_warnings=None,
-        base_no=2,
+        base_no=base_no,
     )
 
     modify_feedback.render_cp_completion_feedback(feedback=feedback, services=services)
-    return (panels[0] if panels else [], text_lines[0] if text_lines else None)
+    title, rows = panels[0] if panels else (None, [])
+    return title, rows, text_lines[0] if text_lines else None
 
 
 class ModifyFeedbackContractTests(unittest.TestCase):
@@ -158,19 +166,28 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertIn(("Natural", "Dates from calendar.csv"), rows)
 
     def test_cp_jitter_feedback_shows_the_selected_interval(self) -> None:
-        rows, _text = _render_cp_completion_feedback("15d~0d")
+        _title, rows, _text = _render_cp_completion_feedback("15d~0d")
         self.assertIn(("Step", "1/1 (15d)"), rows)
 
     def test_cp_random_feedback_shows_the_chain_scoped_selected_interval(self) -> None:
         cp = "rand(11d..14d)"
-        rows, _text = _render_cp_completion_feedback(cp)
+        _title, rows, _text = _render_cp_completion_feedback(cp)
         selected = nautical_core.cp_sequence_interval_for_link(cp, 2, "abcd1234")
         selected_days = int(selected.total_seconds() // 86400)
 
         self.assertIn(("Step", f"1/1 ({selected_days}d)"), rows)
 
+    def test_cp_feedback_renders_the_current_sequence_step(self) -> None:
+        title, rows, _text = _render_cp_completion_feedback(
+            "3d,20d,7d", link_no=1, next_no=2, base_no=1, sequence_step=3, sequence_len=3
+        )
+
+        self.assertEqual(title, "⛓ Next link  #2  00000000 → beeswax")
+        self.assertIn(("Step", "3/3 (7d)"), rows)
+        self.assertTrue(any(label == "Result" and "Applied now" in str(value) for label, value in rows))
+
     def test_cp_text_feedback_uses_stacked_ascii_output(self) -> None:
-        rows, text = _render_cp_completion_feedback("P1D", mode="text")
+        _title, rows, text = _render_cp_completion_feedback("P1D", mode="text")
 
         self.assertEqual(rows, [])
         self.assertIsNotNone(text)

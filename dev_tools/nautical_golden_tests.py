@@ -10840,55 +10840,6 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
     expect(any("Timezone data unavailable" in str(v) for k, v in fb if k == "Integrity"), f"missing timezone fallback warning: {fb}")
 
 
-def test_on_modify_render_cp_completion_feedback_wrapper():
-    """CP completion feedback wrapper should delegate and emit a preview panel title."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_cp_feedback_wrapper_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHAIN_COLOR_PER_CHAIN = False
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
-    mod._timeline_lines = lambda *_a, **_k: []
-
-    captured = {}
-    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
-    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
-
-    prev_panel_mode = mod.core.PANEL_MODE
-    try:
-        mod.core.PANEL_MODE = "panel"
-        mod._presentation_effects.render_cp_completion_feedback(
-            new={"cp": "3d,20d,7d", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-4000-8000-000000000222"},
-            child_due=mod.core.now_utc(),
-            child_short="beeswax",
-            next_no=2,
-            parent_short="00000000",
-            cap_no=None,
-            finals=[],
-            now_utc=mod.core.now_utc(),
-            until_dt=None,
-            until_cap_no=None,
-            meta={"cp_sequence_step": 3, "cp_sequence_len": 3},
-            deferred_spawn=False,
-            spawn_intent_id=None,
-            chain_by_short=None,
-            analytics_advice=None,
-            integrity_warnings=None,
-            base_no=1,
-        )
-    finally:
-        mod.core.PANEL_MODE = prev_panel_mode
-
-    expect("title" in captured, "expected preview panel emission")
-    expect("Next link" in captured["title"], f"unexpected panel title: {captured}")
-    expect(("Step", "3/3 (7d)") in captured["fb"], f"expected sequence step period in feedback rows: {captured}")
-    expect(any(k == "Result" and "Applied now" in str(v) for k, v in captured["fb"]), f"expected applied lifecycle result in CP feedback: {captured}")
-
-
 def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundaries():
     """Completion panels should show the next expiration and one effective last occurrence."""
     hook = _find_hook_file("on-modify.nautical")
@@ -12547,7 +12498,6 @@ TESTS = [
     test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
-    test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundaries,
     test_on_add_rejects_oversized_stdin_early,
     test_on_modify_rejects_oversized_stdin_early,

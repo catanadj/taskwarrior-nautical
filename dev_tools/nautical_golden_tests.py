@@ -9995,47 +9995,6 @@ def test_on_add_preview_and_completion_skip_choose_same_next_anchor():
             completion_current = completion_next
 
 
-def test_on_modify_anchor_dnf_accepts_configured_preset():
-    """completion-side anchor validation should resolve configured preset aliases."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_preset_dnf_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    prev_anchor_presets = getattr(mod.core, "ANCHOR_PRESETS", {})
-    try:
-        mod.core.ANCHOR_PRESETS = {"payday": "m:15,-1bd"}
-        expr = "@payday"
-        dnf = mod.core.validate_anchor_expr_strict(expr)
-    finally:
-        mod.core.ANCHOR_PRESETS = prev_anchor_presets
-
-    expect(expr == "@payday", f"original preset anchor should be preserved: {expr!r}")
-    expect(dnf, f"preset anchor should resolve to DNF: {dnf!r}")
-
-
-def test_on_modify_omit_dnf_accepts_configured_preset():
-    """completion-side omit validation should resolve configured omit preset aliases."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_omit_preset_dnf_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    prev_omit_presets = getattr(mod.core, "OMIT_PRESETS", {})
-    try:
-        mod.core.OMIT_PRESETS = {"april": "y:apr"}
-        host = mod._module("modify_composition").hook_host(mod.__dict__, mod.__name__)
-        omit_effects = mod._module("modify_anchor_effects")
-        expr, omit_dnf = omit_effects.omit_dnf_from_parent(
-            omit_effects.omit_ports_for(host), {"omit": "@april"}
-        )
-    finally:
-        mod.core.OMIT_PRESETS = prev_omit_presets
-
-    expect(expr == "@april", f"original omit preset should be preserved: {expr!r}")
-    expect(omit_dnf, f"omit preset should resolve to DNF: {omit_dnf!r}")
-
-
 def test_navigator_uses_anchor_and_anchor_file_sources():
     """Navigator anchor helpers should summarize and merge anchor sources from anchor + anchor_file."""
     module_name = "_nautical_navigator_anchor_sources_test"
@@ -10057,6 +10016,8 @@ def test_navigator_uses_anchor_and_anchor_file_sources():
             encoding="utf-8",
         )
         old_dir = getattr(navigator.core, "ANCHOR_FILE_DIR", "")
+        old_core_dir = navigator.core._core_config.ANCHOR_FILE_DIR
+        old_facade_config_synced = navigator.core._FACADE_CONFIG_SYNCED
         navigator.core.ANCHOR_FILE_DIR = str(anchor_dir)
         # This test intentionally overrides the lazy facade's configured
         # source; mark the override as synchronized before scheduler access.
@@ -10093,6 +10054,8 @@ def test_navigator_uses_anchor_and_anchor_file_sources():
             )
         finally:
             navigator.core.ANCHOR_FILE_DIR = old_dir
+            navigator.core._core_config.ANCHOR_FILE_DIR = old_core_dir
+            navigator.core._FACADE_CONFIG_SYNCED = old_facade_config_synced
 
 
 def test_navigator_surfaces_configuration_drift_warning():
@@ -13798,8 +13761,6 @@ TESTS = [
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_chain_snapshot_modes_and_query,
     test_on_add_preview_and_completion_skip_choose_same_next_anchor,
-    test_on_modify_anchor_dnf_accepts_configured_preset,
-    test_on_modify_omit_dnf_accepts_configured_preset,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
     test_on_add_chainid_stamp_failure_rejects_recurring_root,
@@ -13864,6 +13825,13 @@ TESTS = [
 
 ]
 
+# This characterization deliberately mutates the compatibility facade's
+# synchronization state while exercising Navigator. Keep its lazy API
+# bindings from leaking into later hook cases in shuffled runs.
+ISOLATED_GOLDEN_TESTS = frozenset({
+    "test_navigator_uses_anchor_and_anchor_file_sources",
+})
+
 DEEP_TESTS = [
 
 ]
@@ -13908,7 +13876,10 @@ def main():
         total_tests += 1
         captured_stderr = io.StringIO()
         try:
-            if not args.isolated_child and "_load_core_module" in fn.__code__.co_names:
+            if not args.isolated_child and (
+                "_load_core_module" in fn.__code__.co_names
+                or fn.__name__ in ISOLATED_GOLDEN_TESTS
+            ):
                 child_env = dict(os.environ)
                 child_env["NAUTICAL_GOLDEN_ISOLATED"] = "1"
                 child = subprocess.run(

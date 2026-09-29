@@ -11,7 +11,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "d62a17a4665f3981eda58449ae00f1c8fd6047472cae997f2dfd6bf4f055fccc"
+    "b14ae72cfa757b2bcb6d1ac08c9ad33b7027c340aa63f3e270fb542fefa8eef4"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -33,8 +33,8 @@ GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
 )
 EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
     "configuration and bootstrap": (
-        34,
-        "0dcd1141cf41540b79d55001ffc3c979ed73d103c33bc24af9291a37e77d71d3",
+        32,
+        "bd00cbb23b9d1421ba5c19794839048af96215df67709959006de2f92fd8a4c5",
     ),
     "install and deployment": (
         15,
@@ -101,6 +101,8 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_timezone",
         "test_on_modify_anchor_file_child_projection_reuses_provider",
         "test_on_modify_pure_anchor_file_projection_reuses_provider",
+        "test_on_modify_anchor_dnf_accepts_configured_preset",
+        "test_on_modify_omit_dnf_accepts_configured_preset",
         "test_on_add_preview_uses_configured_chain_colour",
         "test_on_add_run_task_timeout",
         "test_on_modify_run_task_timeout",
@@ -629,6 +631,28 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertFalse(MIGRATED_DIRECT_CONTRACT_TESTS & top_level)
         self.assertFalse(MIGRATED_DIRECT_CONTRACT_TESTS & RETIRED_CHARACTERIZATION_TESTS)
 
+    def test_navigator_anchor_source_golden_restores_shared_core_state(self):
+        core = self.golden.core
+        previous = (
+            core._FACADE_CONFIG_SYNCED,
+            core.ANCHOR_FILE_DIR,
+            core._core_config.ANCHOR_FILE_DIR,
+        )
+        try:
+            self.golden.test_navigator_uses_anchor_and_anchor_file_sources()
+            self.assertEqual(
+                (
+                    core._FACADE_CONFIG_SYNCED,
+                    core.ANCHOR_FILE_DIR,
+                    core._core_config.ANCHOR_FILE_DIR,
+                ),
+                previous,
+            )
+        finally:
+            core._FACADE_CONFIG_SYNCED = previous[0]
+            core.ANCHOR_FILE_DIR = previous[1]
+            core._core_config.ANCHOR_FILE_DIR = previous[2]
+
     def test_removed_ineffective_tests_stay_absent(self):
         registered = {
             fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)
@@ -656,8 +680,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         performance = importlib.import_module("dev_tools.golden_tests.performance")
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
-        self.assertEqual(len(top_level), 330)
-        self.assertEqual(len(registered), 379)
+        self.assertEqual(len(top_level), 328)
+        self.assertEqual(len(registered), 377)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(hooks.TESTS), 5)
         self.assertEqual(len(operator.TESTS), 4)
@@ -666,7 +690,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(lifecycle.TESTS), 15)
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 489)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 491)
 
     def test_retained_cases_have_a_stable_exclusive_acceptance_inventory(self):
         registered = [fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)]

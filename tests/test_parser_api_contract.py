@@ -5,7 +5,9 @@ import unittest
 from types import SimpleNamespace
 
 import nautical_core as core
+import nautical_core.anchor_omit as anchor_omit
 import nautical_core.parser_api as parser_api
+import nautical_core.modify_anchor_effects as modify_anchor_effects
 from nautical_core.parser_api import ParserOwnerDependencies, _parse_anchor_expr_to_dnf_impl
 from nautical_core.parsing import parser_frontend
 from nautical_core.parsing import parser_dnf
@@ -205,6 +207,37 @@ class ParserPresetContractTests(unittest.TestCase):
             binding.omit_preset_display("@spring"),
             ("Omit preset", "@spring → y:apr"),
         )
+
+    def test_configured_anchor_and_omit_presets_validate_without_hook_bootstrap(self):
+        binding = self._binding(
+            anchors={"payday": "m:15,-1bd"},
+            omits={"april": "y:apr"},
+        )
+
+        anchor_dnf = binding.validate_anchor_expr_strict("@payday")
+        omit_dnf = anchor_omit.validate_omit_expr_strict(
+            "@april",
+            validate_anchor_expr_cached=binding.validate_anchor_expr_strict,
+            resolve_omit_presets=binding.resolve_omit_presets,
+        )
+        omit_ports = modify_anchor_effects.OmitPorts(
+            validate_omit=lambda expr: anchor_omit.validate_omit_expr_strict(
+                expr,
+                validate_anchor_expr_cached=binding.validate_anchor_expr_strict,
+                resolve_omit_presets=binding.resolve_omit_presets,
+            ),
+            load_omit_file_data=lambda *_args: (frozenset(), {}),
+            omit_file_dir="",
+            combine_omit_state=anchor_omit.combine_omit_state,
+        )
+        source_expr, parent_omit_dnf = modify_anchor_effects.omit_dnf_from_parent(
+            omit_ports, {"omit": "@april"}
+        )
+
+        self.assertTrue(anchor_dnf)
+        self.assertTrue(omit_dnf)
+        self.assertEqual(source_expr, "@april")
+        self.assertTrue(parent_omit_dnf)
 
 
 class ParserOwnerDNFContractTests(unittest.TestCase):

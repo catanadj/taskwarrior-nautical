@@ -71,7 +71,7 @@ class RuntimeConfigContracts(unittest.TestCase):
         original_timezone = values.get("tz")
         values["tz"] = "mutated-in-test"
 
-        self.assertEqual(core._core_config.LOCAL_TZ_NAME, original_timezone)
+        self.assertEqual(core_config.LOCAL_TZ_NAME, original_timezone)
 
     def test_hot_config_fingerprint_does_not_stat_filesystem(self) -> None:
         first = core_config.effective_config_fingerprint()

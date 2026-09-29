@@ -25,7 +25,11 @@ class ArchitectureContractTests(unittest.TestCase):
     def test_owner_contracts_do_not_access_private_facade_exports(self) -> None:
         tests = Path(__file__).parent
         private_reads = []
-        for filename in ("test_parser_owner_api_contracts.py", "test_scheduler_api_contract.py"):
+        for filename in (
+            "test_parser_owner_api_contracts.py",
+            "test_scheduler_api_contract.py",
+            "test_runtime_config_contracts.py",
+        ):
             path = tests / filename
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             facade_aliases = {

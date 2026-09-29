@@ -29,10 +29,17 @@ from nautical_core.lifecycle_outbox import (
     OutboxResult,
     OutboxProcessingState,
     OutboxResultKind,
+    lifecycle_outbox_path,
 )
 
 
 class LifecycleOutboxContractTests(unittest.TestCase):
+    def test_outbox_state_file_uses_dedicated_state_directory(self) -> None:
+        path = lifecycle_outbox_path(Path("/tmp/taskdata"))
+
+        self.assertEqual(path.parent.name, ".nautical-state")
+        self.assertEqual(path.name, ".nautical_lifecycle_outbox.db")
+
     @staticmethod
     def _plan(chain: str = "contract", *, max_attempts: int = 3) -> LifecyclePlan:
         from dev_tools.golden_tests.support import task_draft as _task_draft

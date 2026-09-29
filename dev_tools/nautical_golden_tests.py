@@ -4593,37 +4593,6 @@ def test_ops_templates_present_and_runner_executable():
     runner = os.path.join(ops, "nautical_health_check_cron.sh")
     expect(os.access(runner, os.X_OK), f"runner should be executable: {runner}")
 
-def test_on_exit_outcome_diagnostics_are_bounded():
-    """Large drains summarize excess intent diagnostics instead of flooding stderr."""
-    hook = _find_hook_file("on-exit.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_exit_diag_bound_test")
-    from types import SimpleNamespace
-
-    messages = []
-    previous_limit = mod._OUTBOX_DIAG_MAX_ITEMS
-    previous_diag = mod._diag
-    mod._OUTBOX_DIAG_MAX_ITEMS = 2
-    mod._diag = messages.append
-    outcomes = [
-        SimpleNamespace(intent_id=f"intent-{index}", kind=SimpleNamespace(value="retryable"), reason="busy")
-        for index in range(5)
-    ]
-    try:
-        diagnostics = importlib.import_module("nautical_core.exit_diagnostics")
-        suppressed = diagnostics.emit_outcome_diagnostics(
-            outcomes,
-            diagnostic=messages.append,
-            limit=mod._OUTBOX_DIAG_MAX_ITEMS,
-        )
-    finally:
-        mod._OUTBOX_DIAG_MAX_ITEMS = previous_limit
-        mod._diag = previous_diag
-    expect(suppressed == 3, f"unexpected suppressed diagnostic count: {suppressed}")
-    expect(len(messages) == 3, f"bounded diagnostics emitted unexpected lines: {messages!r}")
-    expect("intent-0" in messages[0] and "intent-1" in messages[1], f"first diagnostics were lost: {messages!r}")
-    expect("suppressed 3 additional" in messages[2], f"suppression summary was not actionable: {messages!r}")
-
-
 def test_core_invalid_timezone_warns_and_falls_back_to_utc():
     """Invalid timezone config should fall back to UTC and emit diagnostic warning when enabled."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
@@ -10598,46 +10567,6 @@ def test_ui_live_test_term_guard_restores_environment():
             os.environ["TERM"] = original
 
 
-def test_on_exit_emit_exit_feedback_reaches_stdout_contract():
-    """on-exit failing-hook feedback should still reach stdout even after stdout redirection."""
-    hook = _find_hook_file("on-exit.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_exit_emit_feedback_test")
-
-    class _DevNullLike:
-        def write(self, _s):
-            return None
-        def flush(self):
-            return None
-
-    fake_stdout = io.StringIO()
-    fake_stderr = io.StringIO()
-    orig_stdout = sys.stdout
-    orig_stderr = sys.stderr
-    orig_dunder_stdout = sys.__stdout__
-    try:
-        sys.stdout = _DevNullLike()
-        sys.stderr = fake_stderr
-        sys.__stdout__ = fake_stdout
-        mod._emit_exit_feedback("[nautical] test feedback")
-    finally:
-        sys.stdout = orig_stdout
-        sys.stderr = orig_stderr
-        sys.__stdout__ = orig_dunder_stdout
-
-    expect("[nautical] test feedback" in fake_stdout.getvalue(), "feedback should reach stdout contract stream")
-    expect("[nautical] test feedback" in fake_stderr.getvalue(), "feedback should also remain visible on stderr")
-
-
-def test_on_modify_state_files_use_dedicated_dir():
-    """on-modify lifecycle outbox state should live under .nautical-state."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_state_dir_test")
-    mod._load_core()
-    outbox = mod._module("lifecycle_outbox")
-    path = outbox.lifecycle_outbox_path(Path(mod.TW_DATA_DIR))
-    expect(path.parent.name == ".nautical-state", f"unexpected outbox dir: {path}")
-
-
 def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
     """Re-completing a reactivated task should not spawn when nextLink already exists."""
     hook = _find_hook_file("on-modify.nautical")
@@ -12070,7 +11999,6 @@ TESTS = [
     test_mixed_recurrence_loop_harness_reports_ok,
     test_soak_runner_reports_ok,
     test_ops_templates_present_and_runner_executable,
-    test_on_exit_outcome_diagnostics_are_bounded,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_modify_completion_advances_past_second_dst_fold,
     test_modify_overnight_window_advances_past_second_dst_fold,
@@ -12138,7 +12066,6 @@ TESTS = [
     test_on_modify_panel_fallback,
     test_on_modify_panel_forwards_live_duration,
     test_ui_live_test_term_guard_restores_environment,
-    test_on_exit_emit_exit_feedback_reaches_stdout_contract,
     test_hooks_require_package_core_layout,
     test_core_import_deterministic,
     test_core_import_defers_optional_stacks,
@@ -12149,7 +12076,6 @@ TESTS = [
     test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
-    test_on_modify_state_files_use_dedicated_dir,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
     test_on_modify_missing_taskdata_uses_tw_dir,
     test_core_invalid_timezone_warns_and_falls_back_to_utc,

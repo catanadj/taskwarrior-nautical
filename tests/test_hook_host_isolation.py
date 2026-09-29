@@ -159,6 +159,55 @@ class HookHostIsolationTests(unittest.TestCase):
         self.assertIn("completion lifecycle:", stderr.getvalue())
         self.assertIn("failure_kind=command_error", stderr.getvalue())
 
+    def test_exit_outcome_diagnostics_are_bounded(self) -> None:
+        from types import SimpleNamespace
+
+        from nautical_core.exit_diagnostics import emit_outcome_diagnostics
+
+        messages = []
+        outcomes = [
+            SimpleNamespace(
+                intent_id=f"intent-{index}",
+                kind=SimpleNamespace(value="retryable"),
+                reason="busy",
+            )
+            for index in range(5)
+        ]
+
+        suppressed = emit_outcome_diagnostics(
+            outcomes,
+            diagnostic=messages.append,
+            limit=2,
+        )
+
+        self.assertEqual(suppressed, 3)
+        self.assertEqual(len(messages), 3)
+        self.assertIn("intent-0", messages[0])
+        self.assertIn("intent-1", messages[1])
+        self.assertIn("suppressed 3 additional", messages[2])
+
+    def test_exit_feedback_reaches_taskwarrior_stream_after_stdout_redirect(self) -> None:
+        from nautical_core.hooks import exit_impl
+
+        class DiscardingStream:
+            def write(self, _value):
+                return None
+
+            def flush(self):
+                return None
+
+        redirected = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch.object(exit_impl.sys, "stdout", DiscardingStream()),
+            patch.object(exit_impl.sys, "stderr", stderr),
+            patch.object(exit_impl.sys, "__stdout__", redirected),
+        ):
+            exit_impl._emit_exit_feedback("[nautical] test feedback")
+
+        self.assertIn("[nautical] test feedback", redirected.getvalue())
+        self.assertIn("[nautical] test feedback", stderr.getvalue())
+
     def test_hosts_keep_composition_namespaces_separate(self) -> None:
         first_values = {"value": "first"}
         second_values = {"value": "second"}

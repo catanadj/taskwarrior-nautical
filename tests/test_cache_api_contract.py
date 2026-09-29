@@ -401,6 +401,8 @@ class CacheApiContractTests(unittest.TestCase):
                 self.assertTrue(acquired)
                 with binding._cache_lock("fallback") as competing:
                     self.assertFalse(competing)
+            with binding._cache_lock("fallback") as reacquired:
+                self.assertTrue(reacquired)
 
     def test_fallback_lock_recovers_dead_stale_pid_but_not_a_live_pid(self) -> None:
         with tempfile.TemporaryDirectory() as td:

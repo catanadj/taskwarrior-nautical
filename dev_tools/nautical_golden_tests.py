@@ -1848,20 +1848,6 @@ def test_safe_lock_fcntl_contention():
         with _owner_safe_lock_context(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
             expect(ok, "safe_lock should acquire after lock release")
 
-def test_safe_lock_fallback_contention():
-    """safe_lock should fail to acquire when fallback lockfile exists."""
-    with tempfile.TemporaryDirectory() as td:
-        lock_path = os.path.join(td, ".nautical_fallback.lock")
-        with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
-                              retries=2, sleep_base=0.01, jitter=0.0) as ok:
-            expect(ok, "fallback safe_lock did not acquire")
-            with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
-                                  retries=2, sleep_base=0.01, jitter=0.0) as ok2:
-                expect(not ok2, "fallback safe_lock should not acquire when locked")
-        with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
-                              retries=2, sleep_base=0.01, jitter=0.0) as ok3:
-            expect(ok3, "fallback safe_lock should acquire after release")
-
 def test_diag_log_rotation_bounds():
     """Persistent diag log should rotate when exceeding max size."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13193,7 +13179,6 @@ TESTS = [
     test_hooks_survive_malformed_numeric_environment,
     test_hook_files_are_private_permissions,
     test_safe_lock_fcntl_contention,
-    test_safe_lock_fallback_contention,
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
     test_hook_diag_redact_msg_masks_sensitive_json_fields,

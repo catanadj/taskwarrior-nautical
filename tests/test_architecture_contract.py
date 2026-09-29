@@ -106,7 +106,6 @@ class ArchitectureContractTests(unittest.TestCase):
                 "_LOCAL_TZ",
                 "_LOCAL_TZ",
             ],
-            "test_cache_api_contract.py": ["_clear_all_caches"],
         }
         private_reads = {path: names for path, names in private_reads.items() if names}
         approved_facade_contracts = dict(sorted(approved_facade_contracts.items()))

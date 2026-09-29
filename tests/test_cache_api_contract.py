@@ -169,11 +169,11 @@ class CacheApiContractTests(unittest.TestCase):
     def test_clear_cache_environment_toggle_invokes_global_clear(self) -> None:
         with (
             patch.dict(os.environ, {"NAUTICAL_CLEAR_CACHES": "1"}),
-            patch.object(core, "_clear_all_caches") as clear_all,
+            patch.object(cache_facade, "clear_all") as clear_all,
         ):
             core.parse_anchor_expr_to_dnf_cached("w:mon")
 
-        clear_all.assert_called_once_with()
+        clear_all.assert_called_once()
 
     def test_cache_miss_then_hit_returns_stable_copies(self) -> None:
         with tempfile.TemporaryDirectory() as td:

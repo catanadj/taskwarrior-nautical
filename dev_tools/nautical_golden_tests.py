@@ -1862,28 +1862,6 @@ def test_safe_lock_fallback_contention():
                               retries=2, sleep_base=0.01, jitter=0.0) as ok3:
             expect(ok3, "fallback safe_lock should acquire after release")
 
-def test_safe_lock_fallback_stale_cleanup():
-    """safe_lock fallback should clear stale lockfiles."""
-    with tempfile.TemporaryDirectory() as td:
-        lock_path = os.path.join(td, ".nautical_stale.lock")
-        with open(lock_path, "w", encoding="utf-8") as f:
-            f.write("999999 0\n")
-        os.utime(lock_path, (1, 1))
-        with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
-                              retries=2, sleep_base=0.01, jitter=0.0, stale_after=1.0) as ok:
-            expect(ok, "stale fallback lock was not cleared")
-
-def test_safe_lock_fallback_stale_pid_cleanup():
-    """safe_lock fallback should clear lockfiles with dead PIDs."""
-    with tempfile.TemporaryDirectory() as td:
-        lock_path = os.path.join(td, ".nautical_pid.lock")
-        with open(lock_path, "w", encoding="utf-8") as f:
-            f.write("999999 0\n")
-        os.utime(lock_path, (1, 1))
-        with _owner_safe_lock(lock_path, fcntl_mod=None, os_mod=os, time_mod=time, random_mod=random,
-                              retries=2, sleep_base=0.01, jitter=0.0, stale_after=1.0) as ok:
-            expect(ok, "stale PID lock was not cleared")
-
 def test_diag_log_rotation_bounds():
     """Persistent diag log should rotate when exceeding max size."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13216,8 +13194,6 @@ TESTS = [
     test_hook_files_are_private_permissions,
     test_safe_lock_fcntl_contention,
     test_safe_lock_fallback_contention,
-    test_safe_lock_fallback_stale_cleanup,
-    test_safe_lock_fallback_stale_pid_cleanup,
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
     test_hook_diag_redact_msg_masks_sensitive_json_fields,

@@ -402,6 +402,37 @@ class CacheApiContractTests(unittest.TestCase):
                 with binding._cache_lock("fallback") as competing:
                     self.assertFalse(competing)
 
+    def test_fallback_lock_recovers_dead_stale_pid_but_not_a_live_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "fallback.lock"
+            clock = _Clock()
+            lock_path.write_text("999999 0\n", encoding="ascii")
+
+            with cache_locking.safe_lock(
+                lock_path,
+                retries=2,
+                sleep_base=0,
+                stale_after=1,
+                fcntl_mod=None,
+                os_mod=os,
+                time_mod=clock,
+                random_mod=SimpleNamespace(uniform=lambda _start, _end: 0.0),
+            ) as acquired:
+                self.assertTrue(acquired)
+
+            lock_path.write_text(f"{os.getpid()} 0\n", encoding="ascii")
+            with cache_locking.safe_lock(
+                lock_path,
+                retries=1,
+                sleep_base=0,
+                stale_after=1,
+                fcntl_mod=None,
+                os_mod=os,
+                time_mod=clock,
+                random_mod=SimpleNamespace(uniform=lambda _start, _end: 0.0),
+            ) as acquired:
+                self.assertFalse(acquired)
+
     def test_unexpected_fcntl_error_propagates_and_closes_lock_file(self) -> None:
         class BrokenFcntl:
             LOCK_EX = fcntl.LOCK_EX

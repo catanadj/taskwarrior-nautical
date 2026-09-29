@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from types import SimpleNamespace
 
 import nautical_core as core
+import nautical_core.natural_language_api as natural_language_api
 import nautical_core.scheduler_atom as scheduler_atom
 import nautical_core.scheduler_api as scheduler_api
 import nautical_core.scheduler_expr as scheduler_expr
@@ -356,6 +357,10 @@ class SchedulerApiDelegationTests(unittest.TestCase):
 
 
 class SchedulerExpressionContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.natural_language = natural_language_api.for_core(module=core)
+
     def test_complex_weekday_union_projects_the_next_day(self) -> None:
         expression = " | ".join(
             f"w:{day}" for day in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -393,17 +398,17 @@ class SchedulerExpressionContractTests(unittest.TestCase):
             {"typ": "m", "spec": "rand", "mods": {"bd": True}},
         ]
         self.assertEqual(
-            core._rand_bucket_signature(term), (1, "09:30", True, "1–7")
+            self.natural_language._rand_bucket_signature(term), (1, "09:30", True, "1–7")
         )
         self.assertIsNone(
-            core._rand_bucket_signature(term + [{"typ": "w", "spec": "mon"}])
+            self.natural_language._rand_bucket_signature(term + [{"typ": "w", "spec": "mon"}])
         )
         bad_range = [
             {"typ": "m", "spec": "1..7"},
             {"typ": "m", "spec": "8..14"},
             {"typ": "m", "spec": "rand"},
         ]
-        self.assertIsNone(core._rand_bucket_signature(bad_range))
+        self.assertIsNone(self.natural_language._rand_bucket_signature(bad_range))
 
     def test_time_resolver_keeps_time_after_positive_day_offset(self) -> None:
         dnf = core.validate_anchor_expr_strict("y:04-25@+10d@t=12:00")

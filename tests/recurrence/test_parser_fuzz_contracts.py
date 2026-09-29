@@ -5,6 +5,7 @@ import random
 import unittest
 
 import nautical_core as core
+import nautical_core.natural_language_api as natural_language_api
 
 
 def _random_anchor_expr(rng: random.Random) -> str:
@@ -41,6 +42,10 @@ def _random_anchor_expr(rng: random.Random) -> str:
 
 
 class ParserFuzzContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.natural_language = natural_language_api.for_core(module=core)
+
     def test_mixed_valid_and_invalid_parser_inputs_never_raise_unexpected_errors(self) -> None:
         samples = (
             "", " ", "w:mon", "m:15", "y:06-01", "w:mon..fri@t=09:00",
@@ -122,7 +127,7 @@ class ParserFuzzContractTests(unittest.TestCase):
                     self.assertEqual(after_mutation[0][0]["spec"], original_spec)
                     self.assertEqual(
                         core.describe_anchor_expr(expression),
-                        core._describe_anchor_expr_from_dnf(revalidated),
+                        self.natural_language._describe_anchor_expr_from_dnf(revalidated),
                     )
 
                     references = [start, start, start]

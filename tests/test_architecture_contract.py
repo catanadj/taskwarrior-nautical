@@ -22,6 +22,26 @@ from nautical_core.add_anchor_preview import (
 
 
 class ArchitectureContractTests(unittest.TestCase):
+    def test_parser_owner_contracts_do_not_access_private_facade_exports(self) -> None:
+        path = Path(__file__).parent / "test_parser_owner_api_contracts.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        facade_aliases = {
+            alias.asname or alias.name.split(".", 1)[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+            if alias.name == "nautical_core"
+        }
+        private_reads = [
+            f"{path.name}:{node.lineno}: {node.value.id}.{node.attr}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and node.attr.startswith("_")
+            and isinstance(node.value, ast.Name)
+            and node.value.id in facade_aliases
+        ]
+        self.assertEqual(private_reads, [], "parser owner contracts must use owner APIs directly")
+
     def test_repository_consumers_import_internal_modules_from_their_owners(self) -> None:
         root = Path(__file__).parents[1]
         violations: list[str] = []

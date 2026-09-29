@@ -7,10 +7,13 @@ from datetime import date
 
 import nautical_core as core
 import nautical_core.acf_api as acf_api
+import nautical_core.cache_payload as cache_payload
 import nautical_core.description_aliases as description_aliases
 import nautical_core.expansion_api as expansion_api
+import nautical_core.parsing.parser_support_api as parser_support_api
 import nautical_core.quarter_api as quarter_api
 import nautical_core.satisfiability as satisfiability
+import nautical_core.scheduler_api as scheduler_api
 
 
 class ParserOwnerApiContractTests(unittest.TestCase):
@@ -21,15 +24,17 @@ class ParserOwnerApiContractTests(unittest.TestCase):
                     parser("moon:full + moon:new")
 
     def test_acf_spec_normalization_bounds_input_and_rejects_unknown_types(self) -> None:
-        self.assertEqual(core._normalize_spec_for_acf_cached("w", "mon", "MD"), "mon")
-        self.assertIsNone(core._normalize_spec_for_acf_cached("w", "x" * 300, "MD"))
-        self.assertIsNone(core._normalize_spec_for_acf_cached("q", "mon", "MD"))
+        self.assertEqual(self.acf._normalize_spec_for_acf_cached("w", "mon", "MD"), "mon")
+        self.assertIsNone(self.acf._normalize_spec_for_acf_cached("w", "x" * 300, "MD"))
+        self.assertIsNone(self.acf._normalize_spec_for_acf_cached("q", "mon", "MD"))
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.acf = acf_api.for_core(module=core)
         cls.expansion = expansion_api.for_core(module=core)
         cls.quarter = quarter_api.for_core(module=core)
+        cls.parser_support = parser_support_api.for_core(module=core)
+        cls.scheduler = scheduler_api.for_core(module=core)
 
     def test_acf_round_trip_rejects_checksum_corruption(self) -> None:
         packed = self.acf._build_acf_impl("w:mon")
@@ -301,7 +306,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             "t": [[6, 0], [9, 0], [12, 0], [15, 0]],
         }}]]
         self.assertEqual(
-            core._normalize_dnf_cached(valid)[0][0]["mods"]["t"],
+            cache_payload.normalize_dnf_cached(valid)[0][0]["mods"]["t"],
             [(6, 0), (9, 0), (12, 0), (15, 0)],
         )
         for value in (
@@ -317,7 +322,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             }}]],
         ):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                core._normalize_dnf_cached(value)
+                cache_payload.normalize_dnf_cached(value)
 
         with self.assertRaisesRegex(core.ParseError, "cannot be combined"):
             core.validate_anchor_expr_strict([[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
@@ -330,12 +335,12 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         valid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
             "time_random": "rand(06:00..18:00/3)", "t": [],
         }}]]
-        core._normalize_dnf_cached(valid)
+        cache_payload.normalize_dnf_cached(valid)
         invalid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
             "time_random": "rand(06..18/3)", "t": [],
         }}]]
         with self.assertRaisesRegex(ValueError, "random"):
-            core._normalize_dnf_cached(invalid)
+            cache_payload.normalize_dnf_cached(invalid)
 
     def test_parser_rejects_term_explosion_before_cartesian_expansion(self) -> None:
         group = "(w:mon|w:tue|w:wed|w:thu|w:fri|w:sat)"
@@ -482,9 +487,9 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         )
         for token, parsed in expected:
             with self.subTest(token=token):
-                self.assertEqual(core._parse_y_token(token), parsed)
-        self.assertIsNone(core._parse_y_token("13-01"))
-        self.assertIsNone(core._parse_y_token("31-04"))
+                self.assertEqual(self.parser_support._parse_y_token(token), parsed)
+        self.assertIsNone(self.parser_support._parse_y_token("13-01"))
+        self.assertIsNone(self.parser_support._parse_y_token("31-04"))
 
     def test_parser_rejects_commas_between_atoms_after_modifiers(self) -> None:
         with self.assertRaises(core.ParseError) as ctx:
@@ -677,27 +682,27 @@ class ParserOwnerApiContractTests(unittest.TestCase):
 
     def test_expansion_helpers_cover_business_and_yearly_ranges(self) -> None:
         self.assertEqual(
-            core._weekly_spec_to_wset("rand", mods={"bd": True}),
+            self.expansion._weekly_spec_to_wset("rand", mods={"bd": True}),
             {0, 1, 2, 3, 4},
         )
         self.assertEqual(
-            core._y_ranges_from_spec("rand-07,01-10..01-12"),
+            self.expansion._y_ranges_from_spec("rand-07,01-10..01-12"),
             [(7, 1, 7, 31), (1, 10, 1, 12)],
         )
         self.assertEqual(
-            core._doms_allowed_by_year(2026, 7, ["rand-07"]),
+            self.expansion._doms_allowed_by_year(2026, 7, ["rand-07"]),
             set(range(1, 32)),
         )
 
     def test_monthly_expansion_helpers_resolve_valid_occurrence_months(self) -> None:
         from datetime import date
 
-        self.assertEqual(core._doms_for_monthly_token("last-fri", 2026, 1), {30})
-        self.assertFalse(core._month_has_hit("5th-mon", 2026, 2))
-        self.assertTrue(core._month_has_hit("5th-mon", 2026, 3))
-        self.assertEqual(core._next_valid_month_on_or_after("5th-mon", 2026, 2), (2026, 3))
+        self.assertEqual(self.expansion._doms_for_monthly_token("last-fri", 2026, 1), {30})
+        self.assertFalse(self.scheduler._month_has_hit("5th-mon", 2026, 2))
+        self.assertTrue(self.scheduler._month_has_hit("5th-mon", 2026, 3))
+        self.assertEqual(self.scheduler._next_valid_month_on_or_after("5th-mon", 2026, 2), (2026, 3))
         self.assertEqual(
-            core._first_hit_after_probe_in_month("5th-mon", 2026, 3, date(2026, 3, 1)),
+            self.scheduler._first_hit_after_probe_in_month("5th-mon", 2026, 3, date(2026, 3, 1)),
             date(2026, 3, 30),
         )
 

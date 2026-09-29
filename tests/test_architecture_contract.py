@@ -34,6 +34,7 @@ class ArchitectureContractTests(unittest.TestCase):
             "recurrence/test_cp_sequence_contracts.py",
             "recurrence/test_scheduler_cross_path_conformance.py",
             "test_astronomy_contracts.py",
+            "test_cache_api_contract.py",
         ):
             path = tests / filename
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

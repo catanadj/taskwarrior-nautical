@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import fcntl
+import importlib
 import io
 import json
 import os
 from pathlib import Path
 import stat
+import sys
 import tempfile
 import time
 import unittest
@@ -17,9 +19,14 @@ from unittest.mock import patch
 
 import nautical_core as core
 import nautical_core.cache_api as cache_api
+import nautical_core.cache_facade as cache_facade
 import nautical_core.cache_locking as cache_locking
 import nautical_core.cache_payload as cache_payload
 import nautical_core.cache_support as cache_support
+
+
+def _import_core_sibling(name: str):
+    return importlib.import_module(f"nautical_core.{name}")
 
 
 class _Clock:
@@ -114,7 +121,7 @@ class CacheApiContractTests(unittest.TestCase):
             namespace["_cache_atomic_replace"] = atomic_replace
         if semantic_fingerprint is not None:
             namespace["_cache_semantic_fingerprint"] = semantic_fingerprint
-        namespace["_import_sibling"] = core._import_sibling
+        namespace["_import_sibling"] = _import_core_sibling
         binding = cache_api.for_core(namespace=namespace, module=core)
         namespace["_cache_lock"] = binding._cache_lock
         self._namespaces.append(namespace)
@@ -286,6 +293,20 @@ class CacheApiContractTests(unittest.TestCase):
             self.assertTrue(unrelated.exists())
 
     def test_cache_metrics_are_emitted_only_when_enabled(self) -> None:
+        from functools import lru_cache
+
+        @lru_cache
+        def cached(value: str) -> str:
+            return value
+
+        cached("w:mon")
+
+        def emit_metrics() -> None:
+            cache_facade.emit_metrics(
+                (("normalize_acf", cached),),
+                lambda _key, message: print(message, file=sys.stderr),
+            )
+
         with tempfile.TemporaryDirectory() as td:
             stderr = io.StringIO()
             with (
@@ -299,7 +320,7 @@ class CacheApiContractTests(unittest.TestCase):
                 ),
                 patch("sys.stderr", stderr),
             ):
-                core._emit_cache_metrics()
+                emit_metrics()
 
             self.assertIn("nautical-metrics", stderr.getvalue())
 
@@ -312,7 +333,7 @@ class CacheApiContractTests(unittest.TestCase):
                 ),
                 patch("sys.stderr", stderr),
             ):
-                core._emit_cache_metrics()
+                emit_metrics()
             self.assertEqual(stderr.getvalue(), "")
 
     def test_unsupported_schema_and_invalid_shape_are_quarantined(self) -> None:

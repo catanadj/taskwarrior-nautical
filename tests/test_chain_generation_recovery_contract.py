@@ -184,6 +184,23 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual((due_local.hour, due_local.minute), (9, 0))
         self.assertEqual(metadata["target_field"], "scheduled")
 
+    def test_anchor_generation_selects_next_local_timed_slot(self):
+        due_local = core.build_local_datetime(date(2026, 7, 4), (9, 0))
+        end_local = core.build_local_datetime(date(2026, 7, 4), (10, 0))
+        parent = _task(
+            anchor="w:mon..sun@t=05:00,09:00,14:00,19:00",
+            cp=None,
+            due=fmt_isoz(due_local),
+            end=fmt_isoz(end_local),
+        )
+        service = ChainGenerationService.from_core(core)
+
+        child_due, _metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        child_local = core.to_local(child_due)
+        self.assertEqual(child_local.date(), date(2026, 7, 4))
+        self.assertEqual((child_local.hour, child_local.minute), (14, 0))
+
     def test_hook_adapter_uses_shared_generation_service_without_legacy_helpers(self) -> None:
         class Hook:
             core = _Core()

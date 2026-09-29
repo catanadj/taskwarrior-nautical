@@ -11205,42 +11205,6 @@ def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_str
     expect("(omitted)" in txt, f"expected merged timeline omitted marker for anchor-side omit_file date: {txt!r}")
 
 
-def test_on_modify_compute_counted_random_advances_within_period():
-    """Counted-random completion should emit the remaining selection in the same period."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_counted_random_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    dnf = mod.core.validate_anchor_expr_strict("m:2rand")
-    seed = date(2026, 1, 1)
-    first, _meta = mod.core.next_after_expr(
-        dnf,
-        seed,
-        default_seed=seed,
-        seed_base="abcd1234",
-    )
-    expected, _meta = mod.core.next_after_expr(
-        dnf,
-        first,
-        default_seed=seed,
-        seed_base="abcd1234",
-    )
-    child_due, meta, _dnf = _compute_anchor_child_due(mod,
-        {
-            "anchor": "m:2rand",
-            "anchor_mode": "skip",
-            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(first, (9, 0))),
-            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(first, (10, 0))),
-            "chainID": "abcd1234",
-            "link": 1,
-        }
-    )
-    expect(mod.core.to_local(child_due).date() == expected, f"unexpected counted-random child due: {child_due}")
-    expect(expected.month == first.month, f"second counted pick should remain in the same month: {first}, {expected}")
-    expect(meta.get("target_field") == "due", f"expected due target field: {meta}")
-
-
 def test_on_modify_completion_build_and_spawn_child_happy_path():
     """completion spawn wrapper should return child info and stamp nextLink when verified."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13691,7 +13655,6 @@ TESTS = [
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
     test_hook_on_modify_merged_timeline_marks_projection_failures,
     test_hook_on_modify_timeline_uses_omit_file_description_label,
-    test_on_modify_compute_counted_random_advances_within_period,
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_completion_spawn_exception_is_retryable_with_reason,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,

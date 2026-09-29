@@ -246,6 +246,40 @@ class ChainGenerationContractTests(unittest.TestCase):
         ):
             service.compute_anchor_child_due(parent)
 
+    def test_on_modify_compute_counted_random_advances_within_period(self):
+        chain_id = "abcd1234"
+        dnf = core.validate_anchor_expr_strict("m:2rand")
+        seed = date(2026, 1, 1)
+        first, _metadata = core.next_after_expr(
+            dnf,
+            seed,
+            default_seed=seed,
+            seed_base=chain_id,
+        )
+        expected, _metadata = core.next_after_expr(
+            dnf,
+            first,
+            default_seed=seed,
+            seed_base=chain_id,
+        )
+        parent_due = core.build_local_datetime(first, (9, 0))
+        parent_end = core.build_local_datetime(first, (10, 0))
+        parent = _task(
+            anchor="m:2rand",
+            anchor_mode="skip",
+            cp=None,
+            due=fmt_isoz(parent_due),
+            end=fmt_isoz(parent_end),
+            chainID=chain_id,
+        )
+
+        service = ChainGenerationService.from_core(core)
+        child_due, metadata, _child_dnf = service.compute_anchor_child_due(parent)
+
+        self.assertEqual(core.to_local(child_due).date(), expected)
+        self.assertEqual(expected.month, first.month)
+        self.assertEqual(metadata["target_field"], "due")
+
     def test_anchor_generation_selects_next_local_timed_slot(self):
         due_local = core.build_local_datetime(date(2026, 7, 4), (9, 0))
         end_local = core.build_local_datetime(date(2026, 7, 4), (10, 0))

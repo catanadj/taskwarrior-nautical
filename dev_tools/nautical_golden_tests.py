@@ -4593,118 +4593,6 @@ def test_ops_templates_present_and_runner_executable():
     runner = os.path.join(ops, "nautical_health_check_cron.sh")
     expect(os.access(runner, os.X_OK), f"runner should be executable: {runner}")
 
-def test_on_modify_diag_blocks_pretty_print():
-    """on-modify diag output should emit indented multi-line blocks."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_diag_pretty_test")
-
-    previous = os.environ.get("NAUTICAL_DIAG")
-    try:
-        os.environ["NAUTICAL_DIAG"] = "1"
-        buf = io.StringIO()
-        with contextlib.redirect_stderr(buf):
-            mod._emit_diag_block("diag stats", [("a", 1), ("b", 2), ("c", 3), ("d", 4)], columns=2)
-    finally:
-        if previous is None:
-            os.environ.pop("NAUTICAL_DIAG", None)
-        else:
-            os.environ["NAUTICAL_DIAG"] = previous
-
-    out = buf.getvalue()
-    expect("[nautical] diag stats:\n" in out, f"missing diag title: {out!r}")
-    expect("[nautical]   a=1  b=2\n" in out, f"missing first wrapped diag line: {out!r}")
-    expect("[nautical]   c=3  d=4\n" in out, f"missing second wrapped diag line: {out!r}")
-
-
-def test_on_modify_lifecycle_diagnostics_are_gated_to_stderr():
-    """Structured lifecycle diagnostics must never leak into hook stdout."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_lifecycle_diag_channel_test")
-    models = core._import_sibling("modify_models")
-    result = models.CompletionLifecycleResult(
-        state="retryable",
-        reason="Taskwarrior lock busy",
-        diagnostic=models.CompletionLifecycleDiagnostic(
-            transition_id="chain01:1->2",
-            chain_id="chain01",
-            parent_link=1,
-            child_link=2,
-            stage="spawn",
-            attempts=1,
-            failure_kind="command_error",
-        ),
-    )
-    previous = os.environ.get("NAUTICAL_DIAG")
-    try:
-        os.environ["NAUTICAL_DIAG"] = "1"
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            mod._diag_lifecycle_result(result)
-        text = stderr.getvalue()
-        expect(stdout.getvalue() == "", f"lifecycle diagnostics leaked to stdout: {stdout.getvalue()!r}")
-        expect("completion lifecycle" in text and "failure_kind=command_error" in text, f"structured lifecycle diagnostics missing: {text!r}")
-
-        os.environ.pop("NAUTICAL_DIAG", None)
-        silent = io.StringIO()
-        with contextlib.redirect_stderr(silent):
-            mod._diag_lifecycle_result(result)
-        expect(silent.getvalue() == "", f"lifecycle diagnostics ignored NAUTICAL_DIAG gate: {silent.getvalue()!r}")
-    finally:
-        if previous is None:
-            os.environ.pop("NAUTICAL_DIAG", None)
-        else:
-            os.environ["NAUTICAL_DIAG"] = previous
-
-
-def test_on_modify_run_task_diag_bucket_stats():
-    """on-modify should classify Taskwarrior calls into stable diagnostic buckets."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_diag_bucket_test")
-
-    mod._reset_modify_runtime_state()
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.verbose=nothing", "_get", "beeswax.entry"]) == "get", "_get should classify as get")
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:beeswax", "export"]) == "other", "repository-owned UUID reads should not have a hook bucket")
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.json.array=on", "chainID:cid", "export"]) == "export_chain", "chain export should classify correctly")
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "import", "-"]) == "import", "import should classify correctly")
-
-    mod._diag_record_run_task(["task", "_get", "beeswax.entry"], ok=True, elapsed=0.25)
-    mod._diag_record_run_task(["task", "rc.json.array=off", "uuid:beeswax", "export"], ok=False, elapsed=0.5)
-    mod._diag_record_run_task(["task", "rc.json.array=on", "chainID:cid", "export"], ok=True, elapsed=0.75)
-
-    stats = mod._modify_runtime_state().diag_stats
-    expect(stats.get("run_task_calls_get") == 1, f"unexpected get call stats: {stats}")
-    expect(stats.get("run_task_calls_export_chain") == 1, f"unexpected chain export call stats: {stats}")
-    expect(stats.get("run_task_failures_other") == 1, f"unexpected repository-owned read fallback stats: {stats}")
-    expect(abs(float(stats.get("run_task_seconds_get", 0.0)) - 0.25) < 1e-9, f"unexpected get seconds: {stats}")
-    expect(abs(float(stats.get("run_task_seconds_other", 0.0)) - 0.5) < 1e-9, f"unexpected fallback command seconds: {stats}")
-    expect(abs(float(stats.get("run_task_seconds_export_chain", 0.0)) - 0.75) < 1e-9, f"unexpected chain export seconds: {stats}")
-
-
-def test_on_exit_diag_blocks_pretty_print():
-    """on-exit diag output should emit indented multi-line blocks."""
-    hook = _find_hook_file("on-exit.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_exit_diag_pretty_test")
-
-    prev = os.environ.get("NAUTICAL_DIAG")
-    os.environ["NAUTICAL_DIAG"] = "1"
-    mod.core = None
-    buf = io.StringIO()
-    try:
-        with contextlib.redirect_stderr(buf):
-            mod._diag_block("on-exit task stats", [("a", 1), ("b", 2), ("c", 3), ("d", 4)], columns=2)
-    finally:
-        if prev is None:
-            os.environ.pop("NAUTICAL_DIAG", None)
-        else:
-            os.environ["NAUTICAL_DIAG"] = prev
-
-    out = buf.getvalue()
-    expect("[nautical] on-exit task stats:\n" in out, f"missing exit diag title: {out!r}")
-    expect("[nautical]   a=1  b=2\n" in out, f"missing first wrapped exit diag line: {out!r}")
-    expect("[nautical]   c=3  d=4\n" in out, f"missing second wrapped exit diag line: {out!r}")
-
-
 def test_on_exit_outcome_diagnostics_are_bounded():
     """Large drains summarize excess intent diagnostics instead of flooding stderr."""
     hook = _find_hook_file("on-exit.nautical")
@@ -12182,10 +12070,6 @@ TESTS = [
     test_mixed_recurrence_loop_harness_reports_ok,
     test_soak_runner_reports_ok,
     test_ops_templates_present_and_runner_executable,
-    test_on_modify_diag_blocks_pretty_print,
-    test_on_modify_lifecycle_diagnostics_are_gated_to_stderr,
-    test_on_modify_run_task_diag_bucket_stats,
-    test_on_exit_diag_blocks_pretty_print,
     test_on_exit_outcome_diagnostics_are_bounded,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_modify_completion_advances_past_second_dst_fold,

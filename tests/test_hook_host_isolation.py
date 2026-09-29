@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+import io
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -77,7 +80,7 @@ class HookHostIsolationTests(unittest.TestCase):
         self.assertEqual(registered, [])
 
     def test_shared_diagnostic_block_is_bounded_and_opt_in(self) -> None:
-        from nautical_core.hook_runtime import emit_diagnostic_block
+        from nautical_core.hook_runtime import emit_diagnostic, emit_diagnostic_block
 
         emitted = []
         emit_diagnostic_block(
@@ -89,6 +92,72 @@ class HookHostIsolationTests(unittest.TestCase):
             columns=2,
         )
         self.assertEqual(emitted, ["stats:", "  a=1  b=2", "  c=3"])
+
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stdout(stdout), redirect_stderr(stderr):
+            for hook_name, title in (
+                ("on-modify", "diag stats"),
+                ("on-exit", "on-exit task stats"),
+            ):
+                emit_diagnostic_block(
+                    title,
+                    (("a", 1), ("b", 2), ("c", 3), ("d", 4)),
+                    hook_name=hook_name,
+                    emit=lambda message: emit_diagnostic(message, hook_name=hook_name),
+                    enabled=True,
+                    columns=2,
+                )
+
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(
+            stderr.getvalue(),
+            "[nautical] diag stats:\n"
+            "[nautical]   a=1  b=2\n"
+            "[nautical]   c=3  d=4\n"
+            "[nautical] on-exit task stats:\n"
+            "[nautical]   a=1  b=2\n"
+            "[nautical]   c=3  d=4\n",
+        )
+
+    def test_modify_lifecycle_diagnostic_is_gated_to_stderr(self) -> None:
+        from nautical_core.hooks import modify_impl
+        from nautical_core.modify_models import (
+            CompletionLifecycleDiagnostic,
+            CompletionLifecycleResult,
+        )
+
+        result = CompletionLifecycleResult(
+            state="retryable",
+            reason="Taskwarrior lock busy",
+            diagnostic=CompletionLifecycleDiagnostic(
+                transition_id="chain01:1->2",
+                chain_id="chain01",
+                parent_link=1,
+                child_link=2,
+                stage="spawn",
+                attempts=1,
+                failure_kind="command_error",
+            ),
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch.object(modify_impl, "_load_core", return_value=None),
+            patch.object(modify_impl, "core", None),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            os.environ.pop("NAUTICAL_DIAG", None)
+            modify_impl._diag_lifecycle_result(result)
+            self.assertEqual(stderr.getvalue(), "")
+            os.environ["NAUTICAL_DIAG"] = "1"
+            modify_impl._diag_lifecycle_result(result)
+
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("completion lifecycle:", stderr.getvalue())
+        self.assertIn("failure_kind=command_error", stderr.getvalue())
 
     def test_hosts_keep_composition_namespaces_separate(self) -> None:
         first_values = {"value": "first"}

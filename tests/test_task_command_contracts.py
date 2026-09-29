@@ -17,6 +17,33 @@ from nautical_core.task_command import failure_message, run_task_command
 
 
 class TaskCommandContractTests(unittest.TestCase):
+    def test_modify_run_task_diagnostics_classify_commands_and_accumulate_stats(self) -> None:
+        from nautical_core.hooks import modify_impl
+
+        state = SimpleNamespace(diag_stats={})
+        commands = (
+            (["task", "rc.hooks=off", "rc.verbose=nothing", "_get", "beeswax.entry"], "get"),
+            (["task", "rc.hooks=off", "uuid:beeswax", "export"], "other"),
+            (["task", "rc.json.array=on", "chainID:cid", "export"], "export_chain"),
+            (["task", "import", "-"], "import"),
+        )
+
+        with patch.object(modify_impl, "_modify_runtime_state", return_value=state):
+            for command, expected in commands:
+                with self.subTest(command=command):
+                    self.assertEqual(modify_impl._run_task_diag_bucket(command), expected)
+
+            modify_impl._diag_record_run_task(commands[0][0], ok=True, elapsed=0.25)
+            modify_impl._diag_record_run_task(commands[1][0], ok=False, elapsed=0.5)
+            modify_impl._diag_record_run_task(commands[2][0], ok=True, elapsed=0.75)
+
+        self.assertEqual(state.diag_stats["run_task_calls_get"], 1)
+        self.assertEqual(state.diag_stats["run_task_calls_export_chain"], 1)
+        self.assertEqual(state.diag_stats["run_task_failures_other"], 1)
+        self.assertEqual(state.diag_stats["run_task_seconds_get"], 0.25)
+        self.assertEqual(state.diag_stats["run_task_seconds_other"], 0.5)
+        self.assertEqual(state.diag_stats["run_task_seconds_export_chain"], 0.75)
+
     def test_client_observation_preserves_evidence_without_command_contents(self) -> None:
         observations = []
 

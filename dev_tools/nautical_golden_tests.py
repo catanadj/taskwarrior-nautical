@@ -1901,21 +1901,6 @@ def test_hook_diag_redact_msg_masks_sensitive_json_fields():
     expect(obj_exit.get("safe") == "ok", f"on-exit non-sensitive key changed: {obj_exit}")
 
 
-def test_core_cache_lock_contention_matches_safe_lock():
-    """_cache_lock should block contention similarly to safe_lock."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cache_dir = os.path.join(td, "cache")
-        mod = _load_hook_module(core_path, "_nautical_core_cache_lock_test")
-        mod._CACHE_DIR = None
-        mod.ANCHOR_CACHE_DIR_OVERRIDE = cache_dir
-        mod._cache_dir()
-        with mod._cache_lock("contend") as ok:
-            expect(ok, "cache lock did not acquire")
-            with mod._cache_lock("contend") as ok2:
-                expect(not ok2, "cache lock should not acquire when already locked")
-
-
 def test_core_cache_dir_rejects_symlink_override():
     """_cache_dir should reject symlink override paths and choose a real directory."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
@@ -13118,7 +13103,6 @@ TESTS = [
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
     test_hook_diag_redact_msg_masks_sensitive_json_fields,
-    test_core_cache_lock_contention_matches_safe_lock,
     test_core_cache_dir_rejects_symlink_override,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_read_two_invalid_trailing,

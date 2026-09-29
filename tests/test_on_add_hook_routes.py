@@ -704,6 +704,67 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertEqual(result["scheduled"], task["scheduled"])
         self.assertIn("First scheduled", process.stderr)
 
+    def test_anchor_scheduled_only_add_preserves_missing_due(self) -> None:
+        task = self._task(
+            anchor="w:wed",
+            anchor_mode="skip",
+            scheduled="20990101T090000Z",
+        )
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertNotIn("due", result)
+        self.assertEqual(result["scheduled"], task["scheduled"])
+        self.assertIn("First scheduled", process.stderr)
+
+    def test_anchor_file_preview_auto_assigns_first_adjusted_match(self) -> None:
+        (self.anchor_files / "calendar.csv").write_text(
+            "date,description\n2099-01-03,Party prep\n", encoding="utf-8"
+        )
+        task = self._task(
+            entry="20990101T090000Z",
+            due="20990101T090000Z",
+            chain="on",
+            chainID="fixture-anchor-file",
+            link=1,
+            anchor_file="calendar.csv@nbd@t=12:00",
+        )
+
+        result = self._assert_valid(task)
+        self.assertEqual(result["due"], "2099-01-05T12:00:00+00:00")
+
+    def test_combined_anchor_sources_choose_earliest_occurrence(self) -> None:
+        file_date = date.today() + timedelta(days=1)
+        (self.anchor_files / "calendar.csv").write_text(
+            f"date,description\n{file_date.isoformat()},Special date\n", encoding="utf-8"
+        )
+        entry = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        task = self._task(
+            entry=entry,
+            due=entry,
+            chain="on",
+            chainID="fixture-anchor-union",
+            link=1,
+            anchor="w:sat@t=09:00",
+            anchor_file="calendar.csv@t=12:00",
+        )
+
+        result = self._assert_valid(task)
+        self.assertEqual(
+            result["due"],
+            datetime.combine(file_date, time(12), timezone.utc).isoformat(),
+        )
+
+    def test_anchor_file_time_requires_zero_padding(self) -> None:
+        self._assert_invalid(
+            self._task(
+                anchor_file="calendar.csv@t=3:00",
+                anchor_mode="skip",
+                due="20990101T090000Z",
+            ),
+            ("leading zero", "03:00"),
+        )
+
     def _assert_dst_window_slot_occurs_once(
         self, anchor: str, entry: str, due: str, expected_slot: str
     ) -> None:

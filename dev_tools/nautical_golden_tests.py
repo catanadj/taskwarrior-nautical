@@ -5487,30 +5487,6 @@ def test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance():
             expect(part in stderr_txt, f"expected parser guidance fragment {part!r} for {cp_value!r}: {stderr_txt[:500]!r}")
 
 
-def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
-    """scheduled-only anchor tasks should remain scheduled-only on add."""
-    hook = _find_hook_file("on-add.nautical")
-    env = {"NO_COLOR": "1"}
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000113",
-        "description": "hook test on-add anchor scheduled-only",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20251217T000000Z",
-        "anchor": "w:wed",
-        "anchor_mode": "skip",
-        "scheduled": "20251217T090000Z",
-    }
-    p = _run_hook_script(hook, task, env_extra=env)
-    if p.returncode != 0:
-        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
-    out_task = _extract_last_json(p.stdout)
-    expect(not out_task.get("due"), f"scheduled-only anchor add should not set due: {out_task}")
-    expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
-    stderr_txt = _strip_markup(p.stderr)
-    expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
-
-
 def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
     """A shared evaluator failure must never fall back to legacy scheduling callbacks."""
     hook = _find_hook_file("on-add.nautical")
@@ -5990,27 +5966,6 @@ def test_on_modify_native_until_rejects_legacy_all_completion():
     expect(proc.returncode != 0, "legacy anchor_mode:all completion perpetuated native until")
     expect(not (proc.stdout or "").strip(), f"rejected legacy completion leaked stdout: {proc.stdout!r}")
     expect("Invalid expiration mode" in _strip_markup(proc.stderr), f"missing completion mode guard: {proc.stderr!r}")
-
-
-def test_hook_on_add_anchor_file_time_padding_hint():
-    """on-add should tell the user to pad single-digit hours in anchor_file @t."""
-    hook = _find_hook_file("on-add.nautical")
-    env = {"NO_COLOR": "1"}
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000115b",
-        "description": "hook test on-add anchor_file padding hint",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20250108T000000Z",
-        "anchor_file": "calendar.csv@t=3:00",
-        "anchor_mode": "skip",
-        "due": "20250108T090000Z",
-    }
-    p = _run_hook_script(hook, task, env_extra=env)
-    expect(p.returncode != 0, "on-add should fail for unpadded anchor_file @t")
-    expect((p.stdout or "").strip() == "", f"expected no stdout on invalid anchor_file @t failure, got: {p.stdout!r}")
-    stderr_txt = _strip_markup(p.stderr)
-    expect("leading zero" in stderr_txt and "03:00" in stderr_txt, f"expected padding hint in error message. stderr={stderr_txt[:500]!r}")
 
 
 def test_hook_on_modify_timeline_multitime_includes_all_slots():
@@ -7418,33 +7373,6 @@ def test_cap_from_until_cp_includes_exact_deadline():
     expect(final_dt == exact_until, f"exact deadline should be the final due: {final_dt!r} != {exact_until!r}")
 
 
-def test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor():
-    """on-add should reject invalid chainMax values for both recurrence branches."""
-    hook = _find_hook_file("on-add.nautical")
-    env = {"NO_COLOR": "1"}
-    cases = [
-        ({"cp": "1d", "chainMax": 0}, "cp zero"),
-        ({"cp": "1d", "chainMax": -1}, "cp negative"),
-        ({"cp": "1d", "chainMax": 2.5}, "cp fractional"),
-        ({"anchor": "w:mon", "anchor_mode": "skip", "chainMax": 0}, "anchor zero"),
-    ]
-    for idx, (attrs, label) in enumerate(cases, start=1):
-        task = {
-            "uuid": f"00000000-0000-4000-8000-00000000{180 + idx:04d}",
-            "description": f"hook test invalid chainMax add {label}",
-            "status": "pending",
-            "entry": "20260101T000000Z",
-            "due": "20260101T090000Z",
-            **attrs,
-        }
-        p = _run_hook_script(hook, task, env_extra=env)
-        expect(p.returncode != 0, f"on-add should reject {label}")
-        expect((p.stdout or "").strip() == "", f"invalid chainMax add should not emit stdout: {p.stdout!r}")
-        stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid chainMax" in stderr_txt, f"expected chainMax panel for {label}: {stderr_txt[:500]!r}")
-        expect("chainMax must be" in stderr_txt, f"expected chainMax guidance for {label}: {stderr_txt[:500]!r}")
-
-
 def test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor():
     """on-modify should reject invalid chainMax values before completion or spawn."""
     hook = _find_hook_file("on-modify.nautical")
@@ -8304,86 +8232,6 @@ def test_navigator_reads_through_read_only_invocation_repository():
     finally:
         navigator._UNIT_OF_WORK = None
         sys.modules.pop(module_name, None)
-
-def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
-    """on-add anchor_file preview should auto-assign due from the first future file occurrence and keep task-level time."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_anchor_file_preview_test")
-
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        (anchor_dir / "calendar.csv").write_text("date,description\n2026-04-25,Party prep\n", encoding="utf-8")
-        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
-        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
-        try:
-            task = {
-                "uuid": "00000000-0000-4000-8000-000000000701",
-                "description": "anchor file preview",
-                "status": "pending",
-                "chain": "on",
-                "chainID": "fixture-anchor-file",
-                "link": 1,
-                "anchor_file": "calendar.csv@nbd@t=12:00",
-                "entry": "2026-04-12T09:00:00Z",
-                "due": "2026-04-12T09:00:00Z",
-            }
-            now_utc = mod.core.parse_dt_any("2026-04-12T09:00:00Z")
-            now_local = mod.core.to_local(now_utc)
-            ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, now_local)
-            expect(ctx.kind == "anchor_file", f"expected anchor_file kind, got {ctx.kind!r}")
-            expect(not ctx.user_provided_due, f"expected implicit due, got {ctx!r}")
-
-            captured = {}
-            saved_panel = mod._panel
-            try:
-                mod._panel = lambda _title, rows, **_kwargs: captured.setdefault("rows", rows)
-                mod._module("add_composition").render_anchor_preview(mod, ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
-            finally:
-                mod._panel = saved_panel
-
-            due_val = task.get("due")
-            expect(str(due_val).startswith("2026-04-27T12:00:00"), f"unexpected auto-assigned due for anchor_file preview: {due_val!r}")
-        finally:
-            mod.core.ANCHOR_FILE_DIR = old_dir
-
-def test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match():
-    """combined anchor sources should preview from the earliest merged occurrence."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_anchor_and_file_preview_test")
-
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        (anchor_dir / "calendar.csv").write_text("date,description\n2026-04-14,Special date\n", encoding="utf-8")
-        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
-        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
-        try:
-            task = {
-                "uuid": "00000000-0000-4000-8000-000000000702",
-                "description": "combined preview",
-                "status": "pending",
-                "chain": "on",
-                "chainID": "fixture-anchor-union",
-                "link": 1,
-                "anchor": "w:fri@t=09:00",
-                "anchor_file": "calendar.csv@t=12:00",
-                "entry": "2026-04-12T09:00:00Z",
-                "due": "2026-04-12T09:00:00Z",
-            }
-            now_utc = mod.core.parse_dt_any("2026-04-12T09:00:00Z")
-            now_local = mod.core.to_local(now_utc)
-            ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, now_local)
-            captured = {}
-            saved_panel = mod._panel
-            try:
-                mod._panel = lambda _title, rows, **_kwargs: captured.setdefault("rows", rows)
-                mod._module("add_composition").render_anchor_preview(mod, ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
-            finally:
-                mod._panel = saved_panel
-            due_val = task.get("due")
-            expect(str(due_val).startswith("2026-04-14T12:00:00"), f"unexpected merged due preview: {due_val!r}")
-        finally:
-            mod.core.ANCHOR_FILE_DIR = old_dir
-
 
 def test_on_modify_compute_anchor_child_due_from_anchor_file():
     """on-modify completion should compute the next child due from anchor_file occurrences."""
@@ -10165,8 +10013,6 @@ TESTS = [
     test_on_modify_manual_delete_persists_chain_off,
     test_on_modify_invalid_anchor_has_no_stdout,
     test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance,
-    test_hook_on_add_anchor_scheduled_only_preserves_no_due,
-    test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
     test_on_add_rejects_oversized_stdin_early,
@@ -10261,8 +10107,6 @@ TESTS = [
     test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_chain_snapshot_modes_and_query,
-    test_hook_on_add_anchor_file_preview_auto_assigns_first_match,
-    test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match,
     test_on_modify_compute_anchor_child_due_from_anchor_file,
     test_on_modify_compute_anchor_child_due_from_random_anchor_file,
     test_on_modify_compute_anchor_child_due_from_multiple_file_times,
@@ -10464,7 +10308,6 @@ def main():
 
 TESTS.extend([
     *OPERATOR_TESTS,
-    test_hook_on_add_anchor_file_time_padding_hint,
     test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_child,
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,

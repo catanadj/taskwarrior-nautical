@@ -53,6 +53,12 @@ class HookProtocolTests(unittest.TestCase):
         self.assertEqual(result.task, plain)
         self.assertFalse(result.is_nautical)
 
+        legacy_chainid = hook_protocol.probe_on_add(
+            json.dumps(dict(plain, chainid="legacy-1234"))
+        )
+        self.assertTrue(legacy_chainid.valid, legacy_chainid.error)
+        self.assertFalse(legacy_chainid.is_nautical)
+
         for field, value in (
             ("anchor", "w:mon"),
             ("anchor_file", "dates.csv"),

@@ -2437,19 +2437,6 @@ def test_on_modify_limit_update_emits_effective_boundaries():
     expect(any(label == "Removed" and "Chain end point:" in str(value) for label, value in panels[1][1]), f"cleared chain end should be marked removed: {panels[1]!r}")
 
 
-def test_on_add_lowercase_chainid_does_not_mark_nautical():
-    """on-add should ignore lowercase chainid when deciding whether a task is Nautical."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_chainid_alias_test")
-    expect(
-        not mod._module("modify_lifecycle").task_has_nautical_fields({"chainid": "legacy-1234"}),
-        "lowercase chainid should not mark a task Nautical on add",
-    )
-    expect(
-        mod._module("modify_lifecycle").task_has_nautical_fields({"chainID": "abcd1234"}),
-        "canonical chainID should still mark a task Nautical on add",
-    )
-
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
     hook = _find_hook_file("on-modify.nautical")
@@ -2520,16 +2507,6 @@ def test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored():
     p = _run_hook_script_raw(hook, raw)
     expect(p.returncode == 0, f"expected plain delete without uuid to be ignored, got rc={p.returncode}, stderr={p.stderr!r}")
     _assert_stdout_json_only(p.stdout)
-
-
-def test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored():
-    """on-modify should not fail UUID mismatch for plain Taskwarrior deletes without Nautical fields."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_uuid_mismatch_non_nautical_test")
-    old = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
-    new = {"uuid": "00000000-0000-4000-8000-000000000222", "status": "deleted"}
-    got_old, got_new = mod._validate_modify_pair(old, new)
-    expect(got_old is old and got_new is new, f"expected UUID mismatch to be ignored for non-nautical delete: {(got_old, got_new)!r}")
 
 
 def _test_modify_engine_services(
@@ -12018,7 +11995,6 @@ TESTS = [
     test_on_modify_recurrence_update_groups_and_flattens_changes,
     test_on_modify_native_until_update_explains_carry,
     test_on_modify_limit_update_emits_effective_boundaries,
-    test_on_add_lowercase_chainid_does_not_mark_nautical,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser,
@@ -12267,7 +12243,6 @@ TESTS.extend([
     test_navigator_reads_through_read_only_invocation_repository,
     test_navigator_uses_anchor_and_anchor_file_sources,
     test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored,
-    test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored,
     test_config_fingerprint_invalidates_persistent_cache_keys,
     test_configuration_drift_detects_edit_and_removal,
     *INSTALLER_TESTS,

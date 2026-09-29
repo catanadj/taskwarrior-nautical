@@ -4780,35 +4780,6 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     expect(rows[0].get("uuid") == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f"unexpected filtered row: {rows}")
 
 
-def test_on_modify_predecessor_read_preserves_repository_unavailability():
-    """Predecessor presentation must not turn an unavailable chain into no predecessors."""
-    from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_modify_predecessor_chain_failure_test")
-    command = TaskCommand(("task", "export"), "test predecessor read", 1.0)
-    evidence = FailureEvidence(command, CommandFailureKind.INVALID_RESPONSE, 0, 1, 0.0, False, "malformed JSON")
-
-    class Repository:
-        def chain_snapshot(self, _chain_id, **_kwargs):
-            return Unavailable("chain:cid", evidence)
-
-    mod._modify_runtime_state().task_repository = Repository()
-    try:
-        reads = mod._module("modify_read_effects")
-        state = mod._modify_runtime_state()
-        ports = reads.PreviousChainPorts(
-            service=mod._module("modify_composition").lifecycle_read_service_for(mod),
-            panel_chain_by_link=state.panel_chain_by_link,
-            panel_chain_snapshot_loaded=state.panel_chain_snapshot_loaded,
-        )
-        reads.collect_prev_two(ports, {"chainID": "cid", "link": 3})
-    except RuntimeError as exc:
-        expect("malformed JSON" in str(exc), f"predecessor failure detail was lost: {exc}")
-    else:
-        raise AssertionError("unavailable predecessor read became an empty list")
-
-
 def test_core_invalid_timezone_warns_and_falls_back_to_utc():
     """Invalid timezone config should fall back to UTC and emit diagnostic warning when enabled."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
@@ -12289,7 +12260,6 @@ TESTS = [
     test_on_exit_diag_blocks_pretty_print,
     test_on_exit_outcome_diagnostics_are_bounded,
     test_on_modify_get_chain_export_filters_cached_chain_in_memory,
-    test_on_modify_predecessor_read_preserves_repository_unavailability,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_modify_completion_advances_past_second_dst_fold,
     test_modify_overnight_window_advances_past_second_dst_fold,

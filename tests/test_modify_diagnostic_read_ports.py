@@ -8,6 +8,47 @@ import unittest
 
 
 class ModifyDiagnosticReadPortTests(unittest.TestCase):
+    def test_collect_prev_two_preserves_repository_failure(self) -> None:
+        from nautical_core.integration_models import (
+            CommandFailureKind,
+            FailureEvidence,
+            TaskCommand,
+            Unavailable,
+        )
+        from nautical_core.lifecycle_read_service import LifecycleReadService
+        from nautical_core.modify_read_effects import PreviousChainPorts, collect_prev_two
+
+        command = TaskCommand(("task", "export"), "test predecessor read", 1.0)
+        evidence = FailureEvidence(
+            command,
+            CommandFailureKind.INVALID_RESPONSE,
+            0,
+            1,
+            0.0,
+            False,
+            "malformed JSON",
+        )
+
+        class Repository:
+            def chain_snapshot(self, _chain_id, **_kwargs):
+                return Unavailable("chain:cid", evidence)
+
+        missing = object()
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda _value: [],
+            token_matcher=lambda _row, _token: True,
+            read_query_get=lambda _kind, _key: missing,
+            chain_cache_get=lambda _chain: None,
+            repository=Repository(),
+            max_chain_walk=10,
+            read_query_missing=missing,
+        )
+        ports = PreviousChainPorts(service, {}, False)
+
+        with self.assertRaisesRegex(RuntimeError, "malformed JSON"):
+            collect_prev_two(ports, {"chainID": "cid", "link": 3})
+
     def test_tw_get_cached_uses_explicit_ports(self) -> None:
         from nautical_core.modify_read_effects import TwGetPorts, tw_get_cached
 

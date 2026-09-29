@@ -180,13 +180,13 @@ def _dynamic_hook_host_access(
     return None
 
 
-def _namespace_root(node: ast.AST) -> ast.Name | None:
+def _namespace_root(node: ast.AST, aliases: set[str]) -> ast.Name | None:
     while isinstance(node, (ast.Attribute, ast.Subscript)):
         node = node.value
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         if node.func.id in {"getattr", "vars", "hasattr", "setattr"} and node.args:
-            return _namespace_root(node.args[0])
-    return node if isinstance(node, ast.Name) and node.id in {"module", "core"} else None
+            return _namespace_root(node.args[0], aliases)
+    return node if isinstance(node, ast.Name) and node.id in aliases else None
 
 
 def _owner_namespace_reads(tree: ast.AST) -> tuple[tuple[str, int], ...]:
@@ -195,17 +195,48 @@ def _owner_namespace_reads(tree: ast.AST) -> tuple[tuple[str, int], ...]:
     class Visitor(ast.NodeVisitor):
         def __init__(self) -> None:
             self.functions: list[str] = []
+            self.alias_scopes: list[set[str]] = []
             self.reads: list[tuple[str, int]] = []
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
             self.functions.append(node.name)
+            aliases = set(self.alias_scopes[-1]) if self.alias_scopes else set()
+            arguments = (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            )
+            aliases.update(arg.arg for arg in arguments if arg.arg in {"module", "core"})
+            self.alias_scopes.append(aliases)
             self.generic_visit(node)
+            self.alias_scopes.pop()
             self.functions.pop()
 
         def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
             self.functions.append(node.name)
+            aliases = set(self.alias_scopes[-1]) if self.alias_scopes else set()
+            arguments = (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            )
+            aliases.update(arg.arg for arg in arguments if arg.arg in {"module", "core"})
+            self.alias_scopes.append(aliases)
             self.generic_visit(node)
+            self.alias_scopes.pop()
             self.functions.pop()
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            self._update_aliases(node.targets, node.value)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            self._update_aliases((node.target,), node.value)
+            self.generic_visit(node)
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            self._update_aliases((node.target,), node.value)
+            self.generic_visit(node)
 
         def visit_Attribute(self, node: ast.Attribute) -> None:
             self._record_namespace_read(node)
@@ -230,8 +261,23 @@ def _owner_namespace_reads(tree: ast.AST) -> tuple[tuple[str, int], ...]:
                 or function.startswith("_compat_")
                 or function.endswith("_compat_adapter")
             )
-            if not is_adapter and _namespace_root(node) is not None:
+            aliases = self.alias_scopes[-1] if self.alias_scopes else {"module", "core"}
+            if not is_adapter and _namespace_root(node, aliases) is not None:
                 self.reads.append((function, getattr(node, "lineno", 0)))
+
+        def _update_aliases(self, targets: Iterable[ast.AST], value: ast.AST | None) -> None:
+            if not self.alias_scopes:
+                return
+            aliases = self.alias_scopes[-1]
+            names = {
+                target.id
+                for root in targets
+                for target in ast.walk(root)
+                if isinstance(target, ast.Name)
+            }
+            aliases.difference_update(names)
+            if isinstance(value, ast.Name) and value.id in aliases:
+                aliases.update(names)
 
     visitor = Visitor()
     visitor.visit(tree)

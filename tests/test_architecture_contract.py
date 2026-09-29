@@ -289,18 +289,23 @@ class ArchitectureContractTests(unittest.TestCase):
                 "def for_core(module):\n"
                 "    return module.composition_input\n\n"
                 "def compat_adapter(core):\n"
-                "    return core.public_call\n",
+                "    return core.public_call\n\n"
+                "def owner_alias(module):\n"
+                "    namespace = module\n"
+                "    return namespace.next_after_expr\n",
                 encoding="utf-8",
             )
 
             violations = architecture_contract.validate(root)
 
-        self.assertEqual(len(violations), 1)
+        self.assertEqual(len(violations), 2)
         violation = violations[0]
         self.assertEqual(violation.importing_file, "nautical_core/scheduler_api.py")
         self.assertEqual(violation.dependency, "module-namespace")
         self.assertEqual(violation.line, 2)
         self.assertIn("explicit dependencies", violation.rule)
+        self.assertEqual(violations[1].line, 12)
+        self.assertIn("owner_alias", violations[1].rule)
 
     def test_primary_owner_cannot_import_compatibility_implementation(self) -> None:
         with tempfile.TemporaryDirectory(prefix="nautical-architecture-contract-") as td:

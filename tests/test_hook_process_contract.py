@@ -14,6 +14,57 @@ from tests.support.hook_process import HookSubprocessFixture
 
 
 class HookProcessContractTests(HookSubprocessFixture):
+    def test_on_modify_manual_delete_persists_chain_off(self) -> None:
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000422",
+            "status": "pending",
+            "description": "Manual delete protocol",
+            "cp": "7d",
+            "chain": "on",
+            "chainID": "delete22",
+            "link": 1,
+            "due": "20260720T090000Z",
+            "until": "20260726T235900Z",
+        }
+        new = dict(old, status="deleted", end="20260725T000000Z")
+
+        process = self.run_hook(
+            "on-modify.nautical",
+            json.dumps(old) + "\n" + json.dumps(new),
+            extra_environment={"NO_COLOR": "1"},
+        )
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        output = json.loads(process.stdout)
+        self.assertEqual(output["status"], "deleted")
+        self.assertEqual(output["chain"], "off")
+
+    def test_on_modify_expiration_wrapper_preserves_json_stdout(self) -> None:
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000421",
+            "status": "pending",
+            "description": "Expiration protocol",
+            "cp": "7d",
+            "chain": "on",
+            "chainID": "expire21",
+            "link": 1,
+            "due": "20260720T090000Z",
+            "until": "20260726T235900Z",
+        }
+        new = dict(old, status="deleted", end="20260727T000000Z")
+
+        process = self.run_hook(
+            "on-modify.nautical",
+            json.dumps(old) + "\n" + json.dumps(new),
+            extra_environment={"NO_COLOR": "1"},
+        )
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        output = json.loads(process.stdout)
+        self.assertEqual(output["status"], "deleted")
+        self.assertEqual(output["chain"], "on")
+        self.assertNotIn("Nautical occurrence expired", process.stderr)
+
     def test_shared_coverage_opt_in_records_hook_execution(self) -> None:
         coverage_directory = Path(
             os.environ.get("NAUTICAL_SUBPROCESS_COVERAGE_DIR")

@@ -2218,106 +2218,6 @@ def _test_modify_engine_services(
     )
 
 
-def test_delete_chain_summary_span_uses_stop_time_without_last_end():
-    """Deletion summaries should show active chain span even when the deleted pending task has no end."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_delete_chain_summary_span_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    first, last, span = mod._diagnostics_effects.span_fields(
-        "cid",
-        [{"uuid": "root", "due": "20260101T000000Z"}, {"uuid": "tail", "status": "deleted"}],
-        stop_at=datetime(2026, 1, 11, tzinfo=timezone.utc),
-        stopped_by_delete=True,
-    )
-    expect(first is not None, "first due should parse")
-    expect(last is None, f"deleted pending task should not create last end: {last!r}")
-    expect(span.startswith("Active for "), f"delete span should describe active duration: {span!r}")
-    expect("before deletion" in span, f"delete span should mention deletion: {span!r}")
-
-
-def test_end_summary_history_marks_deleted_pending_tail():
-    """End-summary history should not mark deleted pending tasks as completed."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_delete_chain_summary_history_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    lines = mod._diagnostics_effects.last_n_timeline(
-        [
-            {
-                "uuid": "00000000-0000-4000-8000-000000000111",
-                "status": "completed",
-                "link": 1,
-                "due": "20260101T000000Z",
-                "end": "20260101T000000Z",
-            },
-            {
-                "uuid": "00000000-0000-4000-8000-000000000222",
-                "status": "deleted",
-                "link": 2,
-                "due": "20260102T000000Z",
-            },
-        ],
-        n=6,
-    )
-    got = "\n".join(core.strip_rich_markup(line) for line in lines)
-    expect("#2" in got and "×" in got and "deleted" in got, f"deleted tail should be marked as deleted: {got!r}")
-    expect("#2  ✓" not in got and "(no end)" not in got.split("#1", 1)[0], f"deleted tail should not look completed/no-end: {got!r}")
-
-
-def test_delete_chain_summary_uses_stopped_title():
-    """Deletion-stopped summaries should use stopped wording in the panel title."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_delete_chain_summary_title_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    captured = {}
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000222",
-        "status": "deleted",
-        "chainID": "00000000",
-        "link": 2,
-        "cp": "1d",
-        "due": "20260102T000000Z",
-    }
-    chain = [
-        {
-            "uuid": "00000000-0000-4000-8000-000000000111",
-            "status": "completed",
-            "chainID": "00000000",
-            "link": 1,
-            "cp": "1d",
-            "due": "20260101T000000Z",
-            "end": "20260101T000000Z",
-        },
-        task,
-    ]
-
-    ui_effects = mod._module("modify_ui_effects")
-    prev_panel = ui_effects.panel
-    read_effects = mod._module("modify_read_effects")
-    prev_export = read_effects.export_chain_required
-    try:
-        ui_effects.panel = lambda _host, title, rows, **kwargs: captured.update(
-            {"title": title, "rows": rows, "kind": kwargs.get("kind")}
-        )
-        read_effects.export_chain_required = lambda _host, _task: list(chain)
-        mod._diagnostics_effects.end_chain_summary(
-            task,
-            "Pending task deleted.",
-            datetime(2026, 1, 3, tzinfo=timezone.utc),
-            current_task=task,
-        )
-    finally:
-        ui_effects.panel = prev_panel
-        read_effects.export_chain_required = prev_export
-
-    expect(captured.get("title") == "⛔ Chain stopped – summary", f"unexpected delete summary title: {captured!r}")
-
-
 def test_on_modify_expiration_panel_explains_carry():
     """The immediate expiration panel should explain the child's carry policy."""
     from nautical_core.lifecycle_models import LifecycleAction
@@ -2438,62 +2338,6 @@ def test_on_modify_expiration_internal_failure_remains_recoverable():
         and any(label == "Action" and "nautical reconcile --apply" in value for label, value in panels[0][1]),
         f"missing recovery warning: {panels!r}",
     )
-
-
-def test_on_modify_expiration_wrapper_preserves_json_stdout():
-    """Expiration feedback must stay on stderr while the hook returns one strict task object."""
-    hook = _find_hook_file("on-modify.nautical")
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000421",
-        "status": "pending",
-        "description": "Expiration protocol",
-        "cp": "7d",
-        "chain": "on",
-        "chainID": "expire21",
-        "link": 1,
-        "due": "20260720T090000Z",
-        "until": "20260726T235900Z",
-    }
-    new = dict(old, status="deleted", end="20260727T000000Z")
-    with tempfile.TemporaryDirectory() as td:
-        proc = _run_hook_script_raw(
-            hook,
-            json.dumps(old) + "\n" + json.dumps(new),
-            env_extra={"TASKDATA": td, "NO_COLOR": "1"},
-        )
-
-    expect(proc.returncode == 0, f"expiration hook failed: {proc.stderr!r}")
-    output = _assert_stdout_json_only(proc.stdout)
-    expect(output.get("status") == "deleted" and output.get("chain") == "on", f"unexpected hook task: {output!r}")
-    expect("Nautical occurrence expired" not in proc.stderr, f"deferred recovery should stay quiet: {proc.stderr!r}")
-
-
-def test_on_modify_manual_delete_persists_chain_off():
-    """The real hook should distinguish an intentional early deletion from expiration."""
-    hook = _find_hook_file("on-modify.nautical")
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000422",
-        "status": "pending",
-        "description": "Manual delete protocol",
-        "cp": "7d",
-        "chain": "on",
-        "chainID": "delete22",
-        "link": 1,
-        "due": "20260720T090000Z",
-        "until": "20260726T235900Z",
-    }
-    new = dict(old, status="deleted", end="20260725T000000Z")
-    with tempfile.TemporaryDirectory() as td:
-        proc = _run_hook_script_raw(
-            hook,
-            json.dumps(old) + "\n" + json.dumps(new),
-            env_extra={"TASKDATA": td, "NO_COLOR": "1"},
-        )
-
-    expect(proc.returncode == 0, f"manual-delete hook failed: {proc.stderr!r}")
-    output = _assert_stdout_json_only(proc.stdout)
-    expect(output.get("status") == "deleted", f"manual deletion status changed: {output!r}")
-    expect(output.get("chain") == "off", f"manual deletion did not stop the chain: {output!r}")
 
 
 def test_on_modify_invalid_anchor_has_no_stdout():
@@ -9455,14 +9299,9 @@ TESTS = [
     test_hooks_survive_malformed_numeric_environment,
     *STORAGE_TESTS,
     test_on_modify_invalid_json_passthrough,
-    test_delete_chain_summary_span_uses_stop_time_without_last_end,
-    test_end_summary_history_marks_deleted_pending_tail,
-    test_delete_chain_summary_uses_stopped_title,
     test_on_modify_expiration_panel_explains_carry,
     test_on_modify_expiration_delegates_to_extracted_orchestration,
     test_on_modify_expiration_internal_failure_remains_recoverable,
-    test_on_modify_expiration_wrapper_preserves_json_stdout,
-    test_on_modify_manual_delete_persists_chain_off,
     test_on_modify_invalid_anchor_has_no_stdout,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,

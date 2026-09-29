@@ -2,11 +2,89 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
+from datetime import datetime, timezone
 
 from nautical_core.modify_chain_summary import ChainSummaryRenderServices, render_chain_summary_with_services
 
 
 class ChainSummaryRendererContractTests(unittest.TestCase):
+    def test_delete_chain_summary_span_uses_stop_time_without_last_end(self) -> None:
+        from nautical_core.modify_chain_summary import span_fields
+
+        first, last, span = span_fields(
+            "cid",
+            [{"uuid": "root", "due": "20260101T000000Z"}, {"uuid": "tail", "status": "deleted"}],
+            stop_at=datetime(2026, 1, 11, tzinfo=timezone.utc),
+            stopped_by_delete=True,
+            export_endpoint=lambda *_: None,
+            parse_datetime=lambda value: (
+                datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+                if value else None
+            ),
+            human_delta=lambda start, end, **_kwargs: f"{(end - start).days} days",
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(last)
+        self.assertEqual(span, "Active for 10 days before deletion")
+
+    def test_end_summary_history_marks_deleted_pending_tail(self) -> None:
+        from nautical_core.modify_chain_summary import last_n_timeline
+
+        lines = last_n_timeline(
+            [
+                {"uuid": "00000000-0000-4000-8000-000000000111", "status": "completed", "link": 1,
+                 "due": "20260101T000000Z", "end": "20260101T000000Z"},
+                {"uuid": "00000000-0000-4000-8000-000000000222", "status": "deleted", "link": 2,
+                 "due": "20260102T000000Z"},
+            ],
+            n=6,
+            coerce_int=lambda value, default: int(value) if value is not None else default,
+            parse_datetime=lambda value: (
+                datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+                if value else None
+            ),
+            format_local=lambda value: value.isoformat(),
+            format_on_time_delta=lambda _due, _end: "on time",
+            short_uuid=lambda value: str(value)[:8],
+        )
+        rendered = "\n".join(lines)
+
+        self.assertIn("#2", rendered)
+        self.assertIn("×", rendered)
+        self.assertIn("deleted", rendered)
+        self.assertNotIn("#2  ✓", rendered)
+
+    def test_delete_chain_summary_uses_stopped_title(self) -> None:
+        captured = []
+        services = ChainSummaryRenderServices(
+            export_sorted_chain=lambda *_: [],
+            root_uuid_from=lambda task: task.get("uuid"),
+            short_uuid=lambda value: str(value or "")[:8],
+            format_root_and_age=lambda *_: "root",
+            kind_rows=lambda *_: None,
+            span_fields=lambda *_args, **_kwargs: (None, None, "–"),
+            stats_rows=lambda *_: None,
+            limits_row=lambda *_: None,
+            last_n_timeline_rows=lambda *_: [],
+            format_rows=lambda rows: rows,
+            coerce_int=lambda value, default: int(value) if value is not None else default,
+            format_local=lambda value: str(value),
+            max_chain_walk=10,
+            panel=lambda title, _rows, **_kwargs: captured.append(title),
+            diagnostic=lambda _message: None,
+        )
+
+        render_chain_summary_with_services(
+            {"uuid": "00000000-0000-4000-8000-000000000222", "chainID": "00000000", "link": 2},
+            "Pending task deleted.",
+            datetime(2026, 1, 3, tzinfo=timezone.utc),
+            None,
+            services=services,
+        )
+
+        self.assertEqual(captured, ["⛔ Chain stopped – summary"])
+
     def test_service_bundle_delegates_to_renderer(self) -> None:
         calls = []
         services = ChainSummaryRenderServices(

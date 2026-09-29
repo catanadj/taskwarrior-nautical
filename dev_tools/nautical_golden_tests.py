@@ -13417,16 +13417,6 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     expect(bool(intent), "spawn intent id should still be generated")
 
 
-def test_on_add_run_task_timeout():
-    """on-add typed command execution reports timeouts."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_run_task_timeout_test")
-    result = core.run_task_result(
-        [sys.executable, "-c", "import time; time.sleep(2)"], timeout=0.02, retries=1,
-    )
-    expect(not result.ok and result.kind.value == "timeout", f"on-add timeout changed: {result}")
-
-
 def test_on_modify_run_task_timeout():
     """on-modify typed command execution reports timeouts."""
     hook = _find_hook_file("on-modify.nautical")
@@ -14218,7 +14208,6 @@ TESTS = [
     test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
-    test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
     test_on_modify_state_files_use_dedicated_dir,
     test_on_modify_stable_child_uuid_is_slot_deterministic,

@@ -110,6 +110,16 @@ class RuntimeCommandTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIs(result.kind, CommandFailureKind.TIMEOUT)
 
+    def test_shared_runtime_runner_classifies_captured_output_timeout(self) -> None:
+        result = runtime_command.run_task_result(
+            [sys.executable, "-c", "import time; time.sleep(2)"],
+            timeout=0.02,
+            retries=1,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIs(result.kind, CommandFailureKind.TIMEOUT)
+
     def test_run_task_result_preserves_metadata_and_retry_policy(self) -> None:
         success = runtime_command.run_task_result(
             [sys.executable, "-c", "print('typed')"], timeout=2.0, retries=1

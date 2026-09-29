@@ -4,11 +4,136 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 import unittest
 
-from nautical_core.modify_timeline import _timeline_base_line, _timeline_future_anchor_items
+import nautical_core as core
+from nautical_core.modify_timeline import (
+    _timeline_base_line,
+    _timeline_future_anchor_items,
+)
+from nautical_core.recurrence_context import RecurrenceContext
+from nautical_core.scheduler_service import SchedulerService
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
+from nautical_core.task_models import TaskObservation
+from nautical_core.timeutil import parse_dt_any
 
 
 class ModifyTimelineContractTests(unittest.TestCase):
+    def test_positional_anchor_timeline_projects_future_selected_dates(self) -> None:
+        expression = "(w:tue | w:thu)@in-month=last"
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000778",
+            "description": "positional timeline",
+            "status": "pending",
+            "anchor": expression,
+            "anchor_mode": "skip",
+            "link": 1,
+            "due": "20260730T090000Z",
+            "end": "20260730T100000Z",
+            "chainID": "abcd1234",
+        }
+        observation = TaskObservation.from_mapping(
+            task, source_query="modify timeline positional contract"
+        )
+        scheduler = SchedulerService.from_observation(
+            observation,
+            context=RecurrenceContext(chain_id="abcd1234", timezone=timezone.utc),
+        )
+        due = datetime(2026, 8, 27, 9, tzinfo=timezone.utc)
+        items = _timeline_future_anchor_items(
+            task,
+            core.validate_anchor_expr_strict(expression),
+            due,
+            start_no=2,
+            allowed_future=5,
+            cap_no=None,
+            to_local_cached=lambda value: value.astimezone(timezone.utc),
+            safe_parse_datetime=lambda value: (parse_dt_any(value, ()), None),
+            scheduler_service=scheduler,
+            omit_dnf=None,
+            omit_description_for_date=None,
+            max_iterations=64,
+        )
+
+        future_dates = [item[1].date() for item in items if item[3] == "future"]
+        self.assertEqual(future_dates[:2], [date(2026, 9, 29), date(2026, 10, 29)])
+
+    def test_post_selection_modifier_timeline_projects_transformed_dates(self) -> None:
+        expression = "(w:tue | w:thu)@in-month=last@+2d@t=09:00"
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000779",
+            "description": "post-selection timeline",
+            "status": "pending",
+            "anchor": expression,
+            "anchor_mode": "skip",
+            "link": 2,
+            "due": "20260801T060000Z",
+            "end": "20260801T070000Z",
+            "chainID": "abcd1234",
+        }
+        observation = TaskObservation.from_mapping(
+            task, source_query="modify timeline post-selection contract"
+        )
+        scheduler = SchedulerService.from_observation(
+            observation,
+            context=RecurrenceContext(chain_id="abcd1234", timezone=timezone.utc),
+        )
+        due = datetime(2026, 8, 29, 9, tzinfo=timezone.utc)
+        items = _timeline_future_anchor_items(
+            task,
+            core.validate_anchor_expr_strict(expression),
+            due,
+            start_no=3,
+            allowed_future=4,
+            cap_no=None,
+            to_local_cached=lambda value: value.astimezone(timezone.utc),
+            safe_parse_datetime=lambda value: (parse_dt_any(value, ()), None),
+            scheduler_service=scheduler,
+            omit_dnf=None,
+            omit_description_for_date=None,
+            max_iterations=64,
+        )
+
+        future_dates = [item[1].date() for item in items if item[3] == "future"]
+        self.assertEqual(future_dates[0], date(2026, 10, 1))
+
+    def test_yearly_positional_timeline_projects_next_shifted_occurrence(self) -> None:
+        expression = "(w:mon)@in-year=last@+7d@t=09:00"
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000780",
+            "description": "yearly positional timeline",
+            "status": "pending",
+            "anchor": expression,
+            "anchor_mode": "skip",
+            "link": 2,
+            "due": "20270104T060000Z",
+            "end": "20270104T070000Z",
+            "chainID": "abcd1234",
+        }
+        observation = TaskObservation.from_mapping(
+            task, source_query="modify timeline yearly positional contract"
+        )
+        scheduler = SchedulerService.from_observation(
+            observation,
+            context=RecurrenceContext(chain_id="abcd1234", timezone=timezone.utc),
+        )
+        due = datetime(2028, 1, 3, 9, tzinfo=timezone.utc)
+        items = _timeline_future_anchor_items(
+            task,
+            core.validate_anchor_expr_strict(expression),
+            due,
+            start_no=3,
+            allowed_future=4,
+            cap_no=None,
+            to_local_cached=lambda value: value.astimezone(timezone.utc),
+            safe_parse_datetime=lambda value: (parse_dt_any(value, ()), None),
+            scheduler_service=scheduler,
+            omit_dnf=None,
+            omit_description_for_date=None,
+            max_iterations=64,
+        )
+
+        future_dates = [item[1].date() for item in items if item[3] == "future"]
+        self.assertEqual(future_dates[0], date(2029, 1, 1))
+
     def test_scheduler_failure_becomes_a_renderable_warning_row(self) -> None:
         child_due = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
 

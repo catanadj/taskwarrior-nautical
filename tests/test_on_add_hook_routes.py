@@ -115,6 +115,34 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertEqual(payload["chain"], "on")
         self.assertIn("last matching date", result.stderr)
 
+    def test_post_selection_modifiers_are_shown_in_anchor_preview(self) -> None:
+        expression = "(w:tue | w:thu)@in-month=last@+2d@t=09:00"
+        result = self._run(
+            self._task(
+                entry="20260703T090000Z",
+                due="20260801T060000Z",
+                anchor=expression,
+                anchor_mode="skip",
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["anchor"], expression)
+        self.assertIn("2 days later at 09:00", result.stderr)
+
+    def test_yearly_positional_anchor_preview_supports_post_selection_offset(self) -> None:
+        expression = "(w:mon)@in-year=last@+7d@t=09:00"
+        result = self._run(
+            self._task(
+                entry="20260701T090000Z",
+                due="20270104T090000Z",
+                anchor=expression,
+                anchor_mode="skip",
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["anchor"], expression)
+        self.assertIn("in each year", result.stderr)
+
     def test_valid_routes_preserve_or_mutate_the_expected_task_fields(self) -> None:
         explicit_due = "20990102T090000Z"
         routes = (

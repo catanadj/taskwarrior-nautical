@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+from pathlib import Path
 import subprocess
 import sys
 import textwrap
@@ -165,6 +166,7 @@ class HookInputContractTests(HookSubprocessFixture):
         added = self._run("on-add.nautical", json.dumps(task, ensure_ascii=False))
         self.assertEqual(added.returncode, 0)
         self.assertEqual(json.loads(added.stdout), task)
+        self.assertNotIn("\\u", added.stdout)
         self.assertEqual(added.stderr, "")
 
         modified_task = dict(task, description="updated café ăîșț", modified="20260101T000001Z")
@@ -174,25 +176,35 @@ class HookInputContractTests(HookSubprocessFixture):
         )
         self.assertEqual(modified.returncode, 0)
         self.assertEqual(json.loads(modified.stdout), modified_task)
+        self.assertNotIn("\\u", modified.stdout)
         self.assertEqual(modified.stderr, "")
 
     def test_diagnostics_never_contaminate_task_json_stdout(self) -> None:
-        task = {
-            "uuid": "22222222-2222-4222-8222-222222222222",
-            "description": "plain task",
-            "status": "pending",
-            "entry": "20260101T000000Z",
-            "modified": "20260101T000000Z",
+        task = {"uuid": "22222222-2222-4222-8222-222222222222", "description": "plain task", "status": "pending"}
+        latest = dict(task, description="changed task")
+        environment = {
+            "NAUTICAL_BENCH_FORCE_FULL": "1",
+            "NAUTICAL_CONFIG": str(Path(self.taskdata) / "missing.toml"),
         }
-        process = self._run(
-            "on-add.nautical",
-            json.dumps(task, ensure_ascii=False),
-            diagnostics=True,
+        cases = (
+            ("on-add.nautical", json.dumps(task, ensure_ascii=False), task),
+            (
+                "on-modify.nautical",
+                json.dumps(task, ensure_ascii=False) + "\n" + json.dumps(latest, ensure_ascii=False),
+                latest,
+            ),
         )
-        self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertEqual(json.loads(process.stdout), task)
-        self.assertNotIn("[nautical]", process.stdout)
-        self.assertTrue(process.stderr == "" or "[nautical]" in process.stderr)
+        for hook, payload, expected in cases:
+            with self.subTest(hook=hook):
+                process = self.run_hook(
+                    hook, payload, diagnostics=True, extra_environment=environment,
+                )
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(len(process.stdout.splitlines()), 1)
+                self.assertIsInstance(json.loads(process.stdout), dict)
+                self.assertEqual(json.loads(process.stdout), expected)
+                self.assertNotIn("[nautical]", process.stdout)
+                self.assertIn("[nautical]", process.stderr)
 
     def test_on_add_flushes_stdout_after_passthrough(self) -> None:
         task = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}

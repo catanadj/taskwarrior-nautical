@@ -3681,14 +3681,6 @@ def test_on_modify_expands_and_clears_description_uda_aliases():
         mod.core.ENABLE_UDA_ALIASES = previous
 
 
-def test_on_modify_invalid_json_passthrough():
-    """Malformed JSON should fail fast without stdout JSON."""
-    path = _find_hook_file("on-modify.nautical")
-    raw = "{not-json}"
-    p = _run_hook_script_raw(path, raw)
-    expect(p.returncode != 0, "on-modify should fail on invalid JSON input")
-    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
-
 def test_local_datetime_non_hour_dst_gap_is_shared_by_modify():
     """A 30-minute DST gap must shift by its actual transition size everywhere."""
     from zoneinfo import ZoneInfo
@@ -8564,7 +8556,6 @@ TESTS = [
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
     *STORAGE_TESTS,
-    test_on_modify_invalid_json_passthrough,
     test_on_modify_expiration_panel_explains_carry,
     test_on_modify_expiration_delegates_to_extracted_orchestration,
     test_on_modify_expiration_internal_failure_remains_recoverable,

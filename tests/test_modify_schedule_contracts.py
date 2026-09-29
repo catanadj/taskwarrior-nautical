@@ -277,6 +277,37 @@ class ModifyScheduleContractTests(unittest.TestCase):
         self.assertTrue(providers)
         self.assertTrue(all(provider is built[0][3] for provider in providers))
 
+    def test_overnight_window_until_includes_the_final_morning_slot(self) -> None:
+        due_local = core.build_local_datetime(date(2025, 12, 15), (22, 30))
+        until_local = core.build_local_datetime(date(2025, 12, 16), (6, 30))
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000963",
+            "description": "overnight completion",
+            "status": "completed",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "overnight-until-contract",
+            "anchor": "w:mon@t=22:30..06:30/7",
+            "link": 1,
+            "due": core.fmt_isoz(due_local),
+            "end": core.fmt_isoz(due_local + timedelta(minutes=10)),
+            "chainUntil": core.fmt_isoz(until_local),
+        }
+
+        final_link, final_due = modify_schedule_effects.cap_from_until_anchor(
+            self._completion_ports(max_iterations=32),
+            task,
+            due_local.astimezone(timezone.utc),
+            core.validate_anchor_expr_strict(task["anchor"]),
+        )
+
+        self.assertEqual(final_link, 8)
+        self.assertIsNotNone(final_due)
+        self.assertEqual(
+            core.to_local(final_due),
+            until_local,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -211,6 +211,51 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertIn("@payday → m:15", result.stderr)
         self.assertIn("2026-01-15", result.stderr)
 
+    def test_dst_gap_shifted_window_slot_is_not_duplicated(self) -> None:
+        self._assert_dst_window_slot_occurs_once(
+            "w:sun@t=01..04/1h",
+            "20250301T000000Z",
+            "20250309T060000Z",
+            "Sun 2025-03-09 03:00 EDT",
+        )
+
+    def test_dst_gap_shifted_partition_slot_is_not_duplicated(self) -> None:
+        self._assert_dst_window_slot_occurs_once(
+            "w:sun@t=01..05/5",
+            "20250301T000000Z",
+            "20250309T060000Z",
+            "Sun 2025-03-09 03:00 EDT",
+        )
+
+    def test_dst_fallback_overnight_slot_is_not_duplicated(self) -> None:
+        self._assert_dst_window_slot_occurs_once(
+            "w:sat@t=22:30..02:30/5",
+            "20261020T000000Z",
+            "20261101T023000Z",
+            "Sun 2026-11-01 01:30",
+        )
+
+    def _assert_dst_window_slot_occurs_once(
+        self, anchor: str, entry: str, due: str, expected_slot: str
+    ) -> None:
+        config = self.taskdata.parent / "dst-config.toml"
+        config.write_text('tz = "America/New_York"\n', encoding="utf-8")
+        task = self._task(
+            description="DST time-window preview",
+            entry=entry,
+            anchor=anchor,
+            anchor_mode="skip",
+            due=due,
+        )
+        result = self.run_hook(
+            "on-add.nautical",
+            json.dumps(task),
+            extra_environment={"NAUTICAL_CONFIG": str(config), "NO_COLOR": "1"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["uuid"], task["uuid"])
+        self.assertEqual(result.stderr.count(expected_slot), 1, result.stderr)
+
     def test_yearly_positional_anchor_preview_supports_post_selection_offset(self) -> None:
         expression = "(w:mon)@in-year=last@+7d@t=09:00"
         result = self._run(

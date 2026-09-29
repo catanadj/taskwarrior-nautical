@@ -373,6 +373,61 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual(child_after(4, 30), datetime(2025, 12, 17, 12, tzinfo=timezone.utc))
         self.assertEqual(child_after(19, 30), datetime(2025, 12, 18, 4, 30, tzinfo=timezone.utc))
 
+    def test_overnight_window_completion_advances_across_window_boundary(self):
+        due = datetime(2025, 12, 15, 22, 30, tzinfo=timezone.utc)
+        anchor = "w:mon@t=22:30..06:30/7"
+
+        def child_after(ended: datetime) -> datetime:
+            parent = _task(
+                anchor=anchor,
+                cp=None,
+                due=fmt_isoz(due),
+                end=fmt_isoz(ended),
+            )
+            child_due, _metadata, _dnf = self.service.compute_anchor_child_due(parent)
+            return self.service.core.to_local(child_due)
+
+        self.assertEqual(
+            child_after(due + timedelta(minutes=10)),
+            datetime(2025, 12, 15, 23, 50, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            child_after(datetime(2025, 12, 16, 6, 40, tzinfo=timezone.utc)),
+            datetime(2025, 12, 22, 22, 30, tzinfo=timezone.utc),
+        )
+
+    def test_random_window_completion_reuses_the_next_chain_scoped_slot(self):
+        from nautical_core.time_slots import resolve_time_slots_with_offsets
+
+        chain_id = "randommodify1"
+        target_date = date(2025, 12, 15)
+        slots = resolve_time_slots_with_offsets(
+            {"time_random": "rand(06:00..18:00/3)", "t": []},
+            target_date,
+            seed_base=chain_id,
+        )
+
+        def utc_slot(slot):
+            day_offset, hour, minute = slot
+            return datetime.combine(
+                target_date + timedelta(days=day_offset),
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            ).replace(hour=hour, minute=minute)
+
+        first, expected = utc_slot(slots[0]), utc_slot(slots[1])
+        parent = _task(
+            anchor="w:mon@t=rand(06..18/3)",
+            cp=None,
+            chainID=chain_id,
+            due=fmt_isoz(first),
+            end=fmt_isoz(first + timedelta(minutes=10)),
+        )
+
+        child_due, _metadata, _dnf = self.service.compute_anchor_child_due(parent)
+
+        self.assertEqual(self.service.core.to_local(child_due), expected)
+
     def test_anchor_file_projection_reuses_one_provider(self):
         builders = []
         occurrence = Occurrence(

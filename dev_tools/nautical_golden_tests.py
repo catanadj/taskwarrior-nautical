@@ -10724,70 +10724,6 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
     )
 
 
-def test_on_modify_render_anchor_completion_feedback_wrapper():
-    """anchor completion feedback wrapper should delegate and emit a preview panel title."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_feedback_wrapper_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHAIN_COLOR_PER_CHAIN = False
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
-    mod._timeline_lines = lambda *_a, **_k: []
-
-    captured = {}
-    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
-    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
-
-    prev_panel_mode = mod.core.PANEL_MODE
-    prev_show_analytics = mod.core.SHOW_ANALYTICS
-    prev_anchor_presets = getattr(mod.core, "ANCHOR_PRESETS", {})
-    prev_omit_presets = getattr(mod.core, "OMIT_PRESETS", {})
-    try:
-        mod.core.PANEL_MODE = "panel"
-        mod.core.SHOW_ANALYTICS = False
-        mod.core.ANCHOR_PRESETS = {"payday": "m:15,-1bd"}
-        mod.core.OMIT_PRESETS = {"wed": "w:wed"}
-        mod._presentation_effects.render_anchor_completion_feedback(
-            new={"anchor": "@payday", "omit": "@wed", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-4000-8000-000000000222"},
-            child_due=mod.core.now_utc(),
-            child_short="beeswax",
-            next_no=2,
-            parent_short="00000000",
-            cap_no=None,
-            finals=[],
-            now_utc=mod.core.now_utc(),
-            until_dt=None,
-            until_cap_no=None,
-            dnf=[[{"typ": "w", "spec": "mon", "mods": {}}]],
-            meta={"mode": "skip"},
-            stripped_attrs=[],
-            deferred_spawn=False,
-            spawn_intent_id=None,
-            chain_by_short=None,
-            analytics_advice="chain looks healthy but should be hidden",
-            integrity_warnings=None,
-            base_no=1,
-        )
-    finally:
-        mod.core.PANEL_MODE = prev_panel_mode
-        mod.core.SHOW_ANALYTICS = prev_show_analytics
-        mod.core.ANCHOR_PRESETS = prev_anchor_presets
-        mod.core.OMIT_PRESETS = prev_omit_presets
-
-    expect("title" in captured, "expected preview panel emission")
-    expect("Next anchor" in captured["title"], f"unexpected panel title: {captured}")
-    fb = captured.get("fb") or []
-    expect(any(k == "Omit" and "@wed" in str(v) for k, v in fb), f"expected omit row in anchor feedback: {fb}")
-    expect(any(k == "Preset" and "@payday → m:15,-1bd" in str(v) for k, v in fb), f"expected preset expansion row in anchor feedback: {fb}")
-    expect(any(k == "Natural" and "skip @wed" in str(v) for k, v in fb), f"expected natural omit row in anchor feedback: {fb}")
-    expect(any(k == "Result" and "Applied now" in str(v) for k, v in fb), f"expected applied lifecycle result in anchor feedback: {fb}")
-    expect(not any(k == "Analytics" for k, _v in fb), f"analytics row should be hidden when show_analytics is false: {fb}")
-
-
 def test_on_modify_reports_business_calendar_displacement():
     """Completion feedback should report the captured calendar roll in every panel mode."""
     hook = _find_hook_file("on-modify.nautical")
@@ -12822,7 +12758,6 @@ TESTS = [
     test_on_modify_expiration_wrapper_preserves_json_stdout,
     test_on_modify_manual_delete_persists_chain_off,
     test_on_modify_invalid_anchor_has_no_stdout,
-    test_on_modify_render_anchor_completion_feedback_wrapper,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,

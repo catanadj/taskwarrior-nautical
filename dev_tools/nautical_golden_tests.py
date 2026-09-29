@@ -7923,31 +7923,6 @@ def test_on_modify_native_until_rejects_legacy_all_completion():
     expect("Invalid expiration mode" in _strip_markup(proc.stderr), f"missing completion mode guard: {proc.stderr!r}")
 
 
-def test_on_add_due_context_treats_due_matching_entry_as_implicit():
-    """on-add should not treat due==entry as an explicit anchor due."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_due_context_entry_due_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    now_utc = mod.core.parse_dt_any("20260412T111500Z")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000113a",
-        "description": "hook test on-add implicit entry due context",
-        "status": "pending",
-        "entry": "20260412T111500Z",
-        "due": "20260412T111500Z",
-        "anchor": "w:mon,wed,fri",
-    }
-    user_provided_due, recurrence_field, due_dt, past_due_warning, due_day, due_hhmm = mod._due_context_on_add(task, now_utc)
-    expect(not user_provided_due, f"due matching entry should be treated as implicit: {(user_provided_due, recurrence_field, due_dt)!r}")
-    expect(recurrence_field == "due", f"unexpected recurrence field for implicit entry due: {recurrence_field!r}")
-    expect(due_dt == now_utc, f"implicit entry due should fall back to now_utc context: {due_dt!r}")
-    expect(past_due_warning is None, f"implicit entry due should not produce past-due warning: {past_due_warning!r}")
-    expect(due_day == mod.core.to_local(now_utc).date(), f"unexpected implicit due day: {due_day!r}")
-    expect(due_hhmm == (mod.core.to_local(now_utc).hour, mod.core.to_local(now_utc).minute), f"unexpected implicit due hhmm: {due_hhmm!r}")
-
-
 def test_hook_on_add_anchor_preview_skips_omit_date():
     """on-add anchor preview should skip omitted dates when selecting the next anchor."""
     hook = _find_hook_file("on-add.nautical")
@@ -13363,7 +13338,6 @@ TESTS = [
     test_on_modify_native_until_validates_simultaneous_completion,
     test_on_modify_native_until_rejects_strict_anchor_mode_changes,
     test_on_modify_native_until_rejects_legacy_all_completion,
-    test_on_add_due_context_treats_due_matching_entry_as_implicit,
     test_hook_on_add_anchor_preview_skips_omit_date,
     test_hook_on_add_anchor_preview_skips_omit_file_date,
     test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot,

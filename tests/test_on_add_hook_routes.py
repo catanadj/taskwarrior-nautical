@@ -247,7 +247,7 @@ class OnAddHookRouteTests(HookSubprocessFixture):
 
     def test_hook_on_add_anchor_preview_skips_omit_file_date(self) -> None:
         (self.omit_files / "holidays.csv").write_text(
-            "date,description\n2025-01-10,Skip Friday\n", encoding="utf-8"
+            "date,description\n2025-01-10,Company holiday blackout\n", encoding="utf-8"
         )
         task = self._task(
             project="testing",
@@ -265,10 +265,15 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertIn("Omit file", process.stderr)
         self.assertIn("holidays.csv", process.stderr)
         self.assertIn("2025-01-13", process.stderr)
+        self.assertNotIn("Company holida...", process.stderr)
+        self.assertNotIn("Fri 2025-01-10", process.stderr)
+        self.assertNotIn("2025-01-10 09:00", process.stderr)
 
         diagnostic = self._run(task, diagnostics=True)
         self.assertEqual(diagnostic.returncode, 0, diagnostic.stderr)
         self.assertEqual(json.loads(diagnostic.stdout), result)
+        self.assertNotIn("Company holida...", diagnostic.stderr)
+        self.assertNotIn("2025-01-10 09:00", diagnostic.stderr)
         self.assertIn("[nautical]", diagnostic.stderr)
 
     def test_hook_on_add_anchor_preview_marks_omitted_future_slots(self) -> None:

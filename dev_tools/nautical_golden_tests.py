@@ -7923,33 +7923,6 @@ def test_on_modify_native_until_rejects_legacy_all_completion():
     expect("Invalid expiration mode" in _strip_markup(proc.stderr), f"missing completion mode guard: {proc.stderr!r}")
 
 
-def test_hook_on_add_anchor_preview_skips_omit_date():
-    """on-add anchor preview should skip omitted dates when selecting the next anchor."""
-    hook = _find_hook_file("on-add.nautical")
-    env = {"NO_COLOR": "1"}
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000114",
-        "description": "hook test on-add anchor omit preview",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20250108T000000Z",
-        "anchor": "w:mon,wed,fri@t=09:00",
-        "omit": "w:wed",
-        "anchor_mode": "skip",
-        "due": "20250108T090000Z",
-    }
-    p = _run_hook_script(hook, task, env_extra=env)
-    if p.returncode != 0:
-        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
-    out_task = _extract_last_json(p.stdout)
-    expect(out_task.get("due") == task["due"], f"on-add changed explicit due: {out_task!r}")
-    stderr_txt = _strip_markup(p.stderr)
-    expect("Omit" in stderr_txt, f"expected omit row in preview. stderr={stderr_txt[:500]!r}")
-    expect("Except" in stderr_txt, f"expected omit natural-language row in preview. stderr={stderr_txt[:500]!r}")
-    expect("Wednesdays" in stderr_txt or "Wednesday" in stderr_txt, f"expected omit natural-language wording in preview. stderr={stderr_txt[:500]!r}")
-    expect("2025-01-10" in stderr_txt, f"expected next anchor to skip Wednesday and show Friday. stderr={stderr_txt[:500]!r}")
-
-
 def test_hook_on_add_anchor_preview_skips_omit_file_date():
     """on-add anchor preview should skip dates loaded from omit_file."""
     hook = _find_hook_file("on-add.nautical")
@@ -13338,7 +13311,6 @@ TESTS = [
     test_on_modify_native_until_validates_simultaneous_completion,
     test_on_modify_native_until_rejects_strict_anchor_mode_changes,
     test_on_modify_native_until_rejects_legacy_all_completion,
-    test_hook_on_add_anchor_preview_skips_omit_date,
     test_hook_on_add_anchor_preview_skips_omit_file_date,
     test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot,
     test_hook_on_add_anchor_preview_positive_day_offset_uses_timed_slot,

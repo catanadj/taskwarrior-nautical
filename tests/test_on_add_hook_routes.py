@@ -218,6 +218,33 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertNotIn("skip missed anchors and Dates from 2026.csv", process.stderr)
         self.assertNotIn("Preview", process.stdout)
 
+    def test_hook_on_add_anchor_preview_skips_omit_date(self) -> None:
+        task = self._task(
+            project="testing",
+            entry="20250108T000000Z",
+            anchor="w:mon,wed,fri@t=09:00",
+            omit="w:wed",
+            anchor_mode="skip",
+            due="20250108T090000Z",
+        )
+
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["due"], task["due"])
+        self.assertIn("Omit", process.stderr)
+        self.assertIn("Except", process.stderr)
+        self.assertTrue(
+            "Wednesdays" in process.stderr or "Wednesday" in process.stderr,
+            process.stderr,
+        )
+        self.assertIn("2025-01-10", process.stderr)
+
+        diagnostic = self._run(task, diagnostics=True)
+        self.assertEqual(diagnostic.returncode, 0, diagnostic.stderr)
+        self.assertEqual(json.loads(diagnostic.stdout), result)
+        self.assertIn("[nautical]", diagnostic.stderr)
+
     def test_large_weekly_interval_hook_route_is_not_clamped(self) -> None:
         task = self._task(
             entry="20260809T090000Z",

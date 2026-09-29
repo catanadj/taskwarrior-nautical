@@ -68,6 +68,48 @@ class DiagnosticWarningsContractTests(unittest.TestCase):
             self.assertIn("cwd", record)
             self.assertEqual(stderr.getvalue(), "")
 
+    def test_diag_log_redacts_sensitive_legacy_json_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            message = json.dumps(
+                {"description": "secret", "notes": "hidden", "ok": "keep"}
+            )
+            stderr = StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {"NAUTICAL_DIAG": "0", "NAUTICAL_DIAG_LOG": "1"},
+                ),
+                redirect_stderr(stderr),
+            ):
+                runtime.diag(message, "on-modify", directory)
+
+            path = Path(directory) / ".nautical_diag.jsonl"
+            content = path.read_text(encoding="utf-8")
+            self.assertNotIn("secret", content)
+            self.assertNotIn("hidden", content)
+            self.assertIn("[redacted]", content)
+            self.assertIn("keep", content)
+            self.assertEqual(stderr.getvalue(), "")
+
+    def test_diag_log_rotation_moves_oversized_file_and_writes_new_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".nautical_diag.jsonl"
+            path.write_text("x" * 64, encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "NAUTICAL_DIAG": "0",
+                    "NAUTICAL_DIAG_LOG": "1",
+                    "NAUTICAL_DIAG_LOG_MAX_BYTES": "20",
+                },
+            ):
+                runtime.diag_log("rotate me", "on-modify", directory)
+
+            overflow = list(Path(directory).glob(".nautical_diag.overflow.*.jsonl"))
+            self.assertTrue(overflow)
+            self.assertEqual(overflow[0].read_text(encoding="utf-8"), "x" * 64)
+            self.assertIn("rotate me", path.read_text(encoding="utf-8"))
+
     def test_rate_limited_warning_emits_only_once_inside_interval(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             stderr = StringIO()

@@ -30,11 +30,11 @@ class HookHostIsolationTests(unittest.TestCase):
         from nautical_core.hook_runtime import redact_diagnostic_message
 
         result = redact_diagnostic_message(
-            '{"note":null,"annotation":42,"description":"naïve \\"quoted\\""}'
+            '{"note":null,"annotation":42,"description":"naïve \\"quoted\\"","safe":"keep"}'
         )
         self.assertEqual(
             result,
-            '{"note":"[redacted]","annotation":"[redacted]","description":"[redacted]"}',
+            '{"note":"[redacted]","annotation":"[redacted]","description":"[redacted]","safe":"keep"}',
         )
 
     def test_shared_diagnostic_emission_uses_core_event_sink(self) -> None:

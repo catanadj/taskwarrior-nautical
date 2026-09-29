@@ -1767,95 +1767,6 @@ def test_full_hooks_reuse_wrapper_protocol_probe():
             expect(retained_probe is probe, f"{hook_name} did not retain wrapper probe result")
 
 
-def test_diag_log_rotation_bounds():
-    """Persistent diag log should rotate when exceeding max size."""
-    hook = _find_hook_file("on-modify.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        prev_taskdata = os.environ.get("TASKDATA")
-        prev_diag_log = os.environ.get("NAUTICAL_DIAG_LOG")
-        prev_diag_max = os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES")
-        os.environ["TASKDATA"] = td
-        os.environ["NAUTICAL_DIAG_LOG"] = "1"
-        os.environ["NAUTICAL_DIAG_LOG_MAX_BYTES"] = "20"
-        try:
-            mod = _load_hook_module(hook, "_nautical_diag_log_rotation_test")
-            log_path = Path(td) / ".nautical_diag.jsonl"
-            log_path.write_text("x" * 64, encoding="utf-8")
-            mod._diag("rotate me")
-            overflow = list(Path(td).glob(".nautical_diag.overflow.*.jsonl"))
-            expect(overflow, "diag log did not rotate")
-            expect(log_path.exists(), "diag log missing after rotation")
-            content = log_path.read_text(encoding="utf-8").strip()
-            expect(content, "diag log not written after rotation")
-        finally:
-            if prev_taskdata is None:
-                os.environ.pop("TASKDATA", None)
-            else:
-                os.environ["TASKDATA"] = prev_taskdata
-            if prev_diag_log is None:
-                os.environ.pop("NAUTICAL_DIAG_LOG", None)
-            else:
-                os.environ["NAUTICAL_DIAG_LOG"] = prev_diag_log
-            if prev_diag_max is None:
-                os.environ.pop("NAUTICAL_DIAG_LOG_MAX_BYTES", None)
-            else:
-                os.environ["NAUTICAL_DIAG_LOG_MAX_BYTES"] = prev_diag_max
-
-def test_diag_log_redacts_sensitive_fields():
-    """Persistent diag log should redact sensitive fields."""
-    hook = _find_hook_file("on-modify.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        prev_taskdata = os.environ.get("TASKDATA")
-        prev_diag_log = os.environ.get("NAUTICAL_DIAG_LOG")
-        os.environ["TASKDATA"] = td
-        os.environ["NAUTICAL_DIAG_LOG"] = "1"
-        try:
-            mod = _load_hook_module(hook, "_nautical_diag_log_redact_test")
-            msg = json.dumps({"description": "secret", "notes": "hidden", "ok": "keep"})
-            mod._diag(msg)
-            log_path = Path(td) / ".nautical_diag.jsonl"
-            content = log_path.read_text(encoding="utf-8")
-            expect("secret" not in content and "hidden" not in content, "diag log did not redact sensitive fields")
-            expect("[redacted]" in content, "diag log missing redaction marker")
-        finally:
-            if prev_taskdata is None:
-                os.environ.pop("TASKDATA", None)
-            else:
-                os.environ["TASKDATA"] = prev_taskdata
-            if prev_diag_log is None:
-                os.environ.pop("NAUTICAL_DIAG_LOG", None)
-            else:
-                os.environ["NAUTICAL_DIAG_LOG"] = prev_diag_log
-
-
-def test_hook_diag_redact_msg_masks_sensitive_json_fields():
-    """Hook-level diag redaction helper should mask sensitive JSON fields."""
-    hook_add = _find_hook_file("on-add.nautical")
-    hook_exit = _find_hook_file("on-exit.nautical")
-    mod_add = _load_hook_module(hook_add, "_nautical_on_add_diag_redact_msg_test")
-    mod_exit = _load_hook_module(hook_exit, "_nautical_on_exit_diag_redact_msg_test")
-    raw = json.dumps(
-        {
-            "description": "sensitive text",
-            "annotations": "top secret",
-            "note": "private",
-            "safe": "ok",
-        },
-        ensure_ascii=False,
-    )
-    red_add = mod_add._diag_redact_msg(raw)
-    red_exit = mod_exit._diag_redact_msg(raw)
-    obj_add = json.loads(red_add)
-    obj_exit = json.loads(red_exit)
-    expect(obj_add.get("description") == "[redacted]", f"on-add description not redacted: {obj_add}")
-    expect(obj_add.get("annotations") == "[redacted]", f"on-add annotations not redacted: {obj_add}")
-    expect(obj_add.get("note") == "[redacted]", f"on-add note not redacted: {obj_add}")
-    expect(obj_add.get("safe") == "ok", f"on-add non-sensitive key changed: {obj_add}")
-    expect(obj_exit.get("description") == "[redacted]", f"on-exit description not redacted: {obj_exit}")
-    expect(obj_exit.get("annotations") == "[redacted]", f"on-exit annotations not redacted: {obj_exit}")
-    expect(obj_exit.get("note") == "[redacted]", f"on-exit note not redacted: {obj_exit}")
-    expect(obj_exit.get("safe") == "ok", f"on-exit non-sensitive key changed: {obj_exit}")
-
 
 def test_on_exit_reads_data_arg_from_hook_argv():
     """on-exit should resolve TW_DATA_DIR from hook argv data: token."""
@@ -13023,9 +12934,6 @@ TESTS = [
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hooks_survive_malformed_numeric_environment,
     *STORAGE_TESTS,
-    test_diag_log_rotation_bounds,
-    test_diag_log_redacts_sensitive_fields,
-    test_hook_diag_redact_msg_masks_sensitive_json_fields,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_read_two_invalid_trailing,
     test_on_modify_read_two_array_uuid_mismatch_fails,

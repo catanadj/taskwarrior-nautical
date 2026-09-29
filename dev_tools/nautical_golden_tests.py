@@ -2036,43 +2036,6 @@ def test_on_modify_expiration_internal_failure_remains_recoverable():
     )
 
 
-def test_on_modify_invalid_anchor_has_no_stdout():
-    """on-modify should keep stdout empty on semantic validation failures."""
-    hook = _find_hook_file("on-modify.nautical")
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000611",
-        "status": "pending",
-        "description": "invalid anchor test",
-    }
-    new = dict(old)
-    new["anchor"] = "bad"
-    raw = json.dumps(old) + "\n" + json.dumps(new)
-    p = _run_hook_script_raw(hook, raw)
-    expect(p.returncode != 0, "on-modify should fail on invalid anchor")
-    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
-
-def test_on_modify_rejects_oversized_stdin_early():
-    """on-modify should reject stdin over _MAX_JSON_BYTES before object parsing."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_oversized_input_test")
-    mod._MAX_JSON_BYTES = 32
-    raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 256})
-
-    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
-    out = io.StringIO()
-    err = io.StringIO()
-    orig_stdin, orig_stdout, orig_stderr = sys.stdin, sys.stdout, sys.stderr
-    try:
-        sys.stdin, sys.stdout, sys.stderr = stdin, out, err
-        try:
-            mod._read_two()
-            raise AssertionError("on-modify should fail on oversized stdin")
-        except SystemExit as e:
-            expect(e.code == 1, f"unexpected exit code: {e.code}")
-    finally:
-        sys.stdin, sys.stdout, sys.stderr = orig_stdin, orig_stdout, orig_stderr
-    expect((out.getvalue() or "").strip() == "", f"expected no stdout on oversized input, got: {out.getvalue()!r}")
-
 def test_health_check_json_ok_empty_taskdata():
     """health check should report ok for empty taskdata."""
     path = os.path.join(DEV_TOOLS, "nautical_health_check.py")
@@ -3379,51 +3342,6 @@ def test_perf_hint_benchmark_isolates_persistent_cache():
         )
     finally:
         perf.core.build_and_cache_hints = original_build
-
-
-def test_core_import_defers_panel_colour_module():
-    """Core import should not load presentation colour helpers before use."""
-    env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(part for part in (ROOT, env.get("PYTHONPATH", "")) if part)
-    probe = (
-        "import sys, nautical_core; "
-        "assert 'nautical_core.panel_colours' not in sys.modules; "
-        "from nautical_core.panel_colours import chain_colour_root; "
-        "chain_colour_root('chain', 'root'); "
-        "assert 'nautical_core.panel_colours' in sys.modules"
-    )
-    result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, env=env, capture_output=True, text=True)
-    expect(result.returncode == 0, f"panel colour helper was eager or failed lazily: {result.stderr!r}")
-
-
-def test_core_import_defers_diagnostic_model():
-    """Core import should not load diagnostic models before diagnostics are used."""
-    env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(part for part in (ROOT, env.get("PYTHONPATH", "")) if part)
-    probe = (
-        "import sys, nautical_core; "
-        "assert 'nautical_core.diagnostic_models' not in sys.modules; "
-        "assert nautical_core.DiagnosticEvent.__name__ == 'DiagnosticEvent'; "
-        "assert 'nautical_core.diagnostic_models' in sys.modules"
-    )
-    result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, env=env, capture_output=True, text=True)
-    expect(result.returncode == 0, f"diagnostic model was eager or failed lazily: {result.stderr!r}")
-
-
-def test_core_import_defers_parser_scheduler_models():
-    """Core import should defer parser and scheduler model modules until their names are used."""
-    env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(part for part in (ROOT, env.get("PYTHONPATH", "")) if part)
-    probe = (
-        "import sys, nautical_core; "
-        "assert 'nautical_core.parsing.parser_models' not in sys.modules; "
-        "assert 'nautical_core.scheduler_models' not in sys.modules; "
-        "assert nautical_core.ParseError.__name__ == 'ParseError'; "
-        "assert 'nautical_core.parsing.parser_models' in sys.modules; "
-        "assert 'nautical_core.scheduler_models' in sys.modules"
-    )
-    result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, env=env, capture_output=True, text=True)
-    expect(result.returncode == 0, f"parser/scheduler models were eager or failed lazily: {result.stderr!r}")
 
 
 def test_deploy_sanity_enforces_removed_lifecycle_ownership():
@@ -8993,10 +8911,8 @@ TESTS = [
     test_on_modify_expiration_panel_explains_carry,
     test_on_modify_expiration_delegates_to_extracted_orchestration,
     test_on_modify_expiration_internal_failure_remains_recoverable,
-    test_on_modify_invalid_anchor_has_no_stdout,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
-    test_on_modify_rejects_oversized_stdin_early,
     test_health_check_json_ok_empty_taskdata,
     test_queue_status_and_doctor_report_schema_health,
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
@@ -9025,9 +8941,6 @@ TESTS = [
     test_doctor_reports_chain_repair_plan_findings,
     test_perf_hint_benchmark_isolates_persistent_cache,
     *PERFORMANCE_TESTS,
-    test_core_import_defers_panel_colour_module,
-    test_core_import_defers_diagnostic_model,
-    test_core_import_defers_parser_scheduler_models,
     test_deploy_sanity_enforces_removed_lifecycle_ownership,
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,

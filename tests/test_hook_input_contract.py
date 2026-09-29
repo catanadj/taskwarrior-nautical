@@ -6,7 +6,7 @@ import sys
 import textwrap
 import unittest
 
-from tests.support.hook_process import HookSubprocessFixture
+from tests.support.hook_process import ROOT, HookSubprocessFixture
 
 
 class HookInputContractTests(HookSubprocessFixture):
@@ -72,6 +72,66 @@ class HookInputContractTests(HookSubprocessFixture):
                 diagnostic = self._run(hook, "{not-json", diagnostics=True)
                 self.assertNotIn("[nautical]", quiet.stderr)
                 self.assertIn("[nautical]", diagnostic.stderr)
+
+    def test_on_modify_invalid_anchor_has_no_stdout(self) -> None:
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000611",
+            "status": "pending",
+            "description": "invalid anchor test",
+        }
+        new = dict(old, anchor="bad")
+
+        process = self._run(
+            "on-modify.nautical",
+            json.dumps(old) + "\n" + json.dumps(new),
+        )
+
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(process.stdout.strip(), "")
+
+    def test_on_modify_rejects_oversized_stdin_early(self) -> None:
+        raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 256})
+        script = textwrap.dedent(
+            """
+            import importlib.util
+            import io
+            import json
+            import sys
+            from pathlib import Path
+
+            root = Path(sys.argv[1])
+            sys.path.insert(0, str(root / "nautical_core"))
+            source = root / "nautical_core" / "hooks" / "modify_impl.py"
+            spec = importlib.util.spec_from_file_location("_oversized_modify_input", source)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module._MAX_JSON_BYTES = 32
+            sys.stdin = io.TextIOWrapper(io.BytesIO(__RAW__.encode("utf-8")), encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            sys.stdout, sys.stderr = stdout, stderr
+            try:
+                module._read_two()
+            except SystemExit as exc:
+                assert exc.code == 1
+            else:
+                raise AssertionError("oversized on-modify input was accepted")
+            assert stdout.getvalue() == ""
+            assert "exceeds 32 bytes" in stderr.getvalue(), stderr.getvalue()
+            print("ok", file=sys.__stdout__)
+            """
+        ).replace("__RAW__", repr(raw))
+        process = subprocess.run(
+            [sys.executable, "-c", script, str(ROOT)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        self.assertEqual(process.stdout.strip(), "ok")
 
     def test_on_exit_ignores_malformed_and_oversized_input_silently(self) -> None:
         for payload in ("", "{not-json", "[]", "x" * (10 * 1024 * 1024 + 1)):

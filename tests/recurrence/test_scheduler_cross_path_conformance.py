@@ -133,6 +133,83 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
             self.assertTrue(ranged.occurrences and ranged.occurrences[0].description == "first", "file range lost description")
             self.assertEqual(_occurrence_signature(first.occurrence), _occurrence_signature(ranged.occurrences[0]), "file next/range diverged")
 
+    def test_skip_preview_matches_chain_generation_for_recurrence_matrix(self) -> None:
+        """The pure preview and successor owners choose the same skip-mode occurrence."""
+        from types import SimpleNamespace
+
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        from nautical_core.task_models import NauticalTask
+        from nautical_core.timeutil import fmt_isoz
+
+        cases = (
+            ("w:mon,wed,fri@t=09:00", "", date(2026, 1, 5), (9, 0)),
+            ("w:mon,wed,fri + y:apr@t=09:00", "", date(2026, 4, 1), (9, 0)),
+            ("m:-1bd@t=09:00", "", date(2026, 1, 30), (9, 0)),
+            ("w/2:fri@t=09:00", "", date(2026, 1, 2), (9, 0)),
+            ("w:mon@t=09:00,12:00,18:00", "", date(2026, 1, 5), (9, 0)),
+            ("w:mon,wed,fri@t=09:00", "w:wed", date(2026, 1, 5), (9, 0)),
+            ("y:rand + w:sat@t=09:00", "", date(2026, 1, 1), (9, 0)),
+        )
+        core_port = SimpleNamespace(
+            parse_dt_any=core.parse_dt_any,
+            to_local=lambda value: value.astimezone(timezone.utc),
+            _LOCAL_TZ=timezone.utc,
+            DEFAULT_BUSINESS_CALENDAR=None,
+            ASTRONOMY_CONFIG=None,
+            ANCHOR_FILE_DIR="",
+        )
+        generation = ChainGenerationService.from_core(core_port)
+
+        for index, (expression, omit, seed_day, hhmm) in enumerate(cases):
+            with self.subTest(expression=expression, omit=omit):
+                chain_id = f"skip-conformance-{index}"
+                current_utc = datetime.combine(seed_day, datetime.min.time()).replace(
+                    hour=hhmm[0], minute=hhmm[1], tzinfo=timezone.utc
+                )
+                context = RecurrenceContext(chain_id=chain_id, timezone=timezone.utc)
+                for step in range(4):
+                    parent = {
+                        "uuid": f"00000000-0000-4000-8000-{index:012d}",
+                        "description": "skip-mode conformance fixture",
+                        "status": "completed",
+                        "chain": "on",
+                        "chainID": chain_id,
+                        "link": 1,
+                        "anchor": expression,
+                        "anchor_mode": "skip",
+                        "due": fmt_isoz(current_utc),
+                        "end": fmt_isoz(current_utc),
+                    }
+                    if omit:
+                        parent["omit"] = omit
+                    observation = DEFAULT_TASK_CODEC.decode_row(
+                        parent, source_query="skip-mode conformance"
+                    )
+                    typed_parent = NauticalTask.from_observation(observation)
+                    preview = _scheduler_for_fixture(parent, context=context)
+                    selected = preview.select_mode(
+                        "skip",
+                        due_local=current_utc,
+                        end_local=current_utc,
+                        fallback_hhmm=hhmm,
+                        default_seed_date=seed_day,
+                    )
+
+                    generated_utc, metadata, _dnf = generation.compute_anchor_child_due(
+                        typed_parent
+                    )
+
+                    self.assertIsNotNone(selected.selected_occurrence)
+                    self.assertEqual(
+                        selected.selected_occurrence.astimezone(timezone.utc),
+                        generated_utc,
+                        f"{expression} omit={omit!r} step={step + 1}",
+                    )
+                    self.assertEqual(selected.basis, metadata.get("basis"))
+                    self.assertGreater(generated_utc, current_utc)
+                    current_utc = generated_utc
+
     def test_generated_recurrence_matrix_is_monotonic_timezone_aware_and_repeatable(self) -> None:
         import random
 

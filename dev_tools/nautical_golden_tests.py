@@ -2437,76 +2437,6 @@ def test_on_modify_limit_update_emits_effective_boundaries():
     expect(any(label == "Removed" and "Chain end point:" in str(value) for label, value in panels[1][1]), f"cleared chain end should be marked removed: {panels[1]!r}")
 
 
-def test_on_modify_read_two_fuzz_inputs():
-    """on-modify input parsing should be strict and return JSON errors on bad input."""
-    hook = _find_hook_file("on-modify.nautical")
-    cases = [
-        ("", "empty"),
-        ("{not-json}", "invalid"),
-        (json.dumps({"status": "pending", "anchor": "w:mon"}), "json"),
-        (json.dumps({"status": "pending", "anchor": "w:mon"}) + "\n" + json.dumps({"status": "pending", "anchor": "w:mon"}), "json"),
-        ("  \n" + json.dumps({"status": "pending", "anchor": "w:mon"}) + "\n", "json"),
-    ]
-    for raw, mode in cases:
-        p = _run_hook_script_raw(hook, raw)
-        if mode in {"empty", "invalid", "json"}:
-            expect(p.returncode != 0, f"on-modify should fail for case {mode}")
-            expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
-        else:
-            expect(p.returncode == 0, f"on-modify returned {p.returncode} for case {mode}")
-            _assert_stdout_json_only(p.stdout)
-
-def test_on_add_read_one_fuzz_inputs():
-    """on-add input parsing should reject malformed JSON and empty input."""
-    hook = _find_hook_file("on-add.nautical")
-    cases = [
-        ("", "empty"),
-        ("{not-json}", "invalid"),
-        (json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}), "multi"),
-        ("  \n" + json.dumps({"status": "pending"}) + "\n{bad", "trailing"),
-    ]
-    for raw, mode in cases:
-        p = _run_hook_script_raw(hook, raw)
-        expect(p.returncode != 0, f"on-add should fail for case {mode}")
-        expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
-
-def test_on_modify_read_two_invalid_trailing():
-    """on-modify should fail on extra garbage after JSON objects."""
-    hook = _find_hook_file("on-modify.nautical")
-    raw = json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}) + "\n" + "{bad"
-    p = _run_hook_script_raw(hook, raw)
-    expect(p.returncode != 0, "on-modify should fail on trailing garbage")
-    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
-
-def test_on_modify_read_two_array_uuid_mismatch_fails():
-    """on-modify array input should reject old/new UUID mismatches for Nautical tasks."""
-    hook = _find_hook_file("on-modify.nautical")
-    raw = json.dumps(
-        [
-            {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending", "anchor": "w:mon"},
-            {"uuid": "00000000-0000-4000-8000-000000000222", "status": "completed", "anchor": "w:mon"},
-        ]
-    )
-    p = _run_hook_script_raw(hook, raw)
-    expect(p.returncode != 0, "on-modify should fail for mismatched UUIDs in array input")
-    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
-
-def test_on_modify_read_two_array_single_missing_uuid_fails():
-    """on-modify array input with one dict and no Nautical fields should be ignored."""
-    hook = _find_hook_file("on-modify.nautical")
-    raw = json.dumps([{"status": "deleted"}])
-    p = _run_hook_script_raw(hook, raw)
-    expect(p.returncode == 0, "on-modify should ignore array input with one plain non-nautical task lacking UUID")
-    _assert_stdout_json_only(p.stdout)
-
-
-def test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored():
-    """on-modify single-task plain deletes without Nautical fields should not fail on missing UUID."""
-    hook = _find_hook_file("on-modify.nautical")
-    raw = json.dumps({"status": "deleted", "description": "plain taskwarrior recurrence delete"})
-    p = _run_hook_script_raw(hook, raw)
-    expect(p.returncode == 0, f"expected plain delete without uuid to be ignored, got rc={p.returncode}, stderr={p.stderr!r}")
-    _assert_stdout_json_only(p.stdout)
 
 
 def _test_modify_engine_services(
@@ -11914,9 +11844,6 @@ TESTS = [
     test_hooks_survive_malformed_numeric_environment,
     *STORAGE_TESTS,
     test_on_modify_invalid_json_passthrough,
-    test_on_modify_read_two_invalid_trailing,
-    test_on_modify_read_two_array_uuid_mismatch_fails,
-    test_on_modify_read_two_array_single_missing_uuid_fails,
     test_delete_chain_summary_span_uses_stop_time_without_last_end,
     test_end_summary_history_marks_deleted_pending_tail,
     test_delete_chain_summary_uses_stopped_title,
@@ -11995,8 +11922,6 @@ TESTS = [
     test_on_modify_recurrence_update_groups_and_flattens_changes,
     test_on_modify_native_until_update_explains_carry,
     test_on_modify_limit_update_emits_effective_boundaries,
-    test_on_add_read_one_fuzz_inputs,
-    test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser,
     test_on_add_dnf_cache_quarantines_central_corruption,
     test_on_exit_reads_data_arg_from_hook_argv,
@@ -12242,7 +12167,6 @@ TESTS.extend([
     test_random_time_window_is_stable_across_processes,
     test_navigator_reads_through_read_only_invocation_repository,
     test_navigator_uses_anchor_and_anchor_file_sources,
-    test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored,
     test_config_fingerprint_invalidates_persistent_cache_keys,
     test_configuration_drift_detects_edit_and_removal,
     *INSTALLER_TESTS,

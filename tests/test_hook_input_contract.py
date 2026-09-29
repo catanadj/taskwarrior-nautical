@@ -14,7 +14,19 @@ class HookInputContractTests(HookSubprocessFixture):
         return self.run_hook(hook, payload, diagnostics=diagnostics)
 
     def test_invalid_inputs_never_traceback_or_emit_stdout(self) -> None:
-        invalid = ("", "{\"uuid\":", "{not-json", "[]", "x" * (10 * 1024 * 1024 + 1))
+        task = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
+        invalid = (
+            "",
+            "{\"uuid\":",
+            "{not-json",
+            "[]",
+            json.dumps({"status": "pending", "anchor": "w:mon"}),
+            json.dumps({"status": "pending", "anchor": "w:mon"})
+            + "\n"
+            + json.dumps({"status": "pending", "anchor": "w:mon"}),
+            "  \n" + json.dumps(task) + "\n{bad",
+            "x" * (10 * 1024 * 1024 + 1),
+        )
         for hook in ("on-add.nautical", "on-modify.nautical"):
             for payload in invalid:
                 with self.subTest(hook=hook, payload_size=len(payload)):
@@ -23,6 +35,35 @@ class HookInputContractTests(HookSubprocessFixture):
                     self.assertEqual(process.stdout, "")
                     self.assertNotIn("Traceback", process.stderr)
                     self.assertNotIn("[nautical]", process.stderr)
+
+    def test_on_modify_rejects_mismatched_nautical_task_uuids(self) -> None:
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "pending",
+            "anchor": "w:mon",
+        }
+        new = {
+            "uuid": "00000000-0000-4000-8000-000000000222",
+            "status": "completed",
+            "anchor": "w:mon",
+        }
+
+        process = self._run("on-modify.nautical", json.dumps([old, new]))
+
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "")
+
+    def test_on_modify_ignores_plain_deletes_without_uuid(self) -> None:
+        tasks = (
+            [{"status": "deleted"}],
+            {"status": "deleted", "description": "plain Taskwarrior delete"},
+        )
+        for task in tasks:
+            with self.subTest(task=task):
+                process = self._run("on-modify.nautical", json.dumps(task))
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(len(process.stdout.splitlines()), 1)
+                json.loads(process.stdout)
 
     def test_invalid_input_diagnostics_are_opt_in(self) -> None:
         for hook in ("on-add.nautical", "on-modify.nautical"):

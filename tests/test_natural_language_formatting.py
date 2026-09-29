@@ -21,6 +21,37 @@ class NaturalLanguageFormattingTests(unittest.TestCase):
     def test_empty_rows_return_a_stable_empty_shape(self) -> None:
         self.assertEqual(format_anchor_rows([]), [])
 
+    def test_anchor_rows_number_upcoming_after_next_anchor(self) -> None:
+        rows = [
+            ("Pattern", "w:mon"),
+            ("First due", "2025-01-01 09:00"),
+            ("Next anchor", "2025-01-08 09:00"),
+            ("Upcoming", "2025-01-15 09:00\n2025-01-22 09:00"),
+            ("Delta", "+7d"),
+            ("Chain", "enabled"),
+        ]
+
+        formatted = format_anchor_rows(rows)
+        upcoming = dict(formatted)["Upcoming"]
+
+        self.assertIn(" 3 ▸[/] 2025-01-15 09:00", upcoming)
+        self.assertIn(" 4 ▸[/] 2025-01-22 09:00", upcoming)
+
+    def test_anchor_rows_number_upcoming_without_next_anchor(self) -> None:
+        rows = [
+            ("Pattern", "w:mon"),
+            ("First due", "2025-01-01 09:00"),
+            ("Upcoming", "2025-01-08 09:00"),
+            ("Delta", "+7d"),
+            ("Other", "x"),
+        ]
+
+        formatted = format_anchor_rows(rows)
+        by_key = dict(formatted)
+
+        self.assertIn(" 2 ▸[/] 2025-01-08 09:00", by_key["Upcoming"])
+        self.assertIn("Δ +7d", by_key["First due"])
+
 
 if __name__ == "__main__":
     unittest.main()

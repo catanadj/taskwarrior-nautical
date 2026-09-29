@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "0b5f594c57470a760ef8de4187b2d8d5c07c0fc9ce75723fda7f99760c08c8e5"
+    "0056d395bf0819719a75f14fe840cdf36c7ed1054bf9f105848f04ae13694cfb"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -59,8 +59,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "cb19880068ed0fe952886429d5e47c53516d9cffa740e4a1bbc6456c23af5568",
     ),
     "recurrence and hook integration": (
-        211,
-        "fe3ffe3ceab65c9d2e9c21f3f2dfab6e13b028be9d42f24bcdf20dd1656480cf",
+        209,
+        "18fd948bbb69dac4d44dec8e50fd6d7cdcd251c9205366f7cd3a4c3e41def69b",
     ),
     "storage and filesystem safety": (
         2,
@@ -128,6 +128,8 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_diag_log_rotation_bounds",
         "test_diag_log_redacts_sensitive_fields",
         "test_hook_diag_redact_msg_masks_sensitive_json_fields",
+        "test_on_add_format_anchor_rows_numbers_upcoming_from_three_with_next_anchor",
+        "test_on_add_format_anchor_rows_numbers_upcoming_from_two_without_next_anchor",
         "test_on_add_anchor_and_anchor_file_can_coexist",
         "test_on_add_preview_uses_configured_chain_colour",
         "test_on_add_run_task_timeout",
@@ -723,8 +725,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
-        self.assertEqual(len(top_level), 303)
-        self.assertEqual(len(registered), 353)
+        self.assertEqual(len(top_level), 301)
+        self.assertEqual(len(registered), 351)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(hooks.TESTS), 5)
         self.assertEqual(len(operator.TESTS), 4)
@@ -734,7 +736,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 515)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 517)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
         storage = importlib.import_module("dev_tools.golden_tests.storage")

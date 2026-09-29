@@ -9931,58 +9931,6 @@ def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
 
 
-def test_on_modify_anchor_chainmax_forecast_is_bounded():
-    """Large anchor chainMax values must not make final-date forecasting unbounded."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_chainmax_bound_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-
-    original_next = RecurrenceEvaluator._default_next_occurrence_after_local_dt
-    original_diag = mod._diag
-    diagnostics = []
-    calls = []
-
-    def next_daily(_self, _dnf, value, **_kwargs):
-        calls.append(value)
-        return value + timedelta(days=1)
-
-    RecurrenceEvaluator._default_next_occurrence_after_local_dt = next_daily
-    try:
-        from dataclasses import replace
-        schedule = mod._module("modify_schedule_effects")
-        anchor_ports = replace(schedule.anchor_completion_ports_for(mod), diagnostic=diagnostics.append)
-        final_due = schedule.estimate_anchor_final_by_max(
-            anchor_ports,
-            {
-                "uuid": "00000000-0000-4000-8000-000000000118",
-                "description": "chain max bound",
-                "status": "completed",
-                "anchor": "w:mon",
-                "link": 1,
-                "chainMax": 5000,
-                "chainID": "bound-test",
-            },
-            datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
-            None,
-        )
-    finally:
-        RecurrenceEvaluator._default_next_occurrence_after_local_dt = original_next
-        mod._diag = original_diag
-    expect(final_due is None, "unbounded anchor forecast returned a fabricated final date")
-    expect(len(calls) == mod._MAX_ITERATIONS, f"anchor forecast exceeded its iteration budget: {len(calls)}")
-    expect(diagnostics and "final date is unavailable" in diagnostics[0], f"forecast bound was not diagnosed: {diagnostics!r}")
-    cp_ports = replace(schedule.cp_completion_ports_for(mod), diagnostic=diagnostics.append)
-    cp_final = schedule.estimate_cp_final_by_max(
-        cp_ports,
-        {"cp": "1d", "link": 1, "chainMax": 5000},
-        datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
-    )
-    expect(cp_final is None, "unbounded CP forecast returned a fabricated final date")
-
-
 def test_on_modify_anchor_file_child_projection_reuses_provider():
     """Combined all-mode child projection should build one anchor-file provider."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13797,7 +13745,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_on_modify_anchor_chainmax_forecast_is_bounded,
     test_on_modify_anchor_file_child_projection_reuses_provider,
     test_on_modify_pure_anchor_file_projection_reuses_provider,
     test_hook_on_add_multitime_preview_emits_all_slots,

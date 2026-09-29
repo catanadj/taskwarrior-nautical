@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -48,6 +49,72 @@ class ModifyScheduleContractTests(unittest.TestCase):
         final_local = core.to_local(final_due)
         self.assertEqual(final_local.date(), date(2026, 1, 31))
         self.assertEqual((final_local.hour, final_local.minute), (9, 0))
+
+    def test_cp_chain_max_forecast_stops_at_iteration_budget(self) -> None:
+        diagnostics = []
+        ports = modify_schedule_effects.CPCompletionPorts(
+            compute=modify_completion_compute,
+            parse_datetime=lambda value: (core.parse_dt_any(value), None),
+            coerce_int=core.coerce_int,
+            parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
+            sequence=modify_schedule_effects.SequencePorts(
+                core.cp_sequence_interval_for_token
+            ),
+            schedule=modify_schedule_effects.SchedulePorts(
+                core.to_local, core.build_local_datetime
+            ),
+            max_iterations=3,
+            diagnostic=diagnostics.append,
+        )
+
+        final_due = modify_schedule_effects.estimate_cp_final_by_max(
+            ports,
+            {"cp": "1d", "link": 1, "chainMax": 5000},
+            datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertIsNone(final_due)
+        self.assertEqual(len(diagnostics), 1)
+        self.assertIn("final date is unavailable", diagnostics[0])
+
+    def test_anchor_chain_max_forecast_stops_at_iteration_budget(self) -> None:
+        diagnostics = []
+        calls = []
+
+        def next_daily(_self, _dnf, value, **_kwargs):
+            calls.append(value)
+            return value + timedelta(days=1)
+
+        ports = replace(
+            self._completion_ports(max_iterations=3), diagnostic=diagnostics.append
+        )
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000118",
+            "description": "chain max bound",
+            "status": "completed",
+            "anchor": "w:mon",
+            "link": 1,
+            "chainMax": 5000,
+            "chainID": "bound-test",
+            "due": "2026-01-01T09:00:00Z",
+        }
+
+        with patch.object(
+            RecurrenceEvaluator,
+            "_default_next_occurrence_after_local_dt",
+            next_daily,
+        ):
+            final_due = modify_schedule_effects.estimate_anchor_final_by_max(
+                ports,
+                task,
+                datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
+                None,
+            )
+
+        self.assertIsNone(final_due)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(diagnostics), 1)
+        self.assertIn("final date is unavailable", diagnostics[0])
 
     def test_runtime_anchor_provider_cache_keys_effective_fallback(self) -> None:
         with TemporaryDirectory() as directory:

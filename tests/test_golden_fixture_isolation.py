@@ -42,6 +42,25 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_operator_domain_import_does_not_load_sibling_domains(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import importlib, sys; "
+                "importlib.import_module('dev_tools.golden_tests.operator'); "
+                "loaded = sorted(name for name in sys.modules "
+                "if name.startswith('dev_tools.golden_tests.') "
+                "and name not in {'dev_tools.golden_tests.operator', "
+                "'dev_tools.golden_tests.support'}); "
+                "print(loaded); raise SystemExit(bool(loaded))",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_storage_domain_import_does_not_load_sibling_domains(self):
         result = subprocess.run(
             [

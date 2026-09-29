@@ -888,6 +888,26 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertTrue(set(expected) <= registered)
         self.assertFalse(set(expected) & top_level)
 
+    def test_operator_diagnostics_cases_are_owned_by_operator_domain(self):
+        operator = importlib.import_module("dev_tools.golden_tests.operator")
+        expected = (
+            "test_health_check_json_ok_empty_taskdata",
+            "test_queue_status_and_doctor_report_schema_health",
+            "test_queue_status_json_ok_empty_taskdata",
+            "test_queue_status_explicit_prune_reports_maintenance_result",
+            "test_doctor_installation_json_and_verifier_contract",
+        )
+        registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+
+        self.assertTrue(set(expected) <= registered)
+        self.assertTrue(set(expected) <= {test.__name__ for test in operator.TESTS})
+        self.assertFalse(set(expected) & top_level)
+
     def test_registry_inventory_counts_match_documented_snapshot(self):
         registered = [*self.golden.TESTS, *self.golden.DEEP_TESTS]
         top_level = [
@@ -903,10 +923,10 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
-        self.assertEqual(len(top_level), 148)
+        self.assertEqual(len(top_level), 143)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
-        self.assertEqual(len(operator.TESTS), 4)
+        self.assertEqual(len(operator.TESTS), 9)
         self.assertEqual(len(installer.TESTS), 1)
         self.assertEqual(len(performance.TESTS), 2)
         self.assertEqual(len(lifecycle.TESTS), 15)

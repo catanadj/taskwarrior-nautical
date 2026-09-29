@@ -1626,165 +1626,6 @@ def _test_modify_engine_services(
     )
 
 
-def test_health_check_json_ok_empty_taskdata():
-    """health check should report ok for empty taskdata."""
-    path = os.path.join(DEV_TOOLS, "nautical_health_check.py")
-    with tempfile.TemporaryDirectory() as td:
-        p = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(p.returncode == 0, f"health check returned {p.returncode}: {p.stderr!r}")
-        obj = json.loads((p.stdout or "").strip() or "{}")
-        expect(obj.get("status") == "ok", f"unexpected status: {obj}")
-
-def test_queue_status_and_doctor_report_schema_health():
-    """Operator diagnostics should distinguish healthy and incompatible outboxes."""
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-
-    status_path = os.path.join(CORE_TOOLS, "nautical_queue_status.py")
-    doctor = _load_hook_module(
-        os.path.join(CORE_TOOLS, "nautical_doctor.py"),
-        "_nautical_doctor_queue_schema_test",
-    )
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td)
-        repo = _LifecycleOutboxRepository(taskdata)
-        expect(repo.open().ok, "lifecycle outbox did not initialize")
-        db_path = repo.path
-
-        proc = subprocess.run(
-            [sys.executable, status_path, "--taskdata", td, "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(proc.returncode == 0, f"healthy schema status failed: {proc.stderr!r}")
-        payload = json.loads(proc.stdout)
-        expect(payload.get("schema") == "nautical.lifecycle_outbox_status", f"outbox status schema missing: {payload!r}")
-        expect(payload.get("schema_version") == 1, f"queue status schema version missing: {payload!r}")
-        schema = (payload.get("outbox") or {}).get("schema") or {}
-        expect(schema.get("status") == "ok", f"healthy schema was not reported: {payload!r}")
-        expect((payload.get("outbox") or {}).get("integrity") == "ok", f"integrity was not checked: {payload!r}")
-
-        with sqlite3.connect(str(db_path)) as conn:
-            conn.execute("PRAGMA user_version = 3")
-        proc = subprocess.run(
-            [sys.executable, status_path, "--taskdata", td, "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(proc.returncode == 2, f"future schema should be an operator error: {proc.stdout!r}")
-        payload = json.loads(proc.stdout)
-        expect(payload.get("status") == "error", f"future schema status was not error: {payload!r}")
-
-        findings = []
-        doctor._check_lifecycle_outbox(findings, taskdata, 300.0)
-        schema_finding = next(item for item in findings if item.get("id") == "outbox.schema")
-        expect(schema_finding.get("severity") == "error", f"Doctor missed future schema: {findings!r}")
-
-
-def test_queue_status_json_ok_empty_taskdata():
-    """Lifecycle outbox status should report ok for empty taskdata."""
-    path = os.path.join(DEV_TOOLS, "nautical_queue_status.py")
-    with tempfile.TemporaryDirectory() as td:
-        p = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(p.returncode == 0, f"queue status returned {p.returncode}: {p.stderr!r}")
-        obj = json.loads((p.stdout or "").strip() or "{}")
-        expect(obj.get("status") == "ok", f"unexpected queue status: {obj}")
-        outbox = obj.get("outbox") or {}
-        expect(outbox.get("states") == {}, f"unexpected lifecycle states: {obj}")
-        expect((outbox.get("schema") or {}).get("status") == "absent", f"unexpected outbox schema: {obj}")
-
-
-def test_queue_status_explicit_prune_reports_maintenance_result():
-    """Retention cleanup is explicit and returns a structured maintenance result."""
-    path = os.path.join(DEV_TOOLS, "nautical_queue_status.py")
-    with tempfile.TemporaryDirectory() as td:
-        proc = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--prune-acknowledged", "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8,
-        )
-        expect(proc.returncode == 0, f"explicit queue maintenance failed: {proc.stderr!r}")
-        payload = json.loads(proc.stdout)
-        maintenance = payload.get("maintenance") or {}
-        expect(maintenance.get("ok") is True, f"maintenance result was not successful: {payload!r}")
-        expect(maintenance.get("removed") == 0, f"unexpected maintenance removal: {payload!r}")
-
-
-def test_doctor_installation_json_and_verifier_contract():
-    """Installation checks remain bounded and produce a concise report."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    with tempfile.TemporaryDirectory() as td:
-        env = os.environ.copy()
-        env.update(
-            {
-                "HOME": td,
-                "TASKRC": os.path.join(td, ".taskrc"),
-                "NAUTICAL_CONFIG": os.path.join(td, "missing-nautical.toml"),
-                "TASKDATA": td,
-            }
-        )
-        proc = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--json", "--installation-only"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=10.0,
-        )
-        expect(proc.returncode in (0, 1, 2), f"doctor returned an invalid status: {proc.returncode}: {proc.stderr!r}")
-        payload = json.loads((proc.stdout or "").strip() or "{}")
-        expect(payload.get("schema") == "nautical.doctor", f"doctor schema missing: {payload!r}")
-        expect(payload.get("schema_version") == 1, f"doctor schema version missing: {payload!r}")
-        expect(payload.get("scope") == "installation", f"doctor installation scope missing: {payload!r}")
-        expect(payload.get("counts") == {"tasks": 0, "nautical_tasks": 0, "chains": 0}, "installation check audited tasks")
-        expect(payload.get("outbox") == {}, "installation check audited the lifecycle outbox")
-
-        from nautical_core.tools.nautical_install_verify import build_report, render
-
-        launcher = Path(td) / "nautical"
-        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
-        launcher.chmod(0o700)
-        verifier_payload = {
-            "taskdata": td,
-            "operator_findings": [
-                {"code": "taskwarrior.version", "domain": "taskwarrior", "severity": "info", "actionability": "informational", "message": "ok"},
-                {"code": "taskdata.access", "domain": "taskdata", "severity": "info", "actionability": "informational", "message": "ok"},
-                {"code": "install.runtime", "domain": "install", "severity": "info", "actionability": "informational", "message": "ok"},
-                {"code": "hook.add", "domain": "hook", "severity": "info", "actionability": "informational", "message": "ok"},
-                {"code": "hook.modify", "domain": "hook", "severity": "info", "actionability": "informational", "message": "ok"},
-                {"code": "hook.exit", "domain": "hook", "severity": "info", "actionability": "informational", "message": "ok"},
-                {"code": "uda.anchor", "domain": "uda", "severity": "info", "actionability": "informational", "message": "ok"},
-                {"code": "config.timezone", "domain": "config", "severity": "info", "actionability": "informational", "message": "ok"},
-                {"code": "chains.carry.child_relative_offset", "domain": "chains", "severity": "error", "actionability": "actionable", "message": "historical", "guidance": "ignore history"},
-            ],
-        }
-        report = build_report(verifier_payload, platform="Termux", launcher=launcher)
-        expect(report.get("status") == "passed", f"operational findings leaked into installation status: {report!r}")
-        expect(not report.get("manual_actions"), f"operational findings leaked into install actions: {report!r}")
-        rendered = io.StringIO()
-        with contextlib.redirect_stdout(rendered):
-            render(report)
-        expect("\x1b[" not in rendered.getvalue(), "redirected installation report contains terminal styling")
-
-        canonical_payload = dict(verifier_payload)
-        canonical_payload["operator_findings"] = [
-            item for item in verifier_payload["operator_findings"] if not str(item.get("code") or "").startswith("uda.")
-        ]
-        canonical_report = build_report(canonical_payload, platform="Linux", launcher=launcher)
-        expect(canonical_report.get("status") == "passed", f"healthy canonical evidence was rejected: {canonical_report!r}")
-
-
 def test_operator_queue_status_json_ok_empty_taskdata():
     """installed queue status should work from nautical_core/tools."""
     path = os.path.join(CORE_TOOLS, "nautical_queue_status.py")
@@ -7967,12 +7808,9 @@ TESTS = [
     *STORAGE_TESTS,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
-    test_health_check_json_ok_empty_taskdata,
-    test_queue_status_and_doctor_report_schema_health,
+    *OPERATOR_TESTS[:2],
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
-    test_queue_status_json_ok_empty_taskdata,
-    test_queue_status_explicit_prune_reports_maintenance_result,
-    test_doctor_installation_json_and_verifier_contract,
+    *OPERATOR_TESTS[2:5],
     test_operator_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_doctor_reports_healthy_installation,
@@ -8229,7 +8067,7 @@ def main():
     sys.exit(1 if fails else 0)
 
 TESTS.extend([
-    *OPERATOR_TESTS,
+    *OPERATOR_TESTS[5:],
     *TIMELINE_TESTS[6:],
     test_navigator_surfaces_configuration_drift_warning,
     test_navigator_reloads_validated_taskdata_configuration,

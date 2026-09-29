@@ -271,6 +271,29 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertEqual(json.loads(diagnostic.stdout), result)
         self.assertIn("[nautical]", diagnostic.stderr)
 
+    def test_hook_on_add_anchor_preview_marks_omitted_future_slots(self) -> None:
+        task = self._task(
+            project="testing",
+            entry="20250108T000000Z",
+            anchor="w:mon,wed,fri@t=09:00",
+            omit="w:wed",
+            anchor_mode="skip",
+            due="20250108T090000Z",
+        )
+
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["due"], task["due"])
+        self.assertNotIn("(omitted)", process.stderr)
+        self.assertNotIn("2025-01-15", process.stderr)
+
+        diagnostic = self._run(task, diagnostics=True)
+        self.assertEqual(diagnostic.returncode, 0, diagnostic.stderr)
+        self.assertEqual(json.loads(diagnostic.stdout), result)
+        self.assertNotIn("2025-01-15", diagnostic.stderr)
+        self.assertIn("[nautical]", diagnostic.stderr)
+
     def test_large_weekly_interval_hook_route_is_not_clamped(self) -> None:
         task = self._task(
             entry="20260809T090000Z",

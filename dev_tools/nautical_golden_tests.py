@@ -7951,32 +7951,6 @@ def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
         expect("Mon 2026-04-27 09:00" not in stderr_txt, f"expected transformed omit_file date to be skipped. stderr={stderr_txt[:500]!r}")
 
 
-def test_hook_on_add_anchor_preview_marks_omitted_future_slots():
-    """on-add preview should skip omitted future anchor slots in Upcoming."""
-    hook = _find_hook_file("on-add.nautical")
-    env = {"NO_COLOR": "1"}
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000114g",
-        "description": "hook test on-add omit upcoming",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20250108T000000Z",
-        "anchor": "w:mon,wed,fri@t=09:00",
-        "omit": "w:wed",
-        "anchor_mode": "skip",
-        "due": "20250108T090000Z",
-    }
-    p = _run_hook_script(hook, task, env_extra=env)
-    if p.returncode != 0:
-        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
-    stderr_txt = _strip_markup(p.stderr)
-    expect("(omitted)" not in stderr_txt, f"on-add should not render omitted slots as upcoming: {stderr_txt[:700]!r}")
-    expect(
-        "2025-01-15" not in stderr_txt and "Wed 2025-01-15" not in stderr_txt,
-        f"expected omitted Wednesday slot to be skipped in Upcoming: {stderr_txt[:700]!r}",
-    )
-
-
 def test_hook_on_add_anchor_preview_uses_omit_file_description_in_upcoming():
     """on-add preview should skip omit_file dates instead of rendering them as upcoming entries."""
     hook = _find_hook_file("on-add.nautical")
@@ -13656,7 +13630,6 @@ def main():
 TESTS.extend([
     *OPERATOR_TESTS,
     test_hook_on_add_anchor_file_time_padding_hint,
-    test_hook_on_add_anchor_preview_marks_omitted_future_slots,
     test_hook_on_add_anchor_preview_skips_omit_file_modifier_date,
     test_hook_on_add_anchor_preview_uses_omit_file_description_in_upcoming,
     test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_child,

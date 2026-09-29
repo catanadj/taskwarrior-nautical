@@ -1628,55 +1628,6 @@ def _test_modify_engine_services(
     )
 
 
-def test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch():
-    """Doctor should diagnose partial core installs and wrapper/core API skew."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_hook_compatibility_test")
-    with tempfile.TemporaryDirectory() as td:
-        base = Path(td)
-        hooks = base / "hooks"
-        core_dir = base / "nautical_core"
-        hooks.mkdir()
-        core_dir.mkdir()
-        (core_dir / "__init__.py").write_text("", encoding="utf-8")
-        _install_doctor_hook_wrappers(hooks)
-
-        findings = []
-        runtimes = _doctor_hook_installation(mod, findings,
-            hooks_dir=hooks,
-            env={"NAUTICAL_CORE_PATH": str(base), "NAUTICAL_TRUST_CORE_PATH": "1"},
-        )
-        incompatible = [item for item in findings if str(item.get("id") or "").endswith(".incompatible")]
-        expect(not runtimes, f"incomplete core should not produce validated runtimes: {runtimes!r}")
-        expect(len(incompatible) == 3, f"incomplete runtime findings missing: {findings!r}")
-        expect(
-            all(((item.get("details") or {}).get("observed") or {}).get("missing") for item in incompatible),
-            f"missing runtime files were not identified: {findings!r}",
-        )
-
-    with tempfile.TemporaryDirectory() as td:
-        hooks = Path(td) / "hooks"
-        hooks.mkdir()
-        _install_doctor_hook_wrappers(hooks)
-        add_hook = hooks / "on-add.nautical"
-        add_hook.write_text(
-            add_hook.read_text(encoding="utf-8").replace("_EXPECTED_IMPL_API = 1", "_EXPECTED_IMPL_API = 999"),
-            encoding="utf-8",
-        )
-        add_hook.chmod(0o755)
-
-        findings = []
-        runtimes = _doctor_hook_installation(mod, findings,
-            hooks_dir=hooks,
-            env={"NAUTICAL_CORE_PATH": ROOT, "NAUTICAL_TRUST_CORE_PATH": "1"},
-        )
-        mismatch = next(item for item in findings if item.get("id") == "hook.on-add.incompatible")
-        details = mismatch.get("details") or {}
-        expect("on-add" not in runtimes, f"mismatched on-add runtime should not be selected: {runtimes!r}")
-        expect((details.get("observed") or {}).get("expected_api") == 999, f"wrapper API missing from mismatch: {findings!r}")
-        expect((details.get("observed") or {}).get("actual_api") == 1, f"implementation API missing from mismatch: {findings!r}")
-
-
 def test_installer_cli_and_doctor_managed_runtime_diagnostics():
     """Installer JSON and Doctor should expose active, abandoned, and broken runtime state."""
     import nautical_core.install_runtime as install_runtime
@@ -1760,30 +1711,6 @@ def test_installer_cli_and_doctor_managed_runtime_diagnostics():
         expect(broken.get("severity") == "error", f"Doctor missed broken runtime pointer: {findings!r}")
 
 
-def test_doctor_reports_retired_queue_state_without_migrating_it():
-    """Doctor should identify retired queue artifacts and leave them untouched."""
-    from nautical_core.tools import nautical_doctor
-
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td) / "taskdata"
-        state = taskdata / ".nautical-state"
-        state.mkdir(parents=True)
-        retired = [
-            taskdata / ".nautical_spawn_queue.jsonl",
-            state / ".nautical_queue.db",
-            state / ".nautical_queue.db-wal",
-        ]
-        for path in retired:
-            path.write_text("retired\n", encoding="utf-8")
-        findings: list[dict[str, object]] = []
-        found = _doctor_obsolete_queue_state(nautical_doctor, findings, taskdata)
-        expect(set(found) == {str(path) for path in retired}, f"retired queue paths were not reported: {found!r}")
-        issue = next(item for item in findings if item.get("id") == "outbox.obsolete_state")
-        expect(issue.get("severity") == "warning", f"retired queue state had the wrong severity: {issue!r}")
-        expect("quarantine" in str(issue.get("fix") or "").lower(), f"missing quarantine guidance: {issue!r}")
-        expect(all(path.read_text(encoding="utf-8") == "retired\n" for path in retired), "doctor modified retired state")
-
-
 def test_runtime_cleanup_preserves_active_and_rollback_releases():
     """Runtime cleanup must retain the active release and newest rollback."""
     import nautical_core.install_runtime as install_runtime
@@ -1825,61 +1752,6 @@ def test_retained_release_can_be_selected_with_dry_run_then_applied():
         expect(applied.get("active_release") == "release-one", f"rollback did not select retained release: {applied!r}")
         expect(os.readlink(current) == "releases/release-one", "rollback selected the wrong pointer")
         expect((taskdata / ".nautical-runtime/releases/release-two").is_dir(), "rollback removed newer release")
-
-
-def test_doctor_discovers_effective_taskdata_directory():
-    """doctor should discover the effective data dir when --taskdata is omitted."""
-    path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        config_dir = td_path / "config"
-        data_dir = td_path / "taskdata"
-        config_dir.mkdir()
-        hooks = data_dir / "hooks"
-        hooks.mkdir(parents=True)
-        _install_doctor_hook_wrappers(hooks)
-        config = config_dir / "config-nautical.toml"
-        config.write_text('tz = "UTC"\n', encoding="utf-8")
-        fake_task = td_path / "task"
-        _write_fake_task_for_doctor(fake_task)
-        rows = [
-            {
-                "uuid": "aaaaaaaa-0000-4000-8000-000000000903",
-                "status": "completed",
-                "chain": "on",
-                "cp": "1d",
-                "chainID": "cid",
-                "link": 1,
-                "nextLink": "bbbbbbbb",
-            },
-            {
-                "uuid": "bbbbbbbb-0000-4000-8000-000000000904",
-                "status": "pending",
-                "chain": "on",
-                "cp": "1d",
-                "chainID": "cid",
-                "link": 2,
-                "prevLink": "aaaaaaaa",
-            },
-        ]
-        env = os.environ.copy()
-        env["NAUTICAL_CORE_PATH"] = ROOT
-        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
-        env["FAKE_HOOKS"] = str(hooks)
-        env["FAKE_DATA_DIR"] = str(data_dir)
-        env["FAKE_EXPORT"] = json.dumps(rows)
-        env["NAUTICAL_CONFIG"] = str(config)
-        p = subprocess.run(
-            [sys.executable, path, "--task-bin", str(fake_task), "--json"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=8.0,
-        )
-        expect(p.returncode == 0, f"doctor returned {p.returncode}: {p.stderr!r} {p.stdout!r}")
-        obj = json.loads((p.stdout or "").strip() or "{}")
-        expect(obj.get("status") == "ok", f"unexpected doctor status: {obj}")
-        expect(obj.get("taskdata") == str(data_dir), f"doctor did not discover the effective taskdata dir: {obj}")
 
 
 def test_operator_doctor_loads_colocated_queue_helper():
@@ -2036,180 +1908,6 @@ def test_configuration_drift_detects_edit_and_removal():
         expect(payload["before"]["status"] == "ok", f"fresh config reported drift: {payload}")
         expect(payload["edited"]["status"] == "changed", f"edited config drift missing: {payload}")
         expect(payload["removed"]["status"] == "changed", f"removed config drift missing: {payload}")
-
-
-def test_doctor_reports_actionable_broken_installation():
-    """doctor should identify installation, queue, and chain failures with stable IDs."""
-    path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        hooks = td_path / "hooks"
-        hooks.mkdir()
-        fake_task = td_path / "task"
-        _write_fake_task_for_doctor(fake_task)
-        (td_path / "config-nautical.toml").write_text("broken = [\n", encoding="utf-8")
-        state_dir = td_path / ".nautical-state"
-        state_dir.mkdir()
-        with sqlite3.connect(str(state_dir / ".nautical_queue.db")) as conn:
-            conn.execute(
-                """
-                CREATE TABLE queue_entries (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    spawn_intent_id TEXT,
-                    payload TEXT NOT NULL,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL DEFAULT 'queued',
-                    claim_token TEXT,
-                    claimed_at REAL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, state, created_at, updated_at) "
-                "VALUES ('si_doctor', '{}', 'queued', 1.0, 1.0)"
-            )
-            conn.commit()
-        rows = [
-            {
-                "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                "description": "Missing chain identity",
-                "status": "pending",
-                "anchor": "w:mon",
-                "link": 1,
-                "nextLink": "missing1",
-            },
-            {
-                "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                "description": "Duplicate slot first",
-                "status": "pending",
-                "cp": "1d",
-                "chainID": "cid",
-                "link": 2,
-            },
-            {
-                "uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc",
-                "description": "Duplicate slot second",
-                "status": "completed",
-                "cp": "1d",
-                "chainID": "cid",
-                "link": 2,
-            },
-        ]
-        env = os.environ.copy()
-        env["NAUTICAL_CORE_PATH"] = ROOT
-        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
-        env["FAKE_HOOKS"] = str(hooks)
-        env["FAKE_EXPORT"] = json.dumps(rows)
-        env["FAKE_WRONG_UDA"] = "cp"
-        p = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task), "--json"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=8.0,
-        )
-        expect(p.returncode == 2, f"expected doctor error exit 2, got {p.returncode}: {p.stderr!r}")
-        obj = json.loads((p.stdout or "").strip() or "{}")
-        ids = {item.get("id") for item in _doctor_findings(obj)}
-        expected = {
-            "hook.on-add.missing",
-            "hook.on-modify.missing",
-            "hook.on-exit.missing",
-            "uda.cp.type",
-            "config.invalid",
-            "outbox.schema",
-            "outbox.state",
-            "chains.export",
-        }
-        expect(expected <= ids, f"doctor findings missing {expected - ids}: {obj}")
-
-        text = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task)],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=8.0,
-        )
-        expect(text.returncode == 2, f"expected text doctor error exit 2, got {text.returncode}")
-        report = text.stdout or ""
-        expect(
-            "Task data could not be exported for chain inspection" in report,
-            f"missing fail-closed chain export finding from doctor text: {report!r}",
-        )
-
-
-def test_doctor_reports_chain_repair_plan_findings():
-    """doctor should surface safe chain repairs and unresolved repair reasons."""
-    path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        hooks = td_path / "hooks"
-        hooks.mkdir()
-        _install_doctor_hook_wrappers(hooks)
-        (td_path / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
-        fake_task = td_path / "task"
-        _write_fake_task_for_doctor(fake_task)
-        rows = [
-            {
-                "uuid": "11111111-0000-4000-8000-000000000001",
-                "status": "completed",
-                "cp": "1d",
-                "chain": "on",
-                "chainID": "safe0001",
-                "link": 1,
-            },
-            {
-                "uuid": "22222222-0000-4000-8000-000000000002",
-                "status": "pending",
-                "cp": "1d",
-                "chain": "on",
-                "chainID": "safe0001",
-                "link": 2,
-                "prevLink": "wrong",
-            },
-            {
-                "uuid": "33333333-0000-4000-8000-000000000003",
-                "status": "pending",
-                "cp": "1d",
-                "chain": "on",
-                "chainID": "review01",
-                "prevLink": "missing1",
-            },
-        ]
-        env = os.environ.copy()
-        env["NAUTICAL_CORE_PATH"] = ROOT
-        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
-        env["FAKE_HOOKS"] = str(hooks)
-        env["FAKE_EXPORT"] = json.dumps(rows)
-        p = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task), "--json"],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=8.0,
-        )
-        expect(p.returncode == 1, f"expected doctor warn exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
-        obj = json.loads((p.stdout or "").strip() or "{}")
-        findings = {item.get("id"): item for item in _doctor_findings(obj)}
-        expect(any(item_id.startswith("chains.") for item_id in findings), f"missing integrity findings: {obj}")
-        review_details = findings.get("chains.repair_review", {}).get("details") or {}
-        if review_details:
-            expect(review_details.get("reasons"), f"bad review reasons: {review_details}")
-
-        text = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task)],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=8.0,
-        )
-        report = text.stdout or ""
-        expect("Issue:" in report, f"missing integrity review text: {report!r}")
-        expect("Reason:" in report, f"missing integrity reason text: {report!r}")
-
-
 
 
 def test_perf_hint_benchmark_isolates_persistent_cache():
@@ -7279,17 +6977,16 @@ TESTS = [
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
     *OPERATOR_TESTS[2:5],
     *OPERATOR_TESTS[5:10],
-    test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch,
+    *OPERATOR_TESTS[10:11],
     *INSTALLER_TESTS[:5],
     test_installer_cli_and_doctor_managed_runtime_diagnostics,
-    test_doctor_reports_retired_queue_state_without_migrating_it,
+    *OPERATOR_TESTS[11:12],
     test_runtime_cleanup_preserves_active_and_rollback_releases,
     test_retained_release_can_be_selected_with_dry_run_then_applied,
-    test_doctor_discovers_effective_taskdata_directory,
+    *OPERATOR_TESTS[12:13],
     test_operator_doctor_loads_colocated_queue_helper,
     test_nautical_dispatches_supported_subcommands,
-    test_doctor_reports_actionable_broken_installation,
-    test_doctor_reports_chain_repair_plan_findings,
+    *OPERATOR_TESTS[13:15],
     test_perf_hint_benchmark_isolates_persistent_cache,
     *PERFORMANCE_TESTS,
     test_deploy_sanity_enforces_removed_lifecycle_ownership,
@@ -7526,7 +7223,7 @@ def main():
     sys.exit(1 if fails else 0)
 
 TESTS.extend([
-    *OPERATOR_TESTS[10:],
+    *OPERATOR_TESTS[15:],
     *TIMELINE_TESTS[6:],
     test_navigator_surfaces_configuration_drift_warning,
     test_navigator_reloads_validated_taskdata_configuration,

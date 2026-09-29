@@ -901,6 +901,11 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             "test_doctor_reports_healthy_installation",
             "test_doctor_hook_inventory_allows_third_party_and_symlink_install",
             "test_doctor_hook_inventory_rejects_duplicates_without_counting_backups",
+            "test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch",
+            "test_doctor_reports_retired_queue_state_without_migrating_it",
+            "test_doctor_discovers_effective_taskdata_directory",
+            "test_doctor_reports_actionable_broken_installation",
+            "test_doctor_reports_chain_repair_plan_findings",
         )
         registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
         top_level = {
@@ -948,10 +953,10 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
-        self.assertEqual(len(top_level), 133)
+        self.assertEqual(len(top_level), 128)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
-        self.assertEqual(len(operator.TESTS), 14)
+        self.assertEqual(len(operator.TESTS), 19)
         self.assertEqual(len(installer.TESTS), 6)
         self.assertEqual(len(performance.TESTS), 2)
         self.assertEqual(len(lifecycle.TESTS), 15)

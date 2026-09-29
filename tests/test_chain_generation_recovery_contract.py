@@ -150,6 +150,19 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual(metadata["cp_sequence_step"], 1)
         self.assertEqual(metadata["cp_sequence_len"], 1)
 
+    def test_cp_generation_uses_scheduled_when_due_is_missing(self):
+        parent = _task(
+            cp="P1D",
+            due=None,
+            scheduled="2025-01-01T09:00:00Z",
+            end="2025-01-01T17:00:00Z",
+        )
+
+        due, metadata = self.service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2025, 1, 2, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["target_field"], "scheduled")
+
     def test_hook_adapter_uses_shared_generation_service_without_legacy_helpers(self) -> None:
         class Hook:
             core = _Core()

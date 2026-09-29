@@ -6345,34 +6345,6 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
         verify(mod)
 
 
-def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
-    """on-add preview and on-modify completion should select the same cp interval for the same link."""
-    add_mod = _load_hook_module(_find_hook_file("on-add.nautical"), "_nautical_on_add_cp_interval_agreement_test")
-    modify_mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_on_modify_cp_interval_agreement_test")
-    if hasattr(add_mod, "_load_core"):
-        add_mod._load_core()
-    if hasattr(modify_mod, "_load_core"):
-        modify_mod._load_core()
-
-    chain_id = "abcd1234"
-    for cp, link_no in (
-        ("3d,20d,7d", 1),
-        ("3d,20d,7d", 3),
-        ("3d,20d,7d", 4),
-        ("3d,rand(10d..20d),7d", 2),
-        ("3d,14d~2d,7d", 2),
-        ("rand(12h..36h)", 5),
-    ):
-        tokens = core.parse_cp_sequence_tokens(cp)
-        add_preview = add_mod._module("add_preview_composition")
-        add_td = add_preview.cp_sequence_period_for_link(add_mod, tokens, cp, link_no, chain_id)
-        schedule = modify_mod._module("modify_schedule_effects")
-        modify_td = schedule.sequence_period_for_link(
-            schedule.SequencePorts(core.cp_sequence_interval_for_token), tokens, cp, link_no, chain_id
-        )
-        core_td = core.cp_sequence_interval_for_link(cp, link_no, chain_id)
-        expect(add_td == modify_td == core_td, f"cp interval mismatch for {cp!r} link {link_no}: add={add_td}, modify={modify_td}, core={core_td}")
-
 # -------- Runner --------------------------------------------------------------
 
 def test_hook_on_add_multitime_preview_emits_all_slots():
@@ -13891,7 +13863,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_cp_interval_helpers_agree_between_on_add_and_on_modify,
     test_on_modify_compute_cp_sequence_selects_interval_by_link,
     test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,

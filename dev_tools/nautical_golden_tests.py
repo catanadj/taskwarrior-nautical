@@ -9931,29 +9931,6 @@ def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
 
 
-def test_on_modify_compute_cp_sequence_selects_interval_by_link():
-    """cp sequences should derive the active interval from the current link number."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_cp_sequence_compute_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    child_due, meta = _compute_cp_child_due(mod,
-        {
-            "cp": "3d,20d,7d",
-            "chainID": "sequence-chain",
-            "link": 2,
-            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (9, 0))),
-            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (10, 0))),
-        }
-    )
-    child_local = mod.core.to_local(child_due)
-    expect(child_local.date() == date(2026, 1, 21), f"link #2 should use 20d interval: {child_local}")
-    expect((child_local.hour, child_local.minute) == (9, 0), f"whole-day sequence interval should preserve wall clock: {child_local}")
-    expect(meta.get("cp_sequence_step") == 2, f"expected sequence step 2: {meta}")
-    expect(meta.get("cp_sequence_len") == 3, f"expected sequence length 3: {meta}")
-
-
 def test_on_modify_compute_cp_random_selects_deterministic_interval():
     """random cp ranges should resolve deterministically for the active link."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13863,7 +13840,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_on_modify_compute_cp_sequence_selects_interval_by_link,
     test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_on_modify_anchor_chainmax_forecast_is_bounded,

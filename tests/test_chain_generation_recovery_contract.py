@@ -121,6 +121,20 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual(due2, datetime(2026, 1, 4, 9, tzinfo=timezone.utc))
         self.assertEqual(metadata2["cp_sequence_step"], 2)
 
+    def test_cp_generation_selects_middle_interval_and_preserves_wall_clock(self):
+        parent = _task(
+            cp="3d,20d,7d",
+            link=2,
+            due="2026-01-01T09:00:00Z",
+            end="2026-01-01T10:00:00Z",
+        )
+
+        due, metadata = self.service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 1, 21, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["cp_sequence_step"], 2)
+        self.assertEqual(metadata["cp_sequence_len"], 3)
+
     def test_hook_adapter_uses_shared_generation_service_without_legacy_helpers(self) -> None:
         class Hook:
             core = _Core()

@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import nautical_core as core
 import nautical_core.natural_language_api as natural_language_api
 from nautical_core.precompute import build_and_cache_hints
+from nautical_core.scheduler_service import SchedulerService
 
 
 class PrecomputeContractTests(unittest.TestCase):
@@ -58,6 +59,7 @@ class PrecomputeContractTests(unittest.TestCase):
             self.assertEqual(second_dnf[0][0]["spec"], "mon")
 
     def test_production_hint_path_uses_scheduler_service_not_legacy_callbacks(self) -> None:
+        collect_request = SchedulerService.collect_request
         with (
             patch.object(
                 core,
@@ -65,15 +67,17 @@ class PrecomputeContractTests(unittest.TestCase):
                 side_effect=AssertionError("hint build used a legacy scheduler callback"),
             ),
             patch.object(
-                core,
-                "_next_for_or",
-                side_effect=AssertionError("hint build used a legacy scheduler callback"),
-            ),
+                SchedulerService,
+                "collect_request",
+                autospec=True,
+                side_effect=collect_request,
+            ) as collect,
             patch.object(core, "cache_load", return_value=None),
             patch.object(core, "cache_save", return_value=None),
         ):
             payload = core.build_and_cache_hints("w:thu@t=08:45", "skip")
 
+        collect.assert_called()
         self.assertTrue(payload["next_dates"])
         self.assertGreater(payload["per_year"]["est"], 0)
 

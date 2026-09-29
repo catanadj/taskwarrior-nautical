@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
@@ -147,6 +147,29 @@ class OnAddHookRouteTests(HookSubprocessFixture):
                         {"anchor", "anchor_file", "cp", "chain", "chainID", "link", "due", "scheduled"}.intersection(result),
                         result,
                     )
+
+    def test_due_mirroring_entry_is_auto_assigned_to_first_anchor_occurrence(self) -> None:
+        task = self._task(
+            entry="20260412T111500Z",
+            due="20260412T111500Z",
+            anchor="w:mon,wed,fri",
+            anchor_mode="skip",
+        )
+        started = datetime.now(timezone.utc)
+
+        result = self._assert_valid(task)
+        finished = datetime.now(timezone.utc)
+
+        def first_anchor_after(reference: datetime) -> datetime:
+            for offset in range(8):
+                day = reference.date() + timedelta(days=offset)
+                candidate = datetime.combine(day, time(9), timezone.utc)
+                if day.weekday() in {0, 2, 4} and candidate >= reference:
+                    return candidate
+            self.fail("no anchor occurrence found in an eight-day horizon")
+
+        due = datetime.fromisoformat(result["due"])
+        self.assertIn(due, {first_anchor_after(started), first_anchor_after(finished)})
 
     def test_anchor_file_unicode_values_keep_json_stdout_for_implicit_due(self) -> None:
         import nautical_core.anchor_files as anchor_files

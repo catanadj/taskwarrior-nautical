@@ -7948,46 +7948,6 @@ def test_on_add_due_context_treats_due_matching_entry_as_implicit():
     expect(due_hhmm == (mod.core.to_local(now_utc).hour, mod.core.to_local(now_utc).minute), f"unexpected implicit due hhmm: {due_hhmm!r}")
 
 
-def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
-    """on-add anchor preview should auto-assign first anchor when incoming due merely mirrors entry."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_anchor_entry_due_preview_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000136",
-        "description": "hook test on-add implicit entry due preview",
-        "status": "pending",
-        "entry": "20260412T111500Z",
-        "due": "20260412T111500Z",
-        "anchor": "w:mon,wed,fri",
-        "anchor_mode": "skip",
-        "chain": "on",
-        "chainID": "entrydue136",
-        "link": 1,
-    }
-    now_utc = mod.core.parse_dt_any(task["entry"])
-    now_local = mod.core.to_local(now_utc)
-    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, now_local)
-    expect(not ctx.user_provided_due, f"build_on_add_context should treat due==entry as implicit: {ctx!r}")
-
-    captured = {}
-    orig_panel = mod._panel
-    try:
-        mod._panel = lambda title, rows, **_k: captured.update({"title": title, "rows": list(rows)})
-        mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
-    finally:
-        mod._panel = orig_panel
-
-    expected_due = mod._fmt_local_for_task(mod.core.build_local_datetime(date(2026, 4, 13), (9, 0)).astimezone(timezone.utc))
-    expect(task.get("due") == expected_due, f"expected implicit entry due to auto-assign first anchor match: {task!r}")
-    rows = captured.get("rows") or []
-    labels = [label for label, _value in rows]
-    expect("Next anchor" not in labels, f"auto-assigned first due should not render a separate next-anchor row: {rows!r}")
-    expect("[auto-due]" in labels, f"expected auto-due row in anchor preview: {rows!r}")
-
-
 def test_hook_on_add_anchor_preview_skips_omit_date():
     """on-add anchor preview should skip omitted dates when selecting the next anchor."""
     hook = _find_hook_file("on-add.nautical")
@@ -13404,7 +13364,6 @@ TESTS = [
     test_on_modify_native_until_rejects_strict_anchor_mode_changes,
     test_on_modify_native_until_rejects_legacy_all_completion,
     test_on_add_due_context_treats_due_matching_entry_as_implicit,
-    test_on_add_anchor_preview_auto_assigns_when_due_matches_entry,
     test_hook_on_add_anchor_preview_skips_omit_date,
     test_hook_on_add_anchor_preview_skips_omit_file_date,
     test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot,

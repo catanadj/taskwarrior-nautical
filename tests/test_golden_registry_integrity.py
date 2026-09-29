@@ -913,6 +913,26 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertTrue(set(expected) <= {test.__name__ for test in operator.TESTS})
         self.assertFalse(set(expected) & top_level)
 
+    def test_installer_runtime_cases_are_owned_by_installer_domain(self):
+        installer = importlib.import_module("dev_tools.golden_tests.installer")
+        expected = (
+            "test_installer_dry_run_fresh_install_and_idempotent_reinstall",
+            "test_installer_navigator_dependency_failure_is_actionable",
+            "test_installer_upgrade_rollback_restores_active_runtime",
+            "test_installer_migrates_legacy_core_and_rolls_back_first_switch",
+            "test_installer_lock_and_duplicate_hook_guards",
+        )
+        registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+
+        self.assertTrue(set(expected) <= registered)
+        self.assertTrue(set(expected) <= {test.__name__ for test in installer.TESTS})
+        self.assertFalse(set(expected) & top_level)
+
     def test_registry_inventory_counts_match_documented_snapshot(self):
         registered = [*self.golden.TESTS, *self.golden.DEEP_TESTS]
         top_level = [
@@ -928,11 +948,11 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
-        self.assertEqual(len(top_level), 138)
+        self.assertEqual(len(top_level), 133)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 14)
-        self.assertEqual(len(installer.TESTS), 1)
+        self.assertEqual(len(installer.TESTS), 6)
         self.assertEqual(len(performance.TESTS), 2)
         self.assertEqual(len(lifecycle.TESTS), 15)
         self.assertEqual(len(reconcile.TESTS), 33)

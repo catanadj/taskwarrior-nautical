@@ -5175,133 +5175,6 @@ def test_business_calendar_toml_section_resolves_lazily():
         expect(payload == {'names': ['work'], 'open': True, 'closed': False}, f'unexpected TOML result: {payload!r}')
 
 
-def test_hook_on_add_uses_and_normalizes_business_calendar():
-    """on-add should use bc for recurrence calculation and emit its canonical name."""
-    hook = _find_hook_file('on-add.nautical')
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / 'config-nautical.toml'
-        config_path.write_text(
-            '[business_calendar.weekend]\n'
-            'anchor = "w:sat,sun"\n',
-            encoding='utf-8',
-        )
-        task = {
-            'uuid': '00000000-0000-4000-8000-000000000121',
-            'description': 'weekend business calendar',
-            'status': 'pending',
-            'entry': '20260714T000000Z',
-            'anchor': 'm:1bd@t=09:00',
-            'anchor_mode': 'skip',
-            'bc': 'WEEKEND',
-        }
-        proc = _run_hook_script(
-            hook,
-            task,
-            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
-        )
-        expect(proc.returncode == 0, f'on-add named calendar failed: {proc.stderr[:500]!r}')
-        out_task = _assert_stdout_json_only(proc.stdout)
-        due = datetime.fromisoformat(str(out_task.get('due')))
-        expect(due.weekday() in {5, 6}, f'named weekend calendar was ignored: {due}')
-        expect(out_task.get('bc') == 'weekend', f'bc was not normalized: {out_task!r}')
-
-
-def test_hook_on_add_reports_business_calendar_displacement_only_when_shifted():
-    """On-add should explain a named-calendar roll while leaving unchanged anchors quiet."""
-    hook = _find_hook_file('on-add.nautical')
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / 'config-nautical.toml'
-        config_path.write_text(
-            '[business_calendar.work]\n'
-            'anchor = "w:mon..fri"\n'
-            'omit = "y:04-24"\n',
-            encoding='utf-8',
-        )
-        base = {
-            'uuid': '00000000-0000-4000-8000-000000000125',
-            'description': 'calendar displacement',
-            'status': 'pending',
-            'due': '20260420T060000Z',
-            'anchor_mode': 'skip',
-            'bc': 'work',
-        }
-        shifted = _run_hook_script(
-            hook,
-            {**base, 'anchor': 'y:04-24@nbd@t=09:00'},
-            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
-        )
-        unchanged = _run_hook_script(
-            hook,
-            {**base, 'uuid': '00000000-0000-4000-8000-000000000126', 'anchor': 'y:04-23@nbd@t=09:00'},
-            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
-        )
-
-    expect(shifted.returncode == 0, f'shifted calendar add failed: {shifted.stderr[:500]!r}')
-    _assert_stdout_json_only(shifted.stdout)
-    shifted_err = _strip_markup(shifted.stderr)
-    expect('Business calendar adjusted' in shifted_err, f'displacement panel missing: {shifted_err[:800]!r}')
-    expect('Calendar work' in shifted_err, f'calendar name missing: {shifted_err[:800]!r}')
-    expect('Fri 2026-04-24' in shifted_err and 'Mon 2026-04-27' in shifted_err, f'displacement dates missing: {shifted_err[:800]!r}')
-    expect(unchanged.returncode == 0, f'unchanged calendar add failed: {unchanged.stderr[:500]!r}')
-    _assert_stdout_json_only(unchanged.stdout)
-    expect('Business calendar adjusted' not in _strip_markup(unchanged.stderr), f'unchanged anchor should stay quiet: {unchanged.stderr[:800]!r}')
-
-
-def test_hook_on_add_rejects_unknown_business_calendar_cleanly():
-    """unknown bc values should fail before recurrence scheduling with an actionable error."""
-    hook = _find_hook_file('on-add.nautical')
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / 'config-nautical.toml'
-        config_path.write_text(
-            '[business_calendar.work]\n'
-            'anchor = "w:mon..fri"\n',
-            encoding='utf-8',
-        )
-        task = {
-            'uuid': '00000000-0000-4000-8000-000000000122',
-            'description': 'unknown business calendar',
-            'status': 'pending',
-            'anchor': 'w:mon',
-            'bc': 'missing',
-        }
-        proc = _run_hook_script(
-            hook,
-            task,
-            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
-        )
-        expect(proc.returncode != 0, 'on-add should reject an unknown business calendar')
-        stderr_text = _strip_markup(proc.stderr)
-        expect('Invalid business calendar' in stderr_text, f'missing error title: {stderr_text[:500]!r}')
-        expect(
-            'configured calendars:' in stderr_text and 'work.' in stderr_text,
-            f'missing available-calendar hint: {stderr_text[:500]!r}',
-        )
-
-
-def test_hook_on_add_rejects_invalid_timezone_for_nautical_task():
-    """A bad timezone must block recurrence scheduling instead of using UTC silently."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / "config-nautical.toml"
-        config_path.write_text('tz = "Invalid/Timezone"\n', encoding="utf-8")
-        proc = _run_hook_script(
-            hook,
-            {
-                "uuid": "00000000-0000-4000-8000-000000000127",
-                "description": "invalid timezone recurrence",
-                "status": "pending",
-                "anchor": "w:mon",
-            },
-            env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config_path)},
-        )
-    expect(proc.returncode != 0, "invalid timezone should block Nautical on-add")
-    stderr_text = _strip_markup(proc.stderr)
-    expect("Invalid Nautical configuration" in stderr_text, f"missing config error title: {stderr_text[:800]!r}")
-    expect("timezone" in stderr_text.lower(), f"timezone cause missing: {stderr_text[:800]!r}")
-
-
-
-
 def test_discovered_malformed_config_blocks_taskdata_reload():
     """A malformed Taskdata-discovered config must not silently select defaults."""
     with tempfile.TemporaryDirectory() as td:
@@ -11326,34 +11199,6 @@ def test_astronomical_season_selection_scheduler_uses_transition_dates():
         expect(any("astronomical" in line for line in payload["advice"]), f"astronomical advice missing: {payload!r}")
 
 
-def test_on_add_seasonal_selection_feedback():
-    """The add preview should show a readable seasonal rule and its fixed boundary."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000783",
-        "description": "seasonal feedback",
-        "status": "pending",
-        "entry": "20260723T090000Z",
-        "anchor": "(w:mon)@in-spring=first",
-        "anchor_mode": "skip",
-    }
-    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
-    expect(proc.returncode == 0, f"on-add rejected seasonal feedback anchor: {proc.stderr}")
-    out_task = _extract_last_json(proc.stdout)
-    expect(out_task.get("anchor") == task["anchor"], f"on-add changed seasonal anchor: {out_task}")
-    stderr = _strip_markup(proc.stderr)
-    expect("the first Monday of each spring" in stderr, f"preview omitted natural season: {stderr}")
-    expect(
-        "Advice" in stderr
-        and (
-            "fixed March 1 through May 31" in stderr
-            or "astronomical spring equinox through" in stderr
-        )
-        and "boundaries." in stderr,
-        f"preview omitted season boundary: {stderr}",
-    )
-
-
 def test_seasonal_selection_modify_modes_times_and_timeline():
     """Completion modes should preserve seasonal slots, local times, and future projections."""
     from zoneinfo import ZoneInfo
@@ -11511,13 +11356,8 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
 
 TESTS = [
     test_year_ordinals_hooks_modes_calendar_and_timeline,
-    test_on_add_seasonal_selection_feedback,
     test_seasonal_selection_modify_modes_times_and_timeline,
     test_business_calendar_toml_section_resolves_lazily,
-    test_hook_on_add_uses_and_normalizes_business_calendar,
-    test_hook_on_add_reports_business_calendar_displacement_only_when_shifted,
-    test_hook_on_add_rejects_unknown_business_calendar_cleanly,
-    test_hook_on_add_rejects_invalid_timezone_for_nautical_task,
     test_discovered_malformed_config_blocks_taskdata_reload,
     test_taskdata_reload_exposes_consistent_validated_fingerprints,
     test_hook_on_modify_rejects_unknown_business_calendar_cleanly,

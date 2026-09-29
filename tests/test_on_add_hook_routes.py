@@ -143,6 +143,102 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertEqual(json.loads(result.stdout)["anchor"], expression)
         self.assertIn("in each year", result.stderr)
 
+    def test_seasonal_anchor_preview_explains_rule_and_fixed_boundary(self) -> None:
+        expression = "(w:mon)@in-spring=first"
+        result = self._run(
+            self._task(
+                entry="20260723T090000Z",
+                anchor=expression,
+                anchor_mode="skip",
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["anchor"], expression)
+        self.assertIn("the first Monday of each spring", result.stderr)
+        self.assertIn("Advice", result.stderr)
+        self.assertIn("fixed March 1 through May 31", result.stderr)
+
+    def test_named_business_calendar_normalizes_and_selects_its_weekend(self) -> None:
+        self.config.write_text(
+            'tz = "UTC"\n'
+            f'anchor_file_dir = "{self.anchor_files}"\n'
+            f'omit_file_dir = "{self.omit_files}"\n'
+            'panel_mode = "rich"\n'
+            '[business_calendar.weekend]\n'
+            'anchor = "w:sat,sun"\n',
+            encoding="utf-8",
+        )
+        result = self._run(
+            self._task(
+                entry="20260714T000000Z",
+                anchor="m:1bd@t=09:00",
+                anchor_mode="skip",
+                bc="WEEKEND",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        due = datetime.fromisoformat(payload["due"])
+        self.assertIn(due.weekday(), {5, 6})
+        self.assertEqual(payload["bc"], "weekend")
+
+    def test_business_calendar_displacement_is_reported_only_for_shifted_anchor(self) -> None:
+        self.config.write_text(
+            'tz = "UTC"\n'
+            f'anchor_file_dir = "{self.anchor_files}"\n'
+            f'omit_file_dir = "{self.omit_files}"\n'
+            'panel_mode = "rich"\n'
+            '[business_calendar.work]\n'
+            'anchor = "w:mon..fri"\n'
+            'omit = "y:04-24"\n',
+            encoding="utf-8",
+        )
+        base = self._task(
+            due="20260420T060000Z",
+            anchor_mode="skip",
+            bc="work",
+        )
+
+        shifted = self._run({**base, "anchor": "y:04-24@nbd@t=09:00"})
+        unchanged = self._run(
+            {
+                **base,
+                "uuid": "22222222-2222-4222-8222-222222222222",
+                "anchor": "y:04-23@nbd@t=09:00",
+            }
+        )
+
+        self.assertEqual(shifted.returncode, 0, shifted.stderr)
+        self.assertEqual(unchanged.returncode, 0, unchanged.stderr)
+        self.assertIn("Business calendar adjusted", shifted.stderr)
+        self.assertIn("Calendar work", shifted.stderr)
+        self.assertIn("Fri 2026-04-24", shifted.stderr)
+        self.assertIn("Mon 2026-04-27", shifted.stderr)
+        self.assertNotIn("Business calendar adjusted", unchanged.stderr)
+
+    def test_unknown_business_calendar_fails_with_configured_choices(self) -> None:
+        self.config.write_text(
+            'tz = "UTC"\n'
+            f'anchor_file_dir = "{self.anchor_files}"\n'
+            f'omit_file_dir = "{self.omit_files}"\n'
+            'panel_mode = "rich"\n'
+            '[business_calendar.work]\n'
+            'anchor = "w:mon..fri"\n',
+            encoding="utf-8",
+        )
+        self._assert_invalid(
+            self._task(anchor="w:mon", bc="missing"),
+            ("Invalid business calendar", "configured calendars:", "work."),
+        )
+
+    def test_invalid_timezone_blocks_scheduled_on_add_task(self) -> None:
+        self.config.write_text('tz = "Invalid/Timezone"\n', encoding="utf-8")
+        self._assert_invalid(
+            self._task(anchor="w:mon"),
+            ("Invalid Nautical configuration", "timezone"),
+        )
+
     def test_valid_routes_preserve_or_mutate_the_expected_task_fields(self) -> None:
         explicit_due = "20990102T090000Z"
         routes = (

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import stat
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -34,7 +35,7 @@ from nautical_core.lifecycle_outbox import (
 class LifecycleOutboxContractTests(unittest.TestCase):
     @staticmethod
     def _plan(chain: str = "contract", *, max_attempts: int = 3) -> LifecyclePlan:
-        from dev_tools.nautical_golden_tests import _task_draft
+        from dev_tools.golden_tests.support import task_draft as _task_draft
 
         parent = "00000000-0000-4000-8000-000000001001"
         child = "00000000-0000-4000-8000-000000001002"
@@ -63,6 +64,16 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             {stage.value for stage in ExecutionStage},
             {"planned", "persisted", "child_present", "parent_linked", "verified", "finalized", "retryable", "manual_review"},
         )
+
+    def test_outbox_database_file_permissions_are_private(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            opened = repository.open()
+
+            self.assertTrue(opened.ok, opened.reason)
+            self.assertTrue(repository.path.is_file())
+            mode = stat.S_IMODE(repository.path.stat().st_mode)
+            self.assertEqual(mode & 0o077, 0)
 
     def test_failure_round_trip_preserves_unicode_and_evidence(self) -> None:
         failure = OutboxFailure("retryable", "échec — réseau", {"attempt": 2, "note": "再試"})

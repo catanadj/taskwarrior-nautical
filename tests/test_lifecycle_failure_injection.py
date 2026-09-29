@@ -261,7 +261,7 @@ print(json.dumps(payload, sort_keys=True))
 
     @staticmethod
     def _bulk_plan(chain: str, parent: str, child: str, link: int) -> LifecyclePlan:
-        from dev_tools.nautical_golden_tests import _task_draft
+        from dev_tools.golden_tests.support import task_draft as _task_draft
 
         return LifecyclePlan.from_draft(
             identity=LifecycleIdentity(chain, parent, link, link + 1, LifecycleEvent.COMPLETE),
@@ -599,7 +599,7 @@ print(json.dumps(payload, sort_keys=True))
 
         parent = "00000000-0000-4000-8000-000000000201"
         child = "00000000-0000-4000-8000-000000000202"
-        from dev_tools.nautical_golden_tests import _task_draft
+        from dev_tools.golden_tests.support import task_draft as _task_draft
 
         plan = LifecyclePlan.from_draft(
             identity=LifecycleIdentity("budget-chain", parent, 1, 2, LifecycleEvent.COMPLETE),

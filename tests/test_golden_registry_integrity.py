@@ -5,13 +5,15 @@ exclusive acceptance-domain inventory.
 """
 
 import hashlib
+import ast
 import importlib
+from pathlib import Path
 import unittest
 
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "90e308379783a1acfba08e977e22aac1b940e473d0ff03253b829be90aa7933e"
+    "7118b9ce4deed8ddba94c2d2afe0244ff88579fcb32bac4fbf6fb47b1243866e"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -57,8 +59,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "cb19880068ed0fe952886429d5e47c53516d9cffa740e4a1bbc6456c23af5568",
     ),
     "recurrence and hook integration": (
-        213,
-        "820207e3131034a1ba665c0305eed01036c756ec87369ab9ed988f9d1590e68e",
+        212,
+        "fb0480a704fc1129f99de243e41763adaef5508abc1795a006de4f3eca39e38c",
     ),
     "storage and filesystem safety": (
         4,
@@ -122,6 +124,7 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_core_cache_dir_and_lock_permissions",
         "test_core_cache_lock_contention_matches_safe_lock",
         "test_core_cache_dir_rejects_symlink_override",
+        "test_hook_files_are_private_permissions",
         "test_on_add_anchor_and_anchor_file_can_coexist",
         "test_on_add_preview_uses_configured_chain_colour",
         "test_on_add_run_task_timeout",
@@ -651,6 +654,22 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertFalse(MIGRATED_DIRECT_CONTRACT_TESTS & top_level)
         self.assertFalse(MIGRATED_DIRECT_CONTRACT_TESTS & RETIRED_CHARACTERIZATION_TESTS)
 
+    def test_unit_tests_do_not_import_the_golden_runner_directly(self):
+        tests_dir = Path(__file__).resolve().parent
+        offenders = []
+        for path in sorted(tests_dir.glob("test_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    modules = [node.module or ""]
+                else:
+                    continue
+                if "dev_tools.nautical_golden_tests" in modules:
+                    offenders.append(f"{path.name}:{node.lineno}")
+        self.assertEqual(offenders, [])
+
     def test_navigator_anchor_source_golden_restores_shared_core_state(self):
         core = self.golden.core
         previous = (
@@ -701,8 +720,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
-        self.assertEqual(len(top_level), 307)
-        self.assertEqual(len(registered), 357)
+        self.assertEqual(len(top_level), 306)
+        self.assertEqual(len(registered), 356)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(hooks.TESTS), 5)
         self.assertEqual(len(operator.TESTS), 4)
@@ -712,7 +731,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 511)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 512)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
         storage = importlib.import_module("dev_tools.golden_tests.storage")

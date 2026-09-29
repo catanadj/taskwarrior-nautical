@@ -9,7 +9,7 @@ from nautical_core.backup_service import StorageIO, create_manifest, publish_man
 from nautical_core.restore_service import restore_backup, validate_backup
 from nautical_core.lifecycle_models import ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-from dev_tools.nautical_golden_tests import _task_draft
+from dev_tools.golden_tests.support import task_draft as _task_draft
 
 
 class RestoreServiceTests(unittest.TestCase):

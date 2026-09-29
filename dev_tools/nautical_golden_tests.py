@@ -17,7 +17,7 @@ Optional:
 """
 
 import importlib
-import sys, os, re, json, io, contextlib, stat
+import sys, os, re, json, io, contextlib
 import random
 import time
 import sqlite3
@@ -37,24 +37,7 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 
 from tests.support.lifecycle_execution import LifecycleExecutionFixture
 from nautical_core.query_service import OccurrenceQueryRuntime
-from nautical_core.cache_locking import safe_lock as _owner_safe_lock
 from nautical_core.panel_colours import chain_colour_root
-
-try:
-    import fcntl as _fcntl_mod
-except ImportError:
-    _fcntl_mod = None
-
-
-def _owner_safe_lock_context(path, **kwargs):
-    return _owner_safe_lock(
-        path,
-        fcntl_mod=_fcntl_mod,
-        os_mod=os,
-        time_mod=time,
-        random_mod=random,
-        **kwargs,
-    )
 from dev_tools.golden_tests.recurrence import TESTS as RECURRENCE_TESTS
 from dev_tools.golden_tests.hooks import TESTS as HOOK_TESTS
 from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
@@ -1783,33 +1766,6 @@ def test_full_hooks_reuse_wrapper_protocol_probe():
             expect(mod._PROTOCOL is protocol, f"{hook_name} did not retain wrapper protocol module")
             expect(retained_probe is probe, f"{hook_name} did not retain wrapper probe result")
 
-
-def test_hook_files_are_private_permissions():
-    """Lifecycle outbox and lock files should not be group/world-readable."""
-    lock_path = None
-    with tempfile.TemporaryDirectory() as td:
-        prev_taskdata = os.environ.get("TASKDATA")
-        os.environ["TASKDATA"] = td
-        try:
-            lock_path = os.path.join(td, ".nautical_perm_test.lock")
-            with _owner_safe_lock_context(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
-                expect(ok, "safe_lock did not acquire")
-                mode = stat.S_IMODE(os.stat(lock_path).st_mode)
-                expect((mode & 0o077) == 0, f"lock file has group/other perms: {oct(mode)}")
-
-            from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-
-            db_path = _LifecycleOutboxRepository(Path(td)).path
-            opened = _LifecycleOutboxRepository(Path(td)).open()
-            expect(opened.ok, f"lifecycle outbox did not open: {opened.reason}")
-            expect(db_path.exists(), f"lifecycle outbox not created: {db_path}")
-            mode = stat.S_IMODE(db_path.stat().st_mode)
-            expect((mode & 0o077) == 0, f"lifecycle outbox has group/other perms: {oct(mode)}")
-        finally:
-            if prev_taskdata is None:
-                os.environ.pop("TASKDATA", None)
-            else:
-                os.environ["TASKDATA"] = prev_taskdata
 
 def test_diag_log_rotation_bounds():
     """Persistent diag log should rotate when exceeding max size."""
@@ -13066,7 +13022,6 @@ TESTS = [
     test_full_hooks_reuse_wrapper_protocol_probe,
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hooks_survive_malformed_numeric_environment,
-    test_hook_files_are_private_permissions,
     *STORAGE_TESTS,
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,

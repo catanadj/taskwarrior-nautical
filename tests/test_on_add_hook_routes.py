@@ -89,6 +89,16 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertNotIn("[nautical]", diagnostic.stdout)
         self.assertIn("[nautical]", diagnostic.stderr)
 
+    def test_position_selection_advice_preserves_hook_json(self) -> None:
+        expression = "(y:w-1)@in-year=8th"
+        result = self._run(
+            self._task(anchor=expression, anchor_mode="skip"),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["anchor"], expression)
+        self.assertIn("Advice", result.stderr)
+        self.assertIn("ISO-week candidates by calendar year", result.stderr)
+
     def test_valid_routes_preserve_or_mutate_the_expected_task_fields(self) -> None:
         explicit_due = "20990102T090000Z"
         routes = (

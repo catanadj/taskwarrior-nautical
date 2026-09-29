@@ -11283,26 +11283,6 @@ def test_on_modify_missing_taskdata_uses_tw_dir():
     )
 
 
-def test_on_add_position_selection_renders_semantic_advice():
-    """The on-add preview should include one advice row without disturbing hook JSON."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000782",
-        "description": "positional semantic advice",
-        "status": "pending",
-        "entry": "20260715T090000Z",
-        "anchor": "(y:w-1)@in-year=8th",
-        "anchor_mode": "skip",
-    }
-    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
-    expect(proc.returncode == 0, f"on-add advice preview failed: {proc.stderr}")
-    out_task = _extract_last_json(proc.stdout)
-    expect(out_task.get("anchor") == task["anchor"], f"on-add changed advised anchor: {out_task}")
-    stderr = _strip_markup(proc.stderr)
-    expect("Advice" in stderr, f"on-add preview omitted advice row: {stderr}")
-    expect("ISO-week candidates by calendar year" in stderr, f"on-add preview omitted boundary explanation: {stderr}")
-
-
 def test_position_selection_on_add_and_modify_completion():
     """Add preview and modify completion should agree on monthly positional anchors."""
     expr = "(w:tue | w:thu)@in-month=last"
@@ -11752,7 +11732,6 @@ def test_position_selection_public_period_scopes_hooks():
 
 TESTS = [
     test_year_ordinals_hooks_modes_calendar_and_timeline,
-    test_on_add_position_selection_renders_semantic_advice,
     test_position_selection_on_add_and_modify_completion,
     test_position_selection_modify_timeline_projects_future_dates,
     test_position_selection_post_modifiers_modify_completion,

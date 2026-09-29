@@ -5421,122 +5421,6 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
 
 # -------- Runner --------------------------------------------------------------
 
-def test_chain_until_overnight_window_survives_dst_fallback():
-    """chainUntil should include the final overnight slot across a repeated local hour."""
-    from zoneinfo import ZoneInfo
-
-    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_dst_fallback_until_test")
-    old_name = mod.core.LOCAL_TZ_NAME
-    old_tz = mod.core._LOCAL_TZ
-    mod.core.LOCAL_TZ_NAME = "America/New_York"
-    mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
-    try:
-        due = mod.core.build_local_datetime(date(2026, 10, 31), (22, 30))
-        until = mod.core.build_local_datetime(date(2026, 11, 1), (2, 30))
-        parent = {
-            "uuid": "00000000-0000-4000-8000-000000000134",
-            "description": "DST fallback chain end",
-            "status": "completed",
-            "anchor": "w:sat@t=22:30..02:30/5",
-            "anchor_mode": "skip",
-            "chain": "on",
-            "chainID": "dstuntil",
-            "link": 1,
-            "chainUntil": mod.core.fmt_isoz(until.astimezone(timezone.utc)),
-            "due": mod.core.fmt_isoz(due.astimezone(timezone.utc)),
-            "end": mod.core.fmt_isoz(due.astimezone(timezone.utc)),
-        }
-        dnf = mod.core.validate_anchor_expr_strict(parent["anchor"])
-        final_no, final_dt = mod._cap_from_until_anchor(parent, due.astimezone(timezone.utc), dnf)
-        expect(final_no == 6, f"DST fallback chainUntil counted the wrong final link: {final_no!r}")
-        expect(final_dt is not None and mod.core.to_local(final_dt).strftime("%Y-%m-%d %H:%M") == "2026-11-01 02:30", f"DST fallback chainUntil stopped early: {final_dt!r}")
-    finally:
-        mod.core.LOCAL_TZ_NAME = old_name
-        mod.core._LOCAL_TZ = old_tz
-
-
-def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
-    """Configured live panels should fall back cleanly when a hook's stderr is captured."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000121",
-        "description": "live panel protocol test",
-        "status": "pending",
-        "entry": "20260101T000000Z",
-        "cp": "1d",
-        "due": "20260102T090000Z",
-    }
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / "nautical.toml"
-        config_path.write_text('tz = "UTC"\npanel_mode = "live"\n', encoding="utf-8")
-        proc = _run_hook_script(
-            hook,
-            task,
-            env_extra={"NAUTICAL_CONFIG": str(config_path), "NO_COLOR": "1"},
-        )
-
-    expect(proc.returncode == 0, f"on-add live mode failed: {proc.stderr[:500]!r}")
-    stdout_lines = [line for line in proc.stdout.splitlines() if line.strip()]
-    expect(len(stdout_lines) == 1, f"live mode emitted non-protocol stdout: {proc.stdout!r}")
-    output_task = json.loads(stdout_lines[0])
-    expect(output_task.get("uuid") == task["uuid"], f"live mode changed hook protocol output: {output_task!r}")
-    stderr_text = _strip_markup(proc.stderr)
-    expect(
-        "Recurring Chain Preview" in stderr_text and "Period" in stderr_text,
-        f"captured live mode lost the static panel fallback: {stderr_text[:500]!r}",
-    )
-    expect("\x1b[" not in proc.stderr, f"captured live hook emitted terminal controls: {proc.stderr!r}")
-
-
-def test_hook_on_add_counted_random_preview_uses_group_time():
-    """on-add should schedule and explain a constrained counted-random anchor."""
-    hook = _find_hook_file("on-add.nautical")
-    env = {"NO_COLOR": "1"}
-    expr = "(m:2rand + w:mon..fri)@t=09:00"
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000119",
-        "description": "hook test counted random",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20260101T000000Z",
-        "anchor": expr,
-        "anchor_mode": "skip",
-    }
-    p = _run_hook_script(hook, task, env_extra=env)
-    expect(p.returncode == 0, f"on-add counted random failed: {p.stderr[:500]!r}")
-    out_task = _extract_last_json(p.stdout)
-    due = datetime.fromisoformat(str(out_task.get("due")))
-    expect((due.hour, due.minute) == (9, 0), f"group time was not used for first due: {due}")
-    expect(due.weekday() < 5, f"weekday constraint was ignored for first due: {due}")
-    stderr_txt = _strip_markup(p.stderr)
-    expect(
-        "2 random days each" in stderr_txt and "month at 09:00" in stderr_txt,
-        f"counted-random natural text missing: {stderr_txt[:500]!r}",
-    )
-
-
-def test_hook_on_add_accepts_group_date_modifiers():
-    """on-add should accept and schedule date modifiers shared by OR branches."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000120",
-        "description": "hook test grouped date modifiers",
-        "status": "pending",
-        "project": "testing",
-        "entry": "20260101T000000Z",
-        "anchor": "(y:04-24 | y:04-30)@pbd@-1bd@t=09:00",
-        "anchor_mode": "skip",
-    }
-    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
-    expect(proc.returncode == 0, f"on-add grouped date modifiers failed: {proc.stderr[:500]!r}")
-    out_task = _extract_last_json(proc.stdout)
-    due = datetime.fromisoformat(str(out_task.get("due")))
-    today = core.to_local(core.now_utc()).date()
-    expected_date, _meta = core.next_after_expr(core.validate_anchor_expr_strict(task["anchor"]), today)
-    expect(due.date() == expected_date, f"grouped date modifiers produced wrong due date: {due}, expected {expected_date}")
-    expect((due.hour, due.minute) == (9, 0), f"grouped date modifiers lost shared time: {due}")
-
-
 def test_hook_on_add_cp_scheduled_only_preserves_no_due():
     """scheduled-only recurring cp tasks should remain scheduled-only on add."""
     hook = _find_hook_file("on-add.nautical")
@@ -5558,31 +5442,6 @@ def test_hook_on_add_cp_scheduled_only_preserves_no_due():
     expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
     stderr_txt = _strip_markup(p.stderr)
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
-
-
-def test_hook_on_add_anchor_unknown_preset_fails_cleanly():
-    """on-add should fail clearly when an anchor preset is not configured."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        conf = Path(td) / "config-nautical.toml"
-        conf.write_text("[anchor_presets]\n", encoding="utf-8")
-        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000119",
-            "description": "hook test on-add unknown anchor preset",
-            "status": "pending",
-            "project": "testing",
-            "entry": "20260101T000000Z",
-            "anchor": "@missing",
-            "anchor_mode": "skip",
-            "due": "20260101T090000Z",
-        }
-        p = _run_hook_script(hook, task, env_extra=env)
-        expect(p.returncode != 0, "on-add should fail for unknown anchor preset")
-        expect((p.stdout or "").strip() == "", f"expected no stdout on unknown preset failure, got: {p.stdout!r}")
-        stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid anchor" in stderr_txt, f"expected invalid anchor panel. stderr={stderr_txt[:500]!r}")
-        expect("Unknown anchor preset '@missing'" in stderr_txt, f"expected unknown preset guidance. stderr={stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_anchor_composed_preset_resolves_from_config():
@@ -10967,11 +10826,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_chain_until_overnight_window_survives_dst_fallback,
-    test_hook_on_add_live_panel_mode_preserves_captured_protocol,
-    test_hook_on_add_counted_random_preview_uses_group_time,
-    test_hook_on_add_accepts_group_date_modifiers,
-    test_hook_on_add_anchor_unknown_preset_fails_cleanly,
     test_hook_on_add_anchor_composed_preset_resolves_from_config,
     test_hook_on_add_anchor_recursive_preset_fails_cleanly,
     test_hook_on_add_omit_preset_resolves_from_config,

@@ -308,6 +308,62 @@ class ModifyScheduleContractTests(unittest.TestCase):
             until_local,
         )
 
+    def test_fall_back_overnight_until_includes_final_slot(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        from nautical_core.recurrence_context import RecurrenceContext
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        from nautical_core.task_models import NauticalTask
+
+        zone = ZoneInfo("America/New_York")
+        due_local = datetime(2026, 10, 31, 22, 30, tzinfo=zone)
+        until_local = datetime(2026, 11, 1, 2, 30, tzinfo=zone)
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000964",
+            "description": "DST fallback chain end",
+            "status": "completed",
+            "anchor": "w:sat@t=22:30..02:30/5",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "dstuntil-contract",
+            "link": 1,
+            "chainUntil": until_local.isoformat(),
+            "due": due_local.isoformat(),
+            "end": due_local.isoformat(),
+        }
+        observation = DEFAULT_TASK_CODEC.decode_row(
+            task, source_query="DST chainUntil contract"
+        )
+        evaluator = RecurrenceEvaluator.from_task(
+            NauticalTask.from_observation(observation),
+            context=RecurrenceContext.from_observation(observation, timezone=zone),
+        )
+
+        def parse_datetime(value):
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+        final_link, final_due = modify_completion_compute.cap_from_until_anchor(
+            task,
+            due_local.astimezone(timezone.utc),
+            core.validate_anchor_expr_strict(task["anchor"]),
+            parse_datetime=parse_datetime,
+            coerce_int=core.coerce_int,
+            recurrence_seed_base=lambda value: str(value["chainID"]),
+            to_local_cached=lambda value: value.astimezone(zone),
+            safe_parse_datetime=lambda value: (parse_datetime(value), None),
+            anchor_file_fallback_hhmm=lambda *_args: (9, 0),
+            omit_dnf_from_parent=lambda _task: (None, None),
+            recurrence_evaluator_for_task=lambda _task: evaluator,
+            anchor_file_provider_for=lambda *_args, **_kwargs: None,
+            anchor_included_occurrences=lambda *_args, **_kwargs: (),
+            compare_datetimes=compare_datetimes,
+            max_iterations=32,
+        )
+
+        self.assertEqual(final_link, 6)
+        self.assertIsNotNone(final_due)
+        self.assertEqual(final_due.astimezone(zone), until_local)
+
 
 if __name__ == "__main__":
     unittest.main()

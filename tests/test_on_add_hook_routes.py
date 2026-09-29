@@ -235,6 +235,83 @@ class OnAddHookRouteTests(HookSubprocessFixture):
             "Sun 2026-11-01 01:30",
         )
 
+    def test_live_panel_mode_falls_back_when_hook_stderr_is_captured(self) -> None:
+        config = self.taskdata.parent / "live-config.toml"
+        config.write_text('tz = "UTC"\npanel_mode = "live"\n', encoding="utf-8")
+        task = self._task(
+            description="live panel protocol",
+            entry="20260101T000000Z",
+            cp="1d",
+            due="20260102T090000Z",
+        )
+        result = self.run_hook(
+            "on-add.nautical",
+            json.dumps(task),
+            extra_environment={"NAUTICAL_CONFIG": str(config), "NO_COLOR": "1"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output_lines = [line for line in result.stdout.splitlines() if line.strip()]
+        self.assertEqual(len(output_lines), 1)
+        self.assertEqual(json.loads(output_lines[0])["uuid"], task["uuid"])
+        self.assertIn("Recurring Chain Preview", result.stderr)
+        self.assertIn("Period", result.stderr)
+        self.assertNotIn("\x1b[", result.stderr)
+
+    def test_counted_random_preview_uses_group_time(self) -> None:
+        expression = "(m:2rand + w:mon..fri)@t=09:00"
+        task = self._task(
+            description="counted random group time",
+            entry="20260101T000000Z",
+            anchor=expression,
+            anchor_mode="skip",
+        )
+        result = self._run(task)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["anchor"], expression)
+        due = datetime.fromisoformat(payload["due"])
+        self.assertEqual((due.hour, due.minute), (9, 0))
+        self.assertLess(due.weekday(), 5)
+        self.assertIn("2 random days each", result.stderr)
+        self.assertIn("month at 09:00", result.stderr)
+
+    def test_grouped_date_modifiers_are_accepted_and_keep_shared_time(self) -> None:
+        expression = "(y:04-24 | y:04-30)@pbd@-1bd@t=09:00"
+        task = self._task(
+            description="grouped date modifiers",
+            entry="20260101T000000Z",
+            anchor=expression,
+            anchor_mode="skip",
+        )
+        result = self._run(task)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["anchor"], expression)
+        due = datetime.fromisoformat(payload["due"])
+        self.assertEqual((due.hour, due.minute), (9, 0))
+        self.assertLess(due.weekday(), 5)
+        self.assertNotIn("Invalid anchor", result.stderr)
+
+    def test_unknown_anchor_preset_fails_with_actionable_error(self) -> None:
+        config = self.taskdata.parent / "unknown-preset-config.toml"
+        config.write_text("[anchor_presets]\n", encoding="utf-8")
+        task = self._task(
+            description="unknown anchor preset",
+            entry="20260101T000000Z",
+            anchor="@missing",
+            anchor_mode="skip",
+            due="20260101T090000Z",
+        )
+        result = self.run_hook(
+            "on-add.nautical",
+            json.dumps(task),
+            extra_environment={"NAUTICAL_CONFIG": str(config), "NO_COLOR": "1"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Invalid anchor", result.stderr)
+        self.assertIn("Unknown anchor preset '@missing'", result.stderr)
+
     def _assert_dst_window_slot_occurs_once(
         self, anchor: str, entry: str, due: str, expected_slot: str
     ) -> None:

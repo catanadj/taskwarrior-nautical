@@ -33,6 +33,21 @@ class ParserOwnerDependencies:
     resolve_presets: Callable[[str], str]
 
 
+@dataclass(frozen=True, slots=True)
+class ParserValidationDependencies:
+    """Explicit collaborators required by strict anchor validation."""
+
+    strict_validation: Any
+    parse_cached: Callable[..., Any]
+    parse_error: type[Exception]
+    is_atom_like: Callable[..., Any]
+    validate_weekly_spec: Callable[..., Any]
+    validate_monthly_spec: Callable[..., Any]
+    active_mod_keys: Callable[..., Any]
+    validate_yearly_token_format: Callable[..., Any]
+    position_selection: Any
+
+
 def _core_module() -> Any:
     package = __package__ or "nautical_core"
     return sys.modules.get(package) or importlib.import_module(package)
@@ -58,50 +73,50 @@ def _parse_anchor_expr_to_dnf_impl(s: str, deps: ParserOwnerDependencies) -> Any
     )
 
 
-def _validate_anchor_expr_strict_impl(module: Any, expr: Any) -> Any:
-    """Run strict validation against one isolated deps facade."""
-    return module._strict_validation.validate_anchor_expr_strict(
+def _validate_anchor_expr_strict_impl(deps: ParserValidationDependencies, expr: Any) -> Any:
+    """Run strict validation using its explicit dependency snapshot."""
+    return deps.strict_validation.validate_anchor_expr_strict(
         expr,
-        normalize_anchor_input_to_dnf=lambda value: _normalize_anchor_input_to_dnf(module, value),
-        assert_dnf_structure_strict=lambda value: _assert_dnf_structure_strict(module, value),
-        validate_anchor_dnf_atoms_strict=lambda value: _validate_anchor_dnf_atoms_strict(module, value),
+        normalize_anchor_input_to_dnf=lambda value: _normalize_anchor_input_to_dnf(deps, value),
+        assert_dnf_structure_strict=lambda value: _assert_dnf_structure_strict(deps, value),
+        validate_anchor_dnf_atoms_strict=lambda value: _validate_anchor_dnf_atoms_strict(deps, value),
     )
 
 
-def _normalize_anchor_input_to_dnf(module: Any, expr: Any) -> Any:
-    return module._strict_validation.normalize_anchor_input_to_dnf(
+def _normalize_anchor_input_to_dnf(deps: ParserValidationDependencies, expr: Any) -> Any:
+    return deps.strict_validation.normalize_anchor_input_to_dnf(
         expr,
-        parse_anchor_expr_to_dnf_cached=module.parse_anchor_expr_to_dnf_cached,
-        parse_error_cls=module.ParseError,
+        parse_anchor_expr_to_dnf_cached=deps.parse_cached,
+        parse_error_cls=deps.parse_error,
     )
 
 
-def _assert_dnf_structure_strict(module: Any, dnf: Any) -> Any:
-    module._strict_validation.assert_dnf_structure_strict(
+def _assert_dnf_structure_strict(deps: ParserValidationDependencies, dnf: Any) -> Any:
+    deps.strict_validation.assert_dnf_structure_strict(
         dnf,
-        is_atom_like=module._is_atom_like,
-        parse_error_cls=module.ParseError,
+        is_atom_like=deps.is_atom_like,
+        parse_error_cls=deps.parse_error,
     )
 
 
-def _validate_anchor_atom_strict(module: Any, atom: dict) -> None:
-    module._strict_validation.validate_anchor_atom_strict(
+def _validate_anchor_atom_strict(deps: ParserValidationDependencies, atom: dict) -> None:
+    deps.strict_validation.validate_anchor_atom_strict(
         atom,
-        validate_weekly_spec=module._validate_weekly_spec,
-        validate_monthly_spec=module._validate_monthly_spec,
-        active_mod_keys=module._active_mod_keys,
-        validate_yearly_token_format=module._validate_yearly_token_format,
-        parse_error_cls=module.ParseError,
+        validate_weekly_spec=deps.validate_weekly_spec,
+        validate_monthly_spec=deps.validate_monthly_spec,
+        active_mod_keys=deps.active_mod_keys,
+        validate_yearly_token_format=deps.validate_yearly_token_format,
+        parse_error_cls=deps.parse_error,
     )
 
 
-def _validate_anchor_dnf_atoms_strict(module: Any, dnf: Any) -> None:
-    module._strict_validation.validate_anchor_dnf_atoms_strict(
+def _validate_anchor_dnf_atoms_strict(deps: ParserValidationDependencies, dnf: Any) -> None:
+    deps.strict_validation.validate_anchor_dnf_atoms_strict(
         dnf,
-        validate_anchor_atom_strict=lambda atom: _validate_anchor_atom_strict(module, atom),
-        is_selection_node=module._position_selection.is_selection_node,
-        validate_selection_node=module._position_selection.validate_public_selection_node,
-        parse_error_cls=module.ParseError,
+        validate_anchor_atom_strict=lambda atom: _validate_anchor_atom_strict(deps, atom),
+        is_selection_node=deps.position_selection.is_selection_node,
+        validate_selection_node=deps.position_selection.validate_public_selection_node,
+        parse_error_cls=deps.parse_error,
     )
 
 
@@ -120,6 +135,34 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     parser_dnf = context.import_sibling("parsing.parser_dnf") if context is not None else deps["_parser_dnf"]
     parser_frontend = context.import_sibling("parsing.parser_frontend") if context is not None else deps["_parser_frontend"]
     position_selection = context.import_sibling("position_selection") if context is not None else deps["_position_selection"]
+    validation_deps_state: list[ParserValidationDependencies | None] = [None]
+
+    def validation_dependencies() -> ParserValidationDependencies:
+        bound = validation_deps_state[0]
+        if bound is None:
+            parse_error = deps.get("ParseError")
+            if parse_error is None:
+                parser_models = (
+                    context.import_sibling("parsing.parser_models")
+                    if context is not None else deps["_import_sibling"]("parsing.parser_models")
+                )
+                parse_error = parser_models.ParseError
+            bound = ParserValidationDependencies(
+                strict_validation=(
+                    context.import_sibling("strict_validation")
+                    if context is not None else deps["_strict_validation"]
+                ),
+                parse_cached=deps["_parse_anchor_expr_to_dnf_cached_impl"],
+                parse_error=parse_error,
+                is_atom_like=deps["_is_atom_like"],
+                validate_weekly_spec=deps["_validate_weekly_spec"],
+                validate_monthly_spec=deps["_validate_monthly_spec"],
+                active_mod_keys=deps["_active_mod_keys"],
+                validate_yearly_token_format=deps["_validate_yearly_token_format"],
+                position_selection=position_selection,
+            )
+            validation_deps_state[0] = bound
+        return bound
     preset_ref_re = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
 
     def resolve_preset_refs(
@@ -429,7 +472,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return _parse_anchor_expr_to_dnf_impl(s, owner_deps)
 
     return ApiBinding.from_kwargs(
-        build_acf=lambda expr: module._build_acf_impl(expr),
+        build_acf=lambda expr: deps["_build_acf_impl"](expr),
         _resolve_preset_refs=resolve_preset_refs,
         _resolve_anchor_presets_impl=resolve_anchor_presets_impl,
         _resolve_omit_presets_impl=resolve_omit_presets,
@@ -460,17 +503,17 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         _validate_and_terms_satisfiable=validate_and_terms_satisfiable,
         resolve_anchor_presets=resolve_anchor_presets_impl,
         parse_anchor_expr_to_dnf=parse_anchor_expr_to_dnf_bound,
-        parse_anchor_expr_to_dnf_cached=lambda s: module._parse_anchor_expr_to_dnf_cached_impl(s),
-        validate_anchor_expr_strict=lambda expr: _validate_anchor_expr_strict_impl(module, expr),
-        normalize_anchor_input_to_dnf=lambda expr: _normalize_anchor_input_to_dnf(module, expr),
-        assert_dnf_structure_strict=lambda dnf: _assert_dnf_structure_strict(module, dnf),
-        validate_anchor_atom_strict=lambda atom: _validate_anchor_atom_strict(module, atom),
-        validate_anchor_dnf_atoms_strict=lambda dnf: _validate_anchor_dnf_atoms_strict(module, dnf),
+        parse_anchor_expr_to_dnf_cached=lambda s: deps["_parse_anchor_expr_to_dnf_cached_impl"](s),
+        validate_anchor_expr_strict=lambda expr: _validate_anchor_expr_strict_impl(validation_dependencies(), expr),
+        normalize_anchor_input_to_dnf=lambda expr: _normalize_anchor_input_to_dnf(validation_dependencies(), expr),
+        assert_dnf_structure_strict=lambda dnf: _assert_dnf_structure_strict(validation_dependencies(), dnf),
+        validate_anchor_atom_strict=lambda atom: _validate_anchor_atom_strict(validation_dependencies(), atom),
+        validate_anchor_dnf_atoms_strict=lambda dnf: _validate_anchor_dnf_atoms_strict(validation_dependencies(), dnf),
     )
 
 
 def build_acf(expr: str) -> str:
-    return _core_module()._build_acf_impl(expr)
+    return _compat_build_acf(expr)
 
 
 def resolve_anchor_presets(expr: str, *, _seen: Any = None) -> str:
@@ -486,11 +529,40 @@ def parse_anchor_expr_to_dnf(s: str) -> Any:
 
 
 def parse_anchor_expr_to_dnf_cached(s: str) -> Any:
-    return _core_module()._parse_anchor_expr_to_dnf_cached_impl(s)
+    return _compat_parse_anchor_expr_to_dnf_cached(s)
 
 
 def validate_anchor_expr_strict(expr: Any) -> Any:
-    return _validate_anchor_expr_strict_impl(_core_module(), expr)
+    return _validate_anchor_expr_strict_impl(_compat_validation_dependencies(), expr)
+
+
+def _compat_build_acf(expr: str) -> str:
+    """Bridge the legacy public call to the facade's current ACF binding."""
+    module = _core_module()
+    return module._build_acf_impl(expr)
+
+
+def _compat_parse_anchor_expr_to_dnf_cached(s: str) -> Any:
+    """Bridge the legacy public call to the facade's cached parser binding."""
+    module = _core_module()
+    return module._parse_anchor_expr_to_dnf_cached_impl(s)
+
+
+def _compat_validation_dependencies() -> ParserValidationDependencies:
+    """Snapshot strict-validation collaborators at the compatibility edge."""
+    module = _core_module()
+    position_selection = module._position_selection
+    return ParserValidationDependencies(
+        strict_validation=module._strict_validation,
+        parse_cached=module._parse_anchor_expr_to_dnf_cached_impl,
+        parse_error=module.ParseError,
+        is_atom_like=module._is_atom_like,
+        validate_weekly_spec=module._validate_weekly_spec,
+        validate_monthly_spec=module._validate_monthly_spec,
+        active_mod_keys=module._active_mod_keys,
+        validate_yearly_token_format=module._validate_yearly_token_format,
+        position_selection=position_selection,
+    )
 
 
 __all__ = (

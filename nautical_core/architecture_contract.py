@@ -63,6 +63,7 @@ _COMPATIBILITY_NAMES = {
 }
 _INTEGRATION_NAMES = {"hook_context", "hook_runtime", "operator_health_service"}
 _DOMAIN_NAMES = {"common", "hint_models", "task_models", "diagnostic_models"}
+_BOUND_OWNER_APIS = {"parser_api", "scheduler_api", "cache_api"}
 
 
 @dataclass(frozen=True)
@@ -179,6 +180,64 @@ def _dynamic_hook_host_access(
     return None
 
 
+def _namespace_root(node: ast.AST) -> ast.Name | None:
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id in {"getattr", "vars", "hasattr", "setattr"} and node.args:
+            return _namespace_root(node.args[0])
+    return node if isinstance(node, ast.Name) and node.id in {"module", "core"} else None
+
+
+def _owner_namespace_reads(tree: ast.AST) -> tuple[tuple[str, int], ...]:
+    """Find mutable facade namespace reads outside explicit composition adapters."""
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.functions: list[str] = []
+            self.reads: list[tuple[str, int]] = []
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self.functions.append(node.name)
+            self.generic_visit(node)
+            self.functions.pop()
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self.functions.append(node.name)
+            self.generic_visit(node)
+            self.functions.pop()
+
+        def visit_Attribute(self, node: ast.Attribute) -> None:
+            self._record_namespace_read(node)
+            self.generic_visit(node)
+
+        def visit_Subscript(self, node: ast.Subscript) -> None:
+            self._record_namespace_read(node)
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Name) and node.func.id in {
+                "getattr", "vars", "hasattr", "setattr",
+            } and node.args:
+                self._record_namespace_read(node)
+            self.generic_visit(node)
+
+        def _record_namespace_read(self, node: ast.AST) -> None:
+            function = self.functions[-1] if self.functions else "<module>"
+            is_adapter = (
+                function == "for_core"
+                or function.startswith("compat_")
+                or function.startswith("_compat_")
+                or function.endswith("_compat_adapter")
+            )
+            if not is_adapter and _namespace_root(node) is not None:
+                self.reads.append((function, getattr(node, "lineno", 0)))
+
+    visitor = Visitor()
+    visitor.visit(tree)
+    return tuple(sorted(set(visitor.reads)))
+
+
 def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
     """Validate imports in ``root`` without importing any source module."""
     layers = module_layer_map(root)
@@ -225,6 +284,18 @@ def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
                             ),
                             dynamic_access.lineno,
                         ))
+        if path.parent.name == "nautical_core" and path.stem in _BOUND_OWNER_APIS:
+            for function, line in _owner_namespace_reads(tree):
+                violations.append(ArchitectureViolation(
+                    relative,
+                    "module-namespace",
+                    layer,
+                    (
+                        f"owner operation {function} must consume explicit dependencies; "
+                        "only for_core composition and compatibility adapters may read module/core namespaces"
+                    ),
+                    line,
+                ))
         for reference in _imports(tree):
             module = reference.module
             if layer in {DOMAIN, RECURRENCE} and _is_forbidden(module, forbidden_pure):

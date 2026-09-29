@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import inspect
-import importlib
-from dataclasses import FrozenInstanceError, is_dataclass
+from datetime import date
 import hashlib
-from types import ModuleType
+import importlib
+import inspect
+from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path
+from types import ModuleType
 import unittest
 
 from nautical_core.api_bindings import ApiBinding, core_namespace
@@ -244,6 +245,33 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertEqual(
             facade.parse_anchor_expr_to_dnf("w:mon"),
             facade.parse_anchor_expr_to_dnf_cached("w:mon"),
+        )
+
+    def test_parser_scheduler_and_cache_bindings_match_facade_behavior(self) -> None:
+        import nautical_core as facade
+        cache_api = importlib.import_module("nautical_core.cache_api")
+        parser_api = importlib.import_module("nautical_core.parser_api")
+        scheduler_api = importlib.import_module("nautical_core.scheduler_api")
+
+        public_dnf = facade.parse_anchor_expr_to_dnf("w:mon")
+        parser = parser_api.for_core(module=facade)
+        scheduler = scheduler_api.for_core(module=facade)
+        cache = cache_api.for_core(module=facade)
+
+        dnf = parser.parse_anchor_expr_to_dnf("w:mon")
+        self.assertEqual(dnf, public_dnf)
+        self.assertEqual(
+            parser.validate_anchor_expr_strict("w:mon"),
+            facade.validate_anchor_expr_strict("w:mon"),
+        )
+        reference = date(2026, 9, 28)
+        self.assertEqual(
+            scheduler.next_after_expr(dnf, reference),
+            facade.next_after_expr(dnf, reference),
+        )
+        self.assertEqual(
+            cache.cache_key_for_task("w:mon", "skip"),
+            facade.cache_key_for_task("w:mon", "skip"),
         )
 
 

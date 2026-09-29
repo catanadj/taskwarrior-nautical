@@ -107,7 +107,7 @@ def _binding_context(
         cache_locking=import_sibling("cache_locking"),
         cache_payload=import_sibling("cache_payload"),
         cache_dir_state=[None],
-        source_file=(context.source_file if context is not None else getattr(module, "__file__", "")) or "",
+        source_file=(context.source_file if context is not None else deps.get("__file__", "")) or "",
     )
 
 

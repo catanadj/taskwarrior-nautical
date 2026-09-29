@@ -218,6 +218,14 @@ class ArchitectureContractTests(unittest.TestCase):
         )
         self.assertEqual(list(violations), [])
 
+    def test_repository_bound_owners_do_not_read_facade_namespaces(self) -> None:
+        violations = [
+            violation.as_dict()
+            for violation in architecture_contract.validate(Path(__file__).parents[1])
+            if violation.dependency == "module-namespace"
+        ]
+        self.assertEqual(violations, [])
+
     def test_primary_bound_apis_do_not_reintroduce_facade_lookups(self) -> None:
         root = Path(__file__).parents[1]
         pattern = re.compile(r"\bcore\s*(?:\[|\.get\s*\()")
@@ -268,6 +276,31 @@ class ArchitectureContractTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["violations"][0]["dependency"], "nautical_core")
+
+    def test_owner_namespace_reads_are_rejected_except_at_composition_adapters(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nautical-architecture-contract-") as td:
+            root = Path(td)
+            package = root / "nautical_core"
+            package.mkdir()
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "scheduler_api.py").write_text(
+                "def owner(module):\n"
+                "    return module.next_after_expr\n\n"
+                "def for_core(module):\n"
+                "    return module.composition_input\n\n"
+                "def compat_adapter(core):\n"
+                "    return core.public_call\n",
+                encoding="utf-8",
+            )
+
+            violations = architecture_contract.validate(root)
+
+        self.assertEqual(len(violations), 1)
+        violation = violations[0]
+        self.assertEqual(violation.importing_file, "nautical_core/scheduler_api.py")
+        self.assertEqual(violation.dependency, "module-namespace")
+        self.assertEqual(violation.line, 2)
+        self.assertIn("explicit dependencies", violation.rule)
 
     def test_primary_owner_cannot_import_compatibility_implementation(self) -> None:
         with tempfile.TemporaryDirectory(prefix="nautical-architecture-contract-") as td:

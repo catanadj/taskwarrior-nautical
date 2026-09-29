@@ -10703,20 +10703,6 @@ def test_on_add_anchor_and_anchor_file_can_coexist():
 
 
 
-def test_on_add_anchor_file_root_gets_chainid_stamp():
-    """on-add should stamp chainID for anchor_file roots so later completion can proceed."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_anchor_file_chainid_stamp_test")
-
-    task = {
-        "description": "anchor file chainid",
-        "uuid": "12345678-1234-1234-1234-1234567890ab",
-        "anchor_file": "calendar.csv",
-    }
-    mod._stamp_chain_id_on_add(task)
-    expect(task.get("chainID") == "12345678", f"expected anchor_file root chainID stamp, got: {task!r}")
-
-
 def test_on_add_chainid_stamp_failure_rejects_recurring_root():
     """A recurring root must not proceed when its mandatory chainID cannot be derived."""
     hook = _find_hook_file("on-add.nautical")
@@ -13643,7 +13629,6 @@ TESTS = [
     test_on_modify_completion_chain_snapshot_modes_and_query,
     test_on_add_preview_and_completion_skip_choose_same_next_anchor,
     test_on_add_anchor_and_anchor_file_can_coexist,
-    test_on_add_anchor_file_root_gets_chainid_stamp,
     test_on_add_chainid_stamp_failure_rejects_recurring_root,
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,
     test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match,

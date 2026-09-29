@@ -12,6 +12,18 @@ from nautical_core.panel_colours import chain_colour_root
 
 
 class AddPanelContractTests(unittest.TestCase):
+    def test_on_add_anchor_file_root_gets_chainid_stamp(self) -> None:
+        task = {
+            "uuid": "12345678-1234-1234-1234-1234567890ab",
+            "anchor_file": "calendar.csv",
+        }
+        core = SimpleNamespace(short_uuid=lambda value: str(value)[:8])
+
+        with patch.object(add_impl, "core", core):
+            add_impl._stamp_chain_id_on_add(task)
+
+        self.assertEqual(task.get("chainID"), "12345678")
+
     def test_on_add_preview_uses_configured_chain_colour(self) -> None:
         rendered = []
 

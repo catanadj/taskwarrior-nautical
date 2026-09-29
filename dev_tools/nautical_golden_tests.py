@@ -6345,40 +6345,6 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
         verify(mod)
 
 
-def test_on_add_preview_uses_configured_chain_colour():
-    """on-add should use the same chain colour as on-modify when enabled."""
-    hook = _load_hook_module(
-        _find_hook_file("on-add.nautical"),
-        "_nautical_on_add_chain_colour_test",
-    )
-    task = {"chainID": "12345678", "anchor": "w:mon"}
-    captured = {}
-    original_render = hook.core.render_panel
-    original_setting = hook.core.CHAIN_COLOR_PER_CHAIN
-    try:
-        hook.core.render_panel = lambda *_args, **kwargs: captured.update(kwargs)
-        hook.core.CHAIN_COLOR_PER_CHAIN = True
-        hook._panel("Preview", [("Pattern", "w:mon")], kind="preview_anchor", task=task)
-        expected = chain_colour_root("anchor", "12345678")
-        theme = captured.get("themes", {}).get("preview_anchor", {})
-        expect(theme.get("border") == expected, f"unexpected on-add border colour: {theme!r}")
-        expect(theme.get("title") == expected, f"unexpected on-add title colour: {theme!r}")
-        expect(
-            captured.get("live_duration_ms") == hook.core.LIVE_PANEL_DURATION_MS,
-            f"on-add did not forward live duration: {captured!r}",
-        )
-
-        captured.clear()
-        hook.core.CHAIN_COLOR_PER_CHAIN = False
-        hook._panel("Preview", [("Pattern", "w:mon")], kind="preview_anchor", task=task)
-        theme = captured.get("themes", {}).get("preview_anchor", {})
-        expect(theme.get("border") == "turquoise2", f"disabled setting changed static border: {theme!r}")
-        expect(captured.get("themes") == hook.core.panel_themes(), f"on-add did not use shared themes: {captured!r}")
-    finally:
-        hook.core.render_panel = original_render
-        hook.core.CHAIN_COLOR_PER_CHAIN = original_setting
-
-
 def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
     """on-add preview and on-modify completion should select the same cp interval for the same link."""
     add_mod = _load_hook_module(_find_hook_file("on-add.nautical"), "_nautical_on_add_cp_interval_agreement_test")
@@ -13925,7 +13891,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_on_add_preview_uses_configured_chain_colour,
     test_cp_interval_helpers_agree_between_on_add_and_on_modify,
     test_on_modify_compute_cp_sequence_selects_interval_by_link,
     test_on_modify_compute_cp_random_selects_deterministic_interval,

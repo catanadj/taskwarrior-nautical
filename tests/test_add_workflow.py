@@ -91,6 +91,7 @@ class AddWorkflowTests(unittest.TestCase):
     def test_combined_anchor_sources_keep_anchor_route(self) -> None:
         task = observation({"anchor": "w:mon", "anchor_file": "calendar.csv"})
         self.assertEqual(classify_add_route(task), WorkflowRoute.ANCHOR_ACTIVATION)
+        self.assertEqual(plan_add(task).recurrence_kind, "anchor")
 
     def test_target_field_prefers_scheduled_when_due_is_implicit(self) -> None:
         plan = plan_add(observation({"cp": "P1D", "scheduled": "20260825T090000Z"}))

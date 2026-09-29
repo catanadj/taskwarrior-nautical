@@ -10678,31 +10678,6 @@ def test_navigator_reads_through_read_only_invocation_repository():
         navigator._UNIT_OF_WORK = None
         sys.modules.pop(module_name, None)
 
-def test_on_add_anchor_and_anchor_file_can_coexist():
-    """on-add should allow anchor and anchor_file to coexist as inclusion sources."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_anchor_and_file_allowed_test")
-
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        (anchor_dir / "calendar.csv").write_text("date\n2026-04-14\n", encoding="utf-8")
-        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
-        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
-        try:
-            task = {
-                "description": "combined inclusions",
-                "anchor": "w:mon",
-                "anchor_file": "calendar.csv",
-            }
-            now_utc = mod.core.now_utc()
-            now_local = mod.core.to_local(now_utc)
-            ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, now_local)
-            expect(ctx.kind == "anchor", f"expected combined anchor kind, got {ctx.kind!r}")
-        finally:
-            mod.core.ANCHOR_FILE_DIR = old_dir
-
-
-
 def test_on_add_chainid_stamp_failure_rejects_recurring_root():
     """A recurring root must not proceed when its mandatory chainID cannot be derived."""
     hook = _find_hook_file("on-add.nautical")
@@ -13628,7 +13603,6 @@ TESTS = [
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_chain_snapshot_modes_and_query,
     test_on_add_preview_and_completion_skip_choose_same_next_anchor,
-    test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_chainid_stamp_failure_rejects_recurring_root,
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,
     test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match,

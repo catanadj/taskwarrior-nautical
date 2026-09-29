@@ -10840,82 +10840,6 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
     expect(any("Timezone data unavailable" in str(v) for k, v in fb if k == "Integrity"), f"missing timezone fallback warning: {fb}")
 
 
-def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundaries():
-    """Completion panels should show the next expiration and one effective last occurrence."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_boundary_feedback_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHAIN_COLOR_PER_CHAIN = False
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
-    mod._timeline_lines = lambda *_a, **_k: []
-
-    child_due = datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc)
-    child_expires = child_due + timedelta(hours=8)
-    chain_end = child_due + timedelta(days=35)
-    last_by_max = child_due + timedelta(days=60)
-    last_by_end = child_due + timedelta(days=28)
-    captured = {}
-    mod._panel = lambda title, rows, **_kwargs: captured.update({"title": title, "rows": list(rows)})
-
-    previous_mode = mod.core.PANEL_MODE
-    try:
-        mod.core.PANEL_MODE = "panel"
-        mod._presentation_effects.render_cp_completion_feedback(
-            new={
-                "cp": "7d",
-                "chainMax": 10,
-                "chainUntil": mod.core.fmt_isoz(chain_end),
-                "uuid": "00000000-0000-4000-8000-000000000143",
-                "chainID": "abcd1234",
-            },
-            child={
-                "uuid": "00000000-0000-4000-8000-000000000144",
-                "until": mod.core.fmt_isoz(child_expires),
-            },
-            child_due=child_due,
-            child_short="beeswax",
-            next_no=2,
-            parent_short="00000000",
-            cap_no=6,
-            finals=[("max", last_by_max), ("until", last_by_end)],
-            now_utc=datetime(2026, 7, 20, 9, 0, tzinfo=timezone.utc),
-            until_dt=chain_end,
-            until_cap_no=6,
-            meta={},
-            deferred_spawn=False,
-            spawn_intent_id=None,
-            chain_by_short=None,
-            analytics_advice=None,
-            integrity_warnings=None,
-            base_no=1,
-        )
-    finally:
-        mod.core.PANEL_MODE = previous_mode
-
-    rows = captured.get("rows") or []
-    add_validation = mod.core._import_sibling("add_validation")
-    expected_policy = add_validation.describe_native_until_carry(
-        child_expires,
-        child_due,
-        to_local=mod.core.to_local,
-    )
-    expect(("Expiration", expected_policy) in rows, f"expiration policy missing: {rows!r}")
-    expect(any(label == "Next expires" for label, _value in rows), f"next expiration missing: {rows!r}")
-    expect(("Chain cap", "#10") in rows, f"chain cap missing: {rows!r}")
-    expect(
-        any(label == "Chain end point" and "2026-09-14" in value for label, value in rows),
-        f"chain end point missing: {rows!r}",
-    )
-    last_rows = [(label, value) for label, value in rows if label == "Last occurrence"]
-    expect(len(last_rows) == 1, f"expected one effective last occurrence: {rows!r}")
-    expect("2026-09-07" in last_rows[0][1], f"earlier boundary should determine last occurrence: {rows!r}")
-    expect(not any(str(label).startswith("Final (") for label, _value in rows), f"legacy final label remains: {rows!r}")
-
-
 def test_on_add_preview_hard_cap():
     """on-add preview loop should respect hard cap even with large preview setting."""
     hook = _find_hook_file("on-add.nautical")
@@ -12498,7 +12422,6 @@ TESTS = [
     test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
-    test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundaries,
     test_on_add_rejects_oversized_stdin_early,
     test_on_modify_rejects_oversized_stdin_early,
     test_health_check_json_ok_empty_taskdata,

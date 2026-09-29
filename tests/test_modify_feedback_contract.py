@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
 
 import nautical_core
+from nautical_core import add_validation
 import nautical_core.modify_feedback as modify_feedback
 from nautical_core.modify_models import (
     AnchorCompletionFeedbackModel,
@@ -23,15 +24,26 @@ def _render_cp_completion_feedback(
     base_no: int = 2,
     sequence_step: int = 1,
     sequence_len: int = 1,
+    task_values: dict[str, object] | None = None,
+    child_values: dict[str, object] | None = None,
+    child_due: datetime | None = None,
+    now_utc: datetime | None = None,
+    cap_no: int | None = None,
+    finals: list[tuple[str, datetime]] | None = None,
+    until_dt: datetime | None = None,
+    until_cap_no: int | None = None,
 ) -> tuple[str | None, list[tuple[str, object]], str | None]:
-    now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
+    now = now_utc or datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
+    due = child_due or now
     panels = []
     core = SimpleNamespace(
         PANEL_MODE=mode,
         SHOW_ANALYTICS=False,
         strip_rich_markup=nautical_core.strip_rich_markup,
+        _import_sibling=lambda name: add_validation if name == "add_validation" else None,
+        to_local=nautical_core.to_local,
         humanize_delta=lambda *_args, **_kwargs: "in 15 days",
-        fmt_dt_local=lambda value: value.isoformat(),
+        fmt_dt_local=nautical_core.fmt_dt_local,
         coerce_int=lambda value, default: int(value) if value else default,
         parse_cp_duration=nautical_core.parse_cp_duration,
         parse_cp_sequence=nautical_core.parse_cp_sequence,
@@ -56,25 +68,27 @@ def _render_cp_completion_feedback(
         chain_colour_for_task=lambda *_args: None,
         human_delta=lambda *_args, **_kwargs: "in 15 days",
     )
+    new_task = {
+        "cp": cp,
+        "link": link_no,
+        "uuid": "00000000-0000-4000-8000-000000000111",
+        "chainID": "abcd1234",
+    }
+    new_task.update(task_values or {})
+    child_task = {"uuid": "00000000-0000-4000-8000-000000000222"}
+    child_task.update(child_values or {})
     feedback = CpCompletionFeedbackModel(
-        new=TaskView.from_mapping(
-            {
-                "cp": cp,
-                "link": link_no,
-                "uuid": "00000000-0000-4000-8000-000000000111",
-                "chainID": "abcd1234",
-            }
-        ),
-        child=TaskView.from_mapping({"uuid": "00000000-0000-4000-8000-000000000222"}),
-        child_due=now,
+        new=TaskView.from_mapping(new_task),
+        child=TaskView.from_mapping(child_task),
+        child_due=due,
         child_short="beeswax",
         next_no=next_no,
         parent_short="00000000",
-        cap_no=None,
-        finals=[],
+        cap_no=cap_no,
+        finals=list(finals or []),
         now_utc=now,
-        until_dt=None,
-        until_cap_no=None,
+        until_dt=until_dt,
+        until_cap_no=until_cap_no,
         meta={"cp_sequence_step": sequence_step, "cp_sequence_len": sequence_len},
         deferred_spawn=False,
         spawn_intent_id=None,
@@ -185,6 +199,38 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertEqual(title, "⛓ Next link  #2  00000000 → beeswax")
         self.assertIn(("Step", "3/3 (7d)"), rows)
         self.assertTrue(any(label == "Result" and "Applied now" in str(value) for label, value in rows))
+
+    def test_cp_feedback_separates_expiration_and_effective_chain_boundary(self) -> None:
+        child_due = datetime(2026, 8, 10, 10, tzinfo=timezone.utc)
+        child_expires = child_due + timedelta(hours=8)
+        chain_end = child_due + timedelta(days=35)
+        last_by_max = child_due + timedelta(days=60)
+        last_by_end = child_due + timedelta(days=28)
+        _title, rows, _text = _render_cp_completion_feedback(
+            "7d",
+            task_values={"chainMax": 10},
+            child_values={"until": nautical_core.fmt_isoz(child_expires)},
+            child_due=child_due,
+            now_utc=datetime(2026, 7, 20, 9, tzinfo=timezone.utc),
+            cap_no=6,
+            finals=[("max", last_by_max), ("until", last_by_end)],
+            until_dt=chain_end,
+            until_cap_no=6,
+        )
+        expected_policy = add_validation.describe_native_until_carry(
+            child_expires,
+            child_due,
+            to_local=nautical_core.to_local,
+        )
+        last_rows = [(label, value) for label, value in rows if label == "Last occurrence"]
+
+        self.assertIn(("Expiration", expected_policy), rows)
+        self.assertTrue(any(label == "Next expires" for label, _value in rows))
+        self.assertIn(("Chain cap", "#10"), rows)
+        self.assertTrue(any(label == "Chain end point" and "2026-09-14" in value for label, value in rows))
+        self.assertEqual(len(last_rows), 1)
+        self.assertIn("2026-09-07", last_rows[0][1])
+        self.assertFalse(any(str(label).startswith("Final (") for label, _value in rows))
 
     def test_cp_text_feedback_uses_stacked_ascii_output(self) -> None:
         _title, rows, text = _render_cp_completion_feedback("P1D", mode="text")

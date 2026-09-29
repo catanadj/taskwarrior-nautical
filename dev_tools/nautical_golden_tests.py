@@ -4593,28 +4593,6 @@ def test_ops_templates_present_and_runner_executable():
     runner = os.path.join(ops, "nautical_health_check_cron.sh")
     expect(os.access(runner, os.X_OK), f"runner should be executable: {runner}")
 
-def test_tw_export_chain_extra_validation():
-    """Chain snapshot filters should reject shell-like extra arguments."""
-    from nautical_core.hook_support import parse_extra_tokens
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_chain_export_extra_test")
-    effects = mod._module("modify_read_effects")
-    port = effects.ExtraTokenPort(parse_extra_tokens)
-    expect(effects.parse_extra_tokens(port, "status:pending; rm -rf /") is None, "unsafe filter was accepted")
-
-
-def test_tw_export_chain_extra_rejects_dash_prefixed_tokens():
-    """tw_export_chain extra parser should reject dash-prefixed tokens."""
-    from nautical_core.hook_support import parse_extra_tokens
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_chain_export_extra_dash_test")
-    effects = mod._module("modify_read_effects")
-    port = effects.ExtraTokenPort(parse_extra_tokens)
-    expect(effects.parse_extra_tokens(port, "status:pending -rc.hooks=on") is None, "dash-prefixed token was accepted")
-
-
 def test_on_modify_diag_blocks_pretty_print():
     """on-modify diag output should emit indented multi-line blocks."""
     hook = _find_hook_file("on-modify.nautical")
@@ -12204,8 +12182,6 @@ TESTS = [
     test_mixed_recurrence_loop_harness_reports_ok,
     test_soak_runner_reports_ok,
     test_ops_templates_present_and_runner_executable,
-    test_tw_export_chain_extra_validation,
-    test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
     test_on_modify_diag_blocks_pretty_print,
     test_on_modify_lifecycle_diagnostics_are_gated_to_stderr,
     test_on_modify_run_task_diag_bucket_stats,

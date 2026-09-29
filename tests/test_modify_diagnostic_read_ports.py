@@ -8,6 +8,15 @@ import unittest
 
 
 class ModifyDiagnosticReadPortTests(unittest.TestCase):
+    def test_parse_extra_tokens_rejects_shell_like_and_option_tokens(self) -> None:
+        from nautical_core.hook_support import parse_extra_tokens as parse_task_filters
+        from nautical_core.modify_read_effects import ExtraTokenPort, parse_extra_tokens
+
+        port = ExtraTokenPort(parse_task_filters)
+        for value in ("status:pending; rm -rf /", "status:pending -rc.hooks=on"):
+            with self.subTest(value=value):
+                self.assertIsNone(parse_extra_tokens(port, value))
+
     def test_collect_prev_two_preserves_repository_failure(self) -> None:
         from nautical_core.integration_models import (
             CommandFailureKind,

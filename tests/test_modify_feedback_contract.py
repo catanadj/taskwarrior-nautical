@@ -83,6 +83,80 @@ def _render_cp_completion_feedback(
 
 
 class ModifyFeedbackContractTests(unittest.TestCase):
+    def test_anchor_file_feedback_renders_without_an_anchor_dnf(self) -> None:
+        now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
+        panels = []
+        core = SimpleNamespace(
+            PANEL_MODE="panel",
+            SHOW_ANALYTICS=False,
+            anchor_preset_display=lambda _value: None,
+            expr_has_m_or_y=lambda _dnf: False,
+            humanize_delta=lambda *_args, **_kwargs: "in 1 day",
+            fmt_dt_local=lambda value: value.isoformat(),
+            coerce_int=lambda value, default: int(value) if value else default,
+        )
+        services = SimpleNamespace(
+            core=core,
+            debug_wait_sched=False,
+            last_wait_sched_debug=None,
+            diag_enabled=False,
+            format_root_and_age=lambda *_args: "abcd1234",
+            append_next_wait_sched_rows=lambda *_args, **_kwargs: None,
+            timeline_lines=lambda *_args, **_kwargs: [],
+            show_timeline_gaps=False,
+            root_uuid_from=lambda _task: "00000000-0000-4000-8000-000000000333",
+            short=lambda value: value[:8],
+            format_next_anchor_rows=lambda rows: rows,
+            format_line_preview=lambda *_args, **_kwargs: "unused line preview",
+            panel_line=lambda *_args, **_kwargs: self.fail("panel mode must use the panel renderer"),
+            text_line=lambda *_args, **_kwargs: self.fail("panel mode must not use text output"),
+            panel=lambda title, rows, **_kwargs: panels.append((title, list(rows))),
+            chain_color_per_chain=False,
+            chain_colour_for_task=lambda *_args: None,
+            strip_quotes=lambda value: value,
+            human_delta=lambda *_args, **_kwargs: "in 1 day",
+        )
+        feedback = AnchorCompletionFeedbackModel(
+            new=TaskView.from_mapping(
+                {
+                    "anchor_file": "calendar.csv@t=12:00",
+                    "anchor_mode": "skip",
+                    "uuid": "00000000-0000-4000-8000-000000000333",
+                    "chainID": "abcd1234",
+                }
+            ),
+            child=TaskView.from_mapping({"uuid": "00000000-0000-4000-8000-000000000444"}),
+            child_due=now,
+            child_short="beeswax",
+            next_no=2,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=now,
+            until_dt=None,
+            until_cap_no=None,
+            dnf=None,
+            meta={"mode": "skip"},
+            stripped_attrs=[],
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            lifecycle_result=CompletionLifecycleResult("applied"),
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=1,
+        )
+
+        modify_feedback.render_anchor_completion_feedback(feedback=feedback, services=services)
+
+        self.assertEqual(len(panels), 1)
+        title, rows = panels[0]
+        self.assertIn("Next anchor", title)
+        self.assertTrue(
+            any(label == "Anchor file" and value.startswith("calendar.csv@t=12:00") for label, value in rows)
+        )
+        self.assertIn(("Natural", "Dates from calendar.csv"), rows)
+
     def test_cp_jitter_feedback_shows_the_selected_interval(self) -> None:
         rows, _text = _render_cp_completion_feedback("15d~0d")
         self.assertIn(("Step", "1/1 (15d)"), rows)

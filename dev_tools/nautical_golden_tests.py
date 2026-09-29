@@ -10840,64 +10840,6 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
     expect(any("Timezone data unavailable" in str(v) for k, v in fb if k == "Integrity"), f"missing timezone fallback warning: {fb}")
 
 
-def test_on_modify_render_anchor_file_completion_feedback_wrapper():
-    """anchor_file completion feedback should not crash when anchor DNF is absent."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_file_feedback_wrapper_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHAIN_COLOR_PER_CHAIN = False
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
-    mod._timeline_lines = lambda *_a, **_k: []
-
-    captured = {}
-    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
-    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
-
-    prev_panel_mode = mod.core.PANEL_MODE
-    prev_anchor_dir = mod.core.ANCHOR_FILE_DIR
-    anchor_dir = tempfile.TemporaryDirectory(prefix="nautical-anchor-feedback-")
-    Path(anchor_dir.name, "calendar.csv").write_text("date\n2025-01-01\n", encoding="utf-8")
-    try:
-        mod.core.PANEL_MODE = "panel"
-        mod.core.ANCHOR_FILE_DIR = anchor_dir.name
-        mod._presentation_effects.render_anchor_completion_feedback(
-            new={"anchor_file": "calendar.csv@t=12:00", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000333", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-4000-8000-000000000444"},
-            child_due=mod.core.now_utc(),
-            child_short="beeswax",
-            next_no=2,
-            parent_short="00000000",
-            cap_no=None,
-            finals=[],
-            now_utc=mod.core.now_utc(),
-            until_dt=None,
-            until_cap_no=None,
-            dnf=None,
-            meta={"mode": "skip"},
-            stripped_attrs=[],
-            deferred_spawn=False,
-            spawn_intent_id=None,
-            chain_by_short=None,
-            analytics_advice=None,
-            integrity_warnings=None,
-            base_no=1,
-        )
-    finally:
-        mod.core.PANEL_MODE = prev_panel_mode
-        mod.core.ANCHOR_FILE_DIR = prev_anchor_dir
-        anchor_dir.cleanup()
-
-    expect("title" in captured, "expected anchor_file preview panel emission")
-    expect("Next anchor" in captured["title"], f"unexpected anchor_file panel title: {captured}")
-    fb = captured.get("fb") or []
-    expect(any(k == "Anchor file" for k, _v in fb), f"expected anchor_file row in feedback: {fb}")
-
-
-
 def test_on_modify_render_cp_completion_feedback_wrapper():
     """CP completion feedback wrapper should delegate and emit a preview panel title."""
     hook = _find_hook_file("on-modify.nautical")
@@ -12605,7 +12547,6 @@ TESTS = [
     test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
-    test_on_modify_render_anchor_file_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundaries,
     test_on_add_rejects_oversized_stdin_early,

@@ -11241,32 +11241,6 @@ def test_on_modify_compute_counted_random_advances_within_period():
     expect(meta.get("target_field") == "due", f"expected due target field: {meta}")
 
 
-def test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails():
-    """anchor completion should fail cleanly when omit removes every future anchor date."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_omit_unsat_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    try:
-        _compute_anchor_child_due(mod,
-            {
-                "anchor": "w:mon",
-                "omit": "w:mon",
-                "anchor_mode": "skip",
-                "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (9, 0))),
-                "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (10, 0))),
-                "chainID": "omit1234",
-            }
-        )
-        expect(False, "expected unsatisfiable omit to fail")
-    except ValueError as e:
-        expect(
-            "No valid anchor occurrences found after applying omit rules." in str(e),
-            f"unexpected unsatisfiable omit error: {e}",
-        )
-
-
 def test_on_modify_completion_build_and_spawn_child_happy_path():
     """completion spawn wrapper should return child info and stamp nextLink when verified."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13718,7 +13692,6 @@ TESTS = [
     test_hook_on_modify_merged_timeline_marks_projection_failures,
     test_hook_on_modify_timeline_uses_omit_file_description_label,
     test_on_modify_compute_counted_random_advances_within_period,
-    test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_completion_spawn_exception_is_retryable_with_reason,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,

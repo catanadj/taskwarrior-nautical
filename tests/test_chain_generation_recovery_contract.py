@@ -226,6 +226,26 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual((child_local.hour, child_local.minute), (9, 0))
         self.assertEqual(metadata["target_field"], "due")
 
+    def test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails(self):
+        due = core.build_local_datetime(date(2025, 1, 6), (9, 0))
+        ended = core.build_local_datetime(date(2025, 1, 6), (10, 0))
+        parent = _task(
+            anchor="w:mon",
+            omit="w:mon",
+            anchor_mode="skip",
+            cp=None,
+            due=fmt_isoz(due),
+            end=fmt_isoz(ended),
+        )
+
+        service = ChainGenerationService.from_core(core)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "No valid anchor occurrences found after applying omit rules",
+        ):
+            service.compute_anchor_child_due(parent)
+
     def test_anchor_generation_selects_next_local_timed_slot(self):
         due_local = core.build_local_datetime(date(2026, 7, 4), (9, 0))
         end_local = core.build_local_datetime(date(2026, 7, 4), (10, 0))

@@ -7923,34 +7923,6 @@ def test_on_modify_native_until_rejects_legacy_all_completion():
     expect("Invalid expiration mode" in _strip_markup(proc.stderr), f"missing completion mode guard: {proc.stderr!r}")
 
 
-def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
-    """on-add anchor preview should apply omit_file modifiers before skipping matching dates."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        omit_dir = Path(td) / "omit"
-        omit_dir.mkdir()
-        (omit_dir / "holidays.csv").write_text('date,description\n2026-04-25,Weekend holiday\n', encoding='utf-8')
-        conf = Path(td) / 'config-nautical.toml'
-        conf.write_text(f'omit_file_dir = "{omit_dir}"\n', encoding='utf-8')
-        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000114e",
-            "description": "hook test on-add anchor omit_file modifier preview",
-            "status": "pending",
-            "project": "testing",
-            "entry": "20260412T000000Z",
-            "anchor": "y:04-25@nbd@t=09:00",
-            "omit_file": "holidays.csv@nbd",
-            "anchor_mode": "skip",
-        }
-        p = _run_hook_script(hook, task, env_extra=env)
-        if p.returncode != 0:
-            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
-        stderr_txt = _strip_markup(p.stderr)
-        expect("Mon 2027-04-26 09:00" in stderr_txt, f"expected rolled 2026 occurrence to be omitted and next year shown. stderr={stderr_txt[:500]!r}")
-        expect("Mon 2026-04-27 09:00" not in stderr_txt, f"expected transformed omit_file date to be skipped. stderr={stderr_txt[:500]!r}")
-
-
 def test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot():
     """on-add preview should keep @t times when a yearly anchor rolls forward to the next business day."""
     hook = _find_hook_file("on-add.nautical")
@@ -13598,7 +13570,6 @@ def main():
 TESTS.extend([
     *OPERATOR_TESTS,
     test_hook_on_add_anchor_file_time_padding_hint,
-    test_hook_on_add_anchor_preview_skips_omit_file_modifier_date,
     test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_child,
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,

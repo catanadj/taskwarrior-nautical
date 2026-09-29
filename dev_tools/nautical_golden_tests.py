@@ -9999,39 +9999,6 @@ def test_on_modify_pure_anchor_file_projection_reuses_provider():
     expect(mod.core.to_local(child_due).date() == date(2026, 8, 4), f"unexpected pure anchor-file child due: {child_due!r}")
 
 
-def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
-    """scheduled-only anchor chains should compute missed occurrences from scheduled, not completion time."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_sched_only_compute_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    parent = {
-            "anchor": "w:mon..sun@t=09:00",
-            "anchor_mode": "all",
-            "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (9, 0))),
-            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 8), (10, 0))),
-            "chainID": "abcd1234",
-        }
-    child_due, meta, _dnf = _compute_anchor_child_due(mod, parent)
-    expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 7), (9, 0)))
-    expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next scheduled anchor: {mod.core.fmt_isoz(child_due)}")
-    expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
-    evaluator = _evaluator_for_fixture(parent, timezone_value=mod.core._LOCAL_TZ)
-    result = evaluator.select_mode(
-        "all",
-        due_local=mod.core.to_local(mod.core.parse_dt_any(parent["scheduled"])),
-        end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
-        due_explicit=False,
-        fallback_hhmm=(9, 0),
-    )
-    expect(
-        result.selected_occurrence is not None
-        and result.selected_occurrence.astimezone(timezone.utc) == child_due,
-        f"scheduled-only evaluator drifted from hook: {result!r} vs {child_due!r}",
-    )
-
-
 def test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_timezone():
     """@t slots are local wall-clock anchors, not UTC clock values."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13942,7 +13909,6 @@ TESTS = [
     test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_chain_snapshot_modes_and_query,
-    test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_timezone,
     test_on_add_preview_and_completion_skip_choose_same_next_anchor,
     test_on_modify_anchor_dnf_accepts_configured_preset,

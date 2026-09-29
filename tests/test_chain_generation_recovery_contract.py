@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import unittest
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import nautical_core as core
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
 from nautical_core.cp_parser import cp_sequence_interval_for_token, parse_cp_sequence_tokens
@@ -161,6 +162,26 @@ class ChainGenerationContractTests(unittest.TestCase):
         due, metadata = self.service.compute_cp_child_due(parent)
 
         self.assertEqual(due, datetime(2025, 1, 2, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["target_field"], "scheduled")
+
+    def test_anchor_generation_uses_scheduled_seed_for_all_mode(self):
+        scheduled = core.build_local_datetime(date(2025, 1, 6), (9, 0))
+        ended = core.build_local_datetime(date(2025, 1, 8), (10, 0))
+        parent = _task(
+            anchor="w:mon..sun@t=09:00",
+            anchor_mode="all",
+            cp=None,
+            due=None,
+            scheduled=fmt_isoz(scheduled),
+            end=fmt_isoz(ended),
+        )
+        service = ChainGenerationService.from_core(core)
+
+        due, metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        due_local = core.to_local(due)
+        self.assertEqual(due_local.date(), date(2025, 1, 7))
+        self.assertEqual((due_local.hour, due_local.minute), (9, 0))
         self.assertEqual(metadata["target_field"], "scheduled")
 
     def test_hook_adapter_uses_shared_generation_service_without_legacy_helpers(self) -> None:

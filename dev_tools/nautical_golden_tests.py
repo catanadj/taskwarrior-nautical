@@ -9931,23 +9931,6 @@ def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
 
 
-def test_on_modify_cp_sequence_estimates_chainmax_final_date():
-    """chainMax final-date estimation should advance through cp sequence intervals."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_cp_sequence_chainmax_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    next_due = mod.core.build_local_datetime(date(2026, 1, 4), (9, 0)).astimezone(timezone.utc)
-    final_due = mod._estimate_cp_final_by_max(
-        {"cp": "3d,20d,7d", "link": 1, "chainMax": 4},
-        next_due,
-    )
-    final_local = mod.core.to_local(final_due)
-    expect(final_local.date() == date(2026, 1, 31), f"expected Jan 31 final due, got {final_local}")
-    expect((final_local.hour, final_local.minute) == (9, 0), f"whole-day sequence cap should preserve wall clock: {final_local}")
-
-
 def test_on_modify_anchor_chainmax_forecast_is_bounded():
     """Large anchor chainMax values must not make final-date forecasting unbounded."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13814,7 +13797,6 @@ TESTS = [
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_on_modify_anchor_chainmax_forecast_is_bounded,
     test_on_modify_anchor_file_child_projection_reuses_provider,
     test_on_modify_pure_anchor_file_projection_reuses_provider,

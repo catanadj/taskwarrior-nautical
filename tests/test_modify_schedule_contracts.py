@@ -16,6 +16,39 @@ from nautical_core.timeutil import compare_datetimes
 
 
 class ModifyScheduleContractTests(unittest.TestCase):
+    def test_cp_chain_max_estimate_advances_through_sequence_intervals(self) -> None:
+        ports = modify_schedule_effects.CPCompletionPorts(
+            compute=modify_completion_compute,
+            parse_datetime=lambda value: (core.parse_dt_any(value), None),
+            coerce_int=core.coerce_int,
+            parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
+            sequence=modify_schedule_effects.SequencePorts(
+                core.cp_sequence_interval_for_token
+            ),
+            schedule=modify_schedule_effects.SchedulePorts(
+                core.to_local, core.build_local_datetime
+            ),
+            max_iterations=100,
+            diagnostic=lambda _message: None,
+        )
+        task = {
+            "cp": "3d,20d,7d",
+            "link": 1,
+            "chainMax": 4,
+            "chainID": "chainmax-sequence-test",
+        }
+        next_due = core.build_local_datetime(date(2026, 1, 4), (9, 0)).astimezone(
+            timezone.utc
+        )
+
+        final_due = modify_schedule_effects.estimate_cp_final_by_max(
+            ports, task, next_due
+        )
+
+        final_local = core.to_local(final_due)
+        self.assertEqual(final_local.date(), date(2026, 1, 31))
+        self.assertEqual((final_local.hour, final_local.minute), (9, 0))
+
     def test_runtime_anchor_provider_cache_keys_effective_fallback(self) -> None:
         with TemporaryDirectory() as directory:
             Path(directory, "calendar.csv").write_text(

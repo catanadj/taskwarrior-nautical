@@ -71,6 +71,7 @@ class HookBootstrapTrustTests(unittest.TestCase):
             )
             self.assertNotIn(override / "hook_bootstrap.py", candidates)
             self.assertNotIn(override / "nautical_core" / "hook_bootstrap.py", candidates)
+            self.assertIn(tw_dir / "nautical_core" / "hook_bootstrap.py", candidates)
 
     def test_explicitly_trusted_override_is_available(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

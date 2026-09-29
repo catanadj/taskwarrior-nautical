@@ -348,34 +348,6 @@ def test_on_modify_panic_passthrough_uses_latest_task():
     expect(obj.get("status") == "completed", f"expected latest task, got: {obj}")
 
 
-def test_on_add_ignores_unsafe_core_path_override():
-    """on-add should ignore unsafe NAUTICAL_CORE_PATH overrides by default."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_unsafe_core_path_test")
-    prev = os.environ.get("NAUTICAL_CORE_PATH")
-    prev_trust = os.environ.get("NAUTICAL_TRUST_CORE_PATH")
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            try:
-                os.chmod(td, 0o777)
-            except Exception:
-                pass
-            os.environ["NAUTICAL_CORE_PATH"] = td
-            os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
-            got = mod._trusted_core_base(Path(mod.TW_DIR))
-            expect(Path(got).resolve() == Path(mod.TW_DIR).resolve(),
-                   f"unsafe core path should fall back to TW_DIR, got {got}")
-    finally:
-        if prev is None:
-            os.environ.pop("NAUTICAL_CORE_PATH", None)
-        else:
-            os.environ["NAUTICAL_CORE_PATH"] = prev
-        if prev_trust is None:
-            os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
-        else:
-            os.environ["NAUTICAL_TRUST_CORE_PATH"] = prev_trust
-
-
 def test_hook_bootstrap_uses_symlink_path_and_core_path_rescue():
     """Symlinked hook installs should boot from the symlink path and NAUTICAL_CORE_PATH rescue."""
     with tempfile.TemporaryDirectory() as td:
@@ -4670,48 +4642,6 @@ def test_core_uda_aliases_config_defaults_disabled_and_can_enable():
             )
 
 
-def test_on_add_expands_enabled_description_uda_aliases():
-    """on-add should expand enabled aliases before recurrence classification."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_description_aliases_test")
-    previous = mod.core.ENABLE_UDA_ALIASES
-    try:
-        mod.core.ENABLE_UDA_ALIASES = True
-        task = {"description": "test task a:w:mon am:all"}
-        mod._apply_description_uda_aliases(task)
-    finally:
-        mod.core.ENABLE_UDA_ALIASES = previous
-    expect(task == {"description": "test task", "anchor": "w:mon", "anchor_mode": "all"}, f"on-add alias expansion failed: {task!r}")
-
-
-def test_hook_on_add_uda_aliases_emit_canonical_json_and_reject_conflicts():
-    """The real on-add boundary should normalize aliases without contaminating stdout."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        config = Path(td) / "nautical.toml"
-        config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000114",
-            "description": "hook alias test a:w:mon am:all",
-            "status": "pending",
-            "project": "testing",
-            "entry": "20260803T000000Z",
-            "due": "20260810T090000Z",
-        }
-        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
-        proc = _run_hook_script(hook, task, env_extra=env)
-        expect(proc.returncode == 0, f"enabled alias hook failed: {proc.stderr[:600]!r}")
-        _assert_stdout_json_only(proc.stdout)
-        normalized = _extract_last_json(proc.stdout)
-        expect(normalized.get("description") == "hook alias test", f"alias text remained in description: {normalized!r}; stderr={proc.stderr[:500]!r}")
-        expect(normalized.get("anchor") == "w:mon" and normalized.get("anchor_mode") == "all", f"canonical aliases missing: {normalized!r}")
-
-        conflict = dict(task, description="hook alias conflict a:w:tue", anchor="w:mon", anchor_mode="skip")
-        rejected = _run_hook_script(hook, conflict, env_extra=env)
-        expect(rejected.returncode != 0, "conflicting canonical and alias values were accepted")
-        expect("different value" in (rejected.stderr or ""), f"conflict error was not actionable: {rejected.stderr[:600]!r}")
-
-
 def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
     """Alias-bearing plain modifies must not be swallowed by the thin fast path."""
     hook = _find_hook_file("on-modify.nautical")
@@ -4792,27 +4722,6 @@ def test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper():
         normalized = _extract_last_json(proc.stdout)
         expect(normalized.get("description") == "plain", f"empty alias remained in description: {normalized!r}")
         expect("anchor" not in normalized, f"empty alias did not clear anchor: {normalized!r}")
-
-
-def test_hook_on_add_disabled_uda_aliases_leave_description_untouched():
-    """Disabling aliases must preserve alias-looking text as ordinary description content."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        config = Path(td) / "nautical.toml"
-        config.write_text("enable_uda_aliases = false\ntz = \"UTC\"\n", encoding="utf-8")
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000117",
-            "description": "ordinary prose a:book",
-            "status": "pending",
-            "entry": "20260803T000000Z",
-        }
-        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
-        proc = _run_hook_script(hook, task, env_extra=env)
-        expect(proc.returncode == 0, f"disabled alias hook failed: {proc.stderr[:600]!r}")
-        _assert_stdout_json_only(proc.stdout)
-        normalized = _extract_last_json(proc.stdout)
-        expect(normalized.get("description") == task["description"], f"disabled alias changed description: {normalized!r}")
-        expect("anchor" not in normalized, f"disabled alias created a canonical UDA: {normalized!r}")
 
 
 def test_on_modify_expands_and_clears_description_uda_aliases():
@@ -5420,36 +5329,6 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
 
 
 # -------- Runner --------------------------------------------------------------
-
-def test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance():
-    """on-add should surface parser-specific guidance for malformed cp strings."""
-    hook = _find_hook_file("on-add.nautical")
-    env = {"NO_COLOR": "1"}
-    cases = [
-        ("rand(7d..3d)", ("lower", "bound", "<=", "upper")),
-        ("rand(3d-7d)", ("expected", "rand(<duration>..<duration>)")),
-        ("14d~abc", ("invalid", "duration", "bound")),
-        ("2d~3d", ("lower", "bound", ">= 0")),
-        ("3d,,7d", ("empty", "duration", "position 2")),
-    ]
-    for idx, (cp_value, expected_parts) in enumerate(cases, start=1):
-        task = {
-            "uuid": f"00000000-0000-4000-8000-00000000{130 + idx:04d}",
-            "description": f"hook test malformed cp add {idx}",
-            "status": "pending",
-            "project": "testing",
-            "entry": "20260101T000000Z",
-            "cp": cp_value,
-            "due": "20260101T090000Z",
-        }
-        p = _run_hook_script(hook, task, env_extra=env)
-        expect(p.returncode != 0, f"on-add should fail for malformed cp {cp_value!r}")
-        expect((p.stdout or "").strip() == "", f"expected no stdout on malformed cp add failure, got: {p.stdout!r}")
-        stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid cp" in stderr_txt or "Invalid CP" in stderr_txt, f"expected invalid cp panel for {cp_value!r}: {stderr_txt[:500]!r}")
-        for part in expected_parts:
-            expect(part in stderr_txt, f"expected parser guidance fragment {part!r} for {cp_value!r}: {stderr_txt[:500]!r}")
-
 
 def test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance():
     """on-modify completion should surface parser-specific guidance for malformed cp strings."""
@@ -10012,7 +9891,6 @@ TESTS = [
     test_on_modify_expiration_wrapper_preserves_json_stdout,
     test_on_modify_manual_delete_persists_chain_off,
     test_on_modify_invalid_anchor_has_no_stdout,
-    test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance,
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
     test_on_add_rejects_oversized_stdin_early,
@@ -10066,7 +9944,6 @@ TESTS = [
     test_on_add_fail_and_exit_emits_json,
     test_on_add_panic_passthrough_emits_valid_json,
     test_on_modify_panic_passthrough_uses_latest_task,
-    test_on_add_ignores_unsafe_core_path_override,
     test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_modify_promotes_chain_emits_upgrade_panel,
@@ -10140,12 +10017,9 @@ TESTS = [
     test_core_live_panel_duration_config_defaults_and_clamps,
     test_core_live_panel_footer_config_defaults_and_customizes,
     test_core_uda_aliases_config_defaults_disabled_and_can_enable,
-    test_on_add_expands_enabled_description_uda_aliases,
-    test_hook_on_add_uda_aliases_emit_canonical_json_and_reject_conflicts,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
     test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel,
     test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,
-    test_hook_on_add_disabled_uda_aliases_leave_description_untouched,
     test_on_modify_expands_and_clears_description_uda_aliases,
     test_astronomical_season_selection_scheduler_uses_transition_dates,
     test_on_modify_build_child_carries_configured_uda_datetime,

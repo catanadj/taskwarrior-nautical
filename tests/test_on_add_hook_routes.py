@@ -765,6 +765,44 @@ class OnAddHookRouteTests(HookSubprocessFixture):
             ("leading zero", "03:00"),
         )
 
+    def test_enabled_description_aliases_emit_canonical_json_and_reject_conflicts(self) -> None:
+        task = self._task(
+            description="hook alias test a:w:mon am:all",
+            entry="20990101T000000Z",
+            due="20990105T090000Z",
+        )
+        config = 'enable_uda_aliases = true\ntz = "UTC"\n'
+        process = self._run_with_config(task, config)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        normalized = json.loads(process.stdout)
+        self.assertEqual(normalized["description"], "hook alias test")
+        self.assertEqual(normalized["anchor"], "w:mon")
+        self.assertEqual(normalized["anchor_mode"], "all")
+
+        conflict = dict(
+            task,
+            description="hook alias conflict a:w:tue",
+            anchor="w:mon",
+            anchor_mode="skip",
+        )
+        rejected = self._run_with_config(conflict, config)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual(rejected.stdout, "")
+        self.assertIn("different value", rejected.stderr)
+
+    def test_disabled_description_aliases_remain_ordinary_text(self) -> None:
+        task = self._task(
+            description="ordinary prose a:book",
+            entry="20990101T000000Z",
+        )
+        process = self._run_with_config(
+            task, 'enable_uda_aliases = false\ntz = "UTC"\n'
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        normalized = json.loads(process.stdout)
+        self.assertEqual(normalized["description"], task["description"])
+        self.assertNotIn("anchor", normalized)
+
     def _assert_dst_window_slot_occurs_once(
         self, anchor: str, entry: str, due: str, expected_slot: str
     ) -> None:

@@ -94,6 +94,16 @@ class ValidationPipelineTests(unittest.TestCase):
         self.assertEqual(task["description"], "review")
         self.assertNotIn("anchor_mode", task)
 
+    def test_enabled_alias_normalization_expands_canonical_fields(self) -> None:
+        task = {"description": "test task a:w:mon am:all"}
+
+        self.assertTrue(normalize_description_uda_aliases(task, enabled=True))
+
+        self.assertEqual(
+            task,
+            {"description": "test task", "anchor": "w:mon", "anchor_mode": "all"},
+        )
+
     def test_alias_normalization_is_disabled_without_mutation(self) -> None:
         task = {"description": "review am:all"}
         self.assertFalse(normalize_description_uda_aliases(task, enabled=False))

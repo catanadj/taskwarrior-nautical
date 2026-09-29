@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-import io
 import subprocess
+import sys
+import textwrap
 import unittest
-from unittest.mock import patch
 
 from tests.support.hook_process import HookSubprocessFixture
 
@@ -81,28 +81,39 @@ class HookInputContractTests(HookSubprocessFixture):
         self.assertTrue(process.stderr == "" or "[nautical]" in process.stderr)
 
     def test_on_add_flushes_stdout_after_passthrough(self) -> None:
-        import sys
-
-        from nautical_core.hooks import add_impl
-
         task = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
+        script = textwrap.dedent(
+            """
+            import io
+            import json
+            import sys
+            from nautical_core.hooks import add_impl
 
-        class FlushIO(io.StringIO):
-            flushed = False
+            class FlushIO(io.StringIO):
+                flush_count = 0
 
-            def flush(self) -> None:
-                self.flushed = True
-                super().flush()
+                def flush(self):
+                    self.flush_count += 1
+                    super().flush()
 
-        stdout = FlushIO()
-        with (
-            patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(task).encode()))),
-            patch.object(sys, "stdout", stdout),
-            patch.object(sys, "stderr", io.StringIO()),
-        ):
+            expected = json.loads(__EXPECTED__)
+            stdout = FlushIO()
+            sys.stdout = stdout
             add_impl.main()
+            if stdout.flush_count < 1 or json.loads(stdout.getvalue()) != expected:
+                raise SystemExit(3)
+            """
+        ).replace("__EXPECTED__", repr(json.dumps(task)))
+        process = subprocess.run(
+            [sys.executable, "-c", script],
+            input=json.dumps(task),
+            text=True,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
 
-        self.assertTrue(stdout.flushed)
+        self.assertEqual(process.returncode, 0, process.stderr)
 
     def test_on_add_anchor_routes_keep_json_stdout_and_panel_stderr(self) -> None:
         task = {

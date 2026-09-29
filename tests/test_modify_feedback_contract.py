@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import importlib
 from types import SimpleNamespace
 import unittest
 
 import nautical_core
-from nautical_core import add_validation
 import nautical_core.modify_feedback as modify_feedback
 from nautical_core.modify_models import (
     AnchorCompletionFeedbackModel,
@@ -35,6 +35,7 @@ def _render_cp_completion_feedback(
 ) -> tuple[str | None, list[tuple[str, object]], str | None]:
     now = now_utc or datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
     due = child_due or now
+    add_validation = importlib.import_module("nautical_core.add_validation")
     panels = []
     core = SimpleNamespace(
         PANEL_MODE=mode,
@@ -217,6 +218,7 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             until_dt=chain_end,
             until_cap_no=6,
         )
+        add_validation = importlib.import_module("nautical_core.add_validation")
         expected_policy = add_validation.describe_native_until_carry(
             child_expires,
             child_due,

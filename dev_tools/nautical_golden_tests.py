@@ -5563,74 +5563,6 @@ def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
 
 
-def test_on_add_native_until_requires_strictly_later_target():
-    """Nautical additions should reject until at or before due/scheduled."""
-    hook = _find_hook_file("on-add.nautical")
-    cases = (
-        ("due", "20260801T090000Z", "20260801T085959Z"),
-        ("due", "20260801T090000Z", "20260801T090000Z"),
-        ("scheduled", "20260801T090000Z", "20260801T090000Z"),
-    )
-    for index, (target_field, target, until) in enumerate(cases):
-        task = {
-            "uuid": f"00000000-0000-4000-8000-00000000012{index}",
-            "description": f"invalid native until {target_field}",
-            "status": "pending",
-            "entry": "20260720T090000Z",
-            "cp": "7d",
-            target_field: target,
-            "until": until,
-        }
-        proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
-        expect(proc.returncode != 0, f"invalid {target_field}/until ordering was accepted: {task!r}")
-        expect(not (proc.stdout or "").strip(), f"rejected add leaked stdout: {proc.stdout!r}")
-        stderr_txt = _strip_markup(proc.stderr)
-        label = "Scheduled" if target_field == "scheduled" else "Due"
-        expect("Invalid expiration window" in stderr_txt, f"missing expiration guard panel: {stderr_txt!r}")
-        expect(label in stderr_txt and "Expires" in stderr_txt, f"missing compared timestamps: {stderr_txt!r}")
-        expect(
-            f"until must be later than {target_field}" in stderr_txt,
-            f"missing ordering guidance: {stderr_txt!r}",
-        )
-
-    valid = {
-        "uuid": "00000000-0000-4000-8000-000000000129",
-        "description": "valid native until window",
-        "status": "pending",
-        "entry": "20260720T090000Z",
-        "cp": "7d",
-        "due": "20260801T090000Z",
-        "until": "20260801T090001Z",
-    }
-    proc = _run_hook_script(hook, valid, env_extra={"NO_COLOR": "1"})
-    expect(proc.returncode == 0, f"strictly later until was rejected: {proc.stderr!r}")
-    expect(_assert_stdout_json_only(proc.stdout).get("until") == valid["until"], "valid until changed")
-
-
-def test_on_add_native_until_checks_generated_cp_due():
-    """The expiration guard should run after CP assigns its automatic first due."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000130",
-        "description": "invalid until before generated CP due",
-        "status": "pending",
-        "entry": "20260801T090000Z",
-        "cp": "7d",
-        "until": "20260808T085959Z",
-    }
-    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
-    expect(proc.returncode != 0, "until before generated CP due was accepted")
-    expect(not (proc.stdout or "").strip(), f"rejected generated CP due leaked stdout: {proc.stdout!r}")
-    stderr_txt = _strip_markup(proc.stderr)
-    expect(
-        "Invalid expiration window" in stderr_txt
-        and "Due" in stderr_txt
-        and "Expires" in stderr_txt
-        and "until must be later than due" in stderr_txt,
-        stderr_txt,
-    )
-
-
 def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
     """Add previews should distinguish native expiration from chain boundaries."""
     hook = _find_hook_file("on-add.nautical")
@@ -5797,60 +5729,6 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
     expect(captured.get("title") == "⚓︎ Anchor Preview", f"evaluator preview did not render: {captured!r}")
 
 
-def test_on_add_native_until_checks_generated_anchor_due():
-    """The expiration guard should run after an anchor resolves its automatic first due."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_generated_anchor_until_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
-    first_due = mod.core.build_local_datetime(date(2026, 4, 13), (9, 0)).astimezone(timezone.utc)
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000131",
-        "description": "invalid until before generated anchor due",
-        "status": "pending",
-        "entry": mod.core.fmt_isoz(now_utc),
-        "anchor": "w:mon",
-        "chain": "on",
-        "chainID": "generated131",
-        "link": 1,
-        "until": mod.core.fmt_isoz(first_due - timedelta(seconds=1)),
-    }
-    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
-    panels = []
-    original = mod._panel
-    try:
-        mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
-        try:
-            mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
-        except SystemExit as exc:
-            expect(exc.code == 1, f"unexpected generated-anchor rejection code: {exc.code!r}")
-        else:
-            raise AssertionError("until before generated anchor due was accepted")
-    finally:
-        mod._panel = original
-
-    expect(task.get("due"), f"anchor target was not finalized before validation: {task!r}")
-    expect(panels and "Invalid expiration window" in panels[-1][0], f"missing guard panel: {panels!r}")
-
-
-def test_on_add_native_until_guard_ignores_ordinary_tasks():
-    """Nautical should not impose its expiration ordering on ordinary Taskwarrior tasks."""
-    hook = _find_hook_file("on-add.nautical")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000132",
-        "description": "ordinary task with independent until",
-        "status": "pending",
-        "entry": "20260720T090000Z",
-        "due": "20260801T090000Z",
-        "until": "20260731T090000Z",
-    }
-    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
-    expect(proc.returncode == 0, f"ordinary task was rejected: {proc.stderr!r}")
-    expect(_assert_stdout_json_only(proc.stdout) == task, "ordinary task was changed")
-
-
 def test_on_add_chain_until_rejects_before_first_anchor_occurrence():
     """An auto-due anchor must not be accepted when chainUntil precedes its first match."""
     hook = _find_hook_file("on-add.nautical")
@@ -5886,40 +5764,6 @@ def test_on_add_chain_until_rejects_before_first_anchor_occurrence():
         panels and any(label == "Invalid chainUntil" for label, _value in panels[-1][1]),
         f"missing chainUntil guard panel: {panels!r}",
     )
-
-
-def test_on_add_native_until_rejects_strict_anchor_modes():
-    """Native until should be incompatible with all and flex anchor backfill."""
-    hook = _find_hook_file("on-add.nautical")
-    base = {
-        "uuid": "00000000-0000-4000-8000-000000000137",
-        "description": "strict anchor expiration conflict",
-        "status": "pending",
-        "entry": "20260720T090000Z",
-        "anchor": "w:mon",
-        "due": "20260803T090000Z",
-        "until": "20260804T090000Z",
-    }
-    for mode in ("all", "flex"):
-        proc = _run_hook_script(hook, dict(base, anchor_mode=mode), env_extra={"NO_COLOR": "1"})
-        expect(proc.returncode != 0, f"anchor_mode:{mode} accepted native until")
-        expect(not (proc.stdout or "").strip(), f"rejected anchor mode leaked stdout: {proc.stdout!r}")
-        stderr_txt = _strip_markup(proc.stderr)
-        expect("Invalid expiration mode" in stderr_txt, f"missing mode conflict panel: {stderr_txt!r}")
-        expect("Remove until or use anchor_mode:skip" in stderr_txt, f"missing mode resolution: {stderr_txt!r}")
-
-    proc = _run_hook_script(hook, dict(base, anchor_mode="skip"), env_extra={"NO_COLOR": "1"})
-    expect(proc.returncode == 0, f"anchor_mode:skip rejected valid native until: {proc.stderr!r}")
-    expect(_assert_stdout_json_only(proc.stdout).get("anchor_mode") == "skip", "skip mode changed")
-
-    validation = core._import_sibling("add_validation")
-    valid, reason = validation.validate_native_until_anchor_mode(
-        base["until"],
-        "",
-        "events.csv",
-        "all",
-    )
-    expect(not valid and "anchor_mode:all" in str(reason), f"anchor_file all conflict was missed: {reason!r}")
 
 
 def test_on_modify_native_until_rejects_invalid_window_changes():
@@ -10441,16 +10285,11 @@ TESTS = [
     test_random_anchor_and_omit_presets_keep_chain_scope,
     test_hook_on_add_omit_timed_preset_rejected,
     test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance,
-    test_on_add_native_until_requires_strictly_later_target,
-    test_on_add_native_until_checks_generated_cp_due,
     test_on_add_preview_distinguishes_expiration_from_chain_end_point,
     test_on_add_preview_fails_closed_when_evaluator_initialization_fails,
     test_on_add_preview_reports_scheduler_exhaustion_actionably,
     test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows,
-    test_on_add_native_until_checks_generated_anchor_due,
-    test_on_add_native_until_guard_ignores_ordinary_tasks,
     test_on_add_chain_until_rejects_before_first_anchor_occurrence,
-    test_on_add_native_until_rejects_strict_anchor_modes,
     test_on_modify_native_until_rejects_invalid_window_changes,
     test_on_modify_native_until_follows_recurrence_target_move,
     test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts,

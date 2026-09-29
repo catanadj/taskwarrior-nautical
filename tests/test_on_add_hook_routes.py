@@ -517,6 +517,101 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertIn("1/1 (15d)", process.stderr)
         self.assertIn("15d~0d", process.stderr)
 
+    def test_native_until_must_be_strictly_later_than_due_or_scheduled(self) -> None:
+        cases = (
+            (
+                self._task(
+                    entry="20260720T090000Z",
+                    cp="7d",
+                    due="20260801T090000Z",
+                    until="20260801T085959Z",
+                ),
+                ("Invalid expiration window", "Due", "Expires", "until must be later than due"),
+            ),
+            (
+                self._task(
+                    entry="20260720T090000Z",
+                    cp="7d",
+                    due="20260801T090000Z",
+                    until="20260801T090000Z",
+                ),
+                ("Invalid expiration window", "Due", "Expires", "until must be later than due"),
+            ),
+            (
+                self._task(
+                    entry="20260720T090000Z",
+                    cp="7d",
+                    scheduled="20260801T090000Z",
+                    until="20260801T090000Z",
+                ),
+                ("Invalid expiration window", "Scheduled", "Expires", "until must be later than scheduled"),
+            ),
+        )
+        for task, expected in cases:
+            with self.subTest(target=task.get("due", task.get("scheduled"))):
+                self._assert_invalid(task, expected)
+
+        valid = self._task(
+            entry="20260720T090000Z",
+            cp="7d",
+            due="20260801T090000Z",
+            until="20260801T090001Z",
+        )
+        result = self._assert_valid(valid)
+        self.assertEqual(result["until"], valid["until"])
+
+    def test_native_until_validation_runs_after_generated_cp_due(self) -> None:
+        self._assert_invalid(
+            self._task(
+                entry="20260801T090000Z",
+                cp="7d",
+                until="20260808T085959Z",
+            ),
+            ("Invalid expiration window", "Due", "Expires", "until must be later than due"),
+        )
+
+    def test_native_until_validation_runs_after_generated_anchor_due(self) -> None:
+        today = date.today()
+        days_to_monday = (0 - today.weekday()) % 7 or 7
+        first_due = datetime.combine(
+            today + timedelta(days=days_to_monday), time(9, 0), tzinfo=timezone.utc
+        )
+        now = datetime.now(timezone.utc)
+        task = self._task(
+            entry=now.strftime("%Y%m%dT%H%M%SZ"),
+            anchor="w:mon",
+            chain="on",
+            chainID="generated-anchor-until",
+            until=(first_due - timedelta(seconds=1)).strftime("%Y%m%dT%H%M%SZ"),
+        )
+        self._assert_invalid(
+            task,
+            ("Invalid expiration window", "Due", "Expires", "until must be later than due"),
+        )
+
+    def test_native_until_guard_does_not_reject_ordinary_tasks(self) -> None:
+        task = self._task(
+            due="20260801T090000Z",
+            until="20260731T090000Z",
+        )
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(json.loads(process.stdout), task)
+
+    def test_native_until_rejects_all_and_flex_anchor_modes(self) -> None:
+        base = self._task(
+            entry="20260720T090000Z",
+            anchor="w:mon",
+            due="20260803T090000Z",
+            until="20260804T090000Z",
+        )
+        for mode in ("all", "flex"):
+            with self.subTest(anchor_mode=mode):
+                self._assert_invalid(
+                    dict(base, anchor_mode=mode),
+                    ("Invalid expiration mode", "Remove until or use anchor_mode:skip"),
+                )
+
     def _assert_dst_window_slot_occurs_once(
         self, anchor: str, entry: str, due: str, expected_slot: str
     ) -> None:

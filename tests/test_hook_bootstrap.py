@@ -10,6 +10,19 @@ from nautical_core.hook_runtime import HookModuleAccess
 
 
 class HookBootstrapTrustTests(unittest.TestCase):
+    def test_core_target_requires_package_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "nautical_core"
+            package.mkdir()
+            package_init = package / "__init__.py"
+            package_init.write_text("# package core\n", encoding="utf-8")
+            legacy_module = root / "nautical_core.py"
+            legacy_module.write_text("# legacy core\n", encoding="utf-8")
+
+            self.assertEqual(hook_bootstrap.core_target_from_base(root), package_init)
+            self.assertIsNone(hook_bootstrap.core_target_from_base(legacy_module))
+
     def test_light_taskdata_resolution_matches_hook_precedence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

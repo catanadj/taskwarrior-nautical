@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,205 @@ from tests.support.hook_process import ROOT, HookSubprocessFixture
 
 
 class HookProcessContractTests(HookSubprocessFixture):
+    def test_plain_fast_paths_avoid_loading_core_and_preserve_protocol(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hooks = root / "hooks"
+            core = root / "nautical_core"
+            hooks.mkdir()
+            core.mkdir()
+            for name in ("on-add.nautical", "on-modify.nautical", "on-exit.nautical"):
+                shutil.copy2(ROOT / name, hooks / name)
+            for name in (
+                "hook_bootstrap.py", "hook_protocol.py", "task_codec.py",
+                "task_models.py", "exit_probe.py", "config_support.py",
+            ):
+                shutil.copy2(ROOT / "nautical_core" / name, core / name)
+            (core / "__init__.py").write_text(
+                "raise RuntimeError('core must not load on plain fast path')\n",
+                encoding="utf-8",
+            )
+
+            environment = os.environ.copy()
+            environment["TASKDATA"] = str(root)
+            for name in ("NAUTICAL_CORE_PATH", "NAUTICAL_TRUST_CORE_PATH", "NAUTICAL_PROFILE", "NAUTICAL_BENCH_FORCE_FULL"):
+                environment.pop(name, None)
+            plain = {
+                "uuid": "00000000-0000-4000-8000-000000000706",
+                "status": "pending",
+                "description": "Cafe ăîșț ✅",
+            }
+
+            cases = (
+                ("on-add.nautical", json.dumps(plain, ensure_ascii=False), plain),
+                (
+                    "on-modify.nautical",
+                    json.dumps(plain, ensure_ascii=False) + "\n"
+                    + json.dumps(dict(plain, description="Modified ăîșț ✅"), ensure_ascii=False),
+                    dict(plain, description="Modified ăîșț ✅"),
+                ),
+            )
+            for hook, payload, expected in cases:
+                with self.subTest(hook=hook):
+                    process = subprocess.run(
+                        [sys.executable, str(hooks / hook)], input=payload, text=True,
+                        capture_output=True, env=environment, timeout=10,
+                    )
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                    self.assertEqual(json.loads(process.stdout), expected)
+                    self.assertIn("ăîșț ✅", process.stdout)
+                    self.assertNotIn("\\u", process.stdout)
+
+            nautical_old = dict(
+                plain, cp="P1D", chain="on", chainID="abcd1234", link=3,
+                due="20270101T090000Z",
+            )
+            nautical_new = dict(nautical_old, description="Modified nautical ăîșț ✅")
+            ordinary_modify = subprocess.run(
+                [sys.executable, str(hooks / "on-modify.nautical")],
+                input=json.dumps(nautical_old, ensure_ascii=False) + "\n"
+                + json.dumps(nautical_new, ensure_ascii=False),
+                text=True, capture_output=True, env=environment, timeout=10,
+            )
+            self.assertEqual(ordinary_modify.returncode, 0, ordinary_modify.stderr)
+            self.assertEqual(json.loads(ordinary_modify.stdout), nautical_new)
+
+            empty_exit = subprocess.run(
+                [sys.executable, str(hooks / "on-exit.nautical")],
+                text=True, capture_output=True, env=environment, timeout=10,
+            )
+            self.assertEqual(empty_exit.returncode, 0, empty_exit.stderr)
+            self.assertEqual(empty_exit.stdout, "")
+            self.assertFalse((root / ".nautical-state").exists())
+
+            forced_environment = dict(environment, NAUTICAL_BENCH_FORCE_FULL="1")
+            forced_cases = (
+                (hooks / "on-add.nautical", json.dumps(plain, ensure_ascii=False)),
+                (hooks / "on-modify.nautical", json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(plain)),
+                (hooks / "on-modify.nautical", json.dumps(nautical_old) + "\n" + json.dumps(nautical_new)),
+                (hooks / "on-exit.nautical", ""),
+            )
+            for hook, payload in forced_cases:
+                with self.subTest(forced_full=hook.name):
+                    process = subprocess.run(
+                        [sys.executable, str(hook)], input=payload, text=True,
+                        capture_output=True, env=forced_environment, timeout=10,
+                    )
+                    self.assertNotEqual(process.returncode, 0)
+
+            implementations = core / "hooks"
+            implementations.mkdir()
+            (implementations / "add_impl.py").write_text(
+                "HOOK_IMPL_API = 999\ndef run_hook(**_kwargs):\n"
+                "    raise AssertionError('mismatched implementation must not run')\n",
+                encoding="utf-8",
+            )
+            nautical_task = dict(plain, cp="P1D")
+            mismatch = subprocess.run(
+                [sys.executable, str(hooks / "on-add.nautical")],
+                input=json.dumps(nautical_task, ensure_ascii=False), text=True,
+                capture_output=True, env=environment, timeout=10,
+            )
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertEqual(json.loads(mismatch.stdout), nautical_task)
+            self.assertEqual(mismatch.stderr, "")
+            diagnostic_environment = dict(environment, NAUTICAL_DIAG="1")
+            mismatch_diagnostic = subprocess.run(
+                [sys.executable, str(hooks / "on-add.nautical")],
+                input=json.dumps(nautical_task, ensure_ascii=False), text=True,
+                capture_output=True, env=diagnostic_environment, timeout=10,
+            )
+            self.assertIn("API mismatch", mismatch_diagnostic.stderr)
+
+            (implementations / "modify_impl.py").write_text(
+                "HOOK_IMPL_API = 999\ndef run_hook(**_kwargs):\n"
+                "    raise AssertionError('mismatched implementation must not run')\n",
+                encoding="utf-8",
+            )
+            modify_input = json.dumps(nautical_task, ensure_ascii=False) + "\n" + json.dumps(
+                dict(nautical_task, cp="P2D"), ensure_ascii=False,
+            )
+            modify_mismatch = subprocess.run(
+                [sys.executable, str(hooks / "on-modify.nautical")],
+                input=modify_input, text=True, capture_output=True,
+                env=environment, timeout=10,
+            )
+            self.assertNotEqual(modify_mismatch.returncode, 0)
+            self.assertEqual(json.loads(modify_mismatch.stdout)["cp"], "P2D")
+            self.assertEqual(modify_mismatch.stderr, "")
+            modify_diagnostic = subprocess.run(
+                [sys.executable, str(hooks / "on-modify.nautical")],
+                input=modify_input, text=True, capture_output=True,
+                env=diagnostic_environment, timeout=10,
+            )
+            self.assertIn("API mismatch", modify_diagnostic.stderr)
+
+            (implementations / "exit_impl.py").write_text(
+                "HOOK_IMPL_API = 999\ndef run_hook(**_kwargs):\n"
+                "    raise AssertionError('mismatched implementation must not run')\n",
+                encoding="utf-8",
+            )
+            state = root / ".nautical-state"
+            state.mkdir(exist_ok=True)
+            with sqlite3.connect(str(state / ".nautical_lifecycle_outbox.db")) as connection:
+                connection.execute(
+                    "CREATE TABLE lifecycle_outbox (intent_id TEXT PRIMARY KEY, processing_state TEXT NOT NULL)"
+                )
+                connection.execute("INSERT INTO lifecycle_outbox VALUES ('intent-1', 'ready')")
+            exit_mismatch = subprocess.run(
+                [sys.executable, str(hooks / "on-exit.nautical")],
+                text=True, capture_output=True, env=environment, timeout=10,
+            )
+            self.assertNotEqual(exit_mismatch.returncode, 0)
+            self.assertEqual(exit_mismatch.stdout, "")
+            self.assertEqual(exit_mismatch.stderr, "")
+            exit_diagnostic = subprocess.run(
+                [sys.executable, str(hooks / "on-exit.nautical")],
+                text=True, capture_output=True, env=diagnostic_environment, timeout=10,
+            )
+            self.assertIn("API mismatch", exit_diagnostic.stderr)
+
+    def test_full_hook_run_reuses_wrapper_protocol_probe(self) -> None:
+        source = textwrap.dedent(f"""
+            from pathlib import Path
+            from types import SimpleNamespace
+            from unittest.mock import patch
+            from nautical_core.hooks import add_impl, modify_impl
+
+            root = Path({str(ROOT)!r})
+            taskdata = Path({self.taskdata!r})
+            for module, probe_name in ((add_impl, 'probe_on_add'), (modify_impl, 'probe_on_modify')):
+                calls = {{'main': 0, 'probe': 0}}
+                probe = object()
+                def unexpected_probe(*_args, **_kwargs):
+                    calls['probe'] += 1
+                    raise AssertionError('full implementation reparsed wrapper input')
+                protocol = SimpleNamespace(**{{probe_name: unexpected_probe}})
+                early = module._EARLY_PROTOCOL_RESULT
+                previous_protocol = module._PROTOCOL
+                with patch.object(module, 'main', side_effect=lambda: calls.__setitem__('main', calls['main'] + 1)), \\
+                     patch.object(module, '_initialize_integration_context'):
+                    result = module.run_hook(
+                        raw_input=b'{{"uuid":"probe-reuse"}}', argv=(),
+                        hook_dir=str(taskdata / 'hooks'), core_base=str(root / 'nautical_core'),
+                        protocol=protocol, probe=probe, protocol_error=None,
+                    )
+                assert result == 0
+                assert calls == {{'main': 1, 'probe': 0}}, calls
+                assert module._PROTOCOL is protocol
+                assert module._EARLY_PROTOCOL_RESULT is probe
+                module._EARLY_PROTOCOL_RESULT = early
+                module._PROTOCOL = previous_protocol
+            print('ok')
+        """)
+        process = subprocess.run(
+            [sys.executable, "-c", source], cwd=ROOT, text=True,
+            capture_output=True, timeout=15,
+        )
+
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        self.assertEqual(process.stdout.strip(), "ok")
+
     def test_hook_bootstrap_uses_symlink_path_and_core_path_rescue(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

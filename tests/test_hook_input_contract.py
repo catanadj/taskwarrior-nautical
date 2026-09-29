@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import subprocess
 import sys
 import textwrap
 import unittest
 
+from nautical_core.hook_results import panic_passthrough
 from tests.support.hook_process import ROOT, HookSubprocessFixture
 
 
@@ -88,6 +91,16 @@ class HookInputContractTests(HookSubprocessFixture):
 
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual(process.stdout.strip(), "")
+
+    def test_on_modify_panic_passthrough_emits_latest_task(self) -> None:
+        previous = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
+        latest = {"uuid": previous["uuid"], "status": "completed"}
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            panic_passthrough(json.dumps(previous) + "\n" + json.dumps(latest), None)
+
+        self.assertEqual(json.loads(output.getvalue()), latest)
 
     def test_on_modify_rejects_oversized_stdin_early(self) -> None:
         raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 256})

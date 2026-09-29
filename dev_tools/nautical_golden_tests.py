@@ -297,23 +297,6 @@ class _BoundDiagnosticsEffects:
         setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
 
 
-def test_on_modify_panic_passthrough_uses_latest_task():
-    """on-modify panic passthrough should emit the latest task object."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_panic_passthrough_test")
-    mod._PARSED_NEW = None
-    old = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
-    new = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "completed"}
-    mod._RAW_INPUT_TEXT = json.dumps(old) + "\n" + json.dumps(new)
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        mod._panic_passthrough()
-    out = buf.getvalue().strip()
-    obj = json.loads(out or "{}")
-    expect(isinstance(obj, dict), f"panic passthrough must emit JSON object, got: {out!r}")
-    expect(obj.get("status") == "completed", f"expected latest task, got: {obj}")
-
-
 def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     """Named mutations re-read, verify, classify replay, and preserve failures."""
     from nautical_core.integration_models import (
@@ -1101,277 +1084,6 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         path.write_bytes(b"not a sqlite database")
         rejected = _LifecycleOutboxRepository(root).open()
         expect(rejected.kind is OutboxResultKind.REJECTED, f"corrupt outbox database was accepted: {rejected}")
-
-
-def test_plain_hook_fast_paths_do_not_import_core_package():
-    """Plain add/modify and empty exit should pass through without importing the core package."""
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        hooks_dir = root / "hooks"
-        core_dir = root / "nautical_core"
-        hooks_dir.mkdir()
-        core_dir.mkdir()
-        for hook_name in ("on-add.nautical", "on-modify.nautical", "on-exit.nautical"):
-            shutil.copy2(_find_hook_file(hook_name), hooks_dir / hook_name)
-        shutil.copy2(Path(ROOT) / "nautical_core" / "hook_bootstrap.py", core_dir / "hook_bootstrap.py")
-        shutil.copy2(Path(ROOT) / "nautical_core" / "hook_protocol.py", core_dir / "hook_protocol.py")
-        shutil.copy2(Path(ROOT) / "nautical_core" / "task_codec.py", core_dir / "task_codec.py")
-        shutil.copy2(Path(ROOT) / "nautical_core" / "task_models.py", core_dir / "task_models.py")
-        shutil.copy2(Path(ROOT) / "nautical_core" / "exit_probe.py", core_dir / "exit_probe.py")
-        shutil.copy2(Path(ROOT) / "nautical_core" / "config_support.py", core_dir / "config_support.py")
-        (core_dir / "__init__.py").write_text("raise RuntimeError('core must not load on plain fast path')\n", encoding="utf-8")
-
-        env = os.environ.copy()
-        env["TASKDATA"] = str(root)
-        env.pop("NAUTICAL_CORE_PATH", None)
-        env.pop("NAUTICAL_TRUST_CORE_PATH", None)
-        env.pop("NAUTICAL_PROFILE", None)
-        env.pop("NAUTICAL_BENCH_FORCE_FULL", None)
-        plain = {
-            "uuid": "00000000-0000-4000-8000-000000000706",
-            "status": "pending",
-            "description": "Cafe ăîșț ✅",
-        }
-
-        add = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-add.nautical")],
-            input=json.dumps(plain, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=5.0,
-        )
-        expect(add.returncode == 0, f"plain add fast path failed: {add.stderr!r}")
-        expect(json.loads(add.stdout) == plain, f"plain add fast path changed task: {add.stdout!r}")
-        expect("ăîșț ✅" in add.stdout and "\\u" not in add.stdout, f"plain add escaped Unicode: {add.stdout!r}")
-
-        modified = dict(plain, description="Modified ăîșț ✅")
-        modify = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-modify.nautical")],
-            input=json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=5.0,
-        )
-        expect(modify.returncode == 0, f"plain modify fast path failed: {modify.stderr!r}")
-        expect(json.loads(modify.stdout) == modified, f"plain modify fast path changed task: {modify.stdout!r}")
-        expect("ăîșț ✅" in modify.stdout and "\\u" not in modify.stdout, f"plain modify escaped Unicode: {modify.stdout!r}")
-
-        nautical_old = dict(
-            plain,
-            cp="P1D",
-            chain="on",
-            chainID="abcd1234",
-            link=3,
-            due="20270101T090000Z",
-        )
-        nautical_new = dict(nautical_old, description="Modified nautical ăîșț ✅")
-        nautical_modify = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-modify.nautical")],
-            input=json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(nautical_new, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=5.0,
-        )
-        expect(nautical_modify.returncode == 0, f"ordinary Nautical edit loaded the broken core: {nautical_modify.stderr!r}")
-        expect(json.loads(nautical_modify.stdout) == nautical_new, f"ordinary Nautical edit changed task: {nautical_modify.stdout!r}")
-
-        exit_hook = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-exit.nautical")],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=5.0,
-        )
-        expect(exit_hook.returncode == 0, f"empty exit fast path failed: {exit_hook.stderr!r}")
-        expect(exit_hook.stdout == "", f"empty exit fast path wrote stdout: {exit_hook.stdout!r}")
-        expect(not (root / ".nautical-state").exists(), "empty exit fast path should not create queue state")
-
-        forced_env = dict(env)
-        forced_env["NAUTICAL_BENCH_FORCE_FULL"] = "1"
-        forced_cases = (
-            (hooks_dir / "on-add.nautical", json.dumps(plain, ensure_ascii=False)),
-            (
-                hooks_dir / "on-modify.nautical",
-                json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
-            ),
-            (
-                hooks_dir / "on-modify.nautical",
-                json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(nautical_new, ensure_ascii=False),
-            ),
-            (hooks_dir / "on-exit.nautical", ""),
-        )
-        for hook_path, input_text in forced_cases:
-            forced = subprocess.run(
-                [sys.executable, str(hook_path)],
-                input=input_text,
-                text=True,
-                capture_output=True,
-                env=forced_env,
-                timeout=5.0,
-            )
-            expect(forced.returncode != 0, f"force-full switch did not reach the broken core for {hook_path.name}")
-
-        impl_dir = core_dir / "hooks"
-        impl_dir.mkdir()
-        (impl_dir / "add_impl.py").write_text(
-            "HOOK_IMPL_API = 999\n"
-            "def run_hook(**_kwargs):\n"
-            "    raise AssertionError('mismatched implementation must not run')\n",
-            encoding="utf-8",
-        )
-        nautical = dict(plain, cp="P1D")
-        mismatch = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-add.nautical")],
-            input=json.dumps(nautical, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=5.0,
-        )
-        expect(mismatch.returncode != 0, "on-add accepted an incompatible implementation API")
-        expect(json.loads(mismatch.stdout) == nautical, "on-add API mismatch did not preserve the input task")
-        expect(mismatch.stderr == "", f"on-add API mismatch wrote diagnostics without opt-in: {mismatch.stderr!r}")
-
-        diag_env = dict(env)
-        diag_env["NAUTICAL_DIAG"] = "1"
-        mismatch_diag = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-add.nautical")],
-            input=json.dumps(nautical, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            env=diag_env,
-            timeout=5.0,
-        )
-        expect("API mismatch" in mismatch_diag.stderr, "on-add API mismatch diagnostic was not actionable")
-
-        (impl_dir / "modify_impl.py").write_text(
-            "HOOK_IMPL_API = 999\n"
-            "def run_hook(**_kwargs):\n"
-            "    raise AssertionError('mismatched implementation must not run')\n",
-            encoding="utf-8",
-        )
-        nautical_old = dict(plain, cp="P1D")
-        nautical_changed = dict(nautical_old, cp="P2D")
-        modify_input = json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(
-            nautical_changed,
-            ensure_ascii=False,
-        )
-        modify_mismatch = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-modify.nautical")],
-            input=modify_input,
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=5.0,
-        )
-        expect(modify_mismatch.returncode != 0, "on-modify accepted an incompatible implementation API")
-        expect(
-            json.loads(modify_mismatch.stdout) == nautical_changed,
-            "on-modify API mismatch did not preserve the latest task",
-        )
-        expect(
-            modify_mismatch.stderr == "",
-            f"on-modify API mismatch wrote diagnostics without opt-in: {modify_mismatch.stderr!r}",
-        )
-
-        modify_mismatch_diag = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-modify.nautical")],
-            input=modify_input,
-            text=True,
-            capture_output=True,
-            env=diag_env,
-            timeout=5.0,
-        )
-        expect(
-            "API mismatch" in modify_mismatch_diag.stderr,
-            "on-modify API mismatch diagnostic was not actionable",
-        )
-
-        (impl_dir / "exit_impl.py").write_text(
-            "HOOK_IMPL_API = 999\n"
-            "def run_hook(**_kwargs):\n"
-            "    raise AssertionError('mismatched implementation must not run')\n",
-            encoding="utf-8",
-        )
-        state_dir = root / ".nautical-state"
-        state_dir.mkdir(exist_ok=True)
-        with sqlite3.connect(str(state_dir / ".nautical_lifecycle_outbox.db")) as conn:
-            conn.execute("CREATE TABLE lifecycle_outbox (intent_id TEXT PRIMARY KEY, processing_state TEXT NOT NULL)")
-            conn.execute("INSERT INTO lifecycle_outbox VALUES ('intent-1', 'ready')")
-            conn.commit()
-        exit_mismatch = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-exit.nautical")],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=5.0,
-        )
-        expect(exit_mismatch.returncode != 0, "on-exit accepted an incompatible implementation API")
-        expect(exit_mismatch.stdout == "", f"on-exit API mismatch wrote stdout: {exit_mismatch.stdout!r}")
-        expect(
-            exit_mismatch.stderr == "",
-            f"on-exit API mismatch wrote diagnostics without opt-in: {exit_mismatch.stderr!r}",
-        )
-
-        exit_mismatch_diag = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-exit.nautical")],
-            text=True,
-            capture_output=True,
-            env=diag_env,
-            timeout=5.0,
-        )
-        expect("API mismatch" in exit_mismatch_diag.stderr, "on-exit API mismatch diagnostic was not actionable")
-
-
-def test_full_hooks_reuse_wrapper_protocol_probe():
-    """The full implementation must consume the wrapper's validated probe once."""
-    cases = (
-        ("on-add.nautical", "_nautical_probe_reuse_add", "probe_on_add"),
-        ("on-modify.nautical", "_nautical_probe_reuse_modify", "probe_on_modify"),
-    )
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td) / "taskdata"
-        taskdata.mkdir()
-        for hook_name, module_name, probe_name in cases:
-            mod = _load_hook_module(_find_hook_file(hook_name), module_name)
-            calls = {"main": 0, "probe": 0}
-            probe = object()
-
-            def unexpected_probe(*_args, **_kwargs):
-                calls["probe"] += 1
-                raise AssertionError("full implementation reparsed wrapper input")
-
-            protocol = SimpleNamespace(**{probe_name: unexpected_probe})
-            previous_main = mod.main
-            previous_resolve = mod._resolve_task_data_context
-            previous_early = getattr(mod, "_EARLY_PROTOCOL_RESULT", None)
-            try:
-                mod.main = lambda: calls.__setitem__("main", calls["main"] + 1)
-                mod._resolve_task_data_context = lambda: (str(taskdata), False)
-                result = mod.run_hook(
-                    raw_input=b"{\"uuid\":\"probe-reuse\"}",
-                    argv=(),
-                    hook_dir=str(taskdata / "hooks"),
-                    core_base=str(Path(ROOT) / "nautical_core"),
-                    protocol=protocol,
-                    probe=probe,
-                    protocol_error=None,
-                )
-                retained_probe = mod._EARLY_PROTOCOL_RESULT
-            finally:
-                mod.main = previous_main
-                mod._resolve_task_data_context = previous_resolve
-                mod._EARLY_PROTOCOL_RESULT = previous_early
-
-            expect(result == 0, f"{hook_name} run_hook returned {result}")
-            expect(calls["main"] == 1, f"{hook_name} implementation main was not called once")
-            expect(calls["probe"] == 0, f"{hook_name} reparsed the wrapper input")
-            expect(mod._PROTOCOL is protocol, f"{hook_name} did not retain wrapper protocol module")
-            expect(retained_probe is probe, f"{hook_name} did not retain wrapper probe result")
-
 
 
 def _assert_hook_requires_integration_context(hook_name: str, module_name: str):
@@ -5226,25 +4938,6 @@ def test_hook_on_modify_timeline_uses_omit_file_description_label():
     expect("(omitted)" not in txt, f"expected omit_file description to replace default omitted marker: {txt!r}")
 
 
-def test_hooks_require_package_core_layout():
-    """Hooks should resolve only the package-based nautical_core layout."""
-    import tempfile
-
-    hook_names = ["on-add.nautical", "on-modify.nautical", "on-exit.nautical"]
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        pkg = td_path / "nautical_core"
-        pkg.mkdir(parents=True, exist_ok=True)
-        pkg_init = pkg / "__init__.py"
-        pkg_init.write_text("# package core\n", encoding="utf-8")
-        legacy = td_path / "nautical_core.py"
-        legacy.write_text("# legacy core\n", encoding="utf-8")
-        for idx, hook_name in enumerate(hook_names):
-            mod = _load_hook_module(_find_hook_file(hook_name), f"_nautical_pkg_layout_test_{idx}")
-            resolved = mod._core_target_from_base(td_path)
-            expect(resolved == pkg_init, f"{hook_name} should prefer package core: {resolved}")
-            expect(mod._core_target_from_base(legacy) is None, f"{hook_name} should reject legacy core file")
-
 def test_core_import_deterministic():
     """Hooks should ignore TASKDATA unless NAUTICAL_DEV=1."""
     with tempfile.TemporaryDirectory() as td:
@@ -5261,40 +4954,6 @@ def test_core_import_deterministic():
 
     expect(True, "core import should ignore TASKDATA when NAUTICAL_DEV is not set")
 
-
-def test_core_import_defers_optional_stacks():
-    """Importing the facade should defer optional and parser API stacks."""
-    probe = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import json, sys, nautical_core; "
-                "names=('rich','nautical_core.ui','nautical_core.astronomy',"
-                "'nautical_core.natural_language','nautical_core.linting',"
-                "'nautical_core.parser_api','nautical_core.parser_support_api',"
-                "'nautical_core.acf_api','nautical_core.expansion_api',"
-                "'nautical_core.quarter_api','nautical_core.scheduler_api',"
-                "'nautical_core.cached_expansion','nautical_core.monthly_support',"
-                "'nautical_core.recurrence_evaluator',"
-                "'nautical_core.token_api','nautical_core.time_api',"
-                "'nautical_core.business_calendar_api','nautical_core.cache_api',"
-                "'nautical_core.hint_builder_api','nautical_core.natural_language_api',"
-                "'nautical_core.linting_api'); "
-                "loaded=sorted(name for name in names if name in sys.modules); "
-                "count=sum(name.startswith('nautical_core') for name in sys.modules); "
-                "assert not loaded, loaded; assert 'subprocess' not in sys.modules, 'subprocess loaded'; "
-                "assert 'tempfile' not in sys.modules, 'tempfile loaded'; "
-                "assert count <= 30, count; "
-                "print(json.dumps({'count': count, 'loaded': loaded}))"
-            ),
-        ],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        timeout=12.0,
-    )
-    expect(probe.returncode == 0, f"optional stacks were imported eagerly: {probe.stderr or probe.stdout}")
 
 def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
     """Quarantined lifecycle intents remain visible to operator diagnostics."""
@@ -8904,8 +8563,6 @@ TESTS = [
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
-    test_plain_hook_fast_paths_do_not_import_core_package,
-    test_full_hooks_reuse_wrapper_protocol_probe,
     *STORAGE_TESTS,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_expiration_panel_explains_carry,
@@ -8956,7 +8613,6 @@ TESTS = [
     test_modify_completion_advances_past_second_dst_fold,
     test_modify_overnight_window_advances_past_second_dst_fold,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
-    test_on_modify_panic_passthrough_uses_latest_task,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_modify_promotes_cp_emits_period_explanation,
@@ -8998,9 +8654,7 @@ TESTS = [
     test_on_modify_panel_fallback,
     test_on_modify_panel_forwards_live_duration,
     test_ui_live_test_term_guard_restores_environment,
-    test_hooks_require_package_core_layout,
     test_core_import_deterministic,
-    test_core_import_defers_optional_stacks,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,

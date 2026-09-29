@@ -11239,29 +11239,6 @@ def test_on_modify_compute_anchor_child_due_skips_omit_date():
     )
 
 
-def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due():
-    """anchor completion should not crash when scheduled is later than due."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_sched_after_due_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    child_due, meta, _dnf = _compute_anchor_child_due(mod,
-        {
-            "anchor": "w:mon..sun@t=09:00",
-            "anchor_mode": "all",
-            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (9, 0))),
-            "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 8), (12, 0))),
-            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 8), (10, 0))),
-            "chainID": "abcd1234",
-        }
-    )
-
-    expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 7), (9, 0)))
-    expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next due with scheduled-after-due: {mod.core.fmt_isoz(child_due)}")
-    expect(meta.get("target_field") == "due", f"expected due target field when due is present: {meta}")
-
-
 def test_on_modify_compute_counted_random_advances_within_period():
     """Counted-random completion should emit the remaining selection in the same period."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13775,7 +13752,6 @@ TESTS = [
     test_hook_on_modify_merged_timeline_marks_projection_failures,
     test_hook_on_modify_timeline_uses_omit_file_description_label,
     test_on_modify_compute_anchor_child_due_skips_omit_date,
-    test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due,
     test_on_modify_compute_counted_random_advances_within_period,
     test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,
     test_on_modify_completion_build_and_spawn_child_happy_path,

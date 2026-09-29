@@ -186,6 +186,26 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual((due_local.hour, due_local.minute), (9, 0))
         self.assertEqual(metadata["target_field"], "scheduled")
 
+    def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due(self):
+        due = core.build_local_datetime(date(2025, 1, 6), (9, 0))
+        scheduled = core.build_local_datetime(date(2025, 1, 8), (12, 0))
+        ended = core.build_local_datetime(date(2025, 1, 8), (10, 0))
+        parent = _task(
+            anchor="w:mon..sun@t=09:00",
+            anchor_mode="all",
+            cp=None,
+            due=fmt_isoz(due),
+            scheduled=fmt_isoz(scheduled),
+            end=fmt_isoz(ended),
+        )
+
+        service = ChainGenerationService.from_core(core)
+        child_due, metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        self.assertEqual(core.to_local(child_due).date(), date(2025, 1, 7))
+        self.assertEqual((core.to_local(child_due).hour, core.to_local(child_due).minute), (9, 0))
+        self.assertEqual(metadata["target_field"], "due")
+
     def test_anchor_generation_selects_next_local_timed_slot(self):
         due_local = core.build_local_datetime(date(2026, 7, 4), (9, 0))
         end_local = core.build_local_datetime(date(2026, 7, 4), (10, 0))

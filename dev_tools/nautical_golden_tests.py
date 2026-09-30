@@ -1489,71 +1489,6 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
     expect((after_dst.hour, after_dst.minute) == (9, 0), f"DST transition changed anchor wall clock: {after_dst}")
 
 
-def test_random_anchor_and_omit_presets_keep_chain_scope():
-    """Random presets should preserve the same chain-scoped draw contract."""
-    def verify(mod):
-        anchor_omit = mod._import_sibling("anchor_omit")
-        start = date(2026, 6, 1)
-        preset_dnf = mod.validate_anchor_expr_strict("@random-workday")
-        direct_dnf = mod.validate_anchor_expr_strict("m:rand@bd")
-        preset_picks = []
-        for idx in range(48):
-            seed = f"random-preset-{idx}"
-            preset_pick, _meta = mod.next_after_expr(
-                preset_dnf,
-                start,
-                default_seed=start,
-                seed_base=seed,
-            )
-            direct_pick, _meta = mod.next_after_expr(
-                direct_dnf,
-                start,
-                default_seed=start,
-                seed_base=seed,
-            )
-            expect(preset_pick == direct_pick, f"anchor preset changed the random draw for {seed}")
-            preset_picks.append(preset_pick)
-        expect(len(set(preset_picks)) >= 12, f"random anchor preset lacked chain diversity: {preset_picks}")
-
-        omit_dnf = anchor_omit.validate_omit_expr_strict(
-            "@random-weekday",
-            validate_anchor_expr_cached=mod.validate_anchor_expr_strict,
-            resolve_omit_presets=mod.resolve_omit_presets,
-        )
-        omit_picks = []
-        weekly_dnf = mod.validate_anchor_expr_strict("w:rand")
-        week_start = date(2026, 6, 7)
-        for idx in range(48):
-            seed = f"random-omit-{idx}"
-            selected, _meta = mod.next_after_expr(
-                weekly_dnf,
-                week_start,
-                default_seed=week_start,
-                seed_base=seed,
-            )
-            expect(
-                anchor_omit.omit_expr_fires_on_date(
-                    omit_dnf,
-                    selected,
-                    week_start,
-                    seed,
-                    core=mod,
-                ),
-                f"random omit preset did not recognize its selected date for {seed}",
-            )
-            omit_picks.append(selected.weekday())
-        expect(len(set(omit_picks)) >= 5, f"random omit preset lacked chain diversity: {omit_picks}")
-
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write('[anchor_presets]\nrandom-workday = "m:rand@bd"\n\n')
-            f.write('[omit_presets]\nrandom-weekday = "w:rand"\n')
-        mod = _load_core_module(core_path, "_nautical_core_random_preset_test", cfg)
-        verify(mod)
-
-
 # -------- Runner --------------------------------------------------------------
 
 def test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance():
@@ -3740,48 +3675,6 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         raise AssertionError("evaluator silently invented a chain identity")
 
 
-def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
-    """One completion task should build its evaluator and scheduler binding once."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_evaluator_session_test")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000111",
-        "chainID": "session-chain",
-        "status": "pending",
-        "link": 1,
-        "anchor": "w:mon@t=09:00",
-        "anchor_mode": "skip",
-        "due": "20250106T090000Z",
-        "end": "20250106T100000Z",
-    }
-    mod._reset_modify_runtime_state()
-    try:
-        schedule = mod._module("modify_schedule_effects")
-        evaluator, _service = schedule.scheduler_callbacks(schedule.scheduler_ports_for(mod))
-        first = evaluator(task)
-        second = evaluator(dict(task))
-        expect(first is second, "equivalent task copies rebuilt the evaluator within one hook session")
-        binding_a = first._get_cached("scheduler_binding", first._build_scheduler_binding)
-        binding_b = first._get_cached("scheduler_binding", first._build_scheduler_binding)
-        expect(binding_a is binding_b, "scheduler binding was rebuilt within one evaluator session")
-    finally:
-        mod._reset_modify_runtime_state()
-
-
-def test_random_time_window_is_stable_across_processes():
-    """The random-time seed must not depend on interpreter-local state."""
-    script = (
-        "import json; from nautical_core.time_windows import parse_random_time_window_spec; "
-        "w=parse_random_time_window_spec('rand(22:30..02:30/3)'); "
-        "print(json.dumps(w.slots_with_offsets('cross-process/2026-08-05')))"
-    )
-    outputs = [
-        subprocess.check_output([sys.executable, "-c", script], cwd=str(ROOT), text=True).strip()
-        for _ in range(2)
-    ]
-    expect(outputs[0] == outputs[1], f"random slots changed across processes: {outputs!r}")
-
-
 def test_navigator_reads_through_read_only_invocation_repository():
     """Navigator must use the typed read snapshot and reject mutation-capable UOWs."""
     from dataclasses import replace
@@ -5101,213 +4994,15 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     expect(bool(intent), "spawn intent id should still be generated")
 
 
-def test_astronomical_season_selection_scheduler_uses_transition_dates():
-    """Public seasonal scheduling should consume astronomical local-date windows."""
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td)
-        (taskdata / "config-nautical.toml").write_text(
-            'tz = "UTC"\nseason_mode = "astronomical"\nseason_hemisphere = "north"\n',
-            encoding="utf-8",
-        )
-        env = os.environ.copy()
-        env["TASKDATA"] = str(taskdata)
-        env.pop("NAUTICAL_CONFIG", None)
-        env["PYTHONPATH"] = str(ROOT)
-        script = (
-            "import json, os\n"
-            "from datetime import date\n"
-            "import nautical_core as c\n"
-            "c.reload_taskdata_config(os.environ['TASKDATA'])\n"
-            "import nautical_core.position_selection as position_selection\n"
-            "import nautical_core.season_support as season_support\n"
-            "dnf = c.validate_anchor_expr_strict('(w:mon)@in-season=1st')\n"
-            "refs = [date(2026, 1, 1), date(2026, 3, 23), date(2026, 6, 22), date(2026, 9, 28), date(2026, 12, 21)]\n"
-            "dates = [c.next_after_expr(dnf, ref, default_seed=date(2026, 1, 1))[0].isoformat() for ref in refs]\n"
-            "advice = position_selection.selection_advice(dnf[0][0])\n"
-            "print(json.dumps({'mode': season_support.active_mode(), 'dates': dates, 'bounds': tuple(x.isoformat() for x in position_selection.period_bounds('spring', date(2026, 4, 1))), 'advice': advice}))\n"
-        )
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=str(ROOT),
-            env=env,
-            text=True,
-            capture_output=True,
-        )
-        expect(proc.returncode == 0, f"astronomical scheduler process failed: {proc.stderr[:800]!r}")
-        payload = json.loads(proc.stdout.strip().splitlines()[-1])
-        expect(payload["mode"] == "astronomical", f"configured season mode was not applied: {payload!r}")
-        expect(
-            payload["dates"] == ["2026-03-23", "2026-06-22", "2026-09-28", "2026-12-21", "2027-03-22"],
-            f"astronomical season date drifted: {payload!r}",
-        )
-        expect(payload["bounds"] == ["2026-03-20", "2026-06-20"], f"astronomical bounds drifted: {payload!r}")
-        expect(any("astronomical" in line for line in payload["advice"]), f"astronomical advice missing: {payload!r}")
-
-
-def test_seasonal_selection_modify_modes_times_and_timeline():
-    """Completion modes should preserve seasonal slots, local times, and future projections."""
-    from zoneinfo import ZoneInfo
-
-    modify_hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(modify_hook, "_nautical_seasonal_modify_modes_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-    season_support = mod.core._import_sibling("season_support")
-    previous_hemisphere = season_support.active_hemisphere()
-    season_support.configure_hemisphere("north")
-    mod.core.SEASON_HEMISPHERE = "north"
-
-    previous_tz = mod.core._LOCAL_TZ
-    mod.core._LOCAL_TZ = ZoneInfo("Europe/Helsinki")
-    expression = "(w:mon)@in-spring=first,last@t=09:00,17:00"
-
-    def stamp(day, hhmm):
-        return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
-
-    try:
-        same_day_due, _same_meta, _same_dnf = _compute_anchor_child_due(mod,
-            {
-                "anchor": expression,
-                "anchor_mode": "skip",
-                "due": stamp(date(2026, 3, 2), (9, 0)),
-                "end": stamp(date(2026, 3, 2), (10, 0)),
-                "chainID": "season123",
-            }
-        )
-        same_day_local = mod.core.to_local(same_day_due)
-        expect(
-            same_day_local.date() == date(2026, 3, 2)
-            and (same_day_local.hour, same_day_local.minute) == (17, 0),
-            f"completion skipped the second same-day seasonal slot: {same_day_local}",
-        )
-
-        common = {
-            "anchor": expression,
-            "due": stamp(date(2026, 3, 2), (17, 0)),
-            "end": stamp(date(2026, 7, 1), (10, 0)),
-            "chainID": "season123",
-        }
-        all_due, all_meta, _all_dnf = _compute_anchor_child_due(mod,
-            dict(common, anchor_mode="all")
-        )
-        skip_due, skip_meta, skip_dnf = _compute_anchor_child_due(mod,
-            dict(common, anchor_mode="skip")
-        )
-        flex_due, flex_meta, _flex_dnf = _compute_anchor_child_due(mod,
-            dict(common, anchor_mode="flex")
-        )
-        all_local = mod.core.to_local(all_due)
-        skip_local = mod.core.to_local(skip_due)
-        flex_local = mod.core.to_local(flex_due)
-        expect(
-            all_local.date() == date(2026, 5, 25)
-            and (all_local.hour, all_local.minute) == (9, 0),
-            f"all mode did not backfill the missed spring slot: {all_local}",
-        )
-        expect(all_meta.get("basis") == "missed", f"all mode metadata drifted: {all_meta}")
-        expect(all_meta.get("source") == "anchor", f"all mode source drifted: {all_meta}")
-        expect(
-            skip_local.date() == date(2027, 3, 1)
-            and (skip_local.hour, skip_local.minute) == (9, 0),
-            f"skip mode did not advance to the next spring: {skip_local}",
-        )
-        expect(skip_meta.get("basis") == "after_end", f"skip metadata drifted: {skip_meta}")
-        expect(skip_meta.get("source") == "anchor", f"skip mode source drifted: {skip_meta}")
-        expect(flex_local == skip_local, f"flex mode did not skip the seasonal backlog: {flex_local}")
-        expect(flex_meta.get("basis") == "flex", f"flex metadata drifted: {flex_meta}")
-        expect(flex_meta.get("source") == "anchor", f"flex mode source drifted: {flex_meta}")
-
-
-        evaluator = _evaluator_for_fixture(
-            common,
-            timezone=mod.core._LOCAL_TZ,
-        )
-        for mode, hook_due, hook_meta in (
-            ("all", all_due, all_meta),
-            ("skip", skip_due, skip_meta),
-            ("flex", flex_due, flex_meta),
-        ):
-            evaluator_result = evaluator.select_mode(
-                mode,
-                due_local=mod.core.to_local(mod.core.parse_dt_any(common["due"])),
-                end_local=mod.core.to_local(mod.core.parse_dt_any(common["end"])),
-                fallback_hhmm=(17, 0),
-            )
-            expect(
-                evaluator_result.selected_occurrence is not None
-                and evaluator_result.selected_occurrence.astimezone(timezone.utc) == hook_due,
-                f"{mode} evaluator timestamp drifted from hook: {evaluator_result!r} vs {hook_due!r}",
-            )
-            expect(
-                evaluator_result.basis == hook_meta.get("basis")
-                and evaluator_result.source == hook_meta.get("source"),
-                f"{mode} evaluator evidence drifted from hook: {evaluator_result!r} vs {hook_meta!r}",
-            )
-        expect(all_local.utcoffset() == timedelta(hours=3), f"summer offset drifted: {all_local}")
-        expect(skip_local.utcoffset() == timedelta(hours=2), f"winter offset drifted: {skip_local}")
-
-        parent = {
-            **common,
-            "uuid": "00000000-0000-4000-8000-000000000784",
-            "status": "completed",
-            "anchor_mode": "flex",
-            "link": 1,
-        }
-        child = _build_child_draft_for_test(mod,
-            parent,
-            flex_due,
-            "due",
-            2,
-            "00000000",
-            "anchor",
-            0,
-            None,
-        )
-        expect(child.get("anchor") == expression, f"child lost seasonal anchor: {child}")
-        expect(child.get("anchor_mode") == "all", f"flex child did not become all mode: {child}")
-        expect(child.get("chainID") == "season123", f"child lost chain identity: {child}")
-
-        saved_collect = getattr(mod, "_collect_prev_two", None)
-        mod._collect_prev_two = lambda _task: []
-        try:
-            lines = _call_with_supported_kwargs(
-                mod._timeline_lines,
-                kind="anchor",
-                task={**parent, "anchor_mode": "skip"},
-                child_due_utc=skip_due,
-                child_short="0000abcd",
-                dnf=skip_dnf,
-                next_count=4,
-                cap_no=None,
-                cur_no=1,
-            )
-        finally:
-            if saved_collect is not None:
-                mod._collect_prev_two = saved_collect
-            else:
-                delattr(mod, "_collect_prev_two")
-        timeline = _strip_markup("\n".join(lines))
-        expect("2027-03-01" in timeline, f"timeline omitted seasonal child: {timeline}")
-        expect("2027-05-31" in timeline, f"timeline omitted later spring slot: {timeline}")
-    finally:
-        mod.core._LOCAL_TZ = previous_tz
-        mod.core.SEASON_HEMISPHERE = previous_hemisphere
-        season_support.configure_hemisphere(previous_hemisphere)
-
-
-
-
-
-
 TESTS = [
     *SCHEDULING_TESTS[:1],
-    test_seasonal_selection_modify_modes_times_and_timeline,
+    *SCHEDULING_TESTS[9:10],
     *CONFIGURATION_TESTS[5:6],
     *CONFIGURATION_TESTS[10:12],
     test_modifier_boundary_paths_agree_and_advance_strictly,
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
-    test_random_anchor_and_omit_presets_keep_chain_scope,
+    *SCHEDULING_TESTS[5:6],
     test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance,
     test_on_modify_native_until_rejects_invalid_window_changes,
     test_on_modify_native_until_follows_recurrence_target_move,
@@ -5345,7 +5040,7 @@ TESTS = [
     *PERFORMANCE_TESTS[3:6],
     *PERFORMANCE_TESTS[9:],
     *PERFORMANCE_TESTS[6:7],
-    *SCHEDULING_TESTS[1:],
+    *SCHEDULING_TESTS[1:5],
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     *MODIFY_TESTS[1:6],
     *MODIFY_TESTS[6:],
@@ -5391,7 +5086,7 @@ TESTS = [
     *CONFIGURATION_TESTS[6:10],
     *CONFIGURATION_TESTS[12:15],
     test_on_modify_expands_and_clears_description_uda_aliases,
-    test_astronomical_season_selection_scheduler_uses_transition_dates,
+    *SCHEDULING_TESTS[8:9],
     test_on_modify_build_child_carries_configured_uda_datetime,
 
 ]
@@ -5558,8 +5253,7 @@ TESTS.extend([
     test_navigator_fallback_export_uses_empty_filter,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_navigator_projects_all_slots_in_a_time_window,
-    test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
-    test_random_time_window_is_stable_across_processes,
+    *SCHEDULING_TESTS[6:8],
     test_navigator_reads_through_read_only_invocation_repository,
     test_navigator_uses_anchor_and_anchor_file_sources,
     *CONFIGURATION_TESTS[3:5],

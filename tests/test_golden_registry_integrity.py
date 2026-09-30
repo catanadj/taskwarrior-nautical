@@ -1019,6 +1019,11 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             "test_modify_completion_advances_past_second_dst_fold",
             "test_modify_overnight_window_advances_past_second_dst_fold",
             "test_anchor_preview_explains_nonexistent_wall_time_adjustment",
+            "test_random_anchor_and_omit_presets_keep_chain_scope",
+            "test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding",
+            "test_random_time_window_is_stable_across_processes",
+            "test_astronomical_season_selection_scheduler_uses_transition_dates",
+            "test_seasonal_selection_modify_modes_times_and_timeline",
         )
         registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
         top_level = {
@@ -1070,7 +1075,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
-        self.assertEqual(len(top_level), 83)
+        self.assertEqual(len(top_level), 78)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
@@ -1083,7 +1088,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)
-        self.assertEqual(len(scheduling.TESTS), 5)
+        self.assertEqual(len(scheduling.TESTS), 10)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
         self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 664)
 

@@ -21,11 +21,14 @@ class ParserOwnerApiContractTests(unittest.TestCase):
     def test_parser_api_uses_parser_owners_without_root_callbacks(self) -> None:
         namespace = vars(core).copy()
         namespace["ParseError"] = core.ParseError
+        namespace["AndTermUnsatisfiable"] = core.AndTermUnsatisfiable
+        namespace["YearTokenFormatError"] = core.YearTokenFormatError
         namespace.pop("_raise_on_bad_colon_year_tokens", None)
         namespace.pop("_parse_atom_head", None)
         namespace.pop("_parse_atom_mods", None)
         namespace.pop("_skip_ws_pos", None)
         namespace.pop("_raise_if_comma_joined_anchors", None)
+        namespace.pop("_rewrite_quarters_in_context", None)
         parser = parser_api.for_core(namespace=namespace)
 
         with self.assertRaisesRegex(core.ParseError, "uses ':' between numbers"):
@@ -33,6 +36,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         with self.assertRaisesRegex(core.ParseError, "Anchors must be joined"):
             parser.parse_anchor_expr_to_dnf("m:31,w:sun")
         self.assertEqual(parser.parse_anchor_expr_to_dnf("w:mon@t=09:00")[0][0]["mods"]["t"], (9, 0))
+        self.assertTrue(parser.parse_anchor_expr_to_dnf("y:q1")[0][0]["spec"].startswith("01-01"))
 
     def test_incompatible_moon_phases_are_rejected_by_both_public_parsers(self) -> None:
         for parser in (core.validate_anchor_expr_strict, core.parse_anchor_expr_to_dnf):

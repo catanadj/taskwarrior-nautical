@@ -753,7 +753,6 @@ _quarter_api = _LazyApiBundle(
         "_is_start_month_selector",
         "_is_end_month_selector",
         "_rewrite_quarter_year_atoms",
-        "_rewrite_quarters_in_context",
     ),
     core=sys.modules[__name__],
 )

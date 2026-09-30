@@ -134,6 +134,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     parser_atoms = context.import_sibling("parsing.parser_atoms") if context is not None else deps["_parser_atoms"]
     parser_dnf = context.import_sibling("parsing.parser_dnf") if context is not None else deps["_parser_dnf"]
     parser_frontend = context.import_sibling("parsing.parser_frontend") if context is not None else deps["_parser_frontend"]
+    quarter_binding_state: list[Any | None] = [None]
     position_selection = context.import_sibling("position_selection") if context is not None else deps["_position_selection"]
     validation_deps_state: list[ParserValidationDependencies | None] = [None]
 
@@ -304,6 +305,21 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             re_mod=deps["re"],
             parse_error_cls=deps["ParseError"],
         )
+
+    def rewrite_quarters_in_context(dnf: Any) -> Any:
+        quarter_binding = quarter_binding_state[0]
+        if quarter_binding is None:
+            quarter_api = (
+                context.import_sibling("quarter_api")
+                if context is not None else deps["_import_sibling"]("quarter_api")
+            )
+            quarter_binding = quarter_api.for_core(
+                module=module,
+                namespace=namespace,
+                context=context,
+            )
+            quarter_binding_state[0] = quarter_binding
+        return quarter_binding._rewrite_quarters_in_context(dnf)
 
     def build_anchor_atom_dnf(head: str, full_tail: str) -> Any:
         return parser_atoms.build_anchor_atom_dnf(
@@ -506,7 +522,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             parse_atom=parse_anchor_atom_at,
             parse_mods=parse_atom_mods,
             skip_ws=skip_ws_pos,
-            rewrite_quarters=deps["_rewrite_quarters_in_context"],
+            rewrite_quarters=rewrite_quarters_in_context,
             rewrite_year_month=deps["_rewrite_year_month_aliases_in_context"],
             validate_year_tokens=validate_year_tokens_in_dnf,
             validate_satisfiable=validate_and_terms_satisfiable,

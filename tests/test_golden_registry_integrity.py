@@ -1043,6 +1043,11 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             "test_random_time_window_is_stable_across_processes",
             "test_astronomical_season_selection_scheduler_uses_transition_dates",
             "test_seasonal_selection_modify_modes_times_and_timeline",
+            "test_on_modify_compute_anchor_child_due_from_anchor_file",
+            "test_on_modify_compute_anchor_child_due_from_random_anchor_file",
+            "test_on_modify_compute_anchor_child_due_from_multiple_file_times",
+            "test_on_modify_compute_anchor_child_due_from_combined_anchor_sources",
+            "test_on_modify_compute_combined_overnight_sources_in_time_order",
         )
         registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
         top_level = {
@@ -1094,7 +1099,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
-        self.assertEqual(len(top_level), 73)
+        self.assertEqual(len(top_level), 68)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
@@ -1107,7 +1112,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)
-        self.assertEqual(len(scheduling.TESTS), 10)
+        self.assertEqual(len(scheduling.TESTS), 15)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
         self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 664)
 

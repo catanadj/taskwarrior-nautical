@@ -789,8 +789,6 @@ _expansion_api = _LazyApiBundle(
         "_wday_idx_any",
         "_weekly_spec_to_wset",
         "_doms_for_weekly_spec",
-        "_doms_for_monthly_token",
-        "_y_ranges_from_spec",
         "_doms_allowed_by_year",
         "_month_allowed_doms_for_monthly_atom",
         "_intersect_monthly_atoms_allowed",

@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
-import subprocess
-import sys
 from pathlib import Path
 import tempfile
 
@@ -14,96 +11,6 @@ from dev_tools.golden_tests.support import expect, load_hook_module
 
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def test_hook_replay_harness_reports_ok():
-    """Replay harness passes the seeded hook corpus."""
-    path = ROOT / "dev_tools" / "nautical_hook_replay.py"
-    corpus = ROOT / "dev_tools" / "nautical_hook_replay_corpus.jsonl"
-    process = subprocess.run(
-        [sys.executable, str(path), "--json", "--corpus", str(corpus)],
-        text=True,
-        capture_output=True,
-        timeout=12.0,
-    )
-    expect(
-        process.returncode == 0,
-        f"replay harness returned {process.returncode}: stderr={process.stderr!r}",
-    )
-    payload = json.loads((process.stdout or "").strip() or "{}")
-    expect(
-        payload.get("status") == "ok", f"unexpected replay harness status: {payload}"
-    )
-    results = payload.get("results") if isinstance(payload.get("results"), list) else []
-    expect(results, "replay harness should report per-case results")
-    expect(
-        all(bool(result.get("ok")) for result in results if isinstance(result, dict)),
-        f"failing replay result: {results}",
-    )
-
-
-def test_mixed_recurrence_loop_harness_reports_ok():
-    """Mixed recurrence runner completes a short deterministic cycle run."""
-    path = ROOT / "dev_tools" / "nautical_mixed_recurrence_loop.py"
-    process = subprocess.run(
-        [sys.executable, str(path), "--cycles", "3", "--json"],
-        text=True,
-        capture_output=True,
-        timeout=30.0,
-    )
-    expect(
-        process.returncode == 0,
-        f"mixed recurrence loop returned {process.returncode}: stderr={process.stderr!r}",
-    )
-    payload = json.loads((process.stdout or "").strip() or "{}")
-    expect(payload.get("ok") is True, f"unexpected mixed loop status: {payload}")
-    expect(
-        int(payload.get("cycles_completed") or 0) >= 1,
-        f"expected loop progress: {payload}",
-    )
-    expect(not payload.get("violations"), f"mixed loop reported violations: {payload}")
-
-
-def test_soak_runner_reports_ok():
-    """A short soak run completes without violations."""
-    path = ROOT / "dev_tools" / "nautical_soak_test.py"
-    process = subprocess.run(
-        [
-            sys.executable,
-            str(path),
-            "--seconds",
-            "2",
-            "--batch-size",
-            "4",
-            "--anchor-rate",
-            "0.5",
-            "--cp-rate",
-            "0.5",
-            "--done-rate",
-            "0.5",
-            "--progress-every-seconds",
-            "0",
-            "--json",
-            "--enforce",
-        ],
-        text=True,
-        capture_output=True,
-        timeout=240,
-    )
-    expect(
-        process.returncode == 0,
-        f"soak runner returned {process.returncode}: stderr={process.stderr!r}",
-    )
-    payload = json.loads((process.stdout or "").strip() or "{}")
-    expect(payload.get("ok") is True, f"unexpected soak status: {payload}")
-    expect(not payload.get("violations"), f"soak runner reported violations: {payload}")
-
-
-TESTS = (
-    test_hook_replay_harness_reports_ok,
-    test_mixed_recurrence_loop_harness_reports_ok,
-    test_soak_runner_reports_ok,
-)
 
 
 def test_load_benchmark_installs_complete_hook_runtime():
@@ -178,7 +85,7 @@ def test_load_benchmark_queue_and_lineage_verification():
     invalid = load_test._verify_link_rows(rows, [parent_uuid])
     expect(invalid.get("verified") == 0 and invalid.get("failures"), f"broken lineage was accepted: {invalid!r}")
 
-TESTS = TESTS + (
+TESTS = (
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,
 )

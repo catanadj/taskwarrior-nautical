@@ -177,7 +177,6 @@ def _timeline_future_cp_items(
         if iterations >= max_iterations:
             break
         iterations += 1
-        token_idx = (max(1, fut_no) - 1) % len(tokens)
         td = evaluator.cp_interval_for_link(fut_no)
         if td is None:
             break
@@ -214,7 +213,6 @@ def _timeline_future_anchor_items(
 ) -> list[tuple[object, Any, dict[str, Any], str]]:
     items: list[tuple[object, Any, dict[str, Any], str]] = []
     fut_no = start_no
-    seed_base = _timeline_seed_base(task)
     nxt_local = to_local_cached(child_due_utc)
     fallback_hhmm = (nxt_local.hour, nxt_local.minute)
     due0, _ = safe_parse_datetime(task.get("due"))
@@ -321,7 +319,6 @@ def _timeline_omitted_before_next_anchor_items(
         return []
 
     items: list[tuple[object, Any, dict[str, Any], str]] = []
-    seed_base = _timeline_seed_base(task)
     child_local = to_local_cached(child_due_utc)
     after_local = to_local_cached(cur_end)
     fallback_hhmm = (child_local.hour, child_local.minute)

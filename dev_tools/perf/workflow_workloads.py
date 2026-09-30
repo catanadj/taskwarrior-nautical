@@ -571,15 +571,12 @@ def run_scenarios(
             measure_workflow=deps._measure_workflow,
             attach_reports=deps._attach_reconcile_reports,
         )
-        reconcile_samples = []
-        reconcile_reports: list[dict] = []
         results["workflow_reconcile"] = healthy_result
 
         # Keep an empty audit as a first-class workload.  This catches startup,
         # snapshot, and report overhead without accidentally measuring stale
         # queue cleanup or a failed Taskwarrior export.
         empty_data = root / "reconcile-empty"
-        empty_env = dict(base_env, TASKDATA=str(empty_data))
         empty_result = deps.workloads.reconcile_empty(
             root=deps.ROOT,
             empty_data=empty_data,
@@ -591,8 +588,6 @@ def run_scenarios(
             measure_workflow=deps._measure_workflow,
             attach_reports=deps._attach_reconcile_reports,
         )
-        empty_samples = []
-        empty_reports: list[dict] = []
         results["workflow_reconcile_empty"] = empty_result
 
         # Candidate-heavy audits must prove that the benchmark contains
@@ -612,10 +607,6 @@ def run_scenarios(
             measure_workflow=deps._measure_workflow,
             attach_reports=deps._attach_reconcile_reports,
         )
-        candidate_data = root / "reconcile-candidates"
-        candidate_env = dict(base_env, TASKDATA=str(candidate_data))
-        candidate_samples = []
-        candidate_reports: list[dict] = []
         results["workflow_reconcile_candidates"] = candidate_result
 
         results["workflow_reconcile_candidates_apply"] = deps.workloads.reconcile_candidates_apply(
@@ -730,8 +721,6 @@ def run_scenarios(
             compact_report=deps._compact_reconcile_report,
             measure_workflow=deps._measure_workflow, attach_reports=deps._attach_reconcile_reports,
         )
-        long_samples = []
-        long_reports: list[dict] = []
         results["workflow_reconcile_long_history"] = long_result
 
         corrupt_data = fixture.taskdata("reconcile-corrupted")
@@ -778,8 +767,6 @@ def run_scenarios(
             compact_report=deps._compact_reconcile_report,
             measure_workflow=deps._measure_workflow, attach_reports=deps._attach_reconcile_reports,
         )
-        corrupt_samples = []
-        corrupt_reports: list[dict] = []
         results["workflow_reconcile_corrupted"] = corrupt_result
 
         mixed_data = fixture.taskdata("reconcile-mixed")
@@ -856,8 +843,6 @@ def run_scenarios(
             compact_report=deps._compact_reconcile_report,
             measure_workflow=deps._measure_workflow, attach_reports=deps._attach_reconcile_reports,
         )
-        mixed_samples = []
-        mixed_reports: list[dict] = []
         results["workflow_reconcile_mixed"] = mixed_result
         reconcile_budgets = workflow_cfg.get("reconcile_budgets", {})
         if isinstance(reconcile_budgets, dict):

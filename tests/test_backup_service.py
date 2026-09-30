@@ -66,7 +66,7 @@ class BackupServiceTests(unittest.TestCase):
     def test_prune_leaves_invalid_and_unverified_generations(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            valid = self._generation(root, "valid")
+            self._generation(root, "valid")
             invalid = root / "invalid"
             invalid.mkdir()
             (invalid / "manifest.json").write_text("not-json", encoding="utf-8")

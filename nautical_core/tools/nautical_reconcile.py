@@ -1450,7 +1450,6 @@ def main(
         budget=budget,
         datetime_parser=parser_for_core(core),
     )
-    repository = session.repository
     snapshot = session.snapshot
     operator_control_plane = session.control_plane
     mutation_gateway = session.mutation_gateway

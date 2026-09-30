@@ -54,7 +54,7 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
     """The reconciler's installed hook path should schedule ordinal anchor children."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = load_hook_module(str(path), "_nautical_reconcile_year_ordinal_test")
+    load_hook_module(str(path), "_nautical_reconcile_year_ordinal_test")
     hook = SimpleNamespace(core=importlib.import_module("nautical_core"))
     due = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (9, 0)))
     end = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (10, 0)))
@@ -261,7 +261,7 @@ def test_outbox_drain_limit_config_and_env_override():
 def test_reconcile_tool_print_plan_includes_evidence():
     """Reconcile dry-run output should explain why each action is safe."""
     reconcile_report = importlib.import_module("nautical_core.reconcile_report")
-    reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
+    importlib.import_module("nautical_core.chain_integrity_lifecycle")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     mod = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_tool_print_test")
     parent = {"uuid": "11111111-0000-4000-8000-000000000001", "status": "completed", "description": "remote completion", "cp": "1d", "chain": "on", "chainID": "11111111", "link": 2, "due": "20260703T090000Z"}
@@ -345,7 +345,7 @@ def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
     prev_core_path = os.environ.get("NAUTICAL_CORE_PATH")
     try:
         os.environ.pop("NAUTICAL_CORE_PATH", None)
-        mod = load_hook_module(str(path), "_nautical_reconcile_tool_timed_anchor_test")
+        load_hook_module(str(path), "_nautical_reconcile_tool_timed_anchor_test")
         hook = SimpleNamespace(core=importlib.import_module("nautical_core"))
         from nautical_core.chain_generation import ChainGenerationService
 
@@ -715,7 +715,7 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
     _load_hook_module = load_hook_module
     _recovery_plan = recovery_plan
     _recovery_action = recovery_action
-    reconcile_report = importlib.import_module("nautical_core.reconcile_report")
+    importlib.import_module("nautical_core.reconcile_report")
 
 
 def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():

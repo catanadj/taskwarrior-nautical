@@ -271,7 +271,6 @@ class RestoreServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source = self._backup(root)
-            manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
             (source / "taskwarrior-export.json").write_text('[{"uuid":"u2"}]\n', encoding="utf-8")
             result = validate_backup(source)
             self.assertEqual(result.status, "rejected")

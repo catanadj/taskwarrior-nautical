@@ -599,7 +599,7 @@ def handle_anchor_file_preview_on_add(
     rows.append(("Anchor file", f"[white]{anchor_file_str}[/]  [bold bright_cyan]SKIP[/]"))
     if not compact_presentation:
         rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
-    omit_dnf = services.prepare_omit_dnf(task, rows)
+    services.prepare_omit_dnf(task, rows)
     t_occ = time.perf_counter()
     scheduler_service = services.scheduler_service_for_task(task)
     all_occurrences = _collect_included_with_provider(

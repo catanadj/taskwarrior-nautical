@@ -136,7 +136,6 @@ class AnchorFileOccurrenceCacheTests(unittest.TestCase):
 
     def test_failed_provider_load_is_retried_without_caching_empty_result(self) -> None:
         provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv", ".", (9, 0))
-        original = anchor_files.load_anchor_file_occurrence_specs
         calls = []
 
         def flaky(*_args, **kwargs):

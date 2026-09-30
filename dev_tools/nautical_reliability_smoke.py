@@ -88,7 +88,7 @@ def _export_one(cmd_args, env):
         return None
 
 def _run_chain_until_failure(env, max_iters: int, settle_s: float) -> tuple[int, str | None]:
-    tid = _add_task(["nautical chain limit", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
+    _add_task(["nautical chain limit", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
     parent = _export_one(["rc.json.array=off", "status:pending", "sort:entry-", "limit:1", "export"], env=env)
     if not parent:
         try:

@@ -1349,7 +1349,6 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
             "cp": "P1D",
             "due": "20260102T090000Z",
         }
-        guard = {"status": "completed", "chain": "on", "chainID": chain_id, "link": str(parent_link)}
         child_task = NauticalTask.from_observation(
             DEFAULT_TASK_CODEC.decode_row(child, source_query="perf:workflow-plan")
         )

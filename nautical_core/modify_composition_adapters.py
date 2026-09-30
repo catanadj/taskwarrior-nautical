@@ -86,7 +86,6 @@ def handle_non_completion(
     capabilities = runtime.non_completion
     modify_ordinary = capabilities.modify_ordinary
     modify_lifecycle = capabilities.modify_lifecycle
-    diagnostics = capabilities.modify_diagnostics_effects
     validation = capabilities.modify_validation_effects
     ui = capabilities.modify_ui_effects
     ui_ports = ui.ui_ports_for(host)

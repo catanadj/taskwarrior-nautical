@@ -324,7 +324,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             self.assertEqual(boundary_payload["retention"]["eligible"], 1)
             self.assertEqual(repository.prune_acknowledged(retention_seconds=50.0).removed, 1)
 
-            concurrent = acknowledged_plan("retention-concurrent", acknowledged_at=900.0, owner="concurrent")
+            acknowledged_plan("retention-concurrent", acknowledged_at=900.0, owner="concurrent")
             with ThreadPoolExecutor(max_workers=2) as pool:
                 status_future = pool.submit(repository.status, retention_seconds=50.0)
                 prune_future = pool.submit(repository.prune_acknowledged, retention_seconds=50.0, limit=10)

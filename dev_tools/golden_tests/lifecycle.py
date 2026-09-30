@@ -7,7 +7,6 @@ domain collection without duplicating lifecycle helpers.
 
 from __future__ import annotations
 
-import importlib
 import contextlib
 import io
 import json
@@ -245,23 +244,108 @@ def test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process():
 
 
 
+def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
+    """Staging via on-modify's _enqueue_spawn_intent must persist the parent
+    guard that authorized the spawn, and the intent_id must be stable across
+    repeated calls for the same transition."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import (
+        LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard,
+        recurrence_fingerprint,
+    )
+    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_staged_guard_test")
+
+    parent = {
+        "uuid": "00000000-0000-4000-8000-000000000111",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "abcd1234",
+        "link": 4,
+        "nextLink": "",
+        "modified": "20260101T000000Z",
+        "cp": "1d",
+    }
+    child_uuid = "00000000-0000-4000-8000-00000000abcd"
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        mod._INTEGRATION_CONTEXT = type("FakeCtx", (), {
+            "configuration": type("FakeCfg", (), {
+                "fingerprint": "cfg-guard-test",
+                "scheduler_fingerprint": "sch-guard-test",
+            })(),
+        })()
+        mod.TW_DATA_DIR = root
+
+        # Build and stage a typed lifecycle plan directly via _enqueue_spawn_intent,
+        # which is the unit under test (no need to involve _spawn_child_atomic internals).
+        rf = recurrence_fingerprint(parent)
+        guard = ParentGuard(
+            status=parent["status"],
+            chain=parent["chain"],
+            chain_id=parent["chainID"],
+            link=int(parent["link"]),
+            recurrence_fingerprint=rf,
+            modified=parent["modified"],
+        )
+        identity = LifecycleIdentity(
+            chain_id=parent["chainID"],
+            parent_uuid=parent["uuid"],
+            source_link=int(parent["link"]),
+            target_link=int(parent["link"]) + 1,
+            event=LifecycleEvent.COMPLETE,
+        )
+        plan = plan_from_values(
+            identity=identity,
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=guard,
+            child_payload={"uuid": child_uuid, "chainID": parent["chainID"], "link": 5, "prevLink": parent["uuid"][:8]},
+            parent_patch={"nextLink": child_uuid[:8]},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
+
+        spawn_effects = mod._module("modify_spawn_effects")
+        ports = spawn_effects.spawn_intent_ports_for(mod)
+        ok, reason = spawn_effects.enqueue_spawn_intent(ports, plan)
+        expect(ok, f"_enqueue_spawn_intent failed: {reason}")
+
+        outbox = _LifecycleOutboxRepository(root)
+        _, status = outbox.status()
+        expect(len(status["records"]) == 1, f"expected 1 staged record: {status}")
+        record = status["records"][0]
+
+        # The staged plan must carry the parent guard with the recurrence fingerprint
+        claim = outbox.claim_intent(owner="test-guard", lease_seconds=30, intent_id=record["intent_id"])
+        expect(claim.ok, f"could not claim the staged intent: {claim}")
+        staged_plan = claim.record.plan
+        expect(staged_plan.parent_guard.status == parent["status"],
+               f"parent guard status wrong: {staged_plan.parent_guard}")
+        expect(staged_plan.parent_guard.chain_id == parent["chainID"],
+               f"parent guard chainID wrong: {staged_plan.parent_guard}")
+        expect(staged_plan.parent_guard.link == int(parent["link"]),
+               f"parent guard link wrong: {staged_plan.parent_guard}")
+        expect(
+            str(staged_plan.parent_guard.recurrence_fingerprint or "").startswith("rf1-"),
+            f"staged plan did not carry a recurrence fingerprint: {staged_plan.parent_guard}",
+        )
+
+        # Staging the same plan again must be idempotent (same intent_id, no second record)
+        ok2, reason2 = spawn_effects.enqueue_spawn_intent(ports, plan)
+        expect(ok2, f"second _enqueue_spawn_intent failed: {reason2}")
+        _, status2 = outbox.status()
+        expect(len(status2["records"]) == 1,
+               f"duplicate staging created a second intent: {status2}")
+        expect(status2["records"][0]["intent_id"] == record["intent_id"],
+               f"second staging produced a different intent_id: {status2}")
 _NAMES = (
     "test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id",
 )
 
 
-def _delegate(name: str):
-    def run() -> None:
-        legacy = importlib.import_module("dev_tools.nautical_golden_tests")
-        getattr(legacy, f"_legacy_{name}")()
-
-    run.__name__ = name
-    run.__qualname__ = name
-    run.__doc__ = f"Lifecycle domain test delegated to the staged legacy implementation: {name}."
-    return run
-
-
-globals().update({name: _delegate(name) for name in _NAMES})
 TESTS = (
     test_lifecycle_configuration_drift_blocks_mutation,
         test_lifecycle_application_staging_only_service_rejects_execution,

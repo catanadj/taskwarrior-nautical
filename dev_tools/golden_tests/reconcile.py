@@ -16,7 +16,20 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from dev_tools.golden_tests.support import expect, fixture_observation
+from dev_tools.golden_tests.support import (
+    carry_native_until,
+    carry_relative_datetime,
+    expect,
+    find_hook_file,
+    fixture_observation,
+    fixture_task,
+    load_hook_module,
+    recovery_action,
+    recovery_child,
+    recovery_plan,
+    task_observation,
+    test_operator_uow,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,10 +52,9 @@ def test_doctor_reports_reconcile_backfill_plans():
 
 def test_reconcile_tool_computes_year_ordinal_anchor():
     """The reconciler's installed hook path should schedule ordinal anchor children."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = legacy._load_hook_module(str(path), "_nautical_reconcile_year_ordinal_test")
+    mod = load_hook_module(str(path), "_nautical_reconcile_year_ordinal_test")
     hook = SimpleNamespace(core=importlib.import_module("nautical_core"))
     due = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (9, 0)))
     end = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (10, 0)))
@@ -50,7 +62,7 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
 
     generation = ChainGenerationService.from_core(hook.core)
     child_due, meta, _dnf = generation.compute_anchor_child_due(
-        legacy._fixture_task(
+        fixture_task(
             {
                 "uuid": "c3f2c233-0000-4000-8000-000000000002",
                 "status": "completed",
@@ -70,8 +82,8 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
     expect((child_local.hour, child_local.minute) == (9, 0), f"reconciler lost ordinal anchor time: {child_local}")
     expect(meta.get("basis") == "after_end", f"unexpected reconcile scheduling metadata: {meta}")
 
-
 def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
+
     """Integrity work uses the shared table but remains invisible to lifecycle claims."""
     from nautical_core.chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety
     from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
@@ -99,13 +111,12 @@ def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
         snapshot_result, snapshot_records = repo.snapshot_records()
         expect(snapshot_result.ok and len(snapshot_records) == 1 and snapshot_records[0].intent_id == envelope.intent_id, "shared outbox snapshot lost integrity evidence")
 
-
 def test_non_hour_dst_carry_and_reconcile_share_core_policy():
+
     """Wait, until, and reconcile repair must share 30-minute gap handling."""
     from zoneinfo import ZoneInfo
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    mod = legacy._load_hook_module(legacy._find_hook_file("on-modify.nautical"), "_nautical_non_hour_dst_carry_test")
+    mod = load_hook_module(find_hook_file("on-modify.nautical"), "_nautical_non_hour_dst_carry_test")
     zone = ZoneInfo("Australia/Lord_Howe")
     old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ
     try:
@@ -115,10 +126,10 @@ def test_non_hour_dst_carry_and_reconcile_share_core_policy():
         child_due = mod.core.build_local_datetime(date(2026, 10, 4), (1, 45))
         parent = {"due": mod.core.fmt_isoz(parent_due), "wait": mod.core.fmt_isoz(parent_limit), "until": mod.core.fmt_isoz(parent_limit)}
         child = {"due": mod.core.fmt_isoz(child_due)}
-        parent_obs = legacy._fixture_observation(parent)
-        current_obs = legacy._fixture_observation({"due": mod.core.fmt_isoz(child_due), "chainID": "fixture-chain"})
-        legacy._carry_relative_datetime(mod, parent, child, child_due, "wait")
-        legacy._carry_native_until(mod, parent, child, child_due, "anchor")
+        parent_obs = fixture_observation(parent)
+        current_obs = fixture_observation({"due": mod.core.fmt_isoz(child_due), "chainID": "fixture-chain"})
+        carry_relative_datetime(mod, parent, child, child_due, "wait")
+        carry_native_until(mod, parent, child, child_due, "anchor")
         repaired, repair_error = reconcile.repair_native_until_from_previous(parent_obs, current_obs, kind="anchor", safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse, fmt_isoz=mod.core.fmt_isoz, utc_to_local_naive=mod.core.utc_to_local_naive, local_naive_to_utc=mod.core.local_naive_to_utc)
     finally:
         mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ = old_name, old_tz
@@ -130,9 +141,8 @@ def test_non_hour_dst_carry_and_reconcile_share_core_policy():
 
 def test_carry_field_failure_defers_completion_and_reconcile_mutation():
     """Malformed carry timestamps must block both child spawn paths."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
-    hook = legacy._find_hook_file("on-modify.nautical")
-    mod = legacy._load_hook_module(hook, "_nautical_carry_failure_boundary_test")
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_carry_failure_boundary_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
     parent = {"uuid": "00000000-0000-4000-8000-000000000555", "status": "completed", "due": "20260101T090000Z", "end": "20260101T091000Z", "wait": "not-a-date", "cp": "1d", "chain": "on", "chainID": "carry555", "link": 1}
@@ -152,8 +162,8 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
     expect("wait" in result.reason and "Invalid isoformat" in result.reason, f"carry result lost actionable reason: {result!r}")
     expect(not spawned and not panels, "completion attempted mutation or rendering after carry failure")
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    plan = legacy._recovery_plan(reconcile, parent, existing_children=[], hook=mod)
-    expect(legacy._recovery_action(plan) == "error" and "wait" in plan.reason, f"reconcile carry failure was not actionable: {plan!r}")
+    plan = recovery_plan(reconcile, parent, existing_children=[], hook=mod)
+    expect(recovery_action(plan) == "error" and "wait" in plan.reason, f"reconcile carry failure was not actionable: {plan!r}")
 
 
 def test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review():
@@ -250,15 +260,14 @@ def test_outbox_drain_limit_config_and_env_override():
 
 def test_reconcile_tool_print_plan_includes_evidence():
     """Reconcile dry-run output should explain why each action is safe."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     reconcile_report = importlib.import_module("nautical_core.reconcile_report")
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    mod = legacy._load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_tool_print_test")
+    mod = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_tool_print_test")
     parent = {"uuid": "11111111-0000-4000-8000-000000000001", "status": "completed", "description": "remote completion", "cp": "1d", "chain": "on", "chainID": "11111111", "link": 2, "due": "20260703T090000Z"}
     from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, recurrence_fingerprint
     from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
-    observation = legacy._fixture_observation(parent)
+    observation = fixture_observation(parent)
     guard = ParentGuard(status="completed", chain="on", chain_id="11111111", link=2, recurrence_fingerprint=recurrence_fingerprint(parent), modified="")
     identity = LifecycleIdentity(chain_id="11111111", parent_uuid=parent["uuid"], source_link=2, target_link=3, event=LifecycleEvent.ACTIVATE)
     plan = RecoveryPlanResult(observation, LifecyclePlan(identity=identity, action=LifecycleAction.UPDATE_PARENT, parent_guard=guard), reason="next link already exists", child_short="22222222")
@@ -281,7 +290,6 @@ def test_reconcile_tool_print_plan_includes_evidence():
 
 def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
     reconcile_report = importlib.import_module("nautical_core.reconcile_report")
     parent = {"uuid": "11111111-0000-4000-8000-000000000001", "status": "completed", "description": "remote completion", "anchor": "w:mon@t=09:00,17:00", "anchor_mode": "skip", "chain": "on", "chainID": "11111111", "link": 1, "due": "20260706T060000Z", "scheduled": "20260706T050000Z", "end": "20260706T070000Z"}
@@ -305,7 +313,7 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
             from nautical_core.task_models import NauticalTask, TaskDraft
             values = {"uuid": "22222222-0000-4000-8000-000000000002", "description": "remote completion", "status": "pending", "chain": "on", "chainID": parent.observation.to_mapping().get("chainID"), "link": next_link, "prevLink": parent_short, "anchor": "w:mon@t=09:00,17:00", "anchor_mode": "skip", "due": child_due, "scheduled": "20260706T130000Z"}
             return TaskDraft.from_task(NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(values, source_query="evidence fake child")))
-    plan = reconcile.plan_recovery_decision(legacy._fixture_observation(parent), existing_children=[], hook=None, generation=FakeGeneration())
+    plan = reconcile.plan_recovery_decision(fixture_observation(parent), existing_children=[], hook=None, generation=FakeGeneration())
     evidence = reconcile_report.describe_recovery_result(plan)
     expect(evidence.get("child_field") == "due", f"expected due target evidence, got: {evidence!r}")
     expect(evidence.get("child_target") == "2026-07-06T14:00:00Z", f"expected due target, got: {evidence!r}")
@@ -313,13 +321,12 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
 
 def test_reconcile_tool_defaults_core_path_to_install_base():
     """The reconciler must seed hook bootstrap with the base containing nautical_core."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
     prev_core_path = os.environ.get("NAUTICAL_CORE_PATH")
     try:
         os.environ.pop("NAUTICAL_CORE_PATH", None)
-        mod = legacy._load_hook_module(str(path), "_nautical_reconcile_tool_core_path_test")
+        mod = load_hook_module(str(path), "_nautical_reconcile_tool_core_path_test")
         expect(
             os.environ.get("NAUTICAL_CORE_PATH") == str(mod.BASE_DIR),
             f"expected NAUTICAL_CORE_PATH={mod.BASE_DIR}, got {os.environ.get('NAUTICAL_CORE_PATH')!r}",
@@ -333,19 +340,18 @@ def test_reconcile_tool_defaults_core_path_to_install_base():
 
 def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
     """Actual reconcile tool loading should compute @t slots as configured-local time."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
     prev_core_path = os.environ.get("NAUTICAL_CORE_PATH")
     try:
         os.environ.pop("NAUTICAL_CORE_PATH", None)
-        mod = legacy._load_hook_module(str(path), "_nautical_reconcile_tool_timed_anchor_test")
+        mod = load_hook_module(str(path), "_nautical_reconcile_tool_timed_anchor_test")
         hook = SimpleNamespace(core=importlib.import_module("nautical_core"))
         from nautical_core.chain_generation import ChainGenerationService
 
         generation = ChainGenerationService.from_core(hook.core)
         child_due, _meta, _dnf = generation.compute_anchor_child_due(
-            legacy._fixture_task(
+            fixture_task(
                 {
                     "uuid": "c3f2c233-0000-4000-8000-000000000001",
                     "status": "completed",
@@ -374,10 +380,9 @@ def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
 
 def test_reconcile_configuration_verification_fails_closed():
     """Configuration exceptions must become unavailable, never a clean reconcile state."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = legacy._load_hook_module(str(path), "_nautical_reconcile_configuration_state_test")
+    mod = load_hook_module(str(path), "_nautical_reconcile_configuration_state_test")
     import types
 
     core_module = types.ModuleType("nautical_core_test_module")
@@ -392,10 +397,9 @@ def test_reconcile_configuration_verification_fails_closed():
 
 def test_reconcile_startup_config_failure_is_structured():
     """Taskdata configuration startup failures expose unavailable status in JSON."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = legacy._load_hook_module(str(path), "_nautical_reconcile_configuration_startup_test")
+    mod = load_hook_module(str(path), "_nautical_reconcile_configuration_startup_test")
     args = SimpleNamespace(json=True, apply=True)
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -432,9 +436,8 @@ def test_reconcile_subprocess_output_contracts():
 
 def test_reconcile_apply_lease_serializes_mutations():
     """Concurrent reconcile apply attempts must not share the mutation lease."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = legacy._load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_apply_lease_test")
+    tool = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_apply_lease_test")
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td)
         with tool._reconcile_apply_lock(taskdata) as first:
@@ -447,16 +450,15 @@ def test_reconcile_apply_lease_serializes_mutations():
 
 def test_reconcile_apply_refuses_a_second_full_run():
     """A held apply lease must reject another reconcile before it loads hooks or exports tasks."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = legacy._load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_full_run_lease_test")
+    tool = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_full_run_lease_test")
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td)
         output = io.StringIO()
         with tool._reconcile_apply_lock(taskdata) as held:
             expect(held, "test could not acquire reconcile lease")
             with contextlib.redirect_stdout(output):
-                result = tool.main(["--apply", "--json"], _unit_of_work=legacy._test_operator_uow(taskdata))
+                result = tool.main(["--apply", "--json"], _unit_of_work=test_operator_uow(taskdata))
     summary = json.loads(output.getvalue())
     expect(result == 1, f"busy reconcile returned {result}")
     expect(summary.get("stage") == "apply_lock", f"busy reconcile was not reported as a lease conflict: {summary!r}")
@@ -464,9 +466,8 @@ def test_reconcile_apply_refuses_a_second_full_run():
 
 def test_reconcile_parent_identity_errors_are_actionable():
     """Parent guard failures should identify the exact broken identity field."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = legacy._load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_identity_diagnostics_test")
+    tool = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_identity_diagnostics_test")
     base = {"uuid": "11111111-0000-0000-0000-000000000001", "status": "completed", "chain": "on", "chainID": "chain001", "link": 2, "nextLink": ""}
     cases = ((dict(base, chainID=""), "parent chainID is missing"), (dict(base, link=""), "parent link is missing"), (dict(base, chainID="11111111-0000-0000-0000-000000000001", link="", prevLink=""), "parent link is missing"), (dict(base, link="not-a-number"), "parent link is invalid"), (dict(base, link=0), "parent link must be positive"))
     for parent, expected in cases:
@@ -480,21 +481,19 @@ def test_reconcile_parent_identity_errors_are_actionable():
 
 def test_reconcile_expired_pending_child_is_resumable_partial():
     """A pending child past native until should wait for Taskwarrior expiration."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = legacy._load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_pending_until_test")
+    tool = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_pending_until_test")
     parent = {"uuid": "11111111-0000-0000-0000-000000000001", "link": 1}
     plan = tool._recovery_terminal(parent, "live recovery child native until has already elapsed")
-    expect(legacy._recovery_action(plan) == "partial", f"expired pending child was not resumable: {plan}")
+    expect(recovery_action(plan) == "partial", f"expired pending child was not resumable: {plan}")
     expect("rerun reconcile" in plan.reason, f"partial recovery guidance missing: {plan.reason}")
 
 
 def test_reconcile_expiration_anchor_advances_from_recurrence_target():
     """Expired anchor links should select the first slot after the prior recurrence target."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    hook = legacy._find_hook_file("on-modify.nautical")
-    mod = legacy._load_hook_module(hook, "_nautical_reconcile_expiration_anchor_due_test")
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_reconcile_expiration_anchor_due_test")
     parent = {
         "uuid": "00000000-0000-4000-8000-0000000050aa",
         "status": "deleted",
@@ -513,34 +512,32 @@ def test_reconcile_expiration_anchor_advances_from_recurrence_target():
 
 def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     """Hookless recovery should preserve and verify scheduled/wait offsets."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    mod = legacy._load_hook_module(legacy._find_hook_file("on-modify.nautical"), "_nautical_reconcile_hookless_carry_test")
+    mod = load_hook_module(find_hook_file("on-modify.nautical"), "_nautical_reconcile_hookless_carry_test")
     due = mod.core.build_local_datetime(date(2026, 7, 20), (10, 0))
     scheduled = mod.core.build_local_datetime(date(2026, 7, 20), (9, 30))
     wait = mod.core.build_local_datetime(date(2026, 7, 20), (8, 0))
     parent = {"uuid": "11111111-0000-4000-8000-000000000001", "status": "completed", "cp": "7d", "chain": "on", "chainID": "11111111", "link": 1, "due": mod.core.fmt_isoz(due), "scheduled": mod.core.fmt_isoz(scheduled), "wait": mod.core.fmt_isoz(wait), "end": mod.core.fmt_isoz(due + timedelta(hours=1))}
-    plan = legacy._recovery_plan(reconcile, parent, existing_children=[], hook=mod)
-    child = legacy._recovery_child(plan)
-    expect(legacy._recovery_action(plan) == "spawn" and child is not None, f"valid hookless carry did not produce a child: {plan}")
+    plan = recovery_plan(reconcile, parent, existing_children=[], hook=mod)
+    child = recovery_child(plan)
+    expect(recovery_action(plan) == "spawn" and child is not None, f"valid hookless carry did not produce a child: {plan}")
     child_due = mod.core.parse_dt_any(child.get("due"))
     expect(mod.core.parse_dt_any(child.get("scheduled")) - child_due == scheduled - due, f"scheduled carry drifted: {child!r}")
     expect(mod.core.parse_dt_any(child.get("wait")) - child_due == wait - due, f"wait carry drifted: {child!r}")
-    failed = legacy._recovery_plan(reconcile, dict(parent, scheduled="not-a-date"), existing_children=[], hook=mod)
-    expect(legacy._recovery_action(failed) == "error" and "scheduled" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
-    failed_wait = legacy._recovery_plan(reconcile, dict(parent, wait="not-a-date"), existing_children=[], hook=mod)
-    expect(legacy._recovery_action(failed_wait) == "error" and "wait" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
+    failed = recovery_plan(reconcile, dict(parent, scheduled="not-a-date"), existing_children=[], hook=mod)
+    expect(recovery_action(failed) == "error" and "scheduled" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
+    failed_wait = recovery_plan(reconcile, dict(parent, wait="not-a-date"), existing_children=[], hook=mod)
+    expect(recovery_action(failed_wait) == "error" and "wait" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
 
 
 def test_reconcile_native_until_manual_review_is_not_a_hard_error():
     """An unrecoverable native-until window is reported without claiming failure."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
-    hook_path = legacy._find_hook_file("on-modify.nautical")
-    hook = legacy._load_hook_module(hook_path, "_nautical_reconcile_manual_until_hook_test")
+    hook_path = find_hook_file("on-modify.nautical")
+    hook = load_hook_module(hook_path, "_nautical_reconcile_manual_until_hook_test")
     if hasattr(hook, "_load_core"):
         hook._load_core()
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = legacy._load_hook_module(
+    tool = load_hook_module(
         str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"),
         "_nautical_reconcile_manual_until_tool_test",
     )
@@ -548,7 +545,7 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
     def stamp(day, hhmm):
         return hook.core.fmt_isoz(hook.core.build_local_datetime(day, hhmm))
 
-    row = legacy._fixture_observation(
+    row = fixture_observation(
         {
             "uuid": "00000000-0000-4000-8000-000000003248",
             "chain": "on",
@@ -584,10 +581,9 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
 
 def test_reconcile_expiration_candidate_requires_expiry_evidence():
     """Deleted chains distinguish expiration, manual stop, and ambiguous evidence."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    hook = legacy._find_hook_file("on-modify.nautical")
-    mod = legacy._load_hook_module(hook, "_nautical_reconcile_expiration_candidate_test")
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_reconcile_expiration_candidate_test")
     parent = {
         "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "deleted",
@@ -601,28 +597,28 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
         "end": "20260726T205959Z",
     }
     is_candidate = lambda task: reconcile.is_orphan_expiration_candidate(
-        legacy._task_observation(task),
+        task_observation(task),
         safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
     )
     expect(is_candidate(parent), "deletion exactly at until should be an expiration candidate")
     manual = dict(parent, end="20260726T205958Z")
     expect(not is_candidate(manual), "manual deletion before until must not advance")
     evidence = reconcile.deleted_chain_disposition(
-        legacy._task_observation(manual), safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse
+        task_observation(manual), safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse
     )
     expect(evidence.disposition.value == "manual", f"early deletion should stop the chain: {evidence!r}")
     no_until_evidence = reconcile.deleted_chain_disposition(
-        legacy._task_observation({key: value for key, value in parent.items() if key != "until"}),
+        task_observation({key: value for key, value in parent.items() if key != "until"}),
         safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
     )
     expect(no_until_evidence.disposition.value == "manual", f"deletion without until should stop the chain: {no_until_evidence!r}")
     malformed_evidence = reconcile.deleted_chain_disposition(
-        legacy._task_observation(dict(parent, until="not-a-date")),
+        task_observation(dict(parent, until="not-a-date")),
         safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
     )
     expect(malformed_evidence.disposition.value == "ambiguous", f"malformed evidence must fail closed: {malformed_evidence!r}")
-    manual_plan = legacy._recovery_plan(reconcile, manual, existing_children=[], hook=mod)
-    expect(legacy._recovery_action(manual_plan) in {"manual_stop", "manual_review"}, f"manual deletion should stop the chain: {manual_plan}")
+    manual_plan = recovery_plan(reconcile, manual, existing_children=[], hook=mod)
+    expect(recovery_action(manual_plan) in {"manual_stop", "manual_review"}, f"manual deletion should stop the chain: {manual_plan}")
     expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")
     expect(not is_candidate(dict(parent, until="not-a-date")), "malformed until must fail closed")
     expect(not is_candidate(dict(parent, nextLink="22222222")), "already-linked expiration must not be reconsidered")
@@ -630,10 +626,9 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
 
 def test_reconcile_expiration_cp_advances_from_recurrence_target():
     """Expired CP links advance from due or scheduled, not deletion end."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    hook = legacy._find_hook_file("on-modify.nautical")
-    mod = legacy._load_hook_module(hook, "_nautical_reconcile_expiration_cp_due_test")
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_reconcile_expiration_cp_due_test")
     due = mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))
     expired_end = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
     parent = {
@@ -657,23 +652,10 @@ def test_reconcile_expiration_cp_advances_from_recurrence_target():
     expect(scheduled_meta.get("target_field") == "scheduled", f"unexpected scheduled metadata: {scheduled_meta!r}")
 
 
-def _delegate(name: str):
-    def run() -> None:
-        legacy = importlib.import_module("dev_tools.nautical_golden_tests")
-        getattr(legacy, f"_legacy_{name}")()
-
-    run.__name__ = name
-    run.__qualname__ = name
-    run.__doc__ = f"Delegated golden test: {name}."
-    return run
-
-
-globals().update({name: _delegate(name) for name in _NAMES})
 def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
     """A deleted anchor occurrence receives one real linked successor."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
-    _find_hook_file = legacy._find_hook_file
-    _load_hook_module = legacy._load_hook_module
+    _find_hook_file = find_hook_file
+    _load_hook_module = load_hook_module
     task_bin = shutil.which("task")
     if not task_bin:
         return
@@ -729,22 +711,20 @@ def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
         by_link = {int(float(row.get("link"))): row for row in rows}
         expect(by_link[1].get("nextLink") == str(by_link[2].get("uuid") or "")[:8], f"anchor parent was not linked: {rows!r}")
 def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
-    _find_hook_file = legacy._find_hook_file
-    _load_hook_module = legacy._load_hook_module
-    _recovery_plan = legacy._recovery_plan
-    _recovery_action = legacy._recovery_action
+    _find_hook_file = find_hook_file
+    _load_hook_module = load_hook_module
+    _recovery_plan = recovery_plan
+    _recovery_action = recovery_action
     reconcile_report = importlib.import_module("nautical_core.reconcile_report")
 
 
 def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     """Reconcile should compute, spawn, and deduplicate the next seasonal slot."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
-    _find_hook_file = legacy._find_hook_file
-    _load_hook_module = legacy._load_hook_module
-    _fixture_observation = legacy._fixture_observation
-    _recovery_action = legacy._recovery_action
-    _recovery_child = legacy._recovery_child
+    _find_hook_file = find_hook_file
+    _load_hook_module = load_hook_module
+    _fixture_observation = fixture_observation
+    _recovery_action = recovery_action
+    _recovery_child = recovery_child
     import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook_path = _find_hook_file("on-modify.nautical")
@@ -825,10 +805,9 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     season_support.configure_hemisphere(previous_hemisphere)
 def test_reconcile_repairs_invalid_native_until_from_previous_link():
     """Hookless due moves should recover the prior link's native-until carry policy."""
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
-    _find_hook_file = legacy._find_hook_file
-    _load_hook_module = legacy._load_hook_module
-    _task_observation = legacy._task_observation
+    _find_hook_file = find_hook_file
+    _load_hook_module = load_hook_module
+    _task_observation = task_observation
     import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook_path = _find_hook_file("on-modify.nautical")
@@ -1435,6 +1414,7 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
             capture_output=True,
             env=env,
             timeout=15.0,
+
         )
         expect(exported_delayed.returncode == 0, f"delayed verification export failed: {exported_delayed.stderr!r}")
         delayed_rows = json.loads(exported_delayed.stdout)
@@ -1445,7 +1425,6 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
             == ["deleted", "deleted", "deleted", "pending"],
             f"delayed recovery stopped at the wrong occurrence: {delayed_rows!r}",
         )
-
         repeated_delayed = subprocess.run(
             [sys.executable, str(tool_path), "--apply", "--task-bin", task_bin, "--json"],
             text=True,

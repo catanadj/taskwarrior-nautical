@@ -17,6 +17,7 @@ import re
 import time as _time
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def expect(condition: bool, message: str) -> None:
@@ -624,20 +625,191 @@ def load_core_module(path: str, module_name: str, config_path: str):
             os.environ["NAUTICAL_CONFIG"] = previous
 
 
+class _BoundCompletionEffects:
+    """Test-only bound view of the extracted completion-effects module."""
+
+    _PORT_FACTORIES = {
+        "preflight_context": "completion_preflight_context_ports_for",
+        "compute_next_and_limits": "completion_compute_ports_for",
+        "build_and_spawn_child": "completion_spawn_ports_for",
+    }
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_completion_effects"))
+        originals = getattr(type(self), "_originals", None)
+        if originals is None:
+            originals = {
+                name: getattr(self._module, name)
+                for name in (
+                    "chain_snapshot", "existing_next_or_fail", "preflight_context",
+                    "compute_child_due", "until_or_fail", "until_guard_or_stop",
+                    "require_child_due_or_fail", "warn_unreasonable_duration", "caps",
+                    "cap_guard_or_stop", "compute_next_and_limits", "build_and_spawn_child",
+                )
+            }
+            setattr(type(self), "_originals", originals)
+        else:
+            for name, fn in originals.items():
+                setattr(self._module, name, fn)
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        factory_name = self._PORT_FACTORIES.get(name)
+        if factory_name:
+            return lambda *args, **kwargs: fn(
+                getattr(self._module, factory_name)(self._hook), *args, **kwargs
+            )
+        if name == "chain_snapshot":
+            def bound_chain_snapshot(chain_id, base_no, next_no, repository):
+                context_ports = self._module.completion_preflight_context_ports_for(self._hook)
+                ports = self._module.SnapshotPorts(
+                    repository=repository,
+                    mode=context_ports.snapshot_mode,
+                    models=context_ports.models,
+                    task_observation=context_ports.task_observation,
+                )
+                return fn(ports, chain_id, base_no, next_no)
+            return bound_chain_snapshot
+        if name == "existing_next_or_fail":
+            def bound_existing_next(new, next_no, snapshot, repository):
+                context = self._module.completion_preflight_context_ports_for(self._hook)
+                ports = self._module.CompletionPreflightPorts(
+                    preflight=context.preflight,
+                    coerce_int=context.coerce_int,
+                    max_link_number=context.max_link_number,
+                    short_uuid=context.short_uuid,
+                    panel=context.panel,
+                    print_task=context.print_task,
+                    end_chain_summary=context.end_chain_summary,
+                    existing_next_lookup=lambda task, link: repository.exact_child_slot(
+                        str(task.get("chainID") or ""), link
+                    ),
+                )
+                return fn(ports, new, next_no, snapshot)
+            return bound_existing_next
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
+
+
+class _BoundTransitionEffects:
+    """Test-only bound view of the extracted transition-effects module."""
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_transition_effects"))
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        if name in {
+            "preserve_cp_relative_offsets_on_due_change",
+            "preserve_native_until_on_target_change",
+            "validate_completion_cp_and_anchor",
+        }:
+            def bound(*args, **kwargs):
+                composition = self._hook._module("modify_composition")
+                capabilities = composition.capabilities_for(self._hook)
+                ports_for = {
+                    "preserve_cp_relative_offsets_on_due_change": composition._cp_carry_ports,
+                    "preserve_native_until_on_target_change": composition._native_preserve_ports,
+                    "validate_completion_cp_and_anchor": composition._completion_validation_ports,
+                }[name]
+                return fn(ports_for(self._hook, capabilities), *args, **kwargs)
+            return bound
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
+
+
+class _BoundPresentationEffects:
+    """Test-only bound view of the extracted presentation-effects module."""
+
+    _RENAMED = {
+        "render_anchor_completion_feedback": "render_anchor_completion_feedback_for",
+        "render_cp_completion_feedback": "render_cp_completion_feedback_for",
+        "render_recurrence_updated_panel": "render_recurrence_updated_panel_for",
+        "first_recurrence_target": "first_recurrence_target_for",
+        "recurrence_enabled_rows": "recurrence_enabled_rows_for",
+        "render_cp_schedule_adjusted_panel": "render_cp_schedule_adjusted_panel_for",
+        "render_explicit_timing_order_warning": "render_explicit_timing_order_warning_for",
+        "render_disabled_chain_summary": "render_disabled_chain_summary_for",
+        "ensure_terminal_chain_off": "ensure_terminal_chain_off_for",
+        "timeline_lines": "timeline_lines_for",
+    }
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        module = importlib.import_module("nautical_core.modify_composition_adapters")
+        object.__setattr__(self, "_module", module)
+        originals = getattr(type(self), "_originals", None)
+        if originals is None:
+            originals = {
+                current_name: getattr(module, current_name)
+                for current_name in (
+                    "render_anchor_completion_feedback_for",
+                    "render_cp_completion_feedback_for",
+                    "render_recurrence_updated_panel_for",
+                )
+            }
+            setattr(type(self), "_originals", originals)
+        else:
+            for name, fn in originals.items():
+                setattr(module, name, fn)
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, self._RENAMED.get(name, name))
+        if name in {"render_anchor_completion_feedback", "render_cp_completion_feedback"}:
+            def bound_feedback(*args, **kwargs):
+                kwargs.setdefault("lifecycle_result", None)
+                return fn(self._hook, request=SimpleNamespace(**kwargs))
+            return bound_feedback
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(
+            self._module,
+            self._RENAMED.get(name, name),
+            lambda _host, *args, **kwargs: value(*args, **kwargs),
+        )
+
+
+class _BoundDiagnosticsEffects:
+    """Test-only bound view of the extracted diagnostics-effects module."""
+
+    _PORT_FACTORIES = {
+        "last_n_timeline": "timeline_summary_ports_for",
+        "span_fields": "span_fields_ports_for",
+        "end_chain_summary": "end_chain_summary_ports_for",
+    }
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_diagnostics_effects"))
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        factory = self._PORT_FACTORIES.get(name)
+        if factory:
+            ports = getattr(self._module, factory)(self._hook)
+            return lambda *args, **kwargs: fn(ports, *args, **kwargs)
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
 def load_hook_protocol_module(module_name: str):
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return legacy._load_hook_module(os.path.join(root, "nautical_core", "hook_protocol.py"), module_name)
+    return load_hook_module(os.path.join(root, "nautical_core", "hook_protocol.py"), module_name)
 
 
 def load_exit_probe_module(module_name: str):
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return legacy._load_hook_module(os.path.join(root, "nautical_core", "exit_probe.py"), module_name)
+    return load_hook_module(os.path.join(root, "nautical_core", "exit_probe.py"), module_name)
 
 
 def load_hook_module(path: str, module_name: str):
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     force_tz_utc()
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if os.path.basename(path) in {"on-add.nautical", "on-modify.nautical", "on-exit.nautical"}:
@@ -659,10 +831,10 @@ def load_hook_module(path: str, module_name: str):
     if callable(load_core) and os.path.basename(path) in {"add_impl.py", "modify_impl.py", "exit_impl.py"}:
         load_core()
     if os.path.basename(path) == "modify_impl.py":
-        module._completion_effects = legacy._BoundCompletionEffects(module)
-        module._transition_effects = legacy._BoundTransitionEffects(module)
-        module._presentation_effects = legacy._BoundPresentationEffects(module)
-        module._diagnostics_effects = legacy._BoundDiagnosticsEffects(module)
+        module._completion_effects = _BoundCompletionEffects(module)
+        module._transition_effects = _BoundTransitionEffects(module)
+        module._presentation_effects = _BoundPresentationEffects(module)
+        module._diagnostics_effects = _BoundDiagnosticsEffects(module)
         schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
         cp_ports = schedule_effects.cp_completion_ports_for(module)
         anchor_ports = schedule_effects.anchor_completion_ports_for(module)

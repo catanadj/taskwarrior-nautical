@@ -67,22 +67,7 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "656cc935f9c5ca336334754710e073cd6dfedfedefcd574f2d3f72fc47f715d6",
     ),
 }
-RETIRED_CHARACTERIZATION_TESTS = frozenset(
-    {
-        "test_reconcile_candidate_discovery_is_narrow_and_deterministic",
-        "test_reconcile_delayed_expiration_dry_run_converges_to_live_slot",
-        "test_reconcile_empty_snapshot_is_authoritative",
-        "test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review",
-        "test_reconcile_planning_configuration_drift_is_partial",
-        "test_reconcile_reuses_verified_live_recovery_child",
-        "test_reconcile_snapshot_reuses_initial_chain_export",
-        "test_prev_weekday_natural_text",
-        "test_natural_interval_or_branches_keep_cadence_with_subject",
-        "test_natural_compresses_repeated_within_variants",
-        "test_natural_compresses_repeated_fall_on_variants",
-        "test_recurrence_evaluator_owns_context_spec_and_timezone_boundary",
-    }
-)
+RETIRED_CHARACTERIZATION_TESTS = frozenset()
 REMOVED_INEFFECTIVE_TESTS = frozenset(
     {
         "test_core_import_deterministic",
@@ -801,6 +786,47 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         )
         self.assertFalse(RETIRED_CHARACTERIZATION_TESTS & registered)
 
+    def test_retired_characterization_bodies_are_removed(self):
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+        self.assertFalse(RETIRED_CHARACTERIZATION_TESTS & top_level)
+
+    def test_runner_has_no_orphaned_legacy_test_support(self):
+        source = Path(self.golden.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        definitions = {
+            node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+        }
+        legacy_helpers = {
+            "_BoundCompletionEffects",
+            "_BoundTransitionEffects",
+            "_BoundPresentationEffects",
+            "_BoundDiagnosticsEffects",
+            "_test_modify_engine_services",
+            "_legacy_test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id",
+        }
+        self.assertFalse(legacy_helpers & definitions)
+
+    def test_golden_domains_do_not_import_the_runner_as_a_helper_library(self):
+        domain_dir = Path(self.golden.__file__).parent / "golden_tests"
+        offenders = []
+        for path in sorted(domain_dir.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "import_module"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == GOLDEN_MODULE
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}")
+        self.assertEqual(offenders, [])
+
     def test_migrated_direct_contracts_are_absent_from_golden_runner(self):
         registered = {
             fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)
@@ -1321,7 +1347,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
-        self.assertEqual(len(top_level), 20)
+        self.assertEqual(len(top_level), 8)
         self.assertEqual(len(registered), 201)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
@@ -1335,7 +1361,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)
         self.assertEqual(len(scheduling.TESTS), 16)
-        self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
+        self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 0)
         self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 665)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):

@@ -25,6 +25,8 @@ DOCTOR = ROOT / "nautical_core" / "tools" / "nautical_doctor.py"
 QUEUE_STATUS = ROOT / "nautical_core" / "tools" / "nautical_queue_status.py"
 RECONCILE = ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"
 NAVIGATOR = ROOT / "nautical_navigator.py"
+DEV_QUEUE_STATUS = ROOT / "dev_tools" / "nautical_queue_status.py"
+HEALTH_CHECK = ROOT / "dev_tools" / "nautical_health_check.py"
 
 
 class OperatorProcessContractTests(unittest.TestCase):
@@ -44,6 +46,46 @@ class OperatorProcessContractTests(unittest.TestCase):
         payload = json.loads(process.stdout)
         self.assertIsInstance(payload, dict)
         return payload
+
+    def test_health_check_json_ok_empty_taskdata(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            process = self._run(HEALTH_CHECK, "--taskdata", taskdata, "--json")
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(self._json(process).get("status"), "ok")
+
+    def test_queue_status_json_ok_empty_taskdata(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            process = self._run(DEV_QUEUE_STATUS, "--taskdata", taskdata, "--json")
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        payload = self._json(process)
+        self.assertEqual(payload.get("status"), "ok")
+        outbox = payload.get("outbox") or {}
+        self.assertEqual(outbox.get("states"), {})
+        self.assertEqual((outbox.get("schema") or {}).get("status"), "absent")
+
+    def test_queue_status_explicit_prune_reports_maintenance_result(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            process = self._run(
+                DEV_QUEUE_STATUS,
+                "--taskdata",
+                taskdata,
+                "--prune-acknowledged",
+                "--json",
+            )
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        maintenance = self._json(process).get("maintenance") or {}
+        self.assertIs(maintenance.get("ok"), True)
+        self.assertEqual(maintenance.get("removed"), 0)
+
+    def test_operator_queue_status_json_ok_empty_taskdata(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            process = self._run(QUEUE_STATUS, "--taskdata", taskdata, "--json")
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(self._json(process).get("status"), "ok")
 
     def test_capabilities_is_strict_json_stdout(self) -> None:
         process = self._run(QUERY, "capabilities")

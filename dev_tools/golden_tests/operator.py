@@ -134,21 +134,6 @@ def test_navigator_import_and_help_are_noninteractive_without_rich():
         raise AssertionError(f"Navigator help changed: {help_result!r}")
 
 
-def test_health_check_json_ok_empty_taskdata():
-    """health check should report ok for empty taskdata."""
-    path = DEV_TOOLS / "nautical_health_check.py"
-    with tempfile.TemporaryDirectory() as td:
-        process = subprocess.run(
-            [sys.executable, str(path), "--taskdata", td, "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(process.returncode == 0, f"health check returned {process.returncode}: {process.stderr!r}")
-        payload = json.loads((process.stdout or "").strip() or "{}")
-        expect(payload.get("status") == "ok", f"unexpected status: {payload}")
-
-
 def test_queue_status_and_doctor_report_schema_health():
     """Operator diagnostics should distinguish healthy and incompatible outboxes."""
     from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
@@ -191,41 +176,6 @@ def test_queue_status_and_doctor_report_schema_health():
         doctor._check_lifecycle_outbox(findings, taskdata, 300.0)
         schema_finding = next(item for item in findings if item.get("id") == "outbox.schema")
         expect(schema_finding.get("severity") == "error", f"Doctor missed future schema: {findings!r}")
-
-
-def test_queue_status_json_ok_empty_taskdata():
-    """Lifecycle outbox status should report ok for empty taskdata."""
-    path = DEV_TOOLS / "nautical_queue_status.py"
-    with tempfile.TemporaryDirectory() as td:
-        process = subprocess.run(
-            [sys.executable, str(path), "--taskdata", td, "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(process.returncode == 0, f"queue status returned {process.returncode}: {process.stderr!r}")
-        payload = json.loads((process.stdout or "").strip() or "{}")
-        expect(payload.get("status") == "ok", f"unexpected queue status: {payload}")
-        outbox = payload.get("outbox") or {}
-        expect(outbox.get("states") == {}, f"unexpected lifecycle states: {payload}")
-        expect((outbox.get("schema") or {}).get("status") == "absent", f"unexpected outbox schema: {payload}")
-
-
-def test_queue_status_explicit_prune_reports_maintenance_result():
-    """Retention cleanup is explicit and returns a structured maintenance result."""
-    path = DEV_TOOLS / "nautical_queue_status.py"
-    with tempfile.TemporaryDirectory() as td:
-        process = subprocess.run(
-            [sys.executable, str(path), "--taskdata", td, "--prune-acknowledged", "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8,
-        )
-        expect(process.returncode == 0, f"explicit queue maintenance failed: {process.stderr!r}")
-        payload = json.loads(process.stdout)
-        maintenance = payload.get("maintenance") or {}
-        expect(maintenance.get("ok") is True, f"maintenance result was not successful: {payload!r}")
-        expect(maintenance.get("removed") == 0, f"unexpected maintenance removal: {payload!r}")
 
 
 def test_doctor_installation_json_and_verifier_contract():
@@ -287,21 +237,6 @@ def test_doctor_installation_json_and_verifier_contract():
         ]
         canonical_report = build_report(canonical_payload, platform="Linux", launcher=launcher)
         expect(canonical_report.get("status") == "passed", f"healthy canonical evidence was rejected: {canonical_report!r}")
-
-
-def test_operator_queue_status_json_ok_empty_taskdata():
-    """installed queue status should work from nautical_core/tools."""
-    path = CORE_TOOLS / "nautical_queue_status.py"
-    with tempfile.TemporaryDirectory() as td:
-        process = subprocess.run(
-            [sys.executable, str(path), "--taskdata", td, "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(process.returncode == 0, f"operator queue status returned {process.returncode}: {process.stderr!r}")
-        payload = json.loads((process.stdout or "").strip() or "{}")
-        expect(payload.get("status") == "ok", f"unexpected operator queue status: {payload}")
 
 
 def test_queue_status_warns_on_stale_processing_and_dead_letters():
@@ -797,12 +732,8 @@ def test_doctor_reports_chain_repair_plan_findings():
 
 
 TESTS = (
-    test_health_check_json_ok_empty_taskdata,
     test_queue_status_and_doctor_report_schema_health,
-    test_queue_status_json_ok_empty_taskdata,
-    test_queue_status_explicit_prune_reports_maintenance_result,
     test_doctor_installation_json_and_verifier_contract,
-    test_operator_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_doctor_reports_healthy_installation,
     test_doctor_hook_inventory_allows_third_party_and_symlink_install,

@@ -27,7 +27,7 @@ _MISSING_CONTEXT_SCRIPT = textwrap.dedent(
     os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
     sys.path.insert(0, str(root))
     sys.argv = [f"{hook_name}.nautical"]
-    source_name = {"on-modify": "modify_impl.py", "on-exit": "exit_impl.py"}[hook_name]
+    source_name = {"on-add": "add_impl.py", "on-modify": "modify_impl.py", "on-exit": "exit_impl.py"}[hook_name]
     source = root / "nautical_core" / "hooks" / source_name
     spec = importlib.util.spec_from_file_location("_nautical_missing_context_contract", source)
     if spec is None or spec.loader is None:
@@ -69,6 +69,8 @@ class HookContextRequirementTests(unittest.TestCase):
     def test_on_modify_requires_integration_context_helper(self) -> None:
         self._assert_context_helper_required("on-modify")
 
+    def test_on_add_requires_integration_context_helper(self) -> None:
+        self._assert_context_helper_required("on-add")
+
     def test_on_exit_requires_integration_context_helper(self) -> None:
         self._assert_context_helper_required("on-exit")
-

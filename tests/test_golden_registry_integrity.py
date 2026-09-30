@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "eb44e2d51083a866ca6023e9a9a40465d7b6a3366b8120ed73269c13b94be5c4"
+    "c08c56704d52a0f7ed9f5a1d90e2aa5435eaaae87368ed76440fbd017bb9d4a5"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -47,8 +47,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "61487bdc8e936b22e8dc8ab36ac30898998fa9b74d1cea425dd263c4d4a0e6a1",
     ),
     "operator/query/Doctor/Navigator": (
-        30,
-        "ba0503eb0c690f2aad010ead902f8db1e7c680aeb9a83567992b4cf13542751e",
+        26,
+        "623fd1e32a7e199370137024f85f3101fd79ca855db4ebe8ca9d0cbb3b18873d",
     ),
     "performance and soak": (
         7,
@@ -59,8 +59,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "cb19880068ed0fe952886429d5e47c53516d9cffa740e4a1bbc6456c23af5568",
     ),
     "recurrence and hook integration": (
-        82,
-        "c374c5e71f4d8a8efcf4939f0e4f4b79a98260d9f7d855a67472a6c6184ee904",
+        81,
+        "1cc1218a7a9510225fee5976548b8c320e13a289b82c476e9d7ffe539396bf4f",
     ),
     "storage and filesystem safety": (
         1,
@@ -79,11 +79,16 @@ REMOVED_INEFFECTIVE_TESTS = frozenset(
 )
 MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
     {
+        "test_on_add_requires_integration_context_helper",
         "test_deploy_sanity_script_reports_ok",
         "test_deploy_sanity_enforces_removed_lifecycle_ownership",
         "test_deploy_sanity_rejects_missing_lazy_lifecycle_module",
         "test_deploy_sanity_rejects_missing_operator_runtime_tool",
         "test_deploy_sanity_rejects_unowned_taskwarrior_subprocess",
+        "test_health_check_json_ok_empty_taskdata",
+        "test_queue_status_json_ok_empty_taskdata",
+        "test_queue_status_explicit_prune_reports_maintenance_result",
+        "test_operator_queue_status_json_ok_empty_taskdata",
         "test_chain_colour_uses_complete_root_identity",
         "test_cp_interval_helpers_agree_between_on_add_and_on_modify",
         "test_on_modify_compute_cp_sequence_selects_interval_by_link",
@@ -923,12 +928,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
     def test_operator_diagnostics_cases_are_owned_by_operator_domain(self):
         operator = importlib.import_module("dev_tools.golden_tests.operator")
         expected = (
-            "test_health_check_json_ok_empty_taskdata",
             "test_queue_status_and_doctor_report_schema_health",
-            "test_queue_status_json_ok_empty_taskdata",
-            "test_queue_status_explicit_prune_reports_maintenance_result",
             "test_doctor_installation_json_and_verifier_contract",
-            "test_operator_queue_status_json_ok_empty_taskdata",
             "test_queue_status_warns_on_stale_processing_and_dead_letters",
             "test_doctor_reports_healthy_installation",
             "test_doctor_hook_inventory_allows_third_party_and_symlink_install",
@@ -1181,15 +1182,25 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertTrue(set(expected) <= registered)
         self.assertFalse(set(expected) & top_level)
 
-    def test_hook_bootstrap_guard_helper_is_owned_by_golden_support(self):
+    def test_on_add_context_contract_is_owned_by_direct_unittest(self):
         support = importlib.import_module("dev_tools.golden_tests.support")
-        self.assertTrue(callable(getattr(support, "assert_hook_requires_integration_context", None)))
+        self.assertFalse(hasattr(support, "assert_hook_requires_integration_context"))
+        hook_context_tests = importlib.import_module("tests.test_hook_context_requirements")
+        self.assertTrue(
+            callable(
+                getattr(
+                    hook_context_tests.HookContextRequirementTests,
+                    "test_on_add_requires_integration_context_helper",
+                    None,
+                )
+            )
+        )
         source = Path(self.golden.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         local_definitions = {
             node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
-        self.assertNotIn("_assert_hook_requires_integration_context", local_definitions)
+        self.assertNotIn("test_on_add_requires_integration_context_helper", local_definitions)
 
     def test_completion_lifecycle_export_reuse_is_owned_by_lifecycle_domain(self):
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
@@ -1347,10 +1358,10 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
-        self.assertEqual(len(top_level), 8)
-        self.assertEqual(len(registered), 196)
+        self.assertEqual(len(top_level), 7)
+        self.assertEqual(len(registered), 191)
         self.assertEqual(len(recurrence.TESTS), 1)
-        self.assertEqual(len(operator.TESTS), 21)
+        self.assertEqual(len(operator.TESTS), 17)
         self.assertEqual(len(configuration.TESTS), 15)
         self.assertEqual(len(installer.TESTS), 9)
         self.assertEqual(len(performance.TESTS), 9)
@@ -1362,7 +1373,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(timeline.TESTS), 9)
         self.assertEqual(len(scheduling.TESTS), 16)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 0)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 670)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 675)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
         storage = importlib.import_module("dev_tools.golden_tests.storage")

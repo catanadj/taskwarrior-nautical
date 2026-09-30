@@ -49,7 +49,6 @@ from dev_tools.golden_tests.support import (
     test_operator_uow as _test_operator_uow,
     load_hook_module as _load_hook_module,
     find_hook_file as _find_hook_file,
-    assert_hook_requires_integration_context,
     typed_command_result as _typed_command_result,
 )
 
@@ -67,12 +66,6 @@ _hook = importlib.import_module("nautical_core.hooks.modify_impl")
 import subprocess
 import importlib.util
 import importlib.machinery
-
-def test_on_add_requires_integration_context_helper():
-    """on-add should fail closed when the integration context is unavailable."""
-    assert_hook_requires_integration_context("on-add.nautical", "_nautical_on_add_requires_context_test")
-
-
 
 # -------- Runner --------------------------------------------------------------
 
@@ -485,7 +478,6 @@ TESTS = [
     *MODIFY_TESTS[36:37],
     *MODIFY_TESTS[1:6],
     *MODIFY_TESTS[6:10],
-    test_on_add_requires_integration_context_helper,
     *MODIFY_TESTS[10:15],
     *MODIFY_TESTS[30:34],
     *MODIFY_TESTS[37:38],

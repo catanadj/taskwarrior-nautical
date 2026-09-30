@@ -1327,3 +1327,150 @@ TESTS = TESTS + (
     test_on_modify_native_until_rejects_uncarryable_anchor_target_move,
     test_on_modify_completion_reschedule_carries_native_until,
 )
+
+
+def test_on_modify_native_until_accepts_valid_window_change():
+    """A modified until that remains after the target should pass through normally."""
+    hook = find_hook_file("on-modify.nautical")
+    old = {
+        "uuid": "00000000-0000-4000-8000-000000000134",
+        "description": "valid modified native until",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until134",
+        "link": 1,
+        "due": "20260801T090000Z",
+        "until": "20260802T090000Z",
+    }
+    new = dict(old, due="20260801T120000Z")
+    with tempfile.TemporaryDirectory() as td:
+        proc = run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode == 0, f"valid modified expiration window was rejected: {proc.stderr!r}")
+    expect(assert_stdout_json_only(proc.stdout).get("due") == new["due"], "valid due modification changed")
+
+
+def test_on_modify_native_until_validates_recurrence_promotion():
+    """Adding Nautical recurrence should validate an existing native until window."""
+    hook = find_hook_file("on-modify.nautical")
+    old = {
+        "uuid": "00000000-0000-4000-8000-000000000135",
+        "description": "promote invalid native until",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "due": "20260802T090000Z",
+        "until": "20260801T090000Z",
+    }
+    new = dict(old, cp="7d")
+    with tempfile.TemporaryDirectory() as td:
+        proc = run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode != 0, "recurrence promotion accepted an invalid expiration window")
+    expect(not (proc.stdout or "").strip(), f"rejected recurrence promotion leaked stdout: {proc.stdout!r}")
+    expect("Invalid expiration window" in strip_markup(proc.stderr), f"missing promotion guard: {proc.stderr!r}")
+
+
+def test_on_modify_native_until_validates_simultaneous_completion():
+    """Completion should not queue a child from an invalid newly modified window."""
+    hook = find_hook_file("on-modify.nautical")
+    old = {
+        "uuid": "00000000-0000-4000-8000-000000000136",
+        "description": "complete invalid native until",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until136",
+        "link": 1,
+        "due": "20260801T090000Z",
+        "until": "20260801T230000Z",
+    }
+    new = dict(
+        old,
+        status="completed",
+        end="20260801T100000Z",
+        due="20260802T090000Z",
+        until="20260802T090000Z",
+    )
+    with tempfile.TemporaryDirectory() as td:
+        proc = run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode != 0, "simultaneous completion accepted an invalid expiration window")
+    expect(not (proc.stdout or "").strip(), f"rejected completion leaked stdout: {proc.stdout!r}")
+    expect("Invalid expiration window" in strip_markup(proc.stderr), f"missing completion guard: {proc.stderr!r}")
+
+
+def test_on_modify_native_until_rejects_strict_anchor_mode_changes():
+    """Changing an expiring anchor task to all or flex should be rejected."""
+    hook = find_hook_file("on-modify.nautical")
+    old = {
+        "uuid": "00000000-0000-4000-8000-000000000138",
+        "description": "modify strict anchor expiration conflict",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "anchor": "w:mon",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "until138",
+        "link": 1,
+        "due": "20260803T090000Z",
+        "until": "20260804T090000Z",
+    }
+    with tempfile.TemporaryDirectory() as td:
+        for mode in ("all", "flex"):
+            new = dict(old, anchor_mode=mode)
+            proc = run_hook_script_raw(
+                hook,
+                json.dumps(old) + "\n" + json.dumps(new),
+                env_extra={"NO_COLOR": "1", "TASKDATA": td},
+            )
+            expect(proc.returncode != 0, f"anchor_mode:{mode} modification accepted native until")
+            expect(not (proc.stdout or "").strip(), f"rejected mode modification leaked stdout: {proc.stdout!r}")
+            expect("Invalid expiration mode" in strip_markup(proc.stderr), f"missing mode guard: {proc.stderr!r}")
+
+
+def test_on_modify_native_until_rejects_legacy_all_completion():
+    """Completion should not perpetuate a legacy all-plus-until configuration."""
+    hook = find_hook_file("on-modify.nautical")
+    old = {
+        "uuid": "00000000-0000-4000-8000-000000000139",
+        "description": "complete strict anchor expiration conflict",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "anchor": "w:mon",
+        "anchor_mode": "all",
+        "chain": "on",
+        "chainID": "until139",
+        "link": 1,
+        "due": "20260803T090000Z",
+        "until": "20260804T090000Z",
+    }
+    new = dict(old, status="completed", end="20260803T100000Z")
+    with tempfile.TemporaryDirectory() as td:
+        proc = run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode != 0, "legacy anchor_mode:all completion perpetuated native until")
+    expect(not (proc.stdout or "").strip(), f"rejected legacy completion leaked stdout: {proc.stdout!r}")
+    expect("Invalid expiration mode" in strip_markup(proc.stderr), f"missing completion mode guard: {proc.stderr!r}")
+
+TESTS = TESTS + (
+    test_on_modify_native_until_accepts_valid_window_change,
+    test_on_modify_native_until_validates_recurrence_promotion,
+    test_on_modify_native_until_validates_simultaneous_completion,
+    test_on_modify_native_until_rejects_strict_anchor_mode_changes,
+    test_on_modify_native_until_rejects_legacy_all_completion,
+)

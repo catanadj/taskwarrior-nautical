@@ -36,7 +36,6 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 from dev_tools.golden_tests.recurrence import TESTS as RECURRENCE_TESTS
 from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
 from dev_tools.golden_tests.installer import TESTS as INSTALLER_TESTS
-from dev_tools.golden_tests.performance import TESTS as PERFORMANCE_TESTS
 from dev_tools.golden_tests.storage import TESTS as STORAGE_TESTS
 from dev_tools.golden_tests.timeline import TESTS as TIMELINE_TESTS
 from dev_tools.golden_tests.lifecycle import TESTS as LIFECYCLE_TESTS
@@ -467,13 +466,6 @@ TESTS = [
     *INSTALLER_TESTS[6:8],
     *OPERATOR_TESTS[12:13],
     *OPERATOR_TESTS[13:17],
-    *PERFORMANCE_TESTS[7:8],
-    *PERFORMANCE_TESTS[:3],
-    *PERFORMANCE_TESTS[8:9],
-    *PERFORMANCE_TESTS[12:14],
-    *PERFORMANCE_TESTS[3:6],
-    *PERFORMANCE_TESTS[9:12],
-    *PERFORMANCE_TESTS[6:7],
     *SCHEDULING_TESTS[1:5],
     *MODIFY_TESTS[36:37],
     *MODIFY_TESTS[1:6],

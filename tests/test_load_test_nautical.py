@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sqlite3
 import subprocess
 import sys
 import unittest
@@ -14,6 +16,79 @@ from dev_tools import load_test_nautical as loadtest
 
 
 class LoadTestSupportTests(unittest.TestCase):
+    def test_load_benchmark_installs_complete_hook_runtime(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_dir = root / "taskdata"
+            hooks_dir = data_dir / "hooks"
+            taskrc = root / "taskrc"
+            config = root / "config-nautical.toml"
+            data_dir.mkdir()
+            loadtest._install_hooks(hooks_dir)
+            loadtest._write_taskrc(taskrc, data_dir, hooks_dir)
+            loadtest._write_nautical_config(config)
+
+            for hook_name in ("on-add", "on-modify", "on-exit"):
+                hook = hooks_dir / hook_name
+                self.assertTrue(hook.is_file(), f"load benchmark did not install {hook_name}")
+                self.assertTrue(os.access(hook, os.X_OK), f"hook is not executable: {hook_name}")
+            taskrc_text = taskrc.read_text(encoding="utf-8")
+            self.assertIn(f"hooks.location={hooks_dir}", taskrc_text)
+            self.assertIn(f"include {loadtest.REPO_ROOT / 'uda.conf'}", taskrc_text)
+            self.assertNotIn("verbose=nothing", taskrc_text)
+            self.assertIn('tz = "UTC"', config.read_text(encoding="utf-8"))
+
+    def test_load_benchmark_queue_and_lineage_verification(self) -> None:
+        with TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            state_dir = data_dir / ".nautical-state"
+            state_dir.mkdir()
+            db_path = state_dir / ".nautical_queue.db"
+            with sqlite3.connect(str(db_path)) as connection:
+                connection.execute(
+                    "CREATE TABLE queue_entries "
+                    "(id INTEGER PRIMARY KEY, payload TEXT NOT NULL, state TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO queue_entries(payload, state) VALUES (?, ?)",
+                    ('{"child":1}', "queued"),
+                )
+                connection.execute(
+                    "INSERT INTO queue_entries(payload, state) VALUES (?, ?)",
+                    ('{"child":2}', "done"),
+                )
+            self.assertEqual(
+                loadtest._queue_metrics(data_dir),
+                {"items": 1, "bytes": len('{"child":1}')},
+            )
+
+        parent_uuid = "11111111-0000-0000-0000-000000000001"
+        child_uuid = "22222222-0000-0000-0000-000000000002"
+        rows = [
+            {
+                "uuid": parent_uuid,
+                "status": "completed",
+                "chainID": "chain-a",
+                "link": 1,
+                "nextLink": "22222222",
+            },
+            {
+                "uuid": child_uuid,
+                "status": "pending",
+                "chainID": "chain-a",
+                "link": 2,
+                "prevLink": "11111111",
+            },
+        ]
+        self.assertEqual(
+            loadtest._verify_link_rows(rows, [parent_uuid]),
+            {"expected": 1, "verified": 1, "failures": []},
+        )
+        rows[1]["prevLink"] = "wrong"
+        invalid = loadtest._verify_link_rows(rows, [parent_uuid])
+        self.assertEqual(invalid.get("verified"), 0)
+        self.assertTrue(invalid.get("failures"))
+
     def test_percentile_is_deterministic_and_clamps_percentiles(self) -> None:
         self.assertEqual(loadtest._percentile([], 95), 0.0)
         self.assertEqual(loadtest._percentile([3.0, 1.0, 2.0], 50), 2.0)

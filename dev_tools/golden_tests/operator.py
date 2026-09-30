@@ -606,6 +606,77 @@ def test_doctor_discovers_effective_taskdata_directory():
         expect(payload.get("taskdata") == str(data_dir), f"doctor did not discover effective taskdata: {payload}")
 
 
+def test_operator_doctor_loads_colocated_queue_helper():
+    """Installed Doctor loads lifecycle outbox status from its packaged tools."""
+    with tempfile.TemporaryDirectory() as td:
+        process = subprocess.run(
+            [sys.executable, str(CORE_TOOLS / "nautical_doctor.py"), "--taskdata", td, "--task-bin", "/bin/false", "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(process.returncode == 2, f"operator doctor returned {process.returncode}: {process.stderr!r}")
+        payload = json.loads((process.stdout or "").strip() or "{}")
+        ids = {item.get("id") for item in doctor_findings(payload)}
+        expect("outbox.state" in ids, f"operator doctor did not inspect outbox state: {payload}")
+        expect("outbox.unreadable" not in ids, f"operator doctor could not load outbox helper: {payload}")
+
+
+def test_nautical_dispatches_supported_subcommands():
+    """The CLI dispatches supported commands to their owner scripts."""
+    module = load_hook_module(str(ROOT / "nautical"), "_nautical_entrypoint_dispatch_test")
+    previous_argv = list(sys.argv)
+    previous_run_path = module.runpy.run_path
+    calls = []
+    targets = {
+        "install": str(CORE_TOOLS / "nautical_install.py"),
+        "doctor": str(CORE_TOOLS / "nautical_doctor.py"),
+        "queue-status": str(CORE_TOOLS / "nautical_queue_status.py"),
+        "reconcile": str(CORE_TOOLS / "nautical_reconcile.py"),
+        "navigator": str(ROOT / "nautical_navigator.py"),
+    }
+
+    def fake_run_path(target, run_name=None):
+        calls.append((target, run_name, list(sys.argv)))
+        return {}
+
+    try:
+        module.runpy.run_path = fake_run_path
+        for command in targets:
+            sys.argv = ["nautical", command, "--json"]
+            expect(module.main() == 0, f"nautical returned non-zero for {command}")
+        sys.argv = ["nautical", "unknown"]
+        expect(module.main() == 2, "nautical should reject unknown commands")
+    finally:
+        module.runpy.run_path = previous_run_path
+        sys.argv = previous_argv
+
+    expect(len(calls) == len(targets), f"unexpected dispatch count: {calls!r}")
+    for (target, run_name, argv), (command, expected_target) in zip(calls, targets.items()):
+        expect(target == expected_target, f"wrong target for {command}: {target!r}")
+        expect(run_name == "__main__", f"wrong run_name for {command}: {run_name!r}")
+        expect(argv[0] == expected_target, f"argv not rewritten for {command}: {argv!r}")
+        if command == "install":
+            expect(argv[1:3] == ["--source", str(ROOT)], f"install did not select checkout source: {argv!r}")
+
+    previous_install_target = module.COMMANDS["install"]
+    previous_source = os.environ.get("NAUTICAL_SOURCE")
+    try:
+        module.COMMANDS["install"] = Path("/tmp/nautical-missing-install.py")
+        os.environ["NAUTICAL_SOURCE"] = str(ROOT)
+        module.runpy.run_path = fake_run_path
+        calls.clear()
+        sys.argv = ["nautical", "install"]
+        expect(module.main() == 0, "missing install target did not recover through checkout")
+        expect(calls and calls[0][0] == targets["install"], f"checkout recovery selected wrong target: {calls!r}")
+    finally:
+        module.COMMANDS["install"] = previous_install_target
+        if previous_source is None:
+            os.environ.pop("NAUTICAL_SOURCE", None)
+        else:
+            os.environ["NAUTICAL_SOURCE"] = previous_source
+
+
 def test_doctor_reports_actionable_broken_installation():
     """Doctor identifies installation, queue, and chain failures with stable IDs."""
     path = str(DEV_TOOLS / "nautical_doctor.py")
@@ -739,6 +810,8 @@ TESTS = (
     test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch,
     test_doctor_reports_retired_queue_state_without_migrating_it,
     test_doctor_discovers_effective_taskdata_directory,
+    test_operator_doctor_loads_colocated_queue_helper,
+    test_nautical_dispatches_supported_subcommands,
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
     test_query_process_boundary_emits_one_json_document,

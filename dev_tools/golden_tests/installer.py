@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import json
 import shutil
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 
 import nautical_core.install_runtime as install_runtime
-from dev_tools.golden_tests.support import expect
+from dev_tools.golden_tests.support import expect, load_hook_module
 
 
 ROOT = Path(__file__).resolve().parents[2]
+CORE_TOOLS = ROOT / "nautical_core" / "tools"
 
 
 def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
@@ -227,6 +231,91 @@ def test_installer_lock_and_duplicate_hook_guards():
             expect("duplicate execution" in str(exc), f"unexpected duplicate-hook error: {exc}")
 
 
+def test_installer_cli_and_doctor_managed_runtime_diagnostics():
+    """Installer JSON and Doctor expose active, abandoned, and broken runtime state."""
+    install_tool = CORE_TOOLS / "nautical_install.py"
+    doctor = load_hook_module(str(CORE_TOOLS / "nautical_doctor.py"), "_nautical_doctor_managed_runtime_test")
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / "dry-target"
+        process = subprocess.run(
+            [sys.executable, str(install_tool), "--source", str(ROOT), "--taskdata", str(target), "--release-id", "cli-dry", "--dry-run", "--json"],
+            text=True,
+            capture_output=True,
+            timeout=20.0,
+        )
+        expect(process.returncode == 0, f"installer CLI dry-run failed: {process.stderr!r}")
+        payload = json.loads(process.stdout)
+        expect(payload.get("status") == "dry-run", f"bad installer JSON: {process.stdout!r}")
+        expect(payload.get("operation") == "install", f"installer JSON omitted its plan: {process.stdout!r}")
+        expect(not target.exists(), "installer CLI dry-run mutated its target")
+
+        process = subprocess.run(
+            [sys.executable, str(install_tool), "--source", str(ROOT), "--taskdata", str(target), "--release-id", "cli-dry", "--dry-run"],
+            text=True,
+            capture_output=True,
+            timeout=20.0,
+        )
+        expect(process.returncode == 0, f"installer text dry-run failed: {process.stderr!r}")
+        expect("Plan: Install" in process.stdout, f"installer text omitted its plan: {process.stdout!r}")
+        expect("Changes: none (dry run)" in process.stdout, f"installer text obscured dry-run behavior: {process.stdout!r}")
+        expect(not target.exists(), "installer text dry-run mutated its target")
+
+        taskdata = Path(td) / "managed"
+        install_runtime.install_release(source=ROOT, taskdata=taskdata, release_id="doctor-active", smoke=False)
+        findings = []
+        doctor._check_managed_runtime(findings, taskdata / "hooks")
+        active = next(item for item in findings if item.get("id") == "install.runtime")
+        expect(active.get("severity") == "info", f"Doctor did not recognize active runtime: {findings!r}")
+
+        (taskdata / ".nautical-runtime/.staging-abandoned").mkdir()
+        findings = []
+        doctor._check_managed_runtime(findings, taskdata / "hooks")
+        expect(any(item.get("id") == "install.runtime_abandoned" for item in findings), f"Doctor missed abandoned staging: {findings!r}")
+
+        current = taskdata / ".nautical-runtime/current"
+        current.unlink()
+        current.symlink_to("releases/missing")
+        findings = []
+        doctor._check_managed_runtime(findings, taskdata / "hooks")
+        broken = next(item for item in findings if item.get("id") == "install.runtime")
+        expect(broken.get("severity") == "error", f"Doctor missed broken runtime pointer: {findings!r}")
+
+
+def test_runtime_cleanup_preserves_active_and_rollback_releases():
+    """Runtime cleanup retains the active release and newest rollback."""
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        for release_id in ("oldest", "middle", "active"):
+            install_runtime.install_release(source=ROOT, taskdata=taskdata, release_id=release_id, smoke=False)
+        planned = install_runtime.cleanup_runtime(taskdata, keep_releases=1, apply=False)
+        expect(planned.get("active_release") == "active", f"wrong active release: {planned}")
+        expect(set(planned.get("kept_releases") or {}) == {"active", "middle"}, f"rollback retention failed: {planned}")
+        expect(any(path.endswith("oldest") for path in planned.get("remove_releases") or []), f"old release not planned: {planned}")
+        applied = install_runtime.cleanup_runtime(taskdata, keep_releases=1, apply=True)
+        expect(applied.get("removed"), f"cleanup did not remove old release: {applied}")
+        remaining = {path.name for path in (taskdata / ".nautical-runtime" / "releases").iterdir() if path.is_dir()}
+        expect(remaining == {"active", "middle"}, f"cleanup removed a protected release: {remaining}")
+
+
+def test_retained_release_can_be_selected_with_dry_run_then_applied():
+    """Rollback selection validates the retained tree before switching."""
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        install_runtime.install_release(source=ROOT, taskdata=taskdata, release_id="release-one", smoke=False)
+        install_runtime.install_release(source=ROOT, taskdata=taskdata, release_id="release-two", smoke=False)
+        current = taskdata / ".nautical-runtime/current"
+        pointer_before = os.readlink(current)
+        retained = taskdata / ".nautical-runtime/releases/release-one"
+        planned = install_runtime.install_release(source=retained, taskdata=taskdata, release_id="release-one", dry_run=True, smoke=False)
+        expect(planned.get("status") == "dry-run", f"rollback was not dry-run: {planned!r}")
+        expect(planned.get("previous_release") == "release-two", f"wrong rollback source state: {planned!r}")
+        expect(os.readlink(current) == pointer_before, "rollback dry-run changed the active release")
+        applied = install_runtime.install_release(source=retained, taskdata=taskdata, release_id="release-one", smoke=False)
+        expect(applied.get("active_release") == "release-one", f"rollback did not select retained release: {applied!r}")
+        expect(os.readlink(current) == "releases/release-one", "rollback selected the wrong pointer")
+        expect((taskdata / ".nautical-runtime/releases/release-two").is_dir(), "rollback removed newer release")
+
+
 def test_installer_initializes_explicit_timezone_config():
     """Fresh installs should write an explicit detected timezone."""
     previous = install_runtime.detect_local_timezone
@@ -256,5 +345,8 @@ TESTS = (
     test_installer_upgrade_rollback_restores_active_runtime,
     test_installer_migrates_legacy_core_and_rolls_back_first_switch,
     test_installer_lock_and_duplicate_hook_guards,
+    test_installer_cli_and_doctor_managed_runtime_diagnostics,
+    test_runtime_cleanup_preserves_active_and_rollback_releases,
+    test_retained_release_can_be_selected_with_dry_run_then_applied,
     test_installer_initializes_explicit_timezone_config,
 )

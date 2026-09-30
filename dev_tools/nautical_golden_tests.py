@@ -1628,211 +1628,6 @@ def _test_modify_engine_services(
     )
 
 
-def test_installer_cli_and_doctor_managed_runtime_diagnostics():
-    """Installer JSON and Doctor should expose active, abandoned, and broken runtime state."""
-    import nautical_core.install_runtime as install_runtime
-
-    install_tool = Path(ROOT) / "nautical_core/tools/nautical_install.py"
-    doctor_path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    doctor = _load_hook_module(doctor_path, "_nautical_doctor_managed_runtime_test")
-    with tempfile.TemporaryDirectory() as td:
-        target = Path(td) / "dry-target"
-        proc = subprocess.run(
-            [
-                sys.executable,
-                str(install_tool),
-                "--source",
-                ROOT,
-                "--taskdata",
-                str(target),
-                "--release-id",
-                "cli-dry",
-                "--dry-run",
-                "--json",
-            ],
-            text=True,
-            capture_output=True,
-            timeout=20.0,
-        )
-        expect(proc.returncode == 0, f"installer CLI dry-run failed: {proc.stderr!r}")
-        cli_payload = json.loads(proc.stdout)
-        expect(cli_payload.get("status") == "dry-run", f"bad installer JSON: {proc.stdout!r}")
-        expect(cli_payload.get("operation") == "install", f"installer JSON omitted its plan: {proc.stdout!r}")
-        expect(not target.exists(), "installer CLI dry-run mutated its target")
-
-        proc = subprocess.run(
-            [
-                sys.executable,
-                str(install_tool),
-                "--source",
-                ROOT,
-                "--taskdata",
-                str(target),
-                "--release-id",
-                "cli-dry",
-                "--dry-run",
-            ],
-            text=True,
-            capture_output=True,
-            timeout=20.0,
-        )
-        expect(proc.returncode == 0, f"installer text dry-run failed: {proc.stderr!r}")
-        expect("Plan: Install" in proc.stdout, f"installer text omitted its plan: {proc.stdout!r}")
-        expect("Changes: none (dry run)" in proc.stdout, f"installer text obscured dry-run behavior: {proc.stdout!r}")
-        expect(not target.exists(), "installer text dry-run mutated its target")
-
-        taskdata = Path(td) / "managed"
-        install_runtime.install_release(
-            source=Path(ROOT),
-            taskdata=taskdata,
-            release_id="doctor-active",
-            smoke=False,
-        )
-        findings = []
-        doctor._check_managed_runtime(findings, taskdata / "hooks")
-        active = next(item for item in findings if item.get("id") == "install.runtime")
-        expect(active.get("severity") == "info", f"Doctor did not recognize active runtime: {findings!r}")
-
-        abandoned = taskdata / ".nautical-runtime/.staging-abandoned"
-        abandoned.mkdir()
-        findings = []
-        doctor._check_managed_runtime(findings, taskdata / "hooks")
-        expect(
-            any(item.get("id") == "install.runtime_abandoned" for item in findings),
-            f"Doctor missed abandoned staging: {findings!r}",
-        )
-
-        current = taskdata / ".nautical-runtime/current"
-        current.unlink()
-        current.symlink_to("releases/missing")
-        findings = []
-        doctor._check_managed_runtime(findings, taskdata / "hooks")
-        broken = next(item for item in findings if item.get("id") == "install.runtime")
-        expect(broken.get("severity") == "error", f"Doctor missed broken runtime pointer: {findings!r}")
-
-
-def test_runtime_cleanup_preserves_active_and_rollback_releases():
-    """Runtime cleanup must retain the active release and newest rollback."""
-    import nautical_core.install_runtime as install_runtime
-
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td) / "taskdata"
-        for release_id in ("oldest", "middle", "active"):
-            install_runtime.install_release(source=Path(ROOT), taskdata=taskdata, release_id=release_id, smoke=False)
-        planned = install_runtime.cleanup_runtime(taskdata, keep_releases=1, apply=False)
-        expect(planned.get("active_release") == "active", f"wrong active release: {planned}")
-        expect(set(planned.get("kept_releases") or {}) == {"active", "middle"}, f"rollback retention failed: {planned}")
-        expect(any(path.endswith("oldest") for path in planned.get("remove_releases") or []), f"old release not planned: {planned}")
-        applied = install_runtime.cleanup_runtime(taskdata, keep_releases=1, apply=True)
-        expect(applied.get("removed"), f"cleanup did not remove old release: {applied}")
-        remaining = {path.name for path in (taskdata / ".nautical-runtime" / "releases").iterdir() if path.is_dir()}
-        expect(remaining == {"active", "middle"}, f"cleanup removed a protected release: {remaining}")
-
-
-def test_retained_release_can_be_selected_with_dry_run_then_applied():
-    """Rollback selection must validate the retained tree before switching."""
-    import nautical_core.install_runtime as install_runtime
-
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td) / "taskdata"
-        install_runtime.install_release(source=Path(ROOT), taskdata=taskdata, release_id="release-one", smoke=False)
-        install_runtime.install_release(source=Path(ROOT), taskdata=taskdata, release_id="release-two", smoke=False)
-        current = taskdata / ".nautical-runtime/current"
-        pointer_before = os.readlink(current)
-        retained = taskdata / ".nautical-runtime/releases/release-one"
-        planned = install_runtime.install_release(
-            source=retained, taskdata=taskdata, release_id="release-one", dry_run=True, smoke=False,
-        )
-        expect(planned.get("status") == "dry-run", f"rollback was not dry-run: {planned!r}")
-        expect(planned.get("previous_release") == "release-two", f"wrong rollback source state: {planned!r}")
-        expect(os.readlink(current) == pointer_before, "rollback dry-run changed the active release")
-        applied = install_runtime.install_release(
-            source=retained, taskdata=taskdata, release_id="release-one", smoke=False,
-        )
-        expect(applied.get("active_release") == "release-one", f"rollback did not select retained release: {applied!r}")
-        expect(os.readlink(current) == "releases/release-one", "rollback selected the wrong pointer")
-        expect((taskdata / ".nautical-runtime/releases/release-two").is_dir(), "rollback removed newer release")
-
-
-def test_operator_doctor_loads_colocated_queue_helper():
-    """installed doctor should load lifecycle outbox status from nautical_core/tools."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    with tempfile.TemporaryDirectory() as td:
-        p = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--task-bin", "/bin/false", "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8.0,
-        )
-        expect(p.returncode == 2, f"operator doctor returned {p.returncode}: {p.stderr!r}")
-        obj = json.loads((p.stdout or "").strip() or "{}")
-        ids = {item.get("id") for item in _doctor_findings(obj)}
-        expect("outbox.state" in ids, f"operator doctor did not inspect outbox state: {obj}")
-        expect("outbox.unreadable" not in ids, f"operator doctor could not load outbox helper: {obj}")
-
-
-def test_nautical_dispatches_supported_subcommands():
-    """nautical should dispatch supported subcommands to the matching scripts."""
-    path = os.path.join(ROOT, "nautical")
-    mod = _load_hook_module(path, "_nautical_entrypoint_dispatch_test")
-    prev_argv = list(sys.argv)
-    prev_run_path = mod.runpy.run_path
-    calls = []
-    targets = {
-        "install": os.path.join(ROOT, "nautical_core", "tools", "nautical_install.py"),
-        "doctor": os.path.join(ROOT, "nautical_core", "tools", "nautical_doctor.py"),
-        "queue-status": os.path.join(ROOT, "nautical_core", "tools", "nautical_queue_status.py"),
-        "reconcile": os.path.join(ROOT, "nautical_core", "tools", "nautical_reconcile.py"),
-        "navigator": os.path.join(ROOT, "nautical_navigator.py"),
-    }
-
-    def _fake_run_path(target, run_name=None):
-        calls.append((target, run_name, list(sys.argv)))
-        return {}
-
-    try:
-        mod.runpy.run_path = _fake_run_path
-        for command, expected_target in targets.items():
-            sys.argv = ["nautical", command, "--json"]
-            expect(mod.main() == 0, f"nautical returned non-zero for {command}")
-        sys.argv = ["nautical", "unknown"]
-        expect(mod.main() == 2, "nautical should reject unknown commands")
-    finally:
-        mod.runpy.run_path = prev_run_path
-        sys.argv = prev_argv
-
-    expect(len(calls) == len(targets), f"unexpected dispatch count: {calls!r}")
-    for (target, run_name, argv), (command, expected_target) in zip(calls, targets.items()):
-        expect(target == expected_target, f"wrong target for {command}: {target!r}")
-        expect(run_name == "__main__", f"wrong run_name for {command}: {run_name!r}")
-        expect(argv[0] == expected_target, f"argv not rewritten for {command}: {argv!r}")
-        if command == "install":
-            expect(
-                argv[1:3] == ["--source", ROOT],
-                f"install did not select the checkout as its source: {argv!r}",
-            )
-
-    previous_install_target = mod.COMMANDS["install"]
-    previous_source = os.environ.get("NAUTICAL_SOURCE")
-    try:
-        mod.COMMANDS["install"] = Path("/tmp/nautical-missing-install.py")
-        os.environ["NAUTICAL_SOURCE"] = str(ROOT)
-        mod.runpy.run_path = _fake_run_path
-        calls.clear()
-        sys.argv = ["nautical", "install"]
-        expect(mod.main() == 0, "missing install target did not recover through checkout")
-        expect(
-            calls and calls[0][0] == targets["install"],
-            f"checkout recovery selected the wrong install target: {calls!r}",
-        )
-    finally:
-        mod.COMMANDS["install"] = previous_install_target
-        if previous_source is None:
-            os.environ.pop("NAUTICAL_SOURCE", None)
-        else:
-            os.environ["NAUTICAL_SOURCE"] = previous_source
-
-
 def test_config_fingerprint_invalidates_persistent_cache_keys():
     """Changing the selected config file must produce a new cache fingerprint and key."""
     previous = os.environ.get("NAUTICAL_CONFIG")
@@ -6979,14 +6774,11 @@ TESTS = [
     *OPERATOR_TESTS[5:10],
     *OPERATOR_TESTS[10:11],
     *INSTALLER_TESTS[:5],
-    test_installer_cli_and_doctor_managed_runtime_diagnostics,
+    *INSTALLER_TESTS[5:6],
     *OPERATOR_TESTS[11:12],
-    test_runtime_cleanup_preserves_active_and_rollback_releases,
-    test_retained_release_can_be_selected_with_dry_run_then_applied,
+    *INSTALLER_TESTS[6:8],
     *OPERATOR_TESTS[12:13],
-    test_operator_doctor_loads_colocated_queue_helper,
-    test_nautical_dispatches_supported_subcommands,
-    *OPERATOR_TESTS[13:15],
+    *OPERATOR_TESTS[13:17],
     test_perf_hint_benchmark_isolates_persistent_cache,
     *PERFORMANCE_TESTS,
     test_deploy_sanity_enforces_removed_lifecycle_ownership,
@@ -7223,7 +7015,7 @@ def main():
     sys.exit(1 if fails else 0)
 
 TESTS.extend([
-    *OPERATOR_TESTS[15:],
+    *OPERATOR_TESTS[17:],
     *TIMELINE_TESTS[6:],
     test_navigator_surfaces_configuration_drift_warning,
     test_navigator_reloads_validated_taskdata_configuration,
@@ -7236,7 +7028,7 @@ TESTS.extend([
     test_navigator_uses_anchor_and_anchor_file_sources,
     test_config_fingerprint_invalidates_persistent_cache_keys,
     test_configuration_drift_detects_edit_and_removal,
-    *INSTALLER_TESTS[5:],
+    *INSTALLER_TESTS[8:],
 ])
 
 TESTS.append(test_on_modify_completion_helper_returns_finalized_lifecycle_result)

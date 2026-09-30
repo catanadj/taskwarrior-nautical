@@ -969,7 +969,6 @@ _scheduler_api = _LazyApiBundle(
         "factor_matches_on",
         "next_after_term",
         "next_after_expr",
-        "_weeks_between",
         "_resolve_moon_phase_date",
         "_moon_phase_matches_date",
     ),

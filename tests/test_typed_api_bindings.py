@@ -105,11 +105,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 111)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 111)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 110)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 110)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "f22126006bf7e843e4a7bb3e24f4d250c09b5e4dece6cf0110a9a3bb19a19460",
+            "b0e2b26694f04b46fcb93c415943fa80422c9505c2056384821274cbd97808c5",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -158,6 +158,10 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertNotIn("_build_anchor_atom_dnf", compat_api.PUBLIC_OWNER_MODULES)
         self.assertNotIn("_build_anchor_atom_dnf", compat_api.PUBLIC_EXPORT_CATEGORIES)
         self.assertFalse(hasattr(facade, "_build_anchor_atom_dnf"))
+        self.assertNotIn("_weeks_between", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("_weeks_between", compat_api.PUBLIC_OWNER_MODULES)
+        self.assertNotIn("_weeks_between", compat_api.PUBLIC_EXPORT_CATEGORIES)
+        self.assertFalse(hasattr(facade, "_weeks_between"))
 
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES
@@ -180,7 +184,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertNotIn("AnchorValidationResult", owners)
         self.assertEqual(owners["render_panel"], "nautical_core.ui")
         self.assertNotIn("_build_anchor_atom_dnf", owners)
-        self.assertEqual(owners["_weeks_between"], "nautical_core.scheduler_api")
+        self.assertNotIn("_weeks_between", owners)
         self.assertEqual(owners["resolve_task_data_context"], "nautical_core.runtime")
         self.assertNotIn("fcntl", owners)
         self.assertNotIn("chain_colour_root", owners)

@@ -447,6 +447,32 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     scheduler_expr = context.import_sibling("scheduler_expr") if context is not None else deps["_scheduler_expr"]
     cached_expansion = context.import_sibling("cached_expansion") if context is not None else deps["_cached_expansion"]
     ttl_lru_cache = deps["_ttl_lru_cache"]
+    expansion_binding_state: list[Any | None] = [None]
+
+    def expansion_binding() -> Any:
+        binding = expansion_binding_state[0]
+        if binding is None:
+            expansion_api = (
+                context.import_sibling("expansion_api")
+                if context is not None else deps["_import_sibling"]("expansion_api")
+            )
+            binding = expansion_api.for_core(
+                module=module,
+                namespace=namespace,
+                context=context,
+            )
+            expansion_binding_state[0] = binding
+        return binding
+
+    def weekly_spec_to_wset(spec: str, mods: dict | None = None) -> set[int]:
+        return expansion_binding()._weekly_spec_to_wset(spec, mods)
+
+    def doms_allowed_by_year(year: int, month: int, y_specs: list[str]) -> set[int]:
+        return expansion_binding()._doms_allowed_by_year(year, month, y_specs)
+
+    def doms_for_weekly_spec(spec: str, year: int, month: int) -> set[int]:
+        return expansion_binding()._doms_for_weekly_spec(spec, year, month)
+
     interval_deps = SchedulerIntervalDependencies(
         weeks_between=_weeks_between,
         year_index=deps["_year_index"],
@@ -456,7 +482,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def expand_weekly_cached_impl(spec: str) -> Any:
         return cached_expansion.expand_weekly(
             spec,
-            weekly_spec_to_wset=deps["_weekly_spec_to_wset"],
+            weekly_spec_to_wset=weekly_spec_to_wset,
         )
 
     @ttl_lru_cache(maxsize=128)
@@ -654,7 +680,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             term,
             atype=deps["_atype"],
             aspec=deps["_aspec"],
-            weekly_spec_to_wset=deps["_weekly_spec_to_wset"],
+            weekly_spec_to_wset=weekly_spec_to_wset,
         )
 
     @ttl_lru_cache(maxsize=128)
@@ -707,7 +733,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                 month_tokens_for_atom,
                 business_calendar,
             ),
-            doms_allowed_by_year=deps["_doms_allowed_by_year"],
+            doms_allowed_by_year=doms_allowed_by_year,
         )
 
     def next_for_and_rand_yearly(term: Any, ref_d: Any, y_specs: Any, seed_base: Any = None) -> Any:
@@ -719,9 +745,9 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             identity=random_identity(term),
             random_pick_index=random_pick_index,
             days_in_month=deps["_days_in_month"],
-            doms_allowed_by_year=deps["_doms_allowed_by_year"],
+            doms_allowed_by_year=doms_allowed_by_year,
             intersect_monthly_atoms_allowed=deps["_intersect_monthly_atoms_allowed"],
-            doms_for_weekly_spec=deps["_doms_for_weekly_spec"],
+            doms_for_weekly_spec=doms_for_weekly_spec,
             date_cls=date,
         )
 
@@ -752,9 +778,9 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             random_identity=random_identity,
             random_pick_index=random_pick_index,
             days_in_month=deps["_days_in_month"],
-            doms_allowed_by_year=deps["_doms_allowed_by_year"],
+            doms_allowed_by_year=doms_allowed_by_year,
             intersect_monthly_atoms_allowed=deps["_intersect_monthly_atoms_allowed"],
-            doms_for_weekly_spec=deps["_doms_for_weekly_spec"],
+            doms_for_weekly_spec=doms_for_weekly_spec,
             next_after_atom_with_mods=next_atom,
             atom_matches_on=matches,
             max_anchor_iter=deps["MAX_ANCHOR_ITER"],

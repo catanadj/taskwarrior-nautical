@@ -135,6 +135,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     parser_dnf = context.import_sibling("parsing.parser_dnf") if context is not None else deps["_parser_dnf"]
     parser_frontend = context.import_sibling("parsing.parser_frontend") if context is not None else deps["_parser_frontend"]
     quarter_binding_state: list[Any | None] = [None]
+    expansion_binding_state: list[Any | None] = [None]
     position_selection = context.import_sibling("position_selection") if context is not None else deps["_position_selection"]
     validation_deps_state: list[ParserValidationDependencies | None] = [None]
 
@@ -321,6 +322,21 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             quarter_binding_state[0] = quarter_binding
         return quarter_binding._rewrite_quarters_in_context(dnf)
 
+    def weekly_spec_to_wset(spec: str, mods: dict | None = None) -> set[int]:
+        expansion_binding = expansion_binding_state[0]
+        if expansion_binding is None:
+            expansion_api = (
+                context.import_sibling("expansion_api")
+                if context is not None else deps["_import_sibling"]("expansion_api")
+            )
+            expansion_binding = expansion_api.for_core(
+                module=module,
+                namespace=namespace,
+                context=context,
+            )
+            expansion_binding_state[0] = expansion_binding
+        return expansion_binding._weekly_spec_to_wset(spec, mods)
+
     def build_anchor_atom_dnf(head: str, full_tail: str) -> Any:
         return parser_atoms.build_anchor_atom_dnf(
             head,
@@ -421,7 +437,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def weekday_set_from_weekly_atom(atom: Any) -> set[int]:
         return deps["_satisfiability"].weekday_set_from_weekly_atom(
             atom,
-            weekly_spec_to_wset=deps["_weekly_spec_to_wset"],
+            weekly_spec_to_wset=weekly_spec_to_wset,
         )
 
     def md_pairs_from_yearly_spec(spec: str) -> set[tuple[int, int]]:

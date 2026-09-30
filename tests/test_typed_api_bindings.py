@@ -118,11 +118,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 90)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 90)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 87)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 87)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "09461a1d734b61a1a3ef8d7b6f6a52147967a8605d6a4ac05240189a732456f1",
+            "e41ebc7ca72a83cdefbd789c94cb13e4c45de85e3ae381c5e4db0e616675a5b4",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -192,6 +192,9 @@ class ApiBindingContractTests(unittest.TestCase):
             "_rewrite_quarters_in_context",
             "_doms_for_monthly_token",
             "_y_ranges_from_spec",
+            "_weekly_spec_to_wset",
+            "_doms_allowed_by_year",
+            "_doms_for_weekly_spec",
             "_validate_yearly_spec_token",
             "_validate_yearly_token_format",
             "_parse_hhmm",

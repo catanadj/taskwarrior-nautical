@@ -29,6 +29,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         namespace.pop("_skip_ws_pos", None)
         namespace.pop("_raise_if_comma_joined_anchors", None)
         namespace.pop("_rewrite_quarters_in_context", None)
+        namespace.pop("_weekly_spec_to_wset", None)
         parser = parser_api.for_core(namespace=namespace)
 
         with self.assertRaisesRegex(core.ParseError, "uses ':' between numbers"):
@@ -36,6 +37,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         with self.assertRaisesRegex(core.ParseError, "Anchors must be joined"):
             parser.parse_anchor_expr_to_dnf("m:31,w:sun")
         self.assertEqual(parser.parse_anchor_expr_to_dnf("w:mon@t=09:00")[0][0]["mods"]["t"], (9, 0))
+        self.assertEqual(parser._weekday_set_from_weekly_atom({"typ": "w", "spec": "mon"}), {0})
         self.assertTrue(parser.parse_anchor_expr_to_dnf("y:q1")[0][0]["spec"].startswith("01-01"))
 
     def test_incompatible_moon_phases_are_rejected_by_both_public_parsers(self) -> None:
@@ -43,6 +45,23 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             with self.subTest(parser=parser.__name__):
                 with self.assertRaisesRegex(Exception, "incompatible moon phases"):
                     parser("moon:full + moon:new")
+
+    def test_scheduler_uses_expansion_owner_without_root_callbacks(self) -> None:
+        namespace = vars(core).copy()
+        namespace.pop("_weekly_spec_to_wset", None)
+        namespace.pop("_doms_allowed_by_year", None)
+        namespace.pop("_doms_for_weekly_spec", None)
+        scheduler = scheduler_api.for_core(namespace=namespace)
+
+        self.assertEqual(scheduler._expand_weekly_cached_impl("mon"), [0])
+        term = [
+            {"typ": "w", "spec": "mon", "ival": 1, "mods": {}},
+            {"typ": "y", "spec": "01-05", "ival": 1, "mods": {}},
+        ]
+        self.assertEqual(
+            scheduler._term_candidates_in_month(term, 2026, 1, -1, False),
+            [date(2026, 1, 5)],
+        )
 
     def test_acf_spec_normalization_bounds_input_and_rejects_unknown_types(self) -> None:
         self.assertEqual(self.acf._normalize_spec_for_acf_cached("w", "mon", "MD"), "mon")

@@ -355,6 +355,7 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
                 configuration=SimpleNamespace(fingerprint="domain-parity"),
             ),
             repository=Repository(),
+            mutation_epoch=0,
         )
         query_request = OccurrenceQueryRequest.from_mapping(
             {

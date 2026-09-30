@@ -29,6 +29,7 @@ def _uow(repository: object, local_timezone: timezone = timezone.utc) -> SimpleN
             configuration=SimpleNamespace(fingerprint="query-config"),
         ),
         repository=repository,
+        mutation_epoch=0,
     )
 
 

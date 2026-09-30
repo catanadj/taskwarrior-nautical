@@ -6,10 +6,10 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 import hashlib
 import json
-from typing import Any, Callable, Literal, Mapping, TypeAlias, cast
+from typing import Any, Callable, Literal, Mapping, Protocol, TypeAlias, cast
 
 from .integration_models import Absent, Found
-from .integration_context import IntegrationAccess
+from .integration_context import IntegrationAccess, IntegrationContext
 from .business_calendar import BusinessCalendar
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .recurrence_context import RecurrenceContext
@@ -17,7 +17,11 @@ from .task_codec import TaskCodec
 from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from .scheduler_service import SchedulerService
 from .chain_generation import ChainGenerationService
-from .task_read_repository import ACTIVE_TASK_STATUSES, ALL_TASK_STATUSES
+from .task_read_repository import (
+    ACTIVE_TASK_STATUSES,
+    ALL_TASK_STATUSES,
+    TaskReadRepository,
+)
 from .task_models import FieldPresence, NauticalTask, TaskObservation
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_datetime import TaskDatetimeParser, parser_for_core
@@ -42,6 +46,12 @@ from .hook_workflow_models import WorkflowRoute
 
 class QueryServiceError(RuntimeError):
     """Raised when a query cannot be safely constructed or executed."""
+
+
+class _OccurrenceQueryUnitOfWork(Protocol):
+    context: IntegrationContext
+    repository: TaskReadRepository
+    mutation_epoch: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,15 +228,26 @@ def _terminal(result: OccurrenceCollectionResult) -> Mapping[str, Any] | None:
 class OccurrenceQueryService:
     """Resolve bounded occurrence queries without mutation or subprocesses."""
 
-    def __init__(self, unit_of_work: Any, *, runtime: OccurrenceQueryRuntime) -> None:
-        context = getattr(unit_of_work, "context", None)
-        if context is None or getattr(context, "access", None) is not IntegrationAccess.READ_ONLY:
+    def __init__(
+        self,
+        unit_of_work: _OccurrenceQueryUnitOfWork,
+        *,
+        runtime: OccurrenceQueryRuntime,
+    ) -> None:
+        try:
+            context = unit_of_work.context
+            access = context.access
+            local_timezone = context.local_timezone
+        except AttributeError as exc:
+            raise QueryServiceError(
+                "occurrence queries require a read-only Taskwarrior unit of work"
+            ) from exc
+        if access is not IntegrationAccess.READ_ONLY:
             raise QueryServiceError("occurrence queries require a read-only Taskwarrior unit of work")
         if not isinstance(runtime, OccurrenceQueryRuntime):
             raise TypeError("occurrence queries require explicit recurrence runtime services")
         self._uow = unit_of_work
         self._runtime = runtime
-        local_timezone = getattr(context, "local_timezone", None)
         if not isinstance(local_timezone, tzinfo):
             raise QueryServiceError("validated local timezone is unavailable")
         self._timezone: tzinfo = local_timezone
@@ -377,8 +398,8 @@ class OccurrenceQueryService:
                 raise QueryServiceError("query cursors are supported only for --all task queries")
             return rows, None, True
         snapshot_id = self._snapshot_id(rows)
-        configuration = str(getattr(self._uow.context.configuration, "fingerprint", ""))
-        epoch = str(getattr(self._uow, "mutation_epoch", 0))
+        configuration = self._uow.context.configuration.fingerprint
+        epoch = str(self._uow.mutation_epoch)
         if request.cursor is not None:
             try:
                 request.cursor.assert_compatible(snapshot_id, configuration, epoch)
@@ -598,7 +619,7 @@ class OccurrenceQueryService:
                 request=request,
                 timezone=_timezone_name(self._timezone),
                 status="unavailable",
-                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                configuration_fingerprint=self._uow.context.configuration.fingerprint,
                 failure=rows,
             )
         try:
@@ -608,7 +629,7 @@ class OccurrenceQueryService:
                 request=request,
                 timezone=_timezone_name(self._timezone),
                 status="unavailable",
-                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                configuration_fingerprint=self._uow.context.configuration.fingerprint,
                 failure=_failure("cursor_unavailable", str(exc), retryable=False),
                 coverage={"kind": "unavailable", "reason": str(exc)},
             )
@@ -672,7 +693,7 @@ class OccurrenceQueryService:
                 Literal["found", "empty", "exhausted", "absent", "unavailable", "invalid"],
                 status,
             ),
-            configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+            configuration_fingerprint=self._uow.context.configuration.fingerprint,
             cursor=next_cursor,
             complete=complete,
             coverage={
@@ -685,7 +706,7 @@ class OccurrenceQueryService:
                 ),
                 "omitted_count": max(0, len(rows) - len(page_rows)),
                 "snapshot_id": self._snapshot_id(rows),
-                "mutation_epoch": str(getattr(self._uow, "mutation_epoch", 0)),
+                "mutation_epoch": str(self._uow.mutation_epoch),
             },
         )
 
@@ -929,7 +950,7 @@ class OccurrenceQueryService:
                 request=request,
                 timezone=_timezone_name(self._timezone),
                 status="unavailable",
-                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                configuration_fingerprint=self._uow.context.configuration.fingerprint,
                 failure=rows,
                 schema="nautical.query.next",
             )
@@ -944,7 +965,7 @@ class OccurrenceQueryService:
                 Literal["found", "empty", "exhausted", "absent", "unavailable", "invalid"],
                 status,
             ),
-            configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+            configuration_fingerprint=self._uow.context.configuration.fingerprint,
             schema="nautical.query.next",
         )
 

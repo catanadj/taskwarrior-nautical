@@ -366,77 +366,8 @@ def _test_modify_engine_services(
     )
 
 
-def test_load_benchmark_installs_complete_hook_runtime():
-    """The end-to-end benchmark must install on-exit and the Nautical UDAs."""
-    load_test = _load_hook_module(
-        os.path.join(DEV_TOOLS, "load_test_nautical.py"),
-        "_nautical_load_test_runtime_test",
-    )
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        data_dir = root / "taskdata"
-        hooks_dir = data_dir / "hooks"
-        taskrc = root / "taskrc"
-        config = root / "config-nautical.toml"
-        data_dir.mkdir()
-        load_test._install_hooks(hooks_dir)
-        load_test._write_taskrc(taskrc, data_dir, hooks_dir)
-        load_test._write_nautical_config(config)
-
-        for hook_name in ("on-add", "on-modify", "on-exit"):
-            hook = hooks_dir / hook_name
-            expect(hook.is_file(), f"load benchmark did not install {hook_name}")
-            expect(os.access(hook, os.X_OK), f"load benchmark hook is not executable: {hook_name}")
-        taskrc_text = taskrc.read_text(encoding="utf-8")
-        expect(f"hooks.location={hooks_dir}" in taskrc_text, f"missing hooks.location: {taskrc_text!r}")
-        expect(f"include {Path(ROOT) / 'uda.conf'}" in taskrc_text, f"missing UDA include: {taskrc_text!r}")
-        expect("verbose=nothing" not in taskrc_text, "benchmark must preserve task IDs in command output")
-        expect('tz = "UTC"' in config.read_text(encoding="utf-8"), "benchmark config should be deterministic")
 
 
-def test_load_benchmark_queue_and_lineage_verification():
-    """Benchmark validation should detect active SQLite work and broken parent-child links."""
-    load_test = _load_hook_module(
-        os.path.join(DEV_TOOLS, "load_test_nautical.py"),
-        "_nautical_load_test_validation_test",
-    )
-    with tempfile.TemporaryDirectory() as td:
-        data_dir = Path(td)
-        state_dir = data_dir / ".nautical-state"
-        state_dir.mkdir()
-        db_path = state_dir / ".nautical_queue.db"
-        with sqlite3.connect(str(db_path)) as conn:
-            conn.execute(
-                "CREATE TABLE queue_entries (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, state TEXT NOT NULL)"
-            )
-            conn.execute("INSERT INTO queue_entries(payload, state) VALUES (?, ?)", ('{"child":1}', "queued"))
-            conn.execute("INSERT INTO queue_entries(payload, state) VALUES (?, ?)", ('{"child":2}', "done"))
-        metrics = load_test._queue_metrics(data_dir)
-        expect(metrics == {"items": 1, "bytes": len('{"child":1}')}, f"bad active queue metrics: {metrics!r}")
-
-    parent_uuid = "11111111-0000-0000-0000-000000000001"
-    child_uuid = "22222222-0000-0000-0000-000000000002"
-    rows = [
-        {
-            "uuid": parent_uuid,
-            "status": "completed",
-            "chainID": "chain-a",
-            "link": 1,
-            "nextLink": "22222222",
-        },
-        {
-            "uuid": child_uuid,
-            "status": "pending",
-            "chainID": "chain-a",
-            "link": 2,
-            "prevLink": "11111111",
-        },
-    ]
-    valid = load_test._verify_link_rows(rows, [parent_uuid])
-    expect(valid == {"expected": 1, "verified": 1, "failures": []}, f"valid lineage was rejected: {valid!r}")
-    rows[1]["prevLink"] = "wrong"
-    invalid = load_test._verify_link_rows(rows, [parent_uuid])
-    expect(invalid.get("verified") == 0 and invalid.get("failures"), f"broken lineage was accepted: {invalid!r}")
 
 
 
@@ -1300,51 +1231,6 @@ def test_navigator_reads_through_read_only_invocation_repository():
 
 
 
-def test_on_modify_panel_fallback():
-    """on-modify panel should fall back to plain output on errors."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_panel_fallback_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    orig_term = mod.core.term_width_stderr
-    mod.core.term_width_stderr = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom"))
-    stderr = io.StringIO()
-    orig_stderr = sys.stderr
-    try:
-        sys.stderr = stderr
-        mod._panel("Test Panel", [("Key", "Value")], kind="info")
-    finally:
-        sys.stderr = orig_stderr
-        mod.core.term_width_stderr = orig_term
-
-    out = stderr.getvalue()
-    expect("Test Panel" in out, "fallback panel should emit title")
-
-
-def test_on_modify_panel_forwards_live_duration():
-    """on-modify should pass the configured total live duration to the shared renderer."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_live_duration_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    captured = {}
-    original_render = mod.core.render_panel
-    try:
-        mod.core.render_panel = lambda *_args, **kwargs: captured.update(kwargs)
-        mod._panel("Live duration", [("Key", "Value")], kind="info")
-    finally:
-        mod.core.render_panel = original_render
-
-    expect(
-        captured.get("live_duration_ms") == mod.core.LIVE_PANEL_DURATION_MS,
-        f"on-modify did not forward live duration: {captured!r}",
-    )
-    expect(
-        captured.get("themes") == mod.core.panel_themes(),
-        f"on-modify did not use shared semantic themes: {captured!r}",
-    )
 
 
 def test_ui_live_test_term_guard_restores_environment():
@@ -1751,42 +1637,6 @@ def test_reconcile_planning_configuration_drift_is_partial():
 
 
 
-def test_on_modify_lifecycle_export_reuses_completion_chain_snapshot():
-    """Lifecycle filtering and completion presentation share one chain export."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_lifecycle_export_reuse_test")
-    mod._reset_modify_runtime_state()
-    saved_analytics = mod._SHOW_ANALYTICS
-    mod._SHOW_ANALYTICS = True
-    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
-
-    uow = _test_operator_uow()
-    calls = {"count": 0}
-
-    class Client:
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            calls["count"] += 1
-            rows = [{
-                "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                "chainID": "reuse02",
-                "link": 2,
-                "chain": "on",
-                "status": "pending",
-            }]
-            command = TaskCommand(("task", *args), purpose, timeout)
-            return TaskCommandResult(command, 0, json.dumps(rows), "", CommandFailureKind.SUCCESS, 1, 0.001)
-
-    uow.client = Client()
-    mod._modify_runtime_state().task_repository = uow.repository
-    try:
-        rows = mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export("reuse02")
-        expect(len(rows) == 1, f"lifecycle chain export returned unexpected rows: {rows!r}")
-        snapshot = mod._completion_effects.chain_snapshot("reuse02", 1, 2, uow.repository)
-        expect(snapshot.loaded and snapshot.rows, f"completion snapshot did not reuse chain rows: {snapshot!r}")
-        expect(calls["count"] == 1, f"lifecycle and completion repeated chain export: {calls}")
-    finally:
-        mod._SHOW_ANALYTICS = saved_analytics
-        mod._reset_modify_runtime_state()
 
 
 TESTS = [
@@ -1820,10 +1670,9 @@ TESTS = [
     *PERFORMANCE_TESTS[7:8],
     *PERFORMANCE_TESTS[:3],
     *PERFORMANCE_TESTS[8:9],
-    test_load_benchmark_installs_complete_hook_runtime,
-    test_load_benchmark_queue_and_lineage_verification,
+    *PERFORMANCE_TESTS[12:14],
     *PERFORMANCE_TESTS[3:6],
-    *PERFORMANCE_TESTS[9:],
+    *PERFORMANCE_TESTS[9:12],
     *PERFORMANCE_TESTS[6:7],
     *SCHEDULING_TESTS[1:5],
     *MODIFY_TESTS[36:37],
@@ -1839,11 +1688,10 @@ TESTS = [
     *TIMELINE_TESTS[3:5],
     *TIMELINE_TESTS[5:6],
     *LIFECYCLE_TESTS[20:23],
-    test_on_modify_panel_fallback,
-    test_on_modify_panel_forwards_live_duration,
+    *MODIFY_TESTS[40:42],
     test_ui_live_test_term_guard_restores_environment,
     *LIFECYCLE_TESTS[26:30],
-    test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,
+    *LIFECYCLE_TESTS[30:31],
     *LIFECYCLE_TESTS[23:24],
     *LIFECYCLE_TESTS[19:20],
     *MODIFY_TESTS[38:39],

@@ -2440,3 +2440,45 @@ TESTS = TESTS + (
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_completion_snapshot_reuses_full_chain_read,
 )
+
+
+def test_on_modify_lifecycle_export_reuses_completion_chain_snapshot():
+    """Lifecycle filtering and completion presentation share one chain export."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_lifecycle_export_reuse_test")
+    mod._reset_modify_runtime_state()
+    saved_analytics = mod._SHOW_ANALYTICS
+    mod._SHOW_ANALYTICS = True
+    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
+
+    uow = test_operator_uow()
+    calls = {"count": 0}
+
+    class Client:
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            calls["count"] += 1
+            rows = [{
+                "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "chainID": "reuse02",
+                "link": 2,
+                "chain": "on",
+                "status": "pending",
+            }]
+            command = TaskCommand(("task", *args), purpose, timeout)
+            return TaskCommandResult(command, 0, json.dumps(rows), "", CommandFailureKind.SUCCESS, 1, 0.001)
+
+    uow.client = Client()
+    mod._modify_runtime_state().task_repository = uow.repository
+    try:
+        rows = mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export("reuse02")
+        expect(len(rows) == 1, f"lifecycle chain export returned unexpected rows: {rows!r}")
+        snapshot = mod._completion_effects.chain_snapshot("reuse02", 1, 2, uow.repository)
+        expect(snapshot.loaded and snapshot.rows, f"completion snapshot did not reuse chain rows: {snapshot!r}")
+        expect(calls["count"] == 1, f"lifecycle and completion repeated chain export: {calls}")
+    finally:
+        mod._SHOW_ANALYTICS = saved_analytics
+        mod._reset_modify_runtime_state()
+
+TESTS = TESTS + (
+    test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,
+)

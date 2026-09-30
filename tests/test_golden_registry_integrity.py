@@ -984,7 +984,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             if name.startswith("test_") and callable(value)
         }
         self.assertTrue(set(expected) <= registered)
-        self.assertEqual(tuple(test.__name__ for test in performance.TESTS[-5:]), expected)
+        self.assertEqual(tuple(test.__name__ for test in performance.TESTS[7:12]), expected)
         self.assertFalse(set(expected) & top_level)
 
     def test_modify_feedback_cases_are_owned_by_modify_domain(self):
@@ -1125,6 +1125,51 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(tuple(test.__name__ for test in modify.TESTS[35:40]), expected)
         self.assertFalse(set(expected) & top_level)
 
+    def test_hook_panel_cases_are_owned_by_modify_domain(self):
+        modify = importlib.import_module("dev_tools.golden_tests.modify")
+        expected = (
+            "test_on_modify_panel_fallback",
+            "test_on_modify_panel_forwards_live_duration",
+        )
+        registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+        self.assertTrue(set(expected) <= registered)
+        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[40:42]), expected)
+        self.assertFalse(set(expected) & top_level)
+
+    def test_completion_lifecycle_export_reuse_is_owned_by_lifecycle_domain(self):
+        lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
+        expected = ("test_on_modify_lifecycle_export_reuses_completion_chain_snapshot",)
+        registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+        self.assertTrue(set(expected) <= registered)
+        self.assertEqual(tuple(test.__name__ for test in lifecycle.TESTS[30:31]), expected)
+        self.assertFalse(set(expected) & top_level)
+
+    def test_load_benchmarks_are_owned_by_performance_domain(self):
+        performance = importlib.import_module("dev_tools.golden_tests.performance")
+        expected = (
+            "test_load_benchmark_installs_complete_hook_runtime",
+            "test_load_benchmark_queue_and_lineage_verification",
+        )
+        registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+        self.assertTrue(set(expected) <= registered)
+        self.assertEqual(tuple(test.__name__ for test in performance.TESTS[12:14]), expected)
+        self.assertFalse(set(expected) & top_level)
+
     def test_completion_snapshot_cases_are_owned_by_lifecycle_domain(self):
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         expected = (
@@ -1251,16 +1296,16 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
-        self.assertEqual(len(top_level), 28)
+        self.assertEqual(len(top_level), 23)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
         self.assertEqual(len(configuration.TESTS), 15)
         self.assertEqual(len(installer.TESTS), 9)
-        self.assertEqual(len(performance.TESTS), 12)
+        self.assertEqual(len(performance.TESTS), 14)
         modify = importlib.import_module("dev_tools.golden_tests.modify")
-        self.assertEqual(len(modify.TESTS), 40)
-        self.assertEqual(len(lifecycle.TESTS), 30)
+        self.assertEqual(len(modify.TESTS), 42)
+        self.assertEqual(len(lifecycle.TESTS), 31)
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)

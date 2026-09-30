@@ -1659,48 +1659,6 @@ def test_perf_hint_benchmark_isolates_persistent_cache():
         perf.core.build_and_cache_hints = original_build
 
 
-def test_deploy_sanity_enforces_removed_lifecycle_ownership():
-    """Deployment checks must reject reintroduced exit modules or reconcile seams."""
-    import shutil
-    import tempfile
-
-    path = Path(ROOT) / "dev_tools" / "nautical_deploy_sanity.py"
-    module = _load_hook_module(str(path), "_nautical_removed_ownership_deploy_test")
-    results = module._check_removed_ownership(Path(ROOT))
-    failures = [item for item in results if not item.get("ok")]
-    expect(not failures, f"removed lifecycle ownership checks failed: {failures!r}")
-
-    with tempfile.TemporaryDirectory() as td:
-        staged = Path(td)
-        (staged / "nautical_core" / "tools").mkdir(parents=True)
-        shutil.copy2(Path(ROOT) / "nautical_core" / "runtime_manifest.py", staged / "nautical_core" / "runtime_manifest.py")
-        (staged / "nautical_core" / "exit_models.py").write_text("# stale module\n", encoding="utf-8")
-        (staged / "nautical_core" / "tools" / "nautical_reconcile.py").write_text(
-            "_validate_hook_protocol = object()\n", encoding="utf-8"
-        )
-        failures = [item for item in module._check_removed_ownership(staged) if not item.get("ok")]
-        expect(len(failures) >= 2, f"reintroduced ownership paths were not rejected: {failures!r}")
-
-    with tempfile.TemporaryDirectory() as td:
-        staged = Path(td)
-        (staged / "nautical_core" / "tools").mkdir(parents=True)
-        shutil.copy2(Path(ROOT) / "nautical_core" / "runtime_manifest.py", staged / "nautical_core" / "runtime_manifest.py")
-        (staged / "nautical_core" / "tools" / "nautical_reconcile.py").write_text(
-            "from nautical_core.hooks import modify_impl\n", encoding="utf-8"
-        )
-        failures = [item for item in module._check_removed_ownership(staged) if not item.get("ok")]
-        expect(
-            any(item.get("name") == "operator-hook-imports:nautical_core/tools/nautical_reconcile.py" for item in failures),
-            f"operator hook import was not rejected: {failures!r}",
-        )
-
-    results = module._check_removed_ownership(Path(ROOT))
-    expect(
-        any(item.get("name") == "pure-integrity:nautical_core/chain_graph.py" for item in results),
-        f"pure integrity import checks were not reported: {results!r}",
-    )
-
-
 def test_perf_hook_fast_path_ratio_enforcement():
     """Hook latency checks should enforce the normalized fast/full median ratio."""
     perf = _load_hook_module(
@@ -1832,97 +1790,6 @@ def test_load_benchmark_queue_and_lineage_verification():
     expect(invalid.get("verified") == 0 and invalid.get("failures"), f"broken lineage was accepted: {invalid!r}")
 
 
-def test_deploy_sanity_rejects_missing_lazy_lifecycle_module():
-    """Deployment sanity must fail when a declared lazy module is absent."""
-    path = os.path.join(DEV_TOOLS, "nautical_deploy_sanity.py")
-    with tempfile.TemporaryDirectory() as td:
-        candidate = Path(td) / "candidate"
-        shutil.copytree(
-            ROOT,
-            candidate,
-            ignore=shutil.ignore_patterns(".git", "__pycache__", ".nautical-cache", ".nautical_cache"),
-        )
-        missing = candidate / "nautical_core" / "modify_completion_compute.py"
-        missing.unlink()
-        proc = subprocess.run(
-            [sys.executable, path, "--root", str(candidate), "--no-require-exec", "--json"],
-            text=True,
-            capture_output=True,
-            timeout=20.0,
-        )
-        expect(proc.returncode != 0, "deploy sanity accepted a release missing a lazy module")
-        payload = json.loads((proc.stdout or "{}").strip() or "{}")
-        results = payload.get("results") if isinstance(payload.get("results"), list) else []
-        expect(
-            any(
-                item.get("path") == "nautical_core/modify_completion_compute.py" and not item.get("ok")
-                for item in results
-                if isinstance(item, dict)
-            ),
-            f"missing lazy module was not reported by required-file checks: {results}",
-        )
-        expect(
-            any(
-                item.get("kind") == "lazy-modules"
-                and item.get("name") == "on-modify"
-                and not item.get("ok")
-                for item in results
-                if isinstance(item, dict)
-            ),
-            f"modify lazy import smoke did not fail: {results}",
-        )
-
-
-def test_deploy_sanity_rejects_missing_operator_runtime_tool():
-    """Deployment sanity must cover every command dispatched by nautical."""
-    path = os.path.join(DEV_TOOLS, "nautical_deploy_sanity.py")
-    with tempfile.TemporaryDirectory() as td:
-        candidate = Path(td) / "candidate"
-        shutil.copytree(
-            ROOT,
-            candidate,
-            ignore=shutil.ignore_patterns(".git", "__pycache__", ".nautical-cache", ".nautical_cache"),
-        )
-        missing = candidate / "nautical_core" / "tools" / "nautical_doctor.py"
-        missing.unlink()
-        proc = subprocess.run(
-            [sys.executable, path, "--root", str(candidate), "--no-require-exec", "--json"],
-            text=True,
-            capture_output=True,
-            timeout=20.0,
-        )
-        expect(proc.returncode != 0, "deploy sanity accepted a release missing an operator tool")
-        payload = json.loads((proc.stdout or "{}").strip() or "{}")
-        results = payload.get("results") if isinstance(payload.get("results"), list) else []
-        expect(
-            any(
-                item.get("path") == "nautical_core/tools/nautical_doctor.py" and not item.get("ok")
-                for item in results
-                if isinstance(item, dict)
-            ),
-            f"missing operator tool was not reported: {results}",
-        )
-
-
-def test_deploy_sanity_rejects_unowned_taskwarrior_subprocess():
-    """Deployment checks keep Taskwarrior process ownership in one client."""
-    module = _load_hook_module(
-        os.path.join(DEV_TOOLS, "nautical_deploy_sanity.py"),
-        "_nautical_deploy_process_ownership_test",
-    )
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        core_dir = root / "nautical_core"
-        core_dir.mkdir()
-        (core_dir / "bad_runner.py").write_text(
-            "import subprocess\nsubprocess.run(['task', 'export'])\n",
-            encoding="utf-8",
-        )
-        result = module._check_taskwarrior_process_ownership(root)
-        expect(result and not result[0]["ok"], f"unowned subprocess was accepted: {result}")
-        expect("bad_runner.py:2" in result[0]["message"], f"violation location was lost: {result}")
-
-
 def test_hook_replay_harness_reports_ok():
     """Replay harness should pass the seeded hook corpus."""
     path = os.path.join(DEV_TOOLS, "nautical_hook_replay.py")
@@ -1988,22 +1855,6 @@ def test_soak_runner_reports_ok():
     expect(obj.get("ok") is True, f"unexpected soak status: {obj}")
     expect(not obj.get("violations"), f"soak runner reported violations: {obj}")
 
-
-def test_ops_templates_present_and_runner_executable():
-    """ops templates should exist and runner script should be executable."""
-    ops = os.path.join(DEV_TOOLS, "ops")
-    files = [
-        "README.md",
-        "nautical-health-check.crontab",
-        "nautical-health-check.service",
-        "nautical-health-check.timer",
-        "nautical_health_check_cron.sh",
-    ]
-    for name in files:
-        p = os.path.join(ops, name)
-        expect(os.path.isfile(p), f"missing ops template: {p}")
-    runner = os.path.join(ops, "nautical_health_check_cron.sh")
-    expect(os.access(runner, os.X_OK), f"runner should be executable: {runner}")
 
 def test_core_recurrence_update_udas_config_aliases():
     """recurrence UDA carry config should accept top-level and [recurrence] alias forms."""
@@ -6611,18 +6462,15 @@ TESTS = [
     *OPERATOR_TESTS[12:13],
     *OPERATOR_TESTS[13:17],
     test_perf_hint_benchmark_isolates_persistent_cache,
-    *PERFORMANCE_TESTS,
-    test_deploy_sanity_enforces_removed_lifecycle_ownership,
+    *PERFORMANCE_TESTS[:3],
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,
-    test_deploy_sanity_rejects_missing_lazy_lifecycle_module,
-    test_deploy_sanity_rejects_missing_operator_runtime_tool,
-    test_deploy_sanity_rejects_unowned_taskwarrior_subprocess,
+    *PERFORMANCE_TESTS[3:6],
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,
     test_soak_runner_reports_ok,
-    test_ops_templates_present_and_runner_executable,
+    *PERFORMANCE_TESTS[6:],
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_modify_completion_advances_past_second_dst_fold,
     test_modify_overnight_window_advances_past_second_dst_fold,

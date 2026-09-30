@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .lifecycle_models import ExecutionStage, LifecycleContractError, LifecyclePlan
+from .models import ExecutionStage, LifecycleContractError, LifecyclePlan
 _STAGE_ORDER = {
     ExecutionStage.PLANNED: 0,
     ExecutionStage.PERSISTED: 0,

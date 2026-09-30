@@ -41,9 +41,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_lifecycle_configuration_drift_blocks_mutation():
     """A plan persisted under one configuration cannot mutate under another."""
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
 
     class _Uow:
         mutation_epoch = 0
@@ -85,9 +85,9 @@ def test_lifecycle_configuration_drift_blocks_mutation():
 
 def test_lifecycle_application_staging_only_service_rejects_execution():
     """A service without mutation dependencies may stage but not execute."""
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationError
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import LifecycleApplicationService, LifecycleApplicationError
 
     with tempfile.TemporaryDirectory() as td:
         service = LifecycleApplicationService(outbox=_LifecycleOutboxRepository(Path(td)), owner="on-modify")
@@ -107,8 +107,8 @@ def test_lifecycle_outbox_two_process_claims_are_exclusive():
     """Two independent drain workers cannot claim the same lifecycle intent."""
     import tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 
     parent_uuid = "00000000-0000-4000-8000-000000000911"
     child_uuid = "00000000-0000-4000-8000-000000000912"
@@ -122,7 +122,7 @@ def test_lifecycle_outbox_two_process_claims_are_exclusive():
     )
     worker = (
         "import json, sys; from pathlib import Path; "
-        "from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository; "
+        "from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository; "
         "repo = _LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
         "result, records = repo.claim_batch(owner=sys.argv[2], lease_seconds=5.0, limit=1); "
         "print(json.dumps({'kind': result.kind.value, 'count': len(records)}), flush=True)"
@@ -150,8 +150,8 @@ def test_lifecycle_queue_and_reconcile_claims_are_exclusive():
     """FIFO drain and exact reconcile claims cannot own one intent together."""
     import tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 
     parent_uuid = "00000000-0000-4000-8000-000000000921"
     child_uuid = "00000000-0000-4000-8000-000000000922"
@@ -165,7 +165,7 @@ def test_lifecycle_queue_and_reconcile_claims_are_exclusive():
     )
     worker = (
         "import json, sys; from pathlib import Path; "
-        "from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository; "
+        "from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository; "
         "repo = _LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
         "batch = repo.claim_batch(owner=sys.argv[2], lease_seconds=5.0, limit=1) if sys.argv[3] == 'queue' else None; "
         "result = batch[0] if batch is not None else repo.claim_intent(owner=sys.argv[2], lease_seconds=5.0, intent_id=sys.argv[4]); "
@@ -203,8 +203,8 @@ def test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process():
     """An expired owner cannot retain a claim; the next process can recover it."""
     import tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository, OutboxResultKind
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository, OutboxResultKind
 
     parent_uuid = "00000000-0000-4000-8000-000000000931"
     child_uuid = "00000000-0000-4000-8000-000000000932"
@@ -225,7 +225,7 @@ def test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process():
         time.sleep(0.08)
         worker = (
             "import sys; from pathlib import Path; "
-            "from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository; "
+            "from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository; "
             "repo = _LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
             "result = repo.claim_intent(owner='replacement', lease_seconds=5.0, intent_id=sys.argv[2]); "
             "print(result.kind.value, flush=True); raise SystemExit(0 if result.ok else 1)"
@@ -250,11 +250,11 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
     repeated calls for the same transition."""
     import tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import (
+    from nautical_core.lifecycle.models import (
         LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard,
         recurrence_fingerprint,
     )
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 
     hook = find_hook_file("on-modify.nautical")
     mod = load_hook_module(hook, "_nautical_on_modify_staged_guard_test")
@@ -357,9 +357,9 @@ TESTS = (
 
 def test_lifecycle_application_renews_batch_leases_before_mutation():
     """A slow batched import must not proceed to parent linking after expiry."""
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
     from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
     now = [100.0]
     class _Scripted:
@@ -392,9 +392,9 @@ def test_lifecycle_application_outbox_faults_are_retryable():
     """Outbox persist, claim, and manual-review faults never appear durable."""
     import tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
 
     class _Uow:
         mutation_epoch = 0
@@ -442,8 +442,8 @@ def test_lifecycle_shuffled_process_drains_converge_to_same_outbox_state():
     """Repeated worker processes converge despite shuffled staging order."""
     import tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 
     plans = []
     for index in range(3):
@@ -461,7 +461,7 @@ def test_lifecycle_shuffled_process_drains_converge_to_same_outbox_state():
     worker = (
         "import json, sys\n"
         "from pathlib import Path\n"
-        "from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository\n"
+        "from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository\n"
         "repo = _LifecycleOutboxRepository(Path(sys.argv[1]))\n"
         "claimed = []\n"
         "while True:\n"
@@ -507,11 +507,11 @@ def test_lifecycle_application_idempotency_and_duplicate_staging():
     intent produces already_applied and draining an empty outbox is a no-op."""
     import tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import (
+    from nautical_core.lifecycle.models import (
         LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard,
     )
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import (
         LifecycleApplicationService, LifecycleApplicationOutcomeKind,
     )
     from nautical_core.integration_models import (
@@ -565,11 +565,11 @@ def test_lifecycle_application_execute_staged_targets_exact_intent():
     work completely untouched."""
     import tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import (
+    from nautical_core.lifecycle.models import (
         LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard,
     )
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import (
         LifecycleApplicationService, LifecycleApplicationOutcomeKind,
     )
     from nautical_core.integration_models import (
@@ -638,11 +638,11 @@ def test_lifecycle_application_happy_path_real_stack():
     """stage + drain produces an applied outcome and mutates Taskwarrior state."""
     import json, tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import (
+    from nautical_core.lifecycle.models import (
         LifecycleAction, LifecycleDrainStage, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
     )
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import (
         LifecycleApplicationService, LifecycleApplicationOutcomeKind,
     )
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
@@ -712,7 +712,7 @@ def test_lifecycle_application_happy_path_real_stack():
             self.mutation_epoch += 1
             return self.mutation_epoch
 
-    from nautical_core.lifecycle_models import recurrence_fingerprint as _rfp
+    from nautical_core.lifecycle.models import recurrence_fingerprint as _rfp
     parent_uuid = "00000000-0000-4000-8000-000000000101"
     child_uuid  = "00000000-0000-4000-8000-000000000102"
     parent_uuid_2 = "00000000-0000-4000-8000-000000000201"
@@ -794,9 +794,9 @@ def test_lifecycle_application_happy_path_real_stack():
         expect(uow.repository.broad_calls == 0, f"drain used broad history exports: {uow.repository.broad_calls}")
 def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
     """A crash at each stage boundary resumes from the correct next step."""
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, ExecutionStage
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, ExecutionStage
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
     from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition, FailureEvidence, CommandFailureKind, TaskCommand
 
     class _Scripted:
@@ -856,9 +856,9 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
 
 def test_lifecycle_application_stage_failure_matrix_resumes_idempotently():
     """Each persisted spawn boundary can fail once and resume without unsafe duplication."""
-    from nautical_core.lifecycle_models import ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository, OutboxResult, OutboxResultKind
-    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+    from nautical_core.lifecycle.models import ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository, OutboxResult, OutboxResultKind
+    from nautical_core.lifecycle.application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
     from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
 
     class _Uow:
@@ -943,11 +943,11 @@ def test_lifecycle_application_conflict_and_retry_budget_outcomes():
     budget quarantine the intent rather than looping."""
     import tempfile
     from pathlib import Path
-    from nautical_core.lifecycle_models import (
+    from nautical_core.lifecycle.models import (
         LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard,
     )
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-    from nautical_core.lifecycle_application import (
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import (
         LifecycleApplicationService, LifecycleApplicationOutcomeKind,
     )
     from nautical_core.integration_models import (
@@ -1050,7 +1050,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         TaskCommandResult,
         Unavailable,
     )
-    from nautical_core.lifecycle_models import recurrence_fingerprint
+    from nautical_core.lifecycle.models import recurrence_fingerprint
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
@@ -1359,14 +1359,14 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
     """The durable outbox owns immutable plans, leases, stages, and poison rows."""
     import threading
 
-    from nautical_core.lifecycle_models import (
+    from nautical_core.lifecycle.models import (
         LifecycleAction,
         LifecycleEvent,
         LifecycleIdentity,
         LifecyclePlan,
         ParentGuard,
     )
-    from nautical_core.lifecycle_outbox import (
+    from nautical_core.lifecycle.outbox import (
         _LifecycleOutboxRepository,
         OutboxFailure,
         OutboxProcessingState,
@@ -1432,7 +1432,7 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
 import json
 import sys
 from pathlib import Path
-from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 
 repository = _LifecycleOutboxRepository(Path(sys.argv[1]))
 result = repository.claim_intent(
@@ -1729,7 +1729,7 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
     """First-open races are bounded, WAL-backed, and never silently downgrade schema."""
     import threading
 
-    from nautical_core.lifecycle_outbox import (
+    from nautical_core.lifecycle.outbox import (
         _LifecycleOutboxRepository,
         OUTBOX_LEGACY_SCHEMA_VERSION,
         OUTBOX_SCHEMA_VERSION,
@@ -1740,7 +1740,7 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         root = Path(td)
         worker = (
             "import sys; from pathlib import Path; "
-            "from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository; "
+            "from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository; "
             "result = _LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=0.5).open(); "
             "print(result.kind.value, flush=True); raise SystemExit(0 if result.ok else 1)"
         )
@@ -1821,7 +1821,7 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
 
 def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
     """Quarantined lifecycle intents remain visible to operator diagnostics."""
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
     from nautical_core.tools import nautical_doctor
     from nautical_core.tools import nautical_queue_status
 

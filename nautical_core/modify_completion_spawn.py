@@ -4,7 +4,7 @@ import inspect
 from datetime import datetime
 
 from nautical_core.modify_models import CompletionSpawnResult, CompletionSpawnServices
-from nautical_core.lifecycle_models import LifecyclePlan
+from nautical_core.lifecycle.models import LifecyclePlan
 from nautical_core.task_models import TaskDraft, TaskPayload
 
 

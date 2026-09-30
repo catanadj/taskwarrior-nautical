@@ -10,8 +10,8 @@ from types import MappingProxyType
 from typing import Mapping, Protocol, Sequence, TypeAlias
 
 from .chain_graph import ChainGraph
-from .lifecycle_models import LifecycleAction, LifecycleEvent
-from .lifecycle_outbox import LifecycleOutboxRecord, OutboxProcessingState
+from .lifecycle.models import LifecycleAction, LifecycleEvent
+from .lifecycle.outbox import LifecycleOutboxRecord, OutboxProcessingState
 from .integrity_outbox_envelope import IntegrityOutboxRecord
 
 

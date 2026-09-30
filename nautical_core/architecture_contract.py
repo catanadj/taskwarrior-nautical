@@ -62,6 +62,13 @@ _COMPATIBILITY_NAMES = {
     "business_calendar_api", "hint_builder_api", "linting_api", "configuration_facade", "cache_facade", "timezone_facade",
 }
 _INTEGRATION_NAMES = {"hook_context", "hook_runtime", "operator_health_service"}
+_LIFECYCLE_INTEGRATION_NAMES = {
+    "outbox", "outbox_claims", "outbox_codec", "outbox_maintenance",
+    "outbox_operations", "outbox_queries", "outbox_schema",
+}
+_LIFECYCLE_APPLICATION_NAMES = {
+    "application", "operator_owner", "planner", "read_service", "reconciliation",
+}
 _DOMAIN_NAMES = {"common", "hint_models", "task_models", "diagnostic_models"}
 _BOUND_OWNER_APIS = {"parser_api", "scheduler_api", "cache_api"}
 
@@ -105,6 +112,8 @@ def module_layer(relative_path: str | Path) -> str:
     if parts and parts[0] in _ENTRYPOINT_DIRS:
         return ENTRYPOINT
     stem = path.stem
+    if len(parts) > 1 and parts[0] == "lifecycle" and stem in _LIFECYCLE_INTEGRATION_NAMES:
+        return INTEGRATION
     if stem in _COMPATIBILITY_NAMES:
         return COMPATIBILITY
     if stem in _INTEGRATION_NAMES:
@@ -113,6 +122,8 @@ def module_layer(relative_path: str | Path) -> str:
         return DOMAIN
     if parts and parts[0] == "tools":
         return ENTRYPOINT
+    if len(parts) > 1 and parts[0] == "lifecycle" and stem in _LIFECYCLE_APPLICATION_NAMES:
+        return APPLICATION
     if stem in {"operator_models", "operator_findings", "diagnostic_models", "on_exit_models"}:
         return DOMAIN
     if stem in _PRESENTATION_PREFIXES or any(stem.startswith(p) for p in _PRESENTATION_PREFIXES):

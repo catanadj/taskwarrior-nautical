@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import nautical_core.add_validation as add_validation
 import nautical_core.modify_expiration as modify_expiration
-from nautical_core.lifecycle_models import LifecycleAction
+from nautical_core.lifecycle.models import LifecycleAction
 
 
 class ModifyExpirationContractTests(unittest.TestCase):

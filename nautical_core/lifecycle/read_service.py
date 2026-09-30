@@ -14,7 +14,7 @@ from functools import lru_cache
 import threading
 from typing import Any, Protocol, TypeAlias
 
-from .integration_models import (
+from ..integration_models import (
     Absent,
     CommandFailureKind,
     FailureEvidence,
@@ -23,9 +23,9 @@ from .integration_models import (
     TaskRead,
     Unavailable,
 )
-from .task_read_repository import AuthoritativeTaskSnapshot
-from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
-from .task_models import TaskObservation, TaskStatus
+from ..task_read_repository import AuthoritativeTaskSnapshot
+from ..task_codec import DEFAULT_TASK_CODEC, TaskCodecError
+from ..task_models import TaskObservation, TaskStatus
 
 TaskRow: TypeAlias = TaskObservation
 ChainSnapshotValue = AuthoritativeTaskSnapshot | tuple[TaskRow, ...]

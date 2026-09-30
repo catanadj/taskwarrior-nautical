@@ -1,7 +1,7 @@
 import unittest
 
-import nautical_core.lifecycle_outbox as lifecycle_outbox
-import nautical_core.lifecycle_outbox_operations as operations
+import nautical_core.lifecycle.outbox as lifecycle_outbox
+import nautical_core.lifecycle.outbox_operations as operations
 
 
 class OutboxCompatibilityRemovalTests(unittest.TestCase):

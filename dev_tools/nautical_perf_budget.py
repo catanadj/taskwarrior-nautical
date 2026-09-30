@@ -54,7 +54,7 @@ from dev_tools.perf import workflow_workloads as _workflow_workloads
 
 core = importlib.import_module("nautical_core")
 install_runtime = importlib.import_module("nautical_core.install_runtime")
-lifecycle_outbox = importlib.import_module("nautical_core.lifecycle_outbox")
+lifecycle_outbox = importlib.import_module("nautical_core.lifecycle.outbox")
 task_codec = importlib.import_module("nautical_core.task_codec")
 IMPORT_PROFILES: dict[str, int] = {}
 RESOURCE_DETAILS: dict[str, object] = {}
@@ -310,7 +310,7 @@ def _bench_doctor_installation_stage() -> float:
 
 def _bench_housekeeping_stage() -> float:
     """Measure bounded housekeeping against an isolated outbox."""
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
 
     with tempfile.TemporaryDirectory(prefix="nautical-perf-housekeeping-") as td:
         repository = LifecycleOutboxRepository(Path(td))
@@ -1268,7 +1268,7 @@ def _stage_workflow_plans(
 
 def _bind_workflow_plans_to_parents(plans: list, rows: list[dict]) -> list:
     """Bind benchmark plans to the guards Taskwarrior assigned on import."""
-    from nautical_core.lifecycle_models import LifecyclePlan, ParentGuard, recurrence_fingerprint
+    from nautical_core.lifecycle.models import LifecyclePlan, ParentGuard, recurrence_fingerprint
     from nautical_core.task_models import NauticalTask, TaskDraft
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
@@ -1309,7 +1309,7 @@ def _bind_workflow_plans_to_parents(plans: list, rows: list[dict]) -> list:
 
 def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) -> tuple[list[dict], list]:
     """Create independent typed lifecycle plans for durable outbox recovery tests."""
-    from nautical_core.lifecycle_models import (
+    from nautical_core.lifecycle.models import (
         ExecutionStage,
         LifecycleAction,
         LifecycleEvent,

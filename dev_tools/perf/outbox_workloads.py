@@ -29,7 +29,7 @@ def schema_cold(root: Path, rounds: int) -> float:
     with tempfile.TemporaryDirectory(prefix="nautical-perf-outbox-cold-") as td:
         script = (
             "from pathlib import Path; import sys; "
-            "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
+            "from nautical_core.lifecycle.outbox import LifecycleOutboxRepository; "
             "result = LifecycleOutboxRepository(Path(sys.argv[1])).open(); "
             "raise SystemExit(0 if result.ok else result.reason)"
         )
@@ -59,7 +59,7 @@ def lifecycle_staging(
     workflow_outbox_pending: Any,
 ) -> float:
     """Measure one guarded lifecycle plan crossing the durable staging boundary."""
-    from nautical_core.lifecycle_application import LifecycleApplicationService
+    from nautical_core.lifecycle.application import LifecycleApplicationService
 
     with tempfile.TemporaryDirectory(prefix="nautical-perf-lifecycle-stage-") as td:
         taskdata = Path(td)

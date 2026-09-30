@@ -136,7 +136,7 @@ def test_navigator_import_and_help_are_noninteractive_without_rich():
 
 def test_queue_status_and_doctor_report_schema_health():
     """Operator diagnostics should distinguish healthy and incompatible outboxes."""
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 
     status_path = CORE_TOOLS / "nautical_queue_status.py"
     doctor = load_hook_module(

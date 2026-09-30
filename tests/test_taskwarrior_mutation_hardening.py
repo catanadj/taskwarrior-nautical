@@ -19,7 +19,7 @@ from nautical_core.integration_models import (
     TaskCommand,
     Unavailable,
 )
-from nautical_core.lifecycle_models import recurrence_fingerprint
+from nautical_core.lifecycle.models import recurrence_fingerprint
 from nautical_core.task_models import TaskObservation
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 

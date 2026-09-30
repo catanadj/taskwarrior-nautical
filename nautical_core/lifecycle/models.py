@@ -15,11 +15,11 @@ import json
 import re
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, TypeAlias
 
-from .task_models import FieldPresence, TaskObservation
-from .task_field_policy import LIFECYCLE_VOLATILE_CHILD_FIELDS
+from ..task_models import FieldPresence, TaskObservation
+from ..task_field_policy import LIFECYCLE_VOLATILE_CHILD_FIELDS
 
 if TYPE_CHECKING:
-    from .task_models import TaskDraft
+    from ..task_models import TaskDraft
 
 
 class LifecycleContractError(ValueError):
@@ -492,7 +492,7 @@ class LifecyclePlan:
         terminal_kind: str | None = None,
     ) -> "LifecyclePlan":
         """Create a plan from a validated TaskDraft at the planning boundary."""
-        from .task_models import TaskDraft
+        from ..task_models import TaskDraft
 
         if not isinstance(draft, TaskDraft):
             raise LifecycleContractError("lifecycle child payload requires a validated TaskDraft")
@@ -562,8 +562,8 @@ class LifecyclePlan:
             child_schema = value.get("child_payload_schema")
             if value.get("child_payload_kind") != "task_draft" or not isinstance(child_schema, Mapping) or child_schema.get("version") != LIFECYCLE_DRAFT_PAYLOAD_SCHEMA or child_schema.get("kind") != "task_draft":
                 raise LifecycleContractError("spawn plan child payload is not a versioned TaskDraft")
-            from .task_codec import DEFAULT_TASK_CODEC
-            from .task_models import NauticalTask, TaskDraft
+            from ..task_codec import DEFAULT_TASK_CODEC
+            from ..task_models import NauticalTask, TaskDraft
 
             try:
                 child_task = NauticalTask.from_observation(
@@ -641,8 +641,8 @@ class LifecyclePlan:
         """Return the immutable child draft at an explicit inspection boundary."""
         if not self.child_payload:
             return None
-        from .task_codec import DEFAULT_TASK_CODEC
-        from .task_models import NauticalTask, TaskDraft
+        from ..task_codec import DEFAULT_TASK_CODEC
+        from ..task_models import NauticalTask, TaskDraft
 
         task = NauticalTask.from_observation(
             DEFAULT_TASK_CODEC.decode_row(

@@ -8,8 +8,8 @@ from typing import Any, cast
 
 from .operator_presentation import bounded_text, key_value_lines
 from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
-from .lifecycle_models import LifecycleAction, LifecycleEvent
-from .lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
+from .lifecycle.models import LifecycleAction, LifecycleEvent
+from .lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
 
 
 _JSON_SCHEMA = "nautical.reconcile"

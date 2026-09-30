@@ -212,8 +212,8 @@ class OperatorInspectorTests(unittest.TestCase):
         self.assertEqual(projected[0].observed["nextLink"], "")
 
     def test_typed_lifecycle_outcome_preserves_manual_review(self) -> None:
-        from nautical_core.lifecycle_application import LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
-        from nautical_core.lifecycle_models import LifecycleEvent, LifecycleIdentity
+        from nautical_core.lifecycle.application import LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
+        from nautical_core.lifecycle.models import LifecycleEvent, LifecycleIdentity
 
         outcome = LifecycleApplicationOutcome(
             LifecycleApplicationOutcomeKind.MANUAL_REVIEW,

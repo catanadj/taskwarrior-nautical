@@ -8,7 +8,7 @@ import hashlib
 import math
 from typing import Generic, Mapping, Protocol, TypeAlias, TypeVar
 
-from .lifecycle_models import LifecycleIdentity
+from .lifecycle.models import LifecycleIdentity
 
 
 class IntegrationContractError(ValueError):

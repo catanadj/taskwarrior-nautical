@@ -5,8 +5,8 @@ from __future__ import annotations
 from .chain_integrity_context import IntegrityContext
 from .chain_integrity_models import IntegrityFinding, IntegrityRepairPlan
 from .chain_repair_planner import IntegrityPlanningResult, IntegrityRepairPlanner
-from .lifecycle_models import LifecycleEvent, LifecyclePlan, TaskSnapshot
-from .lifecycle_planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
+from .lifecycle.models import LifecycleEvent, LifecyclePlan, TaskSnapshot
+from .lifecycle.planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
 from .operator_domain_plans import DomainEffectPlan, require_domain_effect_plan
 
 

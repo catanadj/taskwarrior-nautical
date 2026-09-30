@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from nautical_core.lifecycle_outbox import (
+from nautical_core.lifecycle.outbox import (
     LifecycleOutboxError,
     _LifecycleOutboxRepository,
     OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE,
@@ -59,7 +59,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             marker = Path(directory) / ".nautical_outbox_recovery.lock"
             marker.write_text('{"created_at": 1, "pid": 12345}', encoding="utf-8")
-            with patch("nautical_core.lifecycle_outbox.os.kill", side_effect=ProcessLookupError):
+            with patch("nautical_core.lifecycle.outbox.os.kill", side_effect=ProcessLookupError):
                 self.assertTrue(_LifecycleOutboxRepository._reclaim_stale_recovery_lock(marker))
             self.assertFalse(marker.exists())
 
@@ -184,7 +184,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
                 opened.append(connection)
                 return connection
 
-            with patch("nautical_core.lifecycle_outbox.sqlite3.connect", side_effect=tracked_connect):
+            with patch("nautical_core.lifecycle.outbox.sqlite3.connect", side_effect=tracked_connect):
                 with self.assertRaises(LifecycleOutboxError):
                     repository._connect()
 

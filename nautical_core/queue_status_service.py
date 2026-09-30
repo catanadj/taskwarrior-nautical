@@ -8,7 +8,7 @@ import hashlib
 import os
 from typing import Any
 
-from .lifecycle_outbox import (
+from .lifecycle.outbox import (
     OUTBOX_ACK_RETENTION_SECONDS,
     OUTBOX_SCHEMA_VERSION,
     lifecycle_outbox_path,
@@ -17,7 +17,7 @@ from .lifecycle_outbox import (
 from .operator_context import OperatorBudgetLedger
 from .taskwarrior_client import TaskwarriorClient
 from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
-from .lifecycle_models import recurrence_fingerprint
+from .lifecycle.models import recurrence_fingerprint
 from .integrity_query_service import IntegrityQueryService
 from .chain_snapshot import IntegritySnapshotRequest
 from .integration_context import IntegrationRuntime

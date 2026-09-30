@@ -33,7 +33,7 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 import nautical_core as nautical_core_package  # noqa: E402
 import nautical_core.chain_integrity_lifecycle as lifecycle  # noqa: E402
 import nautical_core.cache_locking as cache_locking  # noqa: E402
-from nautical_core.lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path  # noqa: E402
+from nautical_core.lifecycle.state import parent_nextlink_lock_path, reconcile_lock_path  # noqa: E402
 import nautical_core.modify_spawn_prep as modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService  # noqa: E402
@@ -43,11 +43,11 @@ from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
 from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
 from nautical_core.operator_models import OperatorLimits  # noqa: E402
-from nautical_core.lifecycle_models import (  # noqa: E402
+from nautical_core.lifecycle.models import (  # noqa: E402
     LifecycleAction,
     LifecyclePlan,
 )
-from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult, RecoveryStatus  # noqa: E402
+from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult, RecoveryStatus  # noqa: E402
 from nautical_core.integration_models import (  # noqa: E402
     Absent,
     Found,
@@ -68,7 +68,7 @@ from nautical_core.reconcile_cli import ReconcileRequest, build_parser  # noqa: 
 from nautical_core.reconcile_report import action_style, describe_plan, describe_recovery_result, evidence_lines, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
 from nautical_core.operator_presentation import render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
-from nautical_core.lifecycle_reconciliation import (  # noqa: E402
+from nautical_core.lifecycle.reconciliation import (  # noqa: E402
     CallbackLifecycleApplyOperations,
     LifecycleReconciliationService,
     LifecycleRecoveryPolicy,
@@ -100,7 +100,7 @@ _UNIT_OF_WORK: TaskwarriorUnitOfWork | None = None
 
 def _opportunistic_housekeeping(taskdata: Path) -> dict[str, Any]:
     """Run bounded outbox maintenance without involving Taskwarrior."""
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
 
     result = LifecycleOutboxRepository(taskdata).opportunistic_housekeeping()
     return {
@@ -803,7 +803,7 @@ def _resolve_lifecycle_plan_child_uuid(
 
 def _raise_for_lifecycle_outcome(outcome: Any, *, label: str) -> None:
     """Preserve the retryable/manual-review exception contract callers depend on."""
-    from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind
+    from nautical_core.lifecycle.application import LifecycleApplicationOutcomeKind
 
     if outcome.ok:
         return
@@ -879,7 +879,7 @@ def _execute_reconcile_lifecycle_wave(
     """
     if not planned:
         return {}
-    from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind
+    from nautical_core.lifecycle.application import LifecycleApplicationOutcomeKind
 
     ordered = tuple(sorted(planned.values(), key=lambda item: str(item[0].parent.field("uuid").raw_value())))
     with ExitStack() as locks:
@@ -1360,8 +1360,8 @@ def _build_reconcile_session(
     )
     configuration = unit_of_work.context.configuration
     control_plane = OperatorControlPlane.from_configuration(configuration, DomainApplicationRegistry())
-    from nautical_core.lifecycle_application import LifecycleApplicationService
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import LifecycleApplicationService
+    from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
     mutation_gateway = TaskwarriorMutationService(unit_of_work)
     integrity_outbox = LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
     lifecycle_application = LifecycleApplicationService(

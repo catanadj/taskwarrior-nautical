@@ -19,14 +19,14 @@ import stat
 import time
 from typing import Any, Callable, Iterator, Mapping, Sequence, cast
 
-from nautical_core.lifecycle_models import ExecutionStage, LifecyclePlan
-from nautical_core.lifecycle_outbox_codec import (
+from .models import ExecutionStage, LifecyclePlan
+from .outbox_codec import (
     canonical_object_json,
     decode_plan,
     plan_json,
     transition_allowed,
 )
-from nautical_core.lifecycle_outbox_schema import (
+from .outbox_schema import (
     OUTBOX_SCHEMA_VERSION,
     OUTBOX_LEGACY_SCHEMA_VERSION as OUTBOX_LEGACY_SCHEMA_VERSION,
     _INIT_BACKOFF_S,
@@ -861,7 +861,7 @@ class _LifecycleOutboxRepository:
         the integrity executor owns its later dispatch path.
         """
         try:
-            from .integrity_outbox_envelope import IntegrityOutboxEnvelope, OutboxWorkKind
+            from ..integrity_outbox_envelope import IntegrityOutboxEnvelope, OutboxWorkKind
 
             if not isinstance(envelope, IntegrityOutboxEnvelope):
                 return OutboxResult(OutboxResultKind.REJECTED, reason="integrity enqueue requires an integrity envelope")
@@ -1043,7 +1043,7 @@ class _LifecycleOutboxRepository:
     def claim_integrity_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[Any, ...]]:
         self._metric("outbox_lease_claims")
         """Claim integrity work without exposing it to lifecycle executors."""
-        from .integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
+        from ..integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
 
         owner = str(owner or "").strip()
         if not owner or lease_seconds <= 0 or limit <= 0:
@@ -1587,7 +1587,7 @@ class _LifecycleOutboxRepository:
             retention = float(retention_seconds)
             if retention < 0 or retention != retention or retention in {float("inf"), float("-inf")}:
                 raise LifecycleOutboxError("retention_seconds must be finite and non-negative")
-            from .lifecycle_outbox_queries import StatusLifecycleRecord, StatusRowPoison, status_summary
+            from .outbox_queries import StatusLifecycleRecord, StatusRowPoison, status_summary
 
             def decode_status_row(row: sqlite3.Row) -> StatusLifecycleRecord:
                 try:
@@ -1681,8 +1681,8 @@ class _LifecycleOutboxRepository:
                     f"outbox schema v{version} is incompatible with v{OUTBOX_SCHEMA_VERSION}"
                 )
             self._validate_schema(conn)
-            from .integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
-            from .lifecycle_outbox_queries import snapshot_rows
+            from ..integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
+            from .outbox_queries import snapshot_rows
 
             def decode_lifecycle_row(row: sqlite3.Row) -> LifecycleOutboxRecord:
                 try:
@@ -1752,7 +1752,7 @@ class _LifecycleOutboxRepository:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
-            from .lifecycle_outbox_maintenance import checkpoint_wal, prune_acknowledged_rows
+            from .outbox_maintenance import checkpoint_wal, prune_acknowledged_rows
 
             removed = prune_acknowledged_rows(
                 conn, cutoff=cutoff, limit=int(limit), transaction=self._transaction
@@ -1834,7 +1834,7 @@ class _LifecycleOutboxRepository:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
-            from .lifecycle_outbox_maintenance import housekeeping_rows
+            from .outbox_maintenance import housekeeping_rows
 
             outcome = housekeeping_rows(
                 conn,

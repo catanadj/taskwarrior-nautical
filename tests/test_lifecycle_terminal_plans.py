@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.models import (
     DeletionDisposition,
     ExecutionStage,
     LifecycleAction,
@@ -16,9 +16,9 @@ from nautical_core.lifecycle_models import (
     TaskLifecycleState,
     TaskSnapshot,
 )
-from nautical_core.lifecycle_outbox import OutboxProcessingState
-from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
-from nautical_core.lifecycle_planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
+from nautical_core.lifecycle.outbox import OutboxProcessingState
+from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
+from nautical_core.lifecycle.planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
 from nautical_core.chain_integrity_lifecycle import deleted_chain_disposition
 from nautical_core.reconcile_report import describe_recovery_result
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
@@ -100,7 +100,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
     def test_recurrence_fingerprint_ignores_formatting_but_tracks_schedule_changes(self) -> None:
         from datetime import datetime, timezone
-        from nautical_core.lifecycle_models import recurrence_fingerprint
+        from nautical_core.lifecycle.models import recurrence_fingerprint
 
         def parse_datetime(value: object):
             text = str(value).strip()
@@ -136,7 +136,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         )
 
     def test_lifecycle_planner_is_pure_and_deterministic(self) -> None:
-        from nautical_core.lifecycle_planner import (
+        from nautical_core.lifecycle.planner import (
             LifecyclePlanningError,
             LifecyclePreflight,
         )
@@ -236,7 +236,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             )
 
     def test_lifecycle_terminal_policy_routes_all_terminal_events_through_one_patch(self) -> None:
-        from nautical_core.lifecycle_planner import LifecyclePlanningError
+        from nautical_core.lifecycle.planner import LifecyclePlanningError
         from nautical_core.modify_lifecycle import apply_terminal_transition
 
         events = (
@@ -449,7 +449,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
     def test_planner_owns_recurrence_candidate_and_terminal_policy(self) -> None:
         from datetime import datetime, timezone
 
-        from nautical_core.lifecycle_planner import (
+        from nautical_core.lifecycle.planner import (
             ChainGenerationLimitPolicy,
             ChainGenerationPlanningService,
             LifecyclePlanningError,
@@ -547,7 +547,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         from types import SimpleNamespace
 
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
-        from nautical_core.lifecycle_planner import plan_candidate_successor
+        from nautical_core.lifecycle.planner import plan_candidate_successor
 
         due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
         parent = {
@@ -675,7 +675,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
     def test_expiration_candidate_uses_scheduled_recurrence_basis(self) -> None:
         from datetime import datetime, timezone
 
-        from nautical_core.lifecycle_planner import LifecyclePreflight, expiration_candidate, plan_candidate_successor
+        from nautical_core.lifecycle.planner import LifecyclePreflight, expiration_candidate, plan_candidate_successor
 
         scheduled = "2026-08-16T09:00:00Z"
         parent = {
@@ -727,7 +727,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
     def test_lifecycle_plan_matrix_preserves_expected_recurrence_fields(self) -> None:
         from datetime import datetime, timezone
 
-        from nautical_core.lifecycle_planner import LifecyclePreflight, plan_candidate_successor
+        from nautical_core.lifecycle.planner import LifecyclePreflight, plan_candidate_successor
 
         due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
 

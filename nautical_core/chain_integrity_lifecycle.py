@@ -11,7 +11,7 @@ from nautical_core.timeutil import compare_datetimes
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from nautical_core.task_codec import TaskCodec
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.models import (
     LifecycleAction,
     LifecycleEvent,
     LifecycleIdentity,
@@ -20,7 +20,7 @@ from nautical_core.lifecycle_models import (
     TaskSnapshot,
     recurrence_fingerprint,
 )
-from nautical_core.lifecycle_planner import (
+from nautical_core.lifecycle.planner import (
     LifecyclePreflight,
     RecurrenceCandidate,
     expiration_candidate,
@@ -29,8 +29,8 @@ from nautical_core.lifecycle_planner import (
 )
 from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
-from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
-from nautical_core.lifecycle_recovery_models import (
+from nautical_core.lifecycle.models import DeletionDisposition, DeletionEvidence
+from nautical_core.lifecycle.recovery_models import (
     RecoveryPlanResult,
     RecoveryRefusal,
     RecoveryResult,

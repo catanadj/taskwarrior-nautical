@@ -9,8 +9,8 @@ from collections.abc import Sequence
 from .chain_integrity_context import IntegrityContext
 from .chain_integrity_models import IntegrityFinding
 from .chain_repair_planner import IntegrityPlanningResult
-from .lifecycle_models import LifecycleEvent, LifecyclePlan, TaskSnapshot
-from .lifecycle_planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
+from .lifecycle.models import LifecycleEvent, LifecyclePlan, TaskSnapshot
+from .lifecycle.planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
 from .chain_repair_planner import IntegrityRepairPlanner
 from .chain_integrity_engine import ChainIntegrityEngine
 from .chain_integrity_recovery import RecoveryAudit

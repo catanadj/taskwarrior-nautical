@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .lifecycle_application import DrainResult, LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
-from .lifecycle_models import LifecycleAction, LifecyclePlan
-from .operator_domain_plans import DomainApplicationAuthorization, require_domain_effect_plan
-from .operator_models import OperatorFailure, OperatorOperation, OperatorResult, OperatorStatus
+from .application import DrainResult, LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
+from .models import LifecycleAction, LifecyclePlan
+from ..operator_domain_plans import DomainApplicationAuthorization, require_domain_effect_plan
+from ..operator_models import OperatorFailure, OperatorOperation, OperatorResult, OperatorStatus
 
 
 class LifecycleApplicationPort(Protocol):

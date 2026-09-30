@@ -164,9 +164,9 @@ facade.__all__
 
     def test_outbox_sql_and_connection_ownership_stay_in_their_modules(self) -> None:
         core = Path(__file__).parents[1] / "nautical_core"
-        repository_source = (core / "lifecycle_outbox.py").read_text(encoding="utf-8")
-        query_source = (core / "lifecycle_outbox_queries.py").read_text(encoding="utf-8")
-        maintenance_source = (core / "lifecycle_outbox_maintenance.py").read_text(encoding="utf-8")
+        repository_source = (core / "lifecycle" / "outbox.py").read_text(encoding="utf-8")
+        query_source = (core / "lifecycle" / "outbox_queries.py").read_text(encoding="utf-8")
+        maintenance_source = (core / "lifecycle" / "outbox_maintenance.py").read_text(encoding="utf-8")
 
         for query in (
             "SELECT processing_state, COUNT(*) FROM lifecycle_outbox",
@@ -206,9 +206,9 @@ facade.__all__
             self.assertNotIn("BEGIN IMMEDIATE", owner_source)
 
     def test_outbox_repository_delegates_each_read_and_maintenance_owner_once(self) -> None:
-        from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-        import nautical_core.lifecycle_outbox_maintenance as lifecycle_outbox_maintenance
-        import nautical_core.lifecycle_outbox_queries as lifecycle_outbox_queries
+        from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
+        import nautical_core.lifecycle.outbox_maintenance as lifecycle_outbox_maintenance
+        import nautical_core.lifecycle.outbox_queries as lifecycle_outbox_queries
 
         with tempfile.TemporaryDirectory(prefix="nautical-outbox-owner-contract-") as td:
             repository = LifecycleOutboxRepository(Path(td))
@@ -359,6 +359,8 @@ facade.__all__
         self.assertEqual(layers["nautical_core/task_models.py"], architecture_contract.DOMAIN)
         self.assertEqual(layers["nautical_core/scheduler_service.py"], architecture_contract.RECURRENCE)
         self.assertEqual(layers["nautical_core/taskwarrior_client.py"], architecture_contract.INTEGRATION)
+        self.assertEqual(layers["nautical_core/lifecycle/outbox.py"], architecture_contract.INTEGRATION)
+        self.assertEqual(layers["nautical_core/lifecycle/application.py"], architecture_contract.APPLICATION)
         self.assertEqual(layers["nautical_core/tools/nautical_query.py"], architecture_contract.ENTRYPOINT)
         self.assertEqual(layers["nautical_core/compat_api.py"], architecture_contract.COMPATIBILITY)
 

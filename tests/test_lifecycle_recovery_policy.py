@@ -1,8 +1,8 @@
 import unittest
 from datetime import datetime, timezone
 
-from nautical_core.lifecycle_reconciliation import LifecycleRecoveryPolicy
-from nautical_core.lifecycle_models import LifecycleAction
+from nautical_core.lifecycle.reconciliation import LifecycleRecoveryPolicy
+from nautical_core.lifecycle.models import LifecycleAction
 from nautical_core.task_models import TaskObservation
 
 

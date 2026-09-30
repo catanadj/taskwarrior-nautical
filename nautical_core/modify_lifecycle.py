@@ -90,8 +90,8 @@ def ensure_terminal_chain_off(task: TaskPayload) -> bool:
 
 def apply_terminal_transition(task: TaskPayload, event: Any) -> bool:
     """Validate one terminal event, then apply its idempotent chain patch."""
-    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
-    from nautical_core.lifecycle_planner import terminal_plan_for_snapshot
+    from nautical_core.lifecycle.models import LifecycleEvent, TaskSnapshot
+    from nautical_core.lifecycle.planner import terminal_plan_for_snapshot
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
     try:

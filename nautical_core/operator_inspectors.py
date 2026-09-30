@@ -130,7 +130,7 @@ def inspect_lifecycle_outcomes(
     scope: OperatorScope | None = None,
 ) -> tuple[OperatorFinding, ...]:
     """Project typed lifecycle application outcomes into stable findings."""
-    from .lifecycle_application import LifecycleApplicationOutcomeKind
+    from .lifecycle.application import LifecycleApplicationOutcomeKind
 
     result: list[OperatorFinding] = []
     for outcome in outcomes:

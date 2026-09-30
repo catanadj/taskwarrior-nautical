@@ -20,7 +20,7 @@ from .integration_models import (
     MutationRequest,
     NativeUntilRepairPayload,
 )
-from .lifecycle_models import recurrence_fingerprint
+from .lifecycle.models import recurrence_fingerprint
 from .task_models import FieldPresence, TaskObservation
 
 

@@ -4,10 +4,10 @@ from types import SimpleNamespace
 from nautical_core.chain_invariants import _child_continuity_rule, _outbox_rule
 from nautical_core.chain_integrity_context import OutboxSnapshot
 from nautical_core.chain_integrity_models import ReferenceState, SnapshotCoverage
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.models import (
     ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
 )
-from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, OutboxProcessingState
+from nautical_core.lifecycle.outbox import LifecycleOutboxRecord, OutboxProcessingState
 
 
 class _Node:

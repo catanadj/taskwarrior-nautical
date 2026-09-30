@@ -38,7 +38,7 @@ from .integration_models import (
     Unavailable,
 )
 from .task_codec import TaskCodec
-from .lifecycle_models import recurrence_fingerprint
+from .lifecycle.models import recurrence_fingerprint
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_models import ALL_TASK_STATUSES, FieldPresence, TaskObservation, TaskStatus
 from .task_changes import timestamp_equal

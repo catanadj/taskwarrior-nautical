@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
-from .lifecycle_models import ExecutionStage, LifecyclePlan
-from .lifecycle_outbox import LifecycleOutboxRecord, OutboxFailure, OutboxMaintenanceResult, OutboxResult
+from .models import ExecutionStage, LifecyclePlan
+from .outbox import LifecycleOutboxRecord, OutboxFailure, OutboxMaintenanceResult, OutboxResult
 
 
 class LifecycleOutboxOperationsPort(Protocol):

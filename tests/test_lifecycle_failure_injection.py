@@ -21,10 +21,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from nautical_core.lifecycle_application import LifecycleApplicationService
-from nautical_core.lifecycle_models import ExecutionStage, LifecycleDrainProgress, LifecycleDrainStage
-from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import (
+from nautical_core.lifecycle.application import LifecycleApplicationService
+from nautical_core.lifecycle.models import ExecutionStage, LifecycleDrainProgress, LifecycleDrainStage
+from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.lifecycle.outbox import (
     LifecycleOutboxRecord,
     _LifecycleOutboxRepository,
     OutboxFailure,
@@ -184,7 +184,7 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
 import json
 import sys
 from pathlib import Path
-from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 
 repo = _LifecycleOutboxRepository(Path(sys.argv[1]))
 ids = tuple(json.loads(sys.argv[3]))
@@ -533,8 +533,8 @@ print(json.dumps(payload, sort_keys=True))
                     self.claimed_records = tuple(records)
                     return DrainResult(claim=OutboxResult(OutboxResultKind.APPLIED), outcomes=())
 
-            from nautical_core.lifecycle_application import DrainResult
-            from nautical_core.lifecycle_outbox import OutboxResult, OutboxResultKind
+            from nautical_core.lifecycle.application import DrainResult
+            from nautical_core.lifecycle.outbox import OutboxResult, OutboxResultKind
 
             class MutationGateway:
                 def apply(self, _request):

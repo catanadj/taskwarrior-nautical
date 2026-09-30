@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import sqlite3
 from typing import Callable, Mapping, Protocol, TypeVar
 
-from .lifecycle_outbox_schema import OUTBOX_SCHEMA_VERSION
+from .outbox_schema import OUTBOX_SCHEMA_VERSION
 
 
 class StatusRowPoison(Exception):

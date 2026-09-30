@@ -3,22 +3,22 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from nautical_core.lifecycle_application import (
+from nautical_core.lifecycle.application import (
     DrainResult,
     LifecycleApplicationError,
     LifecycleApplicationOutcome,
     LifecycleApplicationOutcomeKind,
     LifecycleApplicationService,
 )
-from nautical_core.lifecycle_outbox import OutboxResult, OutboxResultKind
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.outbox import OutboxResult, OutboxResultKind
+from nautical_core.lifecycle.models import (
     LifecycleAction,
     LifecycleEvent,
     LifecycleIdentity,
     LifecyclePlan,
     ParentGuard,
 )
-from nautical_core.lifecycle_operator_owner import LifecycleOperatorOwner
+from nautical_core.lifecycle.operator_owner import LifecycleOperatorOwner
 from nautical_core.operator_domain_plans import DomainApplicationAuthorization
 from nautical_core.operator_models import (
     CoverageKind,
@@ -67,7 +67,7 @@ class _CompleteMutationGateway:
 
 class LifecycleExecutionCapabilityTests(unittest.TestCase):
     def test_explicit_execution_protocol_names_all_required_operations(self) -> None:
-        from nautical_core.lifecycle_application import LifecycleExecutionPort
+        from nautical_core.lifecycle.application import LifecycleExecutionPort
 
         self.assertEqual(
             tuple(name for name in _EXECUTION_METHODS if hasattr(LifecycleExecutionPort, name)),

@@ -7,8 +7,8 @@ from pathlib import Path
 
 from nautical_core.backup_service import StorageIO, create_manifest, publish_manifest
 from nautical_core.restore_service import restore_backup, validate_backup
-from nautical_core.lifecycle_models import ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+from nautical_core.lifecycle.models import ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 from dev_tools.golden_tests.support import task_draft as _task_draft
 
 

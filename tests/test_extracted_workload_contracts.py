@@ -15,8 +15,8 @@ from dev_tools.perf import (
     telemetry,
 )
 import nautical_core.callback_ports as callback_ports
-import nautical_core.lifecycle_outbox_codec as lifecycle_outbox_codec
-from nautical_core.lifecycle_models import ExecutionStage
+import nautical_core.lifecycle.outbox_codec as lifecycle_outbox_codec
+from nautical_core.lifecycle.models import ExecutionStage
 
 
 class ExtractedWorkloadContractTests(unittest.TestCase):

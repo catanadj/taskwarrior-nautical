@@ -21,7 +21,7 @@ from .task_models import (
     TemporalState,
     TaskPayload,
 )
-from .lifecycle_models import LifecyclePlan
+from .lifecycle.models import LifecyclePlan
 
 
 # Hook implementations are intentionally assembled at runtime, but the

@@ -108,7 +108,7 @@ def task_observation(row):
 
 def task_snapshot(row):
     """Build lifecycle snapshots through the observation boundary."""
-    from nautical_core.lifecycle_models import TaskSnapshot
+    from nautical_core.lifecycle.models import TaskSnapshot
 
     return TaskSnapshot.from_observation(task_observations((row,))[0])
 
@@ -153,7 +153,7 @@ def task_draft(row):
 
 def recovery_action(result):
     """Project typed recovery results for characterization assertions."""
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+    from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
 
     if not isinstance(result, RecoveryPlanResult):
         return result.status.value
@@ -166,7 +166,7 @@ def recovery_action(result):
 
 
 def recovery_child(result):
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+    from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
 
     return result.plan.child_dict() if isinstance(result, RecoveryPlanResult) else None
 
@@ -188,8 +188,8 @@ def must_parse(expr):
 
 def new_lifecycle_read_service():
     import nautical_core
+    import nautical_core.lifecycle.read_service as read_service
 
-    read_service = nautical_core._import_sibling("lifecycle_read_service")
     missing = object()
     return read_service.LifecycleReadService(
         coerce_int=nautical_core.coerce_int,
@@ -361,7 +361,7 @@ def fixture_task(task, *, context=None):
 
 
 def plan_from_values(**kwargs):
-    from nautical_core.lifecycle_models import LifecyclePlan, _freeze_pairs
+    from nautical_core.lifecycle.models import LifecyclePlan, _freeze_pairs
 
     child_payload = kwargs.pop("child_payload", None)
     parent_patch = kwargs.pop("parent_patch", None)

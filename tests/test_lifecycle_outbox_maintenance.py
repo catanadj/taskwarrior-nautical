@@ -6,7 +6,7 @@ import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
-from nautical_core.lifecycle_outbox_maintenance import (
+from nautical_core.lifecycle.outbox_maintenance import (
     housekeeping_rows,
     prune_acknowledged_rows,
 )

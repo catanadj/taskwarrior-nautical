@@ -8,8 +8,8 @@ from nautical_core.operator_domain_plans import DomainApplicationAuthorization, 
 from nautical_core.operator_domain_planner import OperatorDomainPlanner
 from nautical_core.chain_repair_planner import IntegrityPlanningResult
 from nautical_core.operator_control_plane import OperatorControlPlane
-from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
-from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
+from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 from nautical_core.task_models import TaskObservation
 
 

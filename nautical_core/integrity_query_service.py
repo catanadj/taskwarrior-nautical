@@ -10,7 +10,7 @@ from .chain_integrity_models import IntegrityReportStatus
 from .chain_snapshot import IntegritySnapshotRequest
 from .integrity_report import public_payload
 from .integration_context import IntegrationAccess, IntegrationRuntime
-from .lifecycle_outbox import LifecycleOutboxRepository
+from .lifecycle.outbox import LifecycleOutboxRepository
 from .operator_context import OperatorInvocationContext
 from .operator_models import (
     OperatorFailure,

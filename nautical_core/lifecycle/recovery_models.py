@@ -7,8 +7,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .lifecycle_models import LifecyclePlan
-from .task_models import TaskObservation
+from .models import LifecyclePlan
+from ..task_models import TaskObservation
 
 
 class RecoveryStatus(str, Enum):

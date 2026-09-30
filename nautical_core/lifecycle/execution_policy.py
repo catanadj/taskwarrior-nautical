@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from enum import Enum
 
-from .integration_models import MutationOutcomeKind
-from .lifecycle_models import ExecutionStage
-from .lifecycle_outbox import OutboxResultKind
+from ..integration_models import MutationOutcomeKind
+from .models import ExecutionStage
+from .outbox import OutboxResultKind
 
 
 class LifecycleApplicationOutcomeKind(str, Enum):

@@ -78,7 +78,7 @@ def operator_interrupted(lifecycle_outbox: Any, init_empty_outbox: Callable[[Pat
 
 def exit_probe() -> float:
     from nautical_core.exit_probe import probe_exit_work
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="nautical-perf-exit-probe-") as td:
         taskdata = Path(td)

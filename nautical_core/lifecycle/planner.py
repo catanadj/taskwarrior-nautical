@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import math
 from typing import Any, Callable, Protocol
 
-from .lifecycle_models import (
+from .models import (
     LifecycleAction,
     LifecycleContractError,
     LifecycleEvent,
@@ -22,9 +22,9 @@ from .lifecycle_models import (
     TaskSnapshot,
     recurrence_fingerprint,
 )
-from .task_codec import TaskCodec
-from .task_codec import DEFAULT_TASK_CODEC
-from .task_models import NauticalTask, TaskDraft
+from ..task_codec import TaskCodec
+from ..task_codec import DEFAULT_TASK_CODEC
+from ..task_models import NauticalTask, TaskDraft
 
 
 class LifecyclePlanningError(RuntimeError):

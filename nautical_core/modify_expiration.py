@@ -9,8 +9,8 @@ from .task_models import TaskPayload
 from .task_models import TaskObservation
 
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.lifecycle_models import DeletionEvidence, LifecycleAction
-from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
+from nautical_core.lifecycle.models import DeletionEvidence, LifecycleAction
+from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 

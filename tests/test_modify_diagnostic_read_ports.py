@@ -24,7 +24,7 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             TaskCommand,
             Unavailable,
         )
-        from nautical_core.lifecycle_read_service import LifecycleReadService
+        from nautical_core.lifecycle.read_service import LifecycleReadService
         from nautical_core.modify_read_effects import PreviousChainPorts, collect_prev_two
 
         command = TaskCommand(("task", "export"), "test predecessor read", 1.0)

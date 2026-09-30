@@ -8,9 +8,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-from nautical_core.lifecycle_models import ExecutionStage
-from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_execution_policy import (
+from nautical_core.lifecycle.models import ExecutionStage
+from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.lifecycle.execution_policy import (
     FailureDisposition,
     MUTATION_TO_APPLICATION,
     OUTBOX_TO_APPLICATION,
@@ -20,7 +20,7 @@ from nautical_core.lifecycle_execution_policy import (
     remaining_drain_work,
 )
 from nautical_core.integration_models import MutationOutcomeKind
-from nautical_core.lifecycle_outbox import (
+from nautical_core.lifecycle.outbox import (
     OUTBOX_LEGACY_SCHEMA_VERSION,
     OUTBOX_SCHEMA_VERSION,
     LifecycleOutboxError,
@@ -111,7 +111,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
     def test_schema_owner_migrates_legacy_v1_table(self) -> None:
         from contextlib import contextmanager
 
-        from nautical_core.lifecycle_outbox_schema import initialize
+        from nautical_core.lifecycle.outbox_schema import initialize
 
         connection = sqlite3.connect(":memory:")
         try:
@@ -549,7 +549,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                 connection.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION}")
             from unittest.mock import patch
 
-            with patch("nautical_core.lifecycle_outbox.sqlite3.connect", side_effect=sqlite3.OperationalError("database is locked")):
+            with patch("nautical_core.lifecycle.outbox.sqlite3.connect", side_effect=sqlite3.OperationalError("database is locked")):
                 status_result, _ = repository.status()
                 snapshot_result, snapshot = repository.snapshot_records()
             self.assertEqual((status_result.kind, status_result.lock_busy), (OutboxResultKind.RETRYABLE, True))
@@ -617,7 +617,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
     def test_outbox_transaction_boundary_has_no_taskwarrior_dependency(self) -> None:
         import ast
 
-        source = Path("nautical_core/lifecycle_outbox.py").read_text(encoding="utf-8")
+        source = Path("nautical_core/lifecycle/outbox.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = [
             alias.name
@@ -640,7 +640,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             MutationOutcomeKind,
             MutationPostcondition,
         )
-        from nautical_core.lifecycle_application import (
+        from nautical_core.lifecycle.application import (
             LifecycleApplicationOutcomeKind,
             LifecycleApplicationService,
         )
@@ -709,7 +709,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             self.assertEqual(payload["states"].get("acknowledged"), 1)
 
     def test_claim_lease_port_exposes_only_cas_operations(self) -> None:
-        from nautical_core.lifecycle_outbox_claims import RepositoryClaimLeasePort
+        from nautical_core.lifecycle.outbox_claims import RepositoryClaimLeasePort
 
         with TemporaryDirectory() as directory:
             port = RepositoryClaimLeasePort(_LifecycleOutboxRepository(Path(directory)))
@@ -754,7 +754,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         )
 
     def test_batch_progress_reporter_accounts_action_and_terminal_work(self) -> None:
-        from nautical_core.lifecycle_application import _BatchProgressReporter
+        from nautical_core.lifecycle.application import _BatchProgressReporter
 
         events = []
         reporter = _BatchProgressReporter(
@@ -780,7 +780,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         self.assertEqual(events[-1].completed, 6)
 
     def test_batch_persistence_coordinator_handles_success_and_missing_rows(self) -> None:
-        from nautical_core.lifecycle_application import _BatchPersistenceCoordinator
+        from nautical_core.lifecycle.application import _BatchPersistenceCoordinator
 
         class Outbox:
             def renew_leases(self, **_kwargs):

@@ -8,8 +8,8 @@ from typing import Any, Callable
 
 from .chain_generation import ChainGenerationService
 from .chain_integrity_lifecycle import is_orphan_deleted_chain_candidate
-from .lifecycle_reconciliation import CallbackLifecycleRecoveryOperations, LifecycleReconciliationService
-from .lifecycle_recovery_models import RecoveryResult
+from .lifecycle.reconciliation import CallbackLifecycleRecoveryOperations, LifecycleReconciliationService
+from .lifecycle.recovery_models import RecoveryResult
 from .task_models import TaskObservation, TaskPayload
 
 

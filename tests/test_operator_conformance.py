@@ -217,7 +217,7 @@ class OperatorConformanceTests(unittest.TestCase):
         self.assertEqual(result.terminal.kind, "search_limit")
 
     def test_control_plane_domain_application_emits_ordered_effect_phases(self) -> None:
-        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+        from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
         from nautical_core.operator_domain_plans import DomainApplicationAuthorization
 
         class Configuration:
@@ -256,7 +256,7 @@ class OperatorConformanceTests(unittest.TestCase):
     def test_control_plane_rejects_expired_budget_before_authorization(self) -> None:
         from nautical_core.operator_domain_plans import DomainApplicationAuthorization
         from nautical_core.operator_context import OperatorInvocationBudget
-        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+        from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 
         class Configuration:
             fingerprint = "config-1"
@@ -281,7 +281,7 @@ class OperatorConformanceTests(unittest.TestCase):
     def test_effect_owner_failure_is_retryable_after_effect_boundary(self) -> None:
         from nautical_core.operator_domain_plans import DomainApplicationAuthorization
         from nautical_core.operator_context import OperatorInvocationBudget
-        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+        from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 
         class Configuration:
             fingerprint = "config-1"

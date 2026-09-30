@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from nautical_core.chain_integrity_engine import IntegrityEngineResult
 from nautical_core.chain_integrity_models import IntegrityReportStatus
 from nautical_core.integrity_report import components
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.models import (
     LifecycleAction,
     LifecycleEvent,
     LifecycleIdentity,
@@ -12,7 +12,7 @@ from nautical_core.lifecycle_models import (
     ParentGuard,
     recurrence_fingerprint,
 )
-from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
 from nautical_core.reconcile_report import describe_recovery_result
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 

@@ -9,7 +9,7 @@ from .operator_models import OperatorFailure, OperatorOperation, OperatorResult,
 from .integration_models import GuardTimestamp, GuardTimestampField, MutationGuard, MutationRequest, Found
 from .task_changes import TaskPatch
 from .task_models import FieldPresence, TaskObservation, TaskUUID
-from .lifecycle_models import recurrence_fingerprint
+from .lifecycle.models import recurrence_fingerprint
 
 
 def build_integrity_mutation_request(operation: object, *, unit_of_work: object) -> MutationRequest:

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Protocol, Sequence
 
-from .lifecycle_outbox import LifecycleOutboxRecord, OutboxResult
-from .lifecycle_outbox_operations import LifecycleExecutionOutboxPort
-from .lifecycle_models import ExecutionStage
+from .outbox import LifecycleOutboxRecord, OutboxResult
+from .outbox_operations import LifecycleExecutionOutboxPort
+from .models import ExecutionStage
 
 
 class LifecycleOutboxClaimPort(Protocol):

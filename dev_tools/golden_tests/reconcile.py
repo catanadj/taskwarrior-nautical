@@ -88,7 +88,7 @@ def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
     from nautical_core.chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety
     from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
     from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository, OutboxResultKind
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository, OutboxResultKind
     with tempfile.TemporaryDirectory() as td:
         repo = _LifecycleOutboxRepository(Path(td))
         expect(repo.open().ok, "shared outbox did not open")
@@ -203,7 +203,7 @@ def test_health_check_critical_outbox_bytes():
 
 def test_health_check_critical_outbox_rows():
     """health check should return critical when lifecycle outbox rows exceed their budget."""
-    from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     path = os.path.join(root, "dev_tools", "nautical_health_check.py")
@@ -223,7 +223,7 @@ def test_health_check_critical_outbox_rows():
 def test_queue_status_does_not_initialize_missing_outbox():
     """A read-only queue inspection must not create lifecycle state."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nautical_core.lifecycle_outbox import lifecycle_outbox_path
+    from nautical_core.lifecycle.outbox import lifecycle_outbox_path
 
     path = os.path.join(root, "nautical_core", "tools", "nautical_queue_status.py")
     with tempfile.TemporaryDirectory() as td:
@@ -265,8 +265,8 @@ def test_reconcile_tool_print_plan_includes_evidence():
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     mod = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_tool_print_test")
     parent = {"uuid": "11111111-0000-4000-8000-000000000001", "status": "completed", "description": "remote completion", "cp": "1d", "chain": "on", "chainID": "11111111", "link": 2, "due": "20260703T090000Z"}
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, recurrence_fingerprint
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, recurrence_fingerprint
+    from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
     observation = fixture_observation(parent)
     guard = ParentGuard(status="completed", chain="on", chain_id="11111111", link=2, recurrence_fingerprint=recurrence_fingerprint(parent), modified="")
     identity = LifecycleIdentity(chain_id="11111111", parent_uuid=parent["uuid"], source_link=2, target_link=3, event=LifecycleEvent.ACTIVATE)
@@ -941,7 +941,7 @@ def test_integration_contract_covers_all_mutation_and_outbox_states():
         OutboxStage,
         TaskCommand,
     )
-    from nautical_core.lifecycle_models import LifecycleEvent, LifecycleIdentity
+    from nautical_core.lifecycle.models import LifecycleEvent, LifecycleIdentity
 
     guard = MutationGuard(
         "parent-uuid",
@@ -1056,7 +1056,7 @@ def test_reconcile_candidate_and_plan_paths():
     import nautical_core as core
     import nautical_core.reconcile_report as reconcile_report
     import nautical_core.chain_integrity_lifecycle as reconcile
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
+    from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
 
     parent = {
         "uuid": "11111111-0000-4000-8000-000000000001",

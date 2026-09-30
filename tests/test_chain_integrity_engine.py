@@ -39,16 +39,16 @@ from nautical_core.integration_models import (
     MutationOutcomeKind,
     Unavailable,
 )
-from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.models import (
     LifecycleAction,
     LifecycleEvent,
     LifecycleIdentity,
     LifecyclePlan,
     ParentGuard,
 )
-from nautical_core.lifecycle_outbox import ExecutionStage, LifecycleOutboxRecord, OutboxProcessingState
+from nautical_core.lifecycle.outbox import ExecutionStage, LifecycleOutboxRecord, OutboxProcessingState
 
 
 def node(row: dict[str, object]) -> ChainNode:

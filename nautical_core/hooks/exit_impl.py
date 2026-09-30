@@ -129,20 +129,20 @@ _MODULE_SPECS = {
     "lifecycle_application": (
         "_LIFECYCLE_APPLICATION",
         "_LIFECYCLE_APPLICATION_LOAD_FAILED",
-        "lifecycle_application.py",
-        "nautical_core.lifecycle_application",
+        "lifecycle/application.py",
+        "nautical_core.lifecycle.application",
     ),
     "lifecycle_outbox": (
         "_LIFECYCLE_OUTBOX",
         "_LIFECYCLE_OUTBOX_LOAD_FAILED",
-        "lifecycle_outbox.py",
-        "nautical_core.lifecycle_outbox",
+        "lifecycle/outbox.py",
+        "nautical_core.lifecycle.outbox",
     ),
     "lifecycle_outbox_operations": (
         "_LIFECYCLE_OUTBOX_OPERATIONS",
         "_LIFECYCLE_OUTBOX_OPERATIONS_LOAD_FAILED",
-        "lifecycle_outbox_operations.py",
-        "nautical_core.lifecycle_outbox_operations",
+        "lifecycle/outbox_operations.py",
+        "nautical_core.lifecycle.outbox_operations",
     ),
     "hook_support": (
         "_HOOK_SUPPORT",

@@ -29,7 +29,7 @@ from nautical_core.scheduler_models import (
     occurrence_exhaustion_message,
 )
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.lifecycle_models import LifecycleEvent
+from nautical_core.lifecycle.models import LifecycleEvent
 from nautical_core.modify_lifecycle import apply_terminal_transition
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import TaskPayload

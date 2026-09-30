@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 import threading
 
-from nautical_core.lifecycle_read_service import ChainCacheStore, LifecycleReadService
+from nautical_core.lifecycle.read_service import ChainCacheStore, LifecycleReadService
 from nautical_core.task_models import TaskObservation
 from nautical_core.integration_models import (
     Absent,

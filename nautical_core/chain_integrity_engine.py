@@ -38,12 +38,12 @@ from .integration_models import (
     TaskRead,
     Unavailable,
 )
-from .lifecycle_outbox import OutboxFailure
-from .lifecycle_outbox_operations import LifecycleExecutionOutboxPort
+from .lifecycle.outbox import OutboxFailure
+from .lifecycle.outbox_operations import LifecycleExecutionOutboxPort
 from .task_models import TaskObservation
 from .chain_generation import ChainGenerationService
-from .lifecycle_models import LifecyclePlan
-from .lifecycle_recovery_models import RecoveryPlanResult, RecoveryResult
+from .lifecycle.models import LifecyclePlan
+from .lifecycle.recovery_models import RecoveryPlanResult, RecoveryResult
 
 
 class _SnapshotProvider(Protocol):

@@ -15,7 +15,7 @@ from .integration_context import IntegrationContext
 
 if TYPE_CHECKING:
     from .evaluation_session import EvaluationSession
-    from .lifecycle_application import LifecycleApplicationService
+    from .lifecycle.application import LifecycleApplicationService
     from .task_read_repository import TaskReadRepository
 
 

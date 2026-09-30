@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypeAlias
 
-from .lifecycle_models import LifecyclePlan, TaskLifecycleState
+from .lifecycle.models import LifecyclePlan, TaskLifecycleState
 from .task_models import FrozenValue, TaskObservation, TaskTimestamp
 
 

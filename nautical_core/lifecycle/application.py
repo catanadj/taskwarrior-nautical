@@ -30,7 +30,7 @@ import os
 import time
 from typing import Any, Callable, Protocol, Sequence, cast
 
-from .integration_models import (
+from ..integration_models import (
     ChainDisablePayload,
     ChildImportPayload,
     GuardTimestamp,
@@ -45,7 +45,7 @@ from .integration_models import (
     ParentLinkPayload,
     TaskwarriorMutationPort,
 )
-from .lifecycle_models import (
+from .models import (
     ExecutionStage,
     LifecycleAction,
     LifecycleDrainProgress,
@@ -54,16 +54,16 @@ from .lifecycle_models import (
     LifecycleIdentity,
     LifecyclePlan,
 )
-from .task_codec import TaskCodec
-from .lifecycle_outbox import (
+from ..task_codec import TaskCodec
+from .outbox import (
     LifecycleOutboxRecord,
     OutboxFailure,
     OutboxResult,
     OutboxResultKind,
     LifecycleOutboxError,
 )
-from .operator_context import OperatorBudgetLedger
-from .lifecycle_execution_policy import (
+from ..operator_context import OperatorBudgetLedger
+from .execution_policy import (
     FailureDisposition,
     MUTATION_TO_APPLICATION,
     OUTBOX_TO_APPLICATION,
@@ -73,8 +73,8 @@ from .lifecycle_execution_policy import (
     classify_outbox_failure,
     remaining_drain_work,
 )
-from .lifecycle_outbox_claims import LifecycleOutboxClaimPort
-from .lifecycle_outbox_operations import LifecycleExecutionOutboxPort
+from .outbox_claims import LifecycleOutboxClaimPort
+from .outbox_operations import LifecycleExecutionOutboxPort
 
 
 class LifecycleApplicationError(RuntimeError):
@@ -356,8 +356,8 @@ def _mutation_guard(plan: LifecyclePlan, *, mutation_epoch: int) -> MutationGuar
 
 
 def _child_import_payload(plan: LifecyclePlan) -> ChildImportPayload | None:
-    from .task_codec import DEFAULT_TASK_CODEC
-    from .task_models import NauticalTask, TaskDraft
+    from ..task_codec import DEFAULT_TASK_CODEC
+    from ..task_models import NauticalTask, TaskDraft
 
     child = plan.child_dict()
     if not child:
@@ -404,7 +404,7 @@ def _update_parent_payload(plan: LifecyclePlan) -> MetadataRepairPayload | None:
     if not updates:
         return None
     try:
-        from .integration_models import _freeze_pairs
+        from ..integration_models import _freeze_pairs
 
         return MetadataRepairPayload(plan.identity.parent_uuid, _freeze_pairs(updates))
     except IntegrationContractError:

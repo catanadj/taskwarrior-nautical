@@ -21,7 +21,7 @@ from nautical_core.hook_workflow_models import (
     TaskPatchOperation,
     PatchOperation,
 )
-from nautical_core.lifecycle_models import TaskLifecycleState
+from nautical_core.lifecycle.models import TaskLifecycleState
 from nautical_core.task_models import TaskObservation
 
 

@@ -1296,7 +1296,7 @@ def queue_shape(
     stage_workflow_plans(shape_data, plans, configuration_fingerprint=config_fingerprint, schedule_fingerprint=schedule_fingerprint)
     staged = workflow_outbox_pending(shape_data)
     if len(staged) != 1:
-        import nautical_core.lifecycle_outbox as lifecycle_outbox
+        import nautical_core.lifecycle.outbox as lifecycle_outbox
         status = lifecycle_outbox.LifecycleOutboxRepository(shape_data).status(limit=20)[1]
         raise RuntimeError(f"{name} fixture staged {len(staged)} active intents before on-exit; taskdata={shape_data}; status={status!r}")
     started = time.perf_counter()

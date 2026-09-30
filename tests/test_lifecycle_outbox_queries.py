@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
-from nautical_core.lifecycle_outbox_queries import (
+from nautical_core.lifecycle.outbox_queries import (
     OutboxStatusFailureSummary,
     StatusRowPoison,
     snapshot_rows,

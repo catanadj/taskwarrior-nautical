@@ -173,6 +173,7 @@ class ApiBindingContractTests(unittest.TestCase):
             "_quick_yearly_and_check",
             "_term_has_any_match_within",
             "_raise_on_bad_colon_year_tokens",
+            "_parse_hhmm",
             "_parse_atom_head",
             "_parse_atom_mods",
         ):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import date, timedelta, timezone
 import tempfile
 from pathlib import Path
@@ -1780,4 +1781,238 @@ TESTS = TESTS + (
     test_on_modify_explicit_timing_edits_warn_on_invalid_order,
     test_on_modify_timing_warning_wrapper_preserves_json_stdout,
     test_on_modify_build_child_carries_configured_uda_datetime,
+)
+
+
+def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
+    """Timed anchors should show a warning when timezone data is unavailable."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_anchor_timezone_warning_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHAIN_COLOR_PER_CHAIN = False
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._timeline_lines = lambda *_a, **_k: []
+
+    captured = {}
+    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
+    prev_local_tz = getattr(mod.core, "_LOCAL_TZ", None)
+    prev_panel_mode = mod.core.PANEL_MODE
+    try:
+        mod.core._LOCAL_TZ = None
+        mod.core.PANEL_MODE = "panel"
+        mod._presentation_effects.render_anchor_completion_feedback(
+            new={"anchor": "w:mon", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
+            child_due=mod.core.now_utc(),
+            child_short="beeswax",
+            next_no=2,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=mod.core.now_utc(),
+            until_dt=None,
+            until_cap_no=None,
+            dnf=[[{"typ": "w", "spec": "mon", "mods": {}}]],
+            meta={"mode": "skip"},
+            stripped_attrs=[],
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=1,
+        )
+    finally:
+        mod.core._LOCAL_TZ = prev_local_tz
+        mod.core.PANEL_MODE = prev_panel_mode
+
+    fb = captured.get("fb") or []
+    expect(any("Timezone data unavailable" in str(v) for k, v in fb if k == "Integrity"), f"missing timezone fallback warning: {fb}")
+
+def test_on_modify_promotes_chain_when_task_becomes_nautical():
+    """Tasks that gain Nautical fields on modify should be promoted to chain:on."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_chain_promotion_test")
+    lifecycle = mod._module("modify_lifecycle")
+
+    plain_old = {
+        "uuid": "00000000-0000-4000-8000-000000000444",
+        "description": "plain task",
+        "status": "pending",
+    }
+    promote_cases = [
+        {"anchor": "w:mon", "label": "anchor"},
+        {"anchor_file": "2026.csv", "label": "anchor_file"},
+        {"cp": "3d", "label": "cp"},
+    ]
+    for case in promote_cases:
+        new = dict(plain_old)
+        new.update(case)
+        new["chain"] = "off"
+        lifecycle.promote_newly_nautical_task(plain_old, new, short_uuid=mod.core.short_uuid)
+        expect(new.get("chain") == "on", f"{case['label']} transition should force chain:on, got {new!r}")
+        expect(bool((new.get("chainID") or "").strip()), f"{case['label']} transition should stamp chainID, got {new!r}")
+
+    already_old = {
+        "uuid": "00000000-0000-4000-8000-000000000445",
+        "description": "already nautical",
+        "status": "pending",
+        "anchor": "w:mon",
+        "due": "20260727T090000Z",
+        "chain": "off",
+    }
+    already_new = dict(already_old)
+    already_new["chain"] = "off"
+    try:
+        lifecycle.promote_newly_nautical_task(already_old, already_new, short_uuid=mod.core.short_uuid)
+    except ValueError as exc:
+        expect("chainID is missing" in str(exc), f"missing chain identity error lost detail: {exc}")
+    else:
+        raise AssertionError("existing recurrence edit without chainID was accepted")
+    expect(already_new.get("chain") == "off", f"rejected task should retain chain state, got {already_new!r}")
+
+    identity_old = {
+        "uuid": "00000000-0000-4000-8000-000000000446",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chain": "on",
+        "chainID": "immutable-chain",
+    }
+    identity_new = dict(identity_old)
+    identity_new["chainID"] = "manually-replaced"
+    try:
+        lifecycle.apply_nautical_transition(identity_old, identity_new, short_uuid=mod.core.short_uuid)
+    except ValueError as exc:
+        expect("chainID is immutable" in str(exc), f"chainID mutation error lost detail: {exc}")
+    else:
+        raise AssertionError("manual chainID modification was accepted")
+
+    repair_old = {
+        "uuid": "00000000-0000-4000-8000-000000000447",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chain": "on",
+    }
+    repair_new = {"uuid": repair_old["uuid"], "status": "pending", "chain": "off"}
+    repair = lifecycle.apply_nautical_transition(
+        repair_old,
+        repair_new,
+        short_uuid=mod.core.short_uuid,
+    )
+    expect(repair.state == "disabled", f"malformed recurrence should remain repairable: {repair!r}")
+    expect(repair_new.get("chain") == "off", f"repair disable changed chain unexpectedly: {repair_new!r}")
+
+def test_on_modify_link_limit():
+    """on-modify should block spawns when link exceeds max."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_link_limit_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._SHOW_ANALYTICS = False
+    mod._CHECK_CHAIN_INTEGRITY = False
+    previous_max_link = mod.core.MAX_LINK_NUMBER
+    mod.core.MAX_LINK_NUMBER = 3
+
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
+    spawn_effects.spawn_child_atomic = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not spawn"))
+
+    old = {
+        "uuid": "00000000-0000-4000-8000-000000000111",
+        "status": "pending",
+        "description": "limit test",
+        "anchor": "w:mon",
+        "chainID": "abcd1234",
+        "link": 3,
+        "due": "20250101T090000Z",
+    }
+    new = dict(old)
+    new.update({"status": "completed", "end": "20250102T090000Z"})
+
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+
+    raw = json.dumps(old) + "\n" + json.dumps(new)
+    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    orig_stdin = sys.stdin
+    try:
+        sys.stdin = stdin
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            mod.main()
+    finally:
+        sys.stdin = orig_stdin
+        mod.core.MAX_LINK_NUMBER = previous_max_link
+        spawn_effects.spawn_child_atomic = original_spawn
+
+    out = json.loads((stdout.getvalue() or "{}").strip() or "{}")
+    expect(out.get("link") == 3, "should pass task through unchanged")
+
+def test_on_modify_stable_child_uuid_is_slot_deterministic():
+    """stable child UUID should be deterministic for the same parent slot and change with link."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_stable_child_uuid_test")
+
+    parent = {
+        "uuid": "00000000-0000-4000-8000-000000000111",
+        "cp": "P1D",
+        "chainID": "cid12345",
+        "link": 1,
+    }
+    child_a = {"chainID": "cid12345", "link": 2}
+    child_b = {"chainID": "cid12345", "link": 2}
+    child_c = {"chainID": "cid12345", "link": 3}
+
+    prep = mod._module("modify_spawn_prep")
+    def uuid_fn(value):
+        return prep.stable_child_uuid(
+            value[0], value[1], task_uuid_or_empty=mod._module("modify_task_fields").task_uuid_or_empty,
+            coerce_int=mod.core.coerce_int, stable_child_uuid_namespace=mod._STABLE_CHILD_UUID_NAMESPACE,
+        )
+    uuid_a = uuid_fn((parent, child_a))
+    uuid_b = uuid_fn((parent, child_b))
+    uuid_c = uuid_fn((parent, child_c))
+
+    expect(bool(uuid_a), "stable child uuid should not be empty")
+    expect(uuid_a == uuid_b, "same chain slot should yield same stable uuid")
+    expect(uuid_a != uuid_c, "different link slot should yield different stable uuid")
+
+def test_on_modify_expands_and_clears_description_uda_aliases():
+    """on-modify aliases should update unchanged fields and support explicit clearing."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_description_aliases_test")
+    previous = mod.core.ENABLE_UDA_ALIASES
+    try:
+        mod.core.ENABLE_UDA_ALIASES = True
+        old = {"description": "test task", "anchor": "w:mon", "anchor_mode": "skip"}
+        new = dict(old, description="test task a:w:tue am:all")
+        mod._apply_description_uda_aliases(old, new)
+        expect(
+            new == {"description": "test task", "anchor": "w:tue", "anchor_mode": "all"},
+            f"on-modify alias expansion failed: {new!r}",
+        )
+        clear = {"description": "test task a:", "anchor": "w:mon"}
+        mod._apply_description_uda_aliases({"description": "test task", "anchor": "w:mon"}, clear)
+        expect("anchor" not in clear and clear["description"] == "test task", f"alias clear failed: {clear!r}")
+        alias_only = {"description": "a:w:fri"}
+        mod._apply_description_uda_aliases({"description": "test task", "anchor": "w:mon"}, alias_only)
+        expect(
+            alias_only == {"description": "test task", "anchor": "w:fri"},
+            f"alias-only modify erased the description: {alias_only!r}",
+        )
+    finally:
+        mod.core.ENABLE_UDA_ALIASES = previous
+
+TESTS = TESTS + (
+    test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
+    test_on_modify_promotes_chain_when_task_becomes_nautical,
+    test_on_modify_link_limit,
+    test_on_modify_stable_child_uuid_is_slot_deterministic,
+    test_on_modify_expands_and_clears_description_uda_aliases,
 )

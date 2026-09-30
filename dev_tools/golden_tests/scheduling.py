@@ -779,6 +779,115 @@ def test_on_modify_compute_combined_overnight_sources_in_time_order():
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
 
+
+def test_modifier_boundary_paths_agree_and_advance_strictly():
+    """Rolled and shifted anchors should agree across preview, completion, timeline, and omit."""
+    import nautical_core.anchor_omit as anchor_omit
+    import nautical_core.modify_timeline as modify_timeline
+
+    add_mod = load_hook_module(find_hook_file("on-add.nautical"), "_nautical_modifier_boundary_add_test")
+    modify_mod = load_hook_module(find_hook_file("on-modify.nautical"), "_nautical_modifier_boundary_modify_test")
+    if hasattr(add_mod, "_load_core"):
+        add_mod._load_core()
+    if hasattr(modify_mod, "_load_core"):
+        modify_mod._load_core()
+
+    cases = [
+        ("y:04-25@pbd@t=09:00", "y:04-25@pbd", date(2026, 4, 24), date(2027, 4, 23)),
+        ("y:04-25@nbd@t=09:00", "y:04-25@nbd", date(2026, 4, 27), date(2027, 4, 26)),
+        ("y:04-25@nbd@t=12:00,17:00", "y:04-25@nbd", date(2026, 4, 27), date(2026, 4, 27)),
+        ("y:01-31@+1d@t=09:00", "y:01-31@+1d", date(2026, 2, 1), date(2027, 2, 1)),
+        ("y:03-01@-1d@t=09:00", "y:03-01@-1d", date(2026, 2, 28), date(2027, 2, 28)),
+        ("y:02-29@+1d@t=09:00", "y:02-29@+1d", date(2028, 3, 1), date(2032, 3, 1)),
+        ("y:04-24@+1bd@t=09:00", "y:04-24@+1bd", date(2026, 4, 27), date(2027, 4, 26)),
+        ("w:sun@t=09:00", "w:sun", date(2026, 3, 22), date(2026, 3, 29)),
+    ]
+    chain_id = "modifier-boundary"
+
+    def next_preview(dnf, current_local, fallback_hhmm, interval_seed):
+        return add_mod._module("add_anchor_compute").anchor_next_occurrence_after_local_dt(
+            dnf,
+            current_local,
+            fallback_hhmm,
+            interval_seed,
+            chain_id,
+            core=add_mod.core,
+            norm_t_mod=add_mod._norm_t_mod,
+            resolve_time_slots=add_mod._resolve_time_slots,
+        )
+
+    for expr, omit_expr, current_day, expected_next_day in cases:
+        dnf = add_mod.core.validate_anchor_expr_strict(expr)
+        omit_dnf = anchor_omit.validate_omit_expr_strict(
+            omit_expr,
+            validate_anchor_expr_cached=add_mod.core.validate_anchor_expr_strict,
+        )
+        first_slot = (12, 0) if "12:00,17:00" in expr else (9, 0)
+        current_utc = add_mod.core.build_local_datetime(current_day, first_slot).astimezone(timezone.utc)
+        current_local = add_mod.core.to_local(current_utc)
+
+        preview_next = next_preview(dnf, current_local, first_slot, current_day)
+        expect(preview_next is not None, f"{expr}: preview did not find the next occurrence")
+        expect(preview_next > current_local, f"{expr}: preview did not advance strictly: {preview_next}")
+        expect(preview_next.date() == expected_next_day, f"{expr}: unexpected preview date {preview_next.date()}")
+        expected_hhmm = (17, 0) if "12:00,17:00" in expr else first_slot
+        expect((preview_next.hour, preview_next.minute) == expected_hhmm, f"{expr}: preview lost wall-clock time")
+
+        parent = {
+            "uuid": "00000000-0000-4000-8000-000000000901",
+            "description": "modifier boundary fixture",
+            "status": "completed",
+            "anchor": expr,
+            "anchor_mode": "skip",
+            "due": modify_mod.core.fmt_isoz(current_utc),
+            "end": modify_mod.core.fmt_isoz(current_utc),
+            "chainID": chain_id,
+            "link": 1,
+        }
+        child_due, _meta, completion_dnf = compute_anchor_child_due(modify_mod, parent)
+        completion_next = modify_mod.core.to_local(child_due)
+        expect(completion_next == preview_next, f"{expr}: completion {completion_next} != preview {preview_next}")
+
+        preview_after_child = next_preview(dnf, preview_next, expected_hhmm, current_day)
+        schedule_effects = modify_mod._module("modify_schedule_effects")
+        _evaluator_callback, scheduler_service_for_task = schedule_effects.scheduler_callbacks(
+            schedule_effects.scheduler_ports_for(modify_mod)
+        )
+        timeline_items = modify_timeline._timeline_future_anchor_items(
+            parent,
+            completion_dnf,
+            child_due,
+            start_no=2,
+            allowed_future=1,
+            cap_no=None,
+            to_local_cached=modify_mod._to_local_cached,
+            safe_parse_datetime=modify_mod._TASK_DATETIME_PARSER.parse,
+            scheduler_service=scheduler_service_for_task(parent),
+            omit_dnf=None,
+            omit_description_for_date=None,
+            max_iterations=32,
+        )
+        expect(len(timeline_items) == 1, f"{expr}: timeline did not produce one future occurrence")
+        timeline_next = modify_mod.core.to_local(timeline_items[0][1])
+        expect(timeline_next == preview_after_child, f"{expr}: timeline {timeline_next} != preview {preview_after_child}")
+
+        expect(
+            anchor_omit.omit_expr_fires_on_date(
+                omit_dnf,
+                current_day,
+                current_day - timedelta(days=10),
+                chain_id,
+                core=add_mod.core,
+            ),
+            f"{omit_expr}: omit did not recognize the effective rolled/shifted date",
+        )
+
+    dst_dnf = add_mod.core.validate_anchor_expr_strict("w:sun@t=09:00")
+    before_dst = add_mod.core.to_local(add_mod.core.build_local_datetime(date(2026, 3, 22), (9, 0)))
+    after_dst = next_preview(dst_dnf, before_dst, (9, 0), date(2026, 3, 22))
+    expect((after_dst.hour, after_dst.minute) == (9, 0), f"DST transition changed anchor wall clock: {after_dst}")
+
+
 TESTS = (
     test_year_ordinals_hooks_modes_calendar_and_timeline,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
@@ -796,3 +905,4 @@ TESTS = (
     test_on_modify_compute_anchor_child_due_from_combined_anchor_sources,
     test_on_modify_compute_combined_overnight_sources_in_time_order,
 )
+TESTS = TESTS + (test_modifier_boundary_paths_agree_and_advance_strictly,)

@@ -2069,3 +2069,42 @@ TESTS = TESTS + (
     test_on_modify_panel_fallback,
     test_on_modify_panel_forwards_live_duration,
 )
+
+
+def test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance():
+    """on-modify completion should surface parser-specific guidance for malformed cp strings."""
+    hook = find_hook_file("on-modify.nautical")
+    env = {"NO_COLOR": "1"}
+    cases = [
+        ("rand(7d..3d)", ("lower", "bound", "<=", "upper")),
+        ("rand(3d-7d)", ("expected", "rand(<duration>..<duration>)")),
+        ("14d~abc", ("invalid", "duration", "bound")),
+        ("2d~3d", ("lower", "bound", ">= 0")),
+        ("3d,,7d", ("empty", "duration", "position 2")),
+    ]
+    for idx, (cp_value, expected_parts) in enumerate(cases, start=1):
+        old = {
+            "uuid": f"00000000-0000-4000-8000-00000000{150 + idx:04d}",
+            "description": f"hook test malformed cp modify {idx}",
+            "status": "pending",
+            "entry": "20260101T000000Z",
+            "cp": cp_value,
+            "chain": "on",
+            "chainID": "abcd1234",
+            "link": 1,
+            "due": "20260101T090000Z",
+        }
+        new = dict(old)
+        new["status"] = "completed"
+        new["end"] = "20260101T100000Z"
+        raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
+        process = run_hook_script_raw(hook, raw, env_extra=env)
+        expect(process.returncode != 0, f"on-modify should fail for malformed cp {cp_value!r}")
+        expect((process.stdout or "").strip() == "", f"expected no stdout on malformed cp modify failure, got: {process.stdout!r}")
+        stderr_txt = strip_markup(process.stderr)
+        expect("Invalid CP" in stderr_txt, f"expected Invalid CP panel for {cp_value!r}: {stderr_txt[:500]!r}")
+        for part in expected_parts:
+            expect(part in stderr_txt, f"expected parser guidance fragment {part!r} for {cp_value!r}: {stderr_txt[:500]!r}")
+
+
+TESTS = TESTS + (test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance,)

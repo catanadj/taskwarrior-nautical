@@ -8,6 +8,26 @@ import unittest
 
 
 class GoldenFixtureIsolationTests(unittest.TestCase):
+    def test_term_fixture_restores_existing_and_missing_values(self):
+        from dev_tools.golden_tests.support import test_term
+
+        original = os.environ.get("TERM")
+        try:
+            os.environ["TERM"] = "before-test"
+            with test_term("xterm"):
+                self.assertEqual(os.environ.get("TERM"), "xterm")
+            self.assertEqual(os.environ.get("TERM"), "before-test")
+
+            os.environ.pop("TERM", None)
+            with test_term("xterm"):
+                self.assertEqual(os.environ.get("TERM"), "xterm")
+            self.assertNotIn("TERM", os.environ)
+        finally:
+            if original is None:
+                os.environ.pop("TERM", None)
+            else:
+                os.environ["TERM"] = original
+
     def test_domain_collections_are_immutable_tuples(self):
         from dev_tools.golden_tests import (
             installer,

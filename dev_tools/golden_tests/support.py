@@ -10,6 +10,7 @@ import importlib.machinery
 import sys
 import sqlite3
 import subprocess
+import tempfile
 import sys
 import os
 import re
@@ -35,6 +36,40 @@ def test_term(value: str):
             os.environ.pop("TERM", None)
         else:
             os.environ["TERM"] = previous
+
+
+def assert_hook_requires_integration_context(hook_name: str, module_name: str):
+    """Check a hook fails closed when its Nautical integration context is unavailable."""
+    hook = find_hook_file(hook_name)
+    previous_core = os.environ.get("NAUTICAL_CORE_PATH")
+    previous_argv = list(sys.argv)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake_core = Path(temp_dir) / "nautical_core/__init__.py"
+        fake_core.parent.mkdir(parents=True, exist_ok=True)
+        fake_core.write_text(
+            "def _warn_once_per_day_any(*_args, **_kwargs):\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+        os.environ["NAUTICAL_CORE_PATH"] = temp_dir
+        sys.argv = [hook_name]
+        try:
+            try:
+                load_hook_module(hook, module_name)
+                raise AssertionError("expected hook import to fail without core data resolver")
+            except Exception as exc:
+                expect(
+                    "integration_context.py is required" in str(exc)
+                    or "core resolver is unavailable" in str(exc)
+                    or "required runtime port is unavailable" in str(exc),
+                    f"unexpected error when context module is missing: {exc!r}",
+                )
+        finally:
+            sys.argv = previous_argv
+            if previous_core is None:
+                os.environ.pop("NAUTICAL_CORE_PATH", None)
+            else:
+                os.environ["NAUTICAL_CORE_PATH"] = previous_core
 
 
 def iso(value):

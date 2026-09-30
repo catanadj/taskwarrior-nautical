@@ -6,6 +6,7 @@ from nautical_core.operator_plans import OperatorPlan
 from nautical_core.operator_application import ApplicationReceipt, MappingGuardVerifier, MappingPostconditionVerifier, OperatorApplicationRegistry, apply_authorized, authorize_application
 from nautical_core.operator_domain_plans import DomainApplicationAuthorization, require_domain_effect_plan
 from nautical_core.operator_domain_planner import OperatorDomainPlanner
+from nautical_core.chain_repair_planner import IntegrityPlanningResult
 from nautical_core.operator_control_plane import OperatorControlPlane
 from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
@@ -13,6 +14,15 @@ from nautical_core.task_models import TaskObservation
 
 
 class OperatorPlanTests(unittest.TestCase):
+    def test_domain_planner_rejects_untyped_integrity_context(self) -> None:
+        class Planner:
+            def plan(self, context: object, findings: tuple[object, ...]) -> IntegrityPlanningResult:
+                del context, findings
+                return IntegrityPlanningResult()
+
+        with self.assertRaisesRegex(TypeError, "requires an IntegrityContext"):
+            OperatorDomainPlanner(object(), Planner()).plan_integrity(object(), ())
+
     def test_recovery_result_variants_are_typed_and_immutable(self) -> None:
         parent = TaskObservation.from_mapping(
             {

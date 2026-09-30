@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 from collections.abc import Sequence
 
+from .chain_integrity_context import IntegrityContext
 from .chain_integrity_models import IntegrityFinding
 from .chain_repair_planner import IntegrityPlanningResult
 from .lifecycle_models import LifecycleEvent, LifecyclePlan, TaskSnapshot
@@ -156,7 +157,11 @@ class OperatorControlPlane:
     ) -> LifecyclePlan:
         return self.planner.plan_lifecycle(snapshot, event, preflight=preflight, carry_validator=carry_validator)
 
-    def plan_integrity(self, context: object, findings: tuple[IntegrityFinding, ...]) -> IntegrityPlanningResult:
+    def plan_integrity(
+        self,
+        context: IntegrityContext,
+        findings: tuple[IntegrityFinding, ...],
+    ) -> IntegrityPlanningResult:
         return self.planner.plan_integrity(context, findings)
 
     def apply_domain(self, operation: str, authorization: DomainApplicationAuthorization) -> OperatorResult:

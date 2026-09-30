@@ -928,6 +928,11 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             "test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone",
             "test_config_fingerprint_invalidates_persistent_cache_keys",
             "test_configuration_drift_detects_edit_and_removal",
+            "test_business_calendar_toml_section_resolves_lazily",
+            "test_core_recurrence_update_udas_config_aliases",
+            "test_core_live_panel_duration_config_defaults_and_clamps",
+            "test_core_live_panel_footer_config_defaults_and_customizes",
+            "test_core_uda_aliases_config_defaults_disabled_and_can_enable",
         )
         registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
         top_level = {
@@ -1021,11 +1026,11 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
-        self.assertEqual(len(top_level), 103)
+        self.assertEqual(len(top_level), 98)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
-        self.assertEqual(len(configuration.TESTS), 5)
+        self.assertEqual(len(configuration.TESTS), 10)
         self.assertEqual(len(installer.TESTS), 9)
         self.assertEqual(len(performance.TESTS), 7)
         modify = importlib.import_module("dev_tools.golden_tests.modify")

@@ -1453,83 +1453,6 @@ def test_soak_runner_reports_ok():
     expect(not obj.get("violations"), f"soak runner reported violations: {obj}")
 
 
-def test_core_recurrence_update_udas_config_aliases():
-    """recurrence UDA carry config should accept top-level and [recurrence] alias forms."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write('recurrence_update_udas = ["rappel", "next_review"]\n')
-            f.write("[recurrence]\n")
-            f.write('update_udas = "ignored_alias"\n')
-        mod = _load_core_module(core_path, "_nautical_core_recur_udas_top_test", cfg)
-        expect(
-            mod.RECURRENCE_UPDATE_UDAS == ("rappel", "next_review"),
-            f"unexpected top-level recurrence_update_udas: {mod.RECURRENCE_UPDATE_UDAS}",
-        )
-
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write("[recurrence]\n")
-            f.write('update_udas = "rappel, next_review, bad-name, 9x"\n')
-        mod = _load_core_module(core_path, "_nautical_core_recur_udas_alias_test", cfg)
-        expect(
-            mod.RECURRENCE_UPDATE_UDAS == ("rappel", "next_review"),
-            f"unexpected alias recurrence.update_udas parse: {mod.RECURRENCE_UPDATE_UDAS}",
-        )
-
-
-def test_core_live_panel_duration_config_defaults_and_clamps():
-    """Live panel duration should default to 160 ms and stay within its safe range."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    cases = [
-        ("", 160),
-        ("live_panel_duration_ms = -20\n", 0),
-        ("live_panel_duration_ms = 275\n", 275),
-        ("live_panel_duration_ms = 5000\n", 1000),
-        ('live_panel_duration_ms = "bad"\n', 160),
-    ]
-    for index, (config_text, expected) in enumerate(cases):
-        with tempfile.TemporaryDirectory() as td:
-            cfg = os.path.join(td, "nautical.toml")
-            with open(cfg, "w", encoding="utf-8") as f:
-                f.write(config_text)
-            mod = _load_core_module(core_path, f"_nautical_core_live_duration_{index}", cfg)
-            expect(
-                mod.LIVE_PANEL_DURATION_MS == expected,
-                f"unexpected live duration for {config_text!r}: {mod.LIVE_PANEL_DURATION_MS!r}",
-            )
-
-
-def test_core_live_panel_footer_config_defaults_and_customizes():
-    """Live panel footer should default to Nautical and accept custom text."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    for index, (config_text, expected) in enumerate((("", "NAUTICAL"), ('live_panel_footer = "STATUS"\n', "STATUS"))):
-        with tempfile.TemporaryDirectory() as td:
-            cfg = os.path.join(td, "nautical.toml")
-            Path(cfg).write_text(config_text, encoding="utf-8")
-            mod = _load_core_module(core_path, f"_nautical_core_live_footer_{index}", cfg)
-            expect(mod.LIVE_PANEL_FOOTER == expected, f"unexpected live footer: {mod.LIVE_PANEL_FOOTER!r}")
-
-
-def test_core_uda_aliases_config_defaults_disabled_and_can_enable():
-    """Description-based UDA aliases should be opt-in through config."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    cases = [("", False), ("enable_uda_aliases = true\n", True), ("enable_uda_aliases = false\n", False)]
-    for index, (config_text, expected) in enumerate(cases):
-        with tempfile.TemporaryDirectory() as td:
-            cfg = os.path.join(td, "nautical.toml")
-            with open(cfg, "w", encoding="utf-8") as f:
-                f.write(config_text)
-            mod = _load_core_module(core_path, f"_nautical_core_uda_aliases_{index}", cfg)
-            expect(
-                mod.ENABLE_UDA_ALIASES is expected,
-                f"unexpected UDA alias setting for {config_text!r}: {mod.ENABLE_UDA_ALIASES!r}",
-            )
-
-
 def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
     """Alias-bearing plain modifies must not be swallowed by the thin fast path."""
     hook = _find_hook_file("on-modify.nautical")
@@ -1926,42 +1849,6 @@ def test_prev_weekday_natural_text():
         "previous Friday before month end",
     ]
     assert any(w in nat for w in want_any), f"Natural missing expected phrasing: {nat!r}"
-
-
-def test_business_calendar_toml_section_resolves_lazily():
-    """a real [business_calendar.<name>] TOML section should load through the core facade."""
-    with tempfile.TemporaryDirectory() as td:
-        base = Path(td)
-        config_path = base / 'config-nautical.toml'
-        config_path.write_text(
-            '[business_calendar.work]\n'
-            'anchor = "w:mon..fri"\n'
-            'omit = "y:04-20"\n',
-            encoding='utf-8',
-        )
-        script = (
-            'import json\n'
-            'from datetime import date\n'
-            'import nautical_core as core\n'
-            'policy = core.get_configured_business_calendar("WORK")\n'
-            'print(json.dumps({'
-            '"names": sorted(core.business_calendar_definitions()), '
-            '"open": policy.is_business_day(date(2026, 4, 21)), '
-            '"closed": policy.is_business_day(date(2026, 4, 20))}))\n'
-        )
-        env = os.environ.copy()
-        env['PYTHONPATH'] = ROOT + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
-        env['NAUTICAL_CONFIG'] = str(config_path)
-        proc = subprocess.run(
-            [sys.executable, '-c', script],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=10,
-        )
-        expect(proc.returncode == 0, f'calendar TOML subprocess failed: {proc.stderr}')
-        payload = json.loads(proc.stdout)
-        expect(payload == {'names': ['work'], 'open': True, 'closed': False}, f'unexpected TOML result: {payload!r}')
 
 
 def test_discovered_malformed_config_blocks_taskdata_reload():
@@ -5956,7 +5843,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
 TESTS = [
     test_year_ordinals_hooks_modes_calendar_and_timeline,
     test_seasonal_selection_modify_modes_times_and_timeline,
-    test_business_calendar_toml_section_resolves_lazily,
+    *CONFIGURATION_TESTS[5:6],
     test_discovered_malformed_config_blocks_taskdata_reload,
     test_taskdata_reload_exposes_consistent_validated_fingerprints,
     test_modifier_boundary_paths_agree_and_advance_strictly,
@@ -6048,10 +5935,7 @@ TESTS = [
     test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
     *CONFIGURATION_TESTS[:3],
-    test_core_recurrence_update_udas_config_aliases,
-    test_core_live_panel_duration_config_defaults_and_clamps,
-    test_core_live_panel_footer_config_defaults_and_customizes,
-    test_core_uda_aliases_config_defaults_disabled_and_can_enable,
+    *CONFIGURATION_TESTS[6:],
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
     test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel,
     test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,
@@ -6227,7 +6111,7 @@ TESTS.extend([
     test_random_time_window_is_stable_across_processes,
     test_navigator_reads_through_read_only_invocation_repository,
     test_navigator_uses_anchor_and_anchor_file_sources,
-    *CONFIGURATION_TESTS[3:],
+    *CONFIGURATION_TESTS[3:5],
     *INSTALLER_TESTS[8:],
 ])
 

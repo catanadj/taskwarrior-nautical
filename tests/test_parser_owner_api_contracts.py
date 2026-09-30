@@ -10,6 +10,7 @@ import nautical_core.acf_api as acf_api
 import nautical_core.cache_payload as cache_payload
 import nautical_core.description_aliases as description_aliases
 import nautical_core.expansion_api as expansion_api
+import nautical_core.parser_api as parser_api
 import nautical_core.parsing.parser_support_api as parser_support_api
 import nautical_core.quarter_api as quarter_api
 import nautical_core.satisfiability as satisfiability
@@ -17,6 +18,15 @@ import nautical_core.scheduler_api as scheduler_api
 
 
 class ParserOwnerApiContractTests(unittest.TestCase):
+    def test_parser_api_uses_frontend_owner_without_root_bad_colon_alias(self) -> None:
+        namespace = vars(core).copy()
+        namespace["ParseError"] = core.ParseError
+        namespace.pop("_raise_on_bad_colon_year_tokens", None)
+        parser = parser_api.for_core(namespace=namespace)
+
+        with self.assertRaisesRegex(core.ParseError, "uses ':' between numbers"):
+            parser.parse_anchor_expr_to_dnf("y:01:02")
+
     def test_incompatible_moon_phases_are_rejected_by_both_public_parsers(self) -> None:
         for parser in (core.validate_anchor_expr_strict, core.parse_anchor_expr_to_dnf):
             with self.subTest(parser=parser.__name__):

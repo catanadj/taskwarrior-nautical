@@ -812,7 +812,6 @@ _parser_support_api = _LazyApiBundle(
         "_parse_y_token_cached",
         "_parse_y_token",
         "_rewrite_year_month_aliases_in_context",
-        "_raise_on_bad_colon_year_tokens",
         "_skip_ws_pos",
         "_raise_if_comma_joined_anchors",
         "_parse_anchor_expr_to_dnf_cached_obj",

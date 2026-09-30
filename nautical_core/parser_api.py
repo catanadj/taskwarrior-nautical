@@ -413,6 +413,22 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             years=years,
         )
 
+    def fatal_bad_colon_in_year_tail(tail: str) -> str | None:
+        return parser_frontend.fatal_bad_colon_in_year_tail(
+            tail,
+            split_csv_tokens=deps["_split_csv_tokens"],
+            re_mod=deps["re"],
+            yearfmt=deps["_yearfmt"],
+        )
+
+    def raise_bad_year_colons(value: str) -> None:
+        parser_frontend.raise_on_bad_colon_year_tokens(
+            value,
+            re_mod=deps["re"],
+            fatal_bad_colon_in_year_tail=fatal_bad_colon_in_year_tail,
+            parse_error_cls=deps["ParseError"],
+        )
+
     def validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: Any) -> Any:
         for term in dnf:
             for factor in term:
@@ -455,7 +471,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def parse_anchor_expr_to_dnf_bound(s: str) -> Any:
         owner_deps = ParserOwnerDependencies(
             normalize_input=normalize_anchor_expr_input,
-            raise_bad_year_colons=deps["_raise_on_bad_colon_year_tokens"],
+            raise_bad_year_colons=raise_bad_year_colons,
             parse_atom=parse_anchor_atom_at,
             parse_mods=deps["_parse_atom_mods"],
             skip_ws=deps["_skip_ws_pos"],

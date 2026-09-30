@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from collections.abc import Iterable
 import hashlib
 import json
 from typing import Any, Callable, Literal, Mapping, Protocol, TypeAlias, cast
@@ -23,6 +24,7 @@ from .task_read_repository import (
     TaskReadRepository,
 )
 from .task_models import FieldPresence, NauticalTask, TaskObservation
+from .occurrence_provider import Occurrence
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_datetime import TaskDatetimeParser, parser_for_core
 from .query_models import (
@@ -442,7 +444,7 @@ class OccurrenceQueryService:
             json.dumps(evidence, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
         ).hexdigest()[:32]
 
-    def _records(self, items: Any, timezone_name: str) -> tuple[OccurrenceRecord, ...]:
+    def _records(self, items: Iterable[Occurrence], timezone_name: str) -> tuple[OccurrenceRecord, ...]:
         records: list[OccurrenceRecord] = []
         for item in items:
             if item.local_datetime is None:

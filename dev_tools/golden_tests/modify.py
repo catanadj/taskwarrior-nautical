@@ -5,14 +5,19 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta, timezone
 import tempfile
+from pathlib import Path
 
 from dev_tools.golden_tests.support import (
     assert_stdout_json_only,
+    build_child_draft_for_test,
+    carry_relative_datetime,
     expect,
     find_hook_file,
     load_hook_module,
     modify_effect,
+    run_hook_script,
     run_hook_script_raw,
+    strip_markup,
     test_operator_uow,
 )
 
@@ -399,6 +404,485 @@ def test_on_modify_reports_business_calendar_displacement():
     expect(("Adjusted", "Mon 2026-04-27 (+3d)") in rows, f"adjusted occurrence missing: {rows!r}")
 
 
+def test_on_modify_carry_wall_clock_across_dst():
+    """carry-forward should preserve local wall-clock offset across DST."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_carry_dst_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        return
+
+    previous_tz_name = mod.core.LOCAL_TZ_NAME
+    previous_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "America/New_York"
+        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+
+        due_local = date(2025, 3, 9)
+        due_utc = mod.core.build_local_datetime(due_local, (1, 30))
+        wait_utc = mod.core.build_local_datetime(due_local, (3, 30))
+
+        child_due_utc = mod.core.build_local_datetime(date(2025, 3, 10), (1, 30))
+
+        parent = {
+            "due": mod.core.fmt_isoz(due_utc),
+            "wait": mod.core.fmt_isoz(wait_utc),
+        }
+        child = {"due": mod.core.fmt_isoz(child_due_utc)}
+
+        carry_relative_datetime(mod, parent, child, child_due_utc, "wait")
+        wait_child = mod.core.parse_dt_any(child.get("wait"))
+        wait_local = mod.core.to_local(wait_child)
+
+        expect(wait_local.hour == 3 and wait_local.minute == 30, f"unexpected local wait: {wait_local}")
+    finally:
+        mod.core.LOCAL_TZ_NAME = previous_tz_name
+        mod.core._LOCAL_TZ = previous_tz
+
+
+
+def test_on_modify_build_child_carries_until_across_dst():
+    """native until should retain its local wall-clock offset from the recurrence due."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_carry_until_dst_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        return
+
+    previous_tz_name = mod.core.LOCAL_TZ_NAME
+    previous_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "America/New_York"
+        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+
+        parent_due = mod.core.build_local_datetime(date(2025, 3, 8), (9, 0))
+        parent_until = mod.core.build_local_datetime(date(2025, 3, 9), (17, 0))
+        child_due = mod.core.build_local_datetime(date(2025, 3, 15), (9, 0))
+        parent = {
+            "uuid": "00000000-0000-4000-8000-000000000994",
+            "status": "completed",
+            "link": 1,
+            "due": mod.core.fmt_isoz(parent_due),
+            "until": mod.core.fmt_isoz(parent_until),
+            "cp": "7d",
+            "chainID": "cid_until",
+        }
+
+        child = build_child_draft_for_test(mod,
+            parent,
+            child_due,
+            "due",
+            2,
+            "beef",
+            "cp",
+            0,
+            None,
+        )
+        child_until_local = mod.core.to_local(mod.core.parse_dt_any(child.get("until")))
+        expect(
+            child_until_local.date() == date(2025, 3, 16)
+            and (child_until_local.hour, child_until_local.minute) == (17, 0),
+            f"unexpected carried until: {child_until_local}",
+        )
+
+        pending_parent = dict(parent, status="pending")
+        moved_parent = dict(pending_parent, due=mod.core.fmt_isoz(child_due))
+        expect(
+            mod._transition_effects.preserve_native_until_on_target_change(pending_parent, moved_parent, "cp"),
+            "ordinary target move skipped native-until carry across DST",
+        )
+        moved_until_local = mod.core.to_local(mod.core.parse_dt_any(moved_parent.get("until")))
+        expect(
+            moved_until_local.date() == date(2025, 3, 16)
+            and (moved_until_local.hour, moved_until_local.minute) == (17, 0),
+            f"ordinary target move changed calendar expiration across DST: {moved_until_local}",
+        )
+    finally:
+        mod.core.LOCAL_TZ_NAME = previous_tz_name
+        mod.core._LOCAL_TZ = previous_tz
+
+
+
+def test_on_modify_native_until_calendar_and_exact_carry_policy():
+    """native until should use calendar carry by default and exact carry with the +1s marker."""
+    import nautical_core.chain_integrity_lifecycle as reconcile
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_native_until_carry_policy_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    due_0900 = mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))
+    due_1300 = mod.core.build_local_datetime(date(2026, 7, 20), (13, 0))
+    due_1800 = mod.core.build_local_datetime(date(2026, 7, 20), (18, 0))
+    until_2300 = mod.core.build_local_datetime(date(2026, 7, 20), (23, 0))
+
+    def build(kind, child_due, until_value):
+        parent = {
+            "uuid": "00000000-0000-4000-8000-000000000995",
+            "description": "native until carry test",
+            "status": "completed",
+            "link": 1,
+            "due": mod.core.fmt_isoz(due_0900),
+            "until": mod.core.fmt_isoz(until_value),
+            "chainID": "cid_until_policy",
+        }
+        if kind == "cp":
+            parent["cp"] = "8h"
+        elif kind == "anchor":
+            parent.update({"anchor": "d:*@t=09:00,13:00", "anchor_mode": "skip"})
+        else:
+            parent.update({"anchor_file": "calendar.csv", "anchor_mode": "skip"})
+        return build_child_draft_for_test(mod,
+            parent,
+            child_due,
+            "due",
+            2,
+            "beef",
+            kind,
+            0,
+            None,
+        )
+
+    for kind in ("cp", "anchor"):
+        child = build(kind, due_1300, until_2300)
+        carried = mod.core.to_local(mod.core.parse_dt_any(child.get("until")))
+        expect(
+            carried.date() == date(2026, 7, 20)
+            and (carried.hour, carried.minute, carried.second) == (23, 0, 0),
+            f"{kind} should keep a same-day calendar expiration: {carried}",
+        )
+
+    until_1700 = mod.core.build_local_datetime(date(2026, 7, 20), (17, 0))
+    cp_rollover = build("cp", due_1800, until_1700)
+    carried_rollover = mod.core.to_local(mod.core.parse_dt_any(cp_rollover.get("until")))
+    expect(
+        carried_rollover.date() == date(2026, 7, 21)
+        and (carried_rollover.hour, carried_rollover.minute) == (17, 0),
+        f"CP should roll an elapsed calendar expiration to the next local day: {carried_rollover}",
+    )
+
+    until_eod = mod.core.build_local_datetime(date(2026, 7, 20), (23, 59)) + timedelta(seconds=59)
+    eod_child = build("anchor", due_1300, until_eod)
+    carried_eod = mod.core.to_local(mod.core.parse_dt_any(eod_child.get("until")))
+    expect(
+        carried_eod.date() == date(2026, 7, 20)
+        and (carried_eod.hour, carried_eod.minute, carried_eod.second) == (23, 59, 59),
+        f"end-of-day expiration should retain calendar carry: {carried_eod}",
+    )
+
+    until_exact = until_2300 + timedelta(seconds=1)
+    for kind in ("cp", "anchor"):
+        exact_child = build(kind, due_1300, until_exact)
+        carried_exact = mod.core.to_local(mod.core.parse_dt_any(exact_child.get("until")))
+        expect(
+            carried_exact.date() == date(2026, 7, 21)
+            and (carried_exact.hour, carried_exact.minute, carried_exact.second) == (3, 0, 1),
+            f"{kind} +1s expiration should retain the exact elapsed window: {carried_exact}",
+        )
+
+    expired_parent = {
+        "uuid": "00000000-0000-4000-8000-000000000996",
+        "description": "native until reconcile test",
+        "status": "deleted",
+        "anchor": "w:mon@t=09:00,13:00",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "cid_until_reconcile",
+        "link": 1,
+        "due": mod.core.fmt_isoz(due_0900),
+        "until": mod.core.fmt_isoz(until_2300),
+        "end": mod.core.fmt_isoz(until_2300),
+    }
+    plan = reconcile.plan_recovery_decision(
+        DEFAULT_TASK_CODEC.decode_row(expired_parent, source_query="golden recovery"),
+        existing_children=[], hook=mod,
+    )
+    child = (
+        plan.child_observation.to_mapping()
+        if getattr(plan, "child_observation", None) is not None
+        else plan.plan.child_dict()
+        if getattr(plan, "plan", None) is not None
+        else {}
+    )
+    reconciled_until = mod.core.to_local(mod.core.parse_dt_any(child.get("until")))
+    expect(getattr(getattr(plan, "plan", None), "action", None).value == "spawn_child", f"expired anchor should produce a child plan: {plan}")
+    expect(
+        reconciled_until.date() == date(2026, 7, 20)
+        and (reconciled_until.hour, reconciled_until.minute) == (23, 0),
+        f"reconciled child should use the same calendar expiration policy: {reconciled_until}",
+    )
+
+    early_until_parent = {
+        "uuid": "00000000-0000-4000-8000-000000000997",
+        "description": "native until end-of-day fallback test",
+        "status": "deleted",
+        "anchor": "w:mon@t=09:00,13:00",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "cid_until_reconcile_eod",
+        "link": 1,
+        "due": mod.core.fmt_isoz(due_0900),
+        "until": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 10))),
+        "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 10))),
+    }
+    from nautical_core.chain_generation import ChainGenerationService
+
+    class FailingBuildGeneration(ChainGenerationService):
+        def build_child_from_parent(self, *_args, **_kwargs):
+            raise ValueError("native until must be later than the child recurrence target")
+
+    failing_generation = FailingBuildGeneration.from_core(mod.core)
+    untyped_plan = reconcile.plan_recovery_decision(
+        DEFAULT_TASK_CODEC.decode_row(early_until_parent, source_query="golden recovery"),
+        existing_children=[],
+        hook=mod,
+        generation=failing_generation,
+    )
+    expect(
+        getattr(getattr(untyped_plan, "plan", None), "action", None).value == "spawn_child",
+        f"typed reconcile planning should not depend on the removed builder seam: {untyped_plan}",
+    )
+
+    early_plan = reconcile.plan_recovery_decision(
+        DEFAULT_TASK_CODEC.decode_row(early_until_parent, source_query="golden recovery"),
+        existing_children=[], hook=mod,
+    )
+    early_child = (
+        early_plan.child_observation.to_mapping()
+        if getattr(early_plan, "child_observation", None) is not None
+        else early_plan.plan.child_dict()
+        if getattr(early_plan, "plan", None) is not None
+        else {}
+    )
+    early_until = mod.core.to_local(mod.core.parse_dt_any(early_child.get("until")))
+    expect(getattr(getattr(early_plan, "plan", None), "action", None).value == "spawn_child", f"expired anchor should still produce a child plan: {early_plan}")
+    expect(
+        early_until.date() == date(2026, 7, 20)
+        and (early_until.hour, early_until.minute, early_until.second) == (23, 59, 59),
+        f"reconcile should fall back to end of day for expired anchor carry: {early_until}",
+    )
+
+
+
+def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
+    """the +1s expiration marker should preserve elapsed seconds instead of local clock offset."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_native_until_exact_dst_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        return
+
+    previous_tz_name = mod.core.LOCAL_TZ_NAME
+    previous_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "America/New_York"
+        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+        parent_due = mod.core.build_local_datetime(date(2025, 3, 8), (9, 0))
+        parent_until = mod.core.build_local_datetime(date(2025, 3, 9), (17, 0)) + timedelta(seconds=1)
+        child_due = mod.core.build_local_datetime(date(2025, 3, 15), (9, 0))
+        parent = {
+            "uuid": "00000000-0000-4000-8000-000000000997",
+            "status": "completed",
+            "due": mod.core.fmt_isoz(parent_due),
+            "until": mod.core.fmt_isoz(parent_until),
+            "cp": "7d",
+            "chainID": "cid_until_exact_dst",
+        }
+
+        child = build_child_draft_for_test(mod,
+            parent,
+            child_due,
+            "due",
+            2,
+            "beef",
+            "cp",
+            0,
+            None,
+        )
+        carried = mod.core.parse_dt_any(child.get("until"))
+        expect(
+            carried - child_due == parent_until - parent_due,
+            f"exact expiration should preserve UTC elapsed time: {carried} from {child_due}",
+        )
+        carried_local = mod.core.to_local(carried)
+        expect(
+            carried_local.date() == date(2025, 3, 16)
+            and (carried_local.hour, carried_local.minute, carried_local.second) == (16, 0, 1),
+            f"exact DST carry should not preserve the old local clock offset: {carried_local}",
+        )
+    finally:
+        mod.core.LOCAL_TZ_NAME = previous_tz_name
+        mod.core._LOCAL_TZ = previous_tz
+
+
+
+def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations():
+    """calendar expiration should reject fixed anchor slots at or after its clock time."""
+    add_hook = find_hook_file("on-add.nautical")
+    modify_hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(modify_hook, "_nautical_native_until_slot_guard_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    anchor_day = date(2030, 7, 1)  # Monday, deliberately beyond the test clock.
+    due = mod.core.build_local_datetime(anchor_day, (9, 0))
+    until_1900 = mod.core.build_local_datetime(anchor_day, (19, 0))
+    base = {
+        "uuid": "00000000-0000-4000-8000-000000000998",
+        "description": "invalid anchor expiration slot",
+        "status": "pending",
+        "entry": "20300630T080000Z",
+        "anchor": "w:mon@t=09:00,18:00,20:00",
+        "anchor_mode": "skip",
+        "due": "20300701T090000Z",
+        "until": "20300701T190000Z",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "config-nautical.toml"
+        config.write_text('tz = "UTC"\n', encoding="utf-8")
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config)}
+        added = run_hook_script(add_hook, dict(base), env_extra=env)
+        expect(added.returncode != 0, "on-add accepted a same-day expiration before an anchor slot")
+        expect(not added.stdout.strip(), f"rejected on-add leaked stdout: {added.stdout!r}")
+        added_stderr = strip_markup(added.stderr)
+        expect("Invalid expiration window" in added_stderr, f"missing on-add expiration panel: {added_stderr!r}")
+        expect("20:00" in added_stderr, f"missing conflicting anchor slot: {added_stderr!r}")
+
+        exact = run_hook_script(
+            add_hook,
+            dict(base, until="20300701T190001Z"),
+            env_extra=env,
+        )
+        expect(exact.returncode == 0, f"+1s exact expiration should bypass calendar slot rejection: {exact.stderr!r}")
+
+        old = dict(base, chain="on", chainID="cid_until_slots", link=1, until="20300701T210000Z")
+        new = dict(old, until="20300701T190000Z")
+        modified = run_hook_script_raw(
+            modify_hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra=dict(env, TASKDATA=td),
+        )
+        anchor_old = dict(
+            base,
+            anchor="w:mon@t=09:00",
+            chain="on",
+            chainID="cid_until_anchor_edit",
+            link=1,
+        )
+        anchor_invalid = run_hook_script_raw(
+            modify_hook,
+            json.dumps(anchor_old) + "\n" + json.dumps(dict(anchor_old, anchor="w:mon@t=09:00,20:00")),
+            env_extra=dict(env, TASKDATA=td),
+        )
+        anchor_valid = run_hook_script_raw(
+            modify_hook,
+            json.dumps(anchor_old) + "\n" + json.dumps(dict(anchor_old, anchor="w:mon@t=09:00,18:00")),
+            env_extra=dict(env, TASKDATA=td),
+        )
+        cp_old = dict(
+            anchor_old,
+            anchor=None,
+            anchor_mode=None,
+            cp="7d",
+            chainID="cid_until_cp_to_anchor",
+        )
+        cp_to_anchor = dict(
+            cp_old,
+            cp=None,
+            anchor="w:mon@t=09:00,20:00",
+            anchor_mode="skip",
+        )
+        converted = run_hook_script_raw(
+            modify_hook,
+            json.dumps(cp_old) + "\n" + json.dumps(cp_to_anchor),
+            env_extra=dict(env, TASKDATA=td),
+        )
+    expect(modified.returncode != 0, "on-modify accepted a same-day expiration before an anchor slot")
+    expect(not modified.stdout.strip(), f"rejected on-modify leaked stdout: {modified.stdout!r}")
+    expect("Invalid expiration window" in strip_markup(modified.stderr), f"missing modify expiration panel: {modified.stderr!r}")
+    expect(anchor_invalid.returncode != 0, "on-modify accepted an anchor edit adding a slot after expiration")
+    expect(not anchor_invalid.stdout.strip(), f"rejected anchor edit leaked stdout: {anchor_invalid.stdout!r}")
+    expect("20:00" in strip_markup(anchor_invalid.stderr), f"missing edited anchor slot: {anchor_invalid.stderr!r}")
+    expect(anchor_valid.returncode == 0, f"valid anchor slot edit was rejected: {anchor_valid.stderr!r}")
+    expect(
+        assert_stdout_json_only(anchor_valid.stdout).get("anchor") == "w:mon@t=09:00,18:00",
+        f"valid anchor edit changed unexpectedly: {anchor_valid.stdout!r}",
+    )
+    expect(converted.returncode != 0, "CP-to-anchor conversion bypassed expiration slot validation")
+    expect(not converted.stdout.strip(), f"rejected CP-to-anchor conversion leaked stdout: {converted.stdout!r}")
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td) / "anchor"
+        anchor_dir.mkdir()
+        (anchor_dir / "events.csv").write_text(f"date\n{anchor_day.isoformat()}\n", encoding="utf-8")
+        config = Path(td) / "config-nautical.toml"
+        config.write_text(f'tz = "UTC"\nanchor_file_dir = "{anchor_dir}"\n', encoding="utf-8")
+        file_task = dict(base, anchor=None, anchor_file="events.csv@t=09:00,18:00,20:00")
+        from_file = run_hook_script(
+            add_hook,
+            file_task,
+            env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config)},
+        )
+        file_old = dict(
+            file_task,
+            anchor_file="events.csv@t=09:00",
+            chain="on",
+            chainID="cid_until_file_edit",
+            link=1,
+        )
+        file_new = dict(file_old, anchor_file="events.csv@t=09:00,20:00")
+        modified_file = run_hook_script_raw(
+            modify_hook,
+            json.dumps(file_old) + "\n" + json.dumps(file_new),
+            env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config), "TASKDATA": td},
+        )
+    expect(from_file.returncode != 0, "anchor_file accepted a same-day expiration before a file slot")
+    expect(not from_file.stdout.strip(), f"rejected anchor_file add leaked stdout: {from_file.stdout!r}")
+    expect("20:00" in strip_markup(from_file.stderr), f"missing anchor_file slot evidence: {from_file.stderr!r}")
+    expect(modified_file.returncode != 0, "on-modify accepted an anchor_file edit adding a slot after expiration")
+    expect(not modified_file.stdout.strip(), f"rejected anchor_file edit leaked stdout: {modified_file.stdout!r}")
+    expect("20:00" in strip_markup(modified_file.stderr), f"missing edited anchor_file slot: {modified_file.stderr!r}")
+
+    invalid_parent = {
+        "uuid": "00000000-0000-4000-8000-000000000998",
+        "status": "completed",
+        "anchor": "w:mon@t=09:00,18:00,20:00",
+        "anchor_mode": "skip",
+        "due": mod.core.fmt_isoz(due),
+        "until": mod.core.fmt_isoz(until_1900),
+        "chainID": "cid_until_slots",
+    }
+    try:
+        build_child_draft_for_test(mod,
+            invalid_parent,
+            mod.core.build_local_datetime(anchor_day, (20, 0)),
+            "due",
+            2,
+            "beef",
+            "anchor",
+            0,
+            None,
+        )
+    except ValueError as exc:
+        expect("until" in str(exc), f"unexpected child guard error: {exc!r}")
+    else:
+        raise AssertionError("child builder accepted an expiration at or before the next anchor slot")
+
 TESTS = (
     test_on_modify_reports_business_calendar_displacement,
     test_on_modify_promotes_chain_emits_upgrade_panel,
@@ -410,4 +894,9 @@ TESTS = (
     test_on_modify_recurrence_update_groups_and_flattens_changes,
     test_on_modify_native_until_update_explains_carry,
     test_on_modify_limit_update_emits_effective_boundaries,
+    test_on_modify_carry_wall_clock_across_dst,
+    test_on_modify_build_child_carries_until_across_dst,
+    test_on_modify_native_until_calendar_and_exact_carry_policy,
+    test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst,
+    test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations,
 )

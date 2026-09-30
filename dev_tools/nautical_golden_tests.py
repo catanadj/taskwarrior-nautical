@@ -1201,184 +1201,6 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     expect(repair_new.get("chain") == "off", f"repair disable changed chain unexpectedly: {repair_new!r}")
 
 
-def test_on_modify_recurrence_update_emits_ack_panel():
-    """Changing recurrence settings on an existing Nautical task should be acknowledged."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_recurrence_update_panel_test")
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000449",
-        "description": "nautical task",
-        "status": "pending",
-        "anchor": "w:mon",
-        "due": "20260727T090000Z",
-        "chain": "on",
-        "chainID": "abcd1234",
-        "link": 1,
-    }
-    new = {**old, "anchor": "w:tue,thu"}
-    captured = {}
-
-    orig_panel = mod._panel
-    orig_print_task = mod._print_task
-    try:
-        def fake_panel(title, rows, *, kind=None):
-            captured["title"] = title
-            captured["rows"] = list(rows)
-            captured["kind"] = kind
-
-        mod._panel = fake_panel
-        mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
-    finally:
-        mod._panel = orig_panel
-        mod._print_task = orig_print_task
-
-    expect(captured.get("title") == "⚓ Nautical recurrence updated", f"expected recurrence update panel, got {captured!r}")
-    expect(captured.get("kind") == "note", f"expected note panel, got {captured!r}")
-    rows = captured.get("rows") or []
-    expect(
-        ("Changed", "Anchor: [dim]w:mon[/] [cyan]→[/] [bold]w:tue,thu[/]") in rows,
-        f"expected styled anchor change row, got {rows!r}",
-    )
-    expect(any(k == "Natural" and "Tuesday" in str(v) and "Thursday" in str(v) for k, v in rows), f"expected natural row, got {rows!r}")
-    expect(any(k == "First next" for k, _v in rows), f"expected recalculated first occurrence, got {rows!r}")
-    expect(not any(k == "Chain" for k, _v in rows), f"recurrence panel should omit redundant chain:on row, got {rows!r}")
-    expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
-
-
-def test_on_modify_recurrence_update_groups_and_flattens_changes():
-    """Multi-field recurrence updates stay grouped and readable in one-line modes."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_recurrence_update_layout_test")
-    changes = [
-        ("anchor", "w:mon", "w:tue"),
-        ("chainMax", "5", "8"),
-    ]
-    rich_rows = [
-        ("Changed", "Anchor: [dim]w:mon[/] [cyan]→[/] [bold]w:tue[/]"),
-        ("Changed", "Max links: [dim]5[/] [cyan]→[/] [bold]8[/]"),
-    ]
-    feedback = mod.core._import_sibling("modify_feedback")
-    grouped = feedback._recurrence_update_panel_rows(
-        changes,
-        rich_rows,
-        panel_mode=mod.core.PANEL_MODE,
-        strip_markup=mod.core.strip_rich_markup,
-    )
-    expect(grouped[1][0] is None, f"expected spacing between recurrence and limits: {grouped!r}")
-
-    previous_mode = mod.core.PANEL_MODE
-    try:
-        mod.core.PANEL_MODE = "text"
-        flattened = feedback._recurrence_update_panel_rows(
-            changes,
-            rich_rows,
-            panel_mode=mod.core.PANEL_MODE,
-            strip_markup=mod.core.strip_rich_markup,
-        )
-    finally:
-        mod.core.PANEL_MODE = previous_mode
-    expect(flattened[0][0] == "Changes", f"expected one-line change summary: {flattened!r}")
-    expect("Anchor:" in flattened[0][1] and "Max links:" in flattened[0][1], f"one-line summary omitted a change: {flattened!r}")
-
-
-def test_on_modify_native_until_update_explains_carry():
-    """Changing native until should acknowledge its exact or calendar carry policy."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_until_update_panel_test")
-    due = mod.core.build_local_datetime(date(2026, 8, 3), (10, 0)).astimezone(timezone.utc)
-    old_until = mod.core.build_local_datetime(date(2026, 8, 3), (18, 0)).astimezone(timezone.utc)
-    new_until = mod.core.build_local_datetime(date(2026, 8, 4), (0, 0)).astimezone(timezone.utc) + timedelta(seconds=1)
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000446",
-        "description": "nautical expiration update",
-        "status": "pending",
-        "cp": "1d",
-        "due": mod.core.fmt_isoz(due),
-        "until": mod.core.fmt_isoz(old_until),
-        "chain": "on",
-        "chainID": "abcd1234",
-    }
-    new = {**old, "until": mod.core.fmt_isoz(new_until)}
-    captured = {}
-
-    orig_panel = mod._panel
-    orig_print_task = mod._print_task
-    try:
-        mod._panel = lambda title, rows, *, kind=None: captured.update(title=title, rows=list(rows), kind=kind)
-        mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
-    finally:
-        mod._panel = orig_panel
-        mod._print_task = orig_print_task
-
-    rows = captured.get("rows") or []
-    expect(captured.get("title") == "⚓ Nautical recurrence updated", f"unexpected expiration panel: {captured!r}")
-    expect(captured.get("kind") == "note", f"unexpected expiration panel style: {captured!r}")
-    expect(any(label == "Changed" and "Expiration:" in str(value) and "2026-08-03" in str(value) and "2026-08-04" in str(value) for label, value in rows), f"missing expiration diff: {rows!r}")
-    expect(("Carry", "Exact · 14h 00m 01s after occurrence") in rows, f"missing exact carry explanation: {rows!r}")
-    expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
-
-
-def test_on_modify_limit_update_emits_effective_boundaries():
-    """Changing chain limits should acknowledge both boundaries without speculative dates."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_limit_update_panel_test")
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000450",
-        "description": "limited nautical task",
-        "status": "pending",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "abcd1234",
-        "link": 2,
-        "chainMax": 5,
-        "chainUntil": "20990810T070000Z",
-    }
-    new = {**old, "chainMax": 8, "chainUntil": "20990820T070000Z"}
-    cleared = dict(new)
-    cleared.pop("chainMax")
-    cleared.pop("chainUntil")
-    panels = []
-
-    orig_panel = mod._panel
-    orig_print_task = mod._print_task
-    try:
-        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
-        mod._print_task = lambda _task: None
-        _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
-        _modify_effect(mod, "handle_non_completion", new, cleared, _test_operator_uow())
-    finally:
-        mod._panel = orig_panel
-        mod._print_task = orig_print_task
-
-    expect(len(panels) == 2, f"each limit update should emit one panel: {panels!r}")
-    title, rows, kind = panels[0]
-    expect(title == "⚓ Nautical recurrence updated" and kind == "note", f"unexpected limit panel: {panels!r}")
-    expect(
-        ("Changed", "Max links: [dim]5[/] [cyan]→[/] [bold]8[/]") in rows,
-        f"missing styled chainMax update: {rows!r}",
-    )
-    expect(
-        any(
-            label == "Changed" and "Chain end point:" in value and "2099-08-10" in value and "2099-08-20" in value
-            for label, value in rows
-        ),
-        f"missing localized chainUntil update: {rows!r}",
-    )
-    expect(("Final link", "#8") in rows, f"missing final link boundary: {rows!r}")
-    expect(
-        sum(label == "Changed" and "Chain end point:" in str(value) for label, value in rows) == 1,
-        f"chain end point should not be repeated: {rows!r}",
-    )
-    expect(("Effective", "Whichever boundary is reached first") in rows, f"missing effective limit rule: {rows!r}")
-    expect(("Chain limits", "None") in panels[1][1], f"clearing both limits should be explicit: {panels[1]!r}")
-    expect(("Removed", "Max links: [dim]8[/]") in panels[1][1], f"cleared max link should be marked removed: {panels[1]!r}")
-    expect(any(label == "Removed" and "Chain end point:" in str(value) for label, value in panels[1][1]), f"cleared chain end should be marked removed: {panels[1]!r}")
-
-
-
-
 def _test_modify_engine_services(
     result_cls,
     *,
@@ -5025,72 +4847,6 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
     )
 
 
-def test_on_modify_reports_business_calendar_displacement():
-    """Completion feedback should report the captured calendar roll in every panel mode."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_calendar_displacement_test")
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHAIN_COLOR_PER_CHAIN = False
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
-    mod._timeline_lines = lambda *_a, **_k: []
-    mod._panel_line = lambda *_a, **_k: None
-    panels = []
-    mod._panel = lambda title, rows, **_kwargs: panels.append((title, list(rows)))
-
-    policy = mod.core.resolve_business_calendar_config(
-        {'work': {'anchor': 'w:mon..fri', 'omit': 'y:04-24'}}
-    )['work']
-    dnf = mod.core.validate_anchor_expr_strict('y:04-24@nbd@t=09:00')
-    previous_mode = mod.core.PANEL_MODE
-    try:
-        mod.core.PANEL_MODE = "minimal"
-        with mod.core.use_business_calendar(policy), mod.core.capture_business_calendar_displacements():
-            child_date, _meta = mod.core.next_after_expr(
-                dnf,
-                date(2026, 4, 20),
-                date(2026, 4, 20),
-            )
-            child_due = mod.core.build_local_datetime(child_date, (9, 0))
-            mod._presentation_effects.render_anchor_completion_feedback(
-                new={
-                    "anchor": "y:04-24@nbd@t=09:00",
-                    "anchor_mode": "skip",
-                    "bc": "work",
-                    "uuid": "00000000-0000-4000-8000-000000000127",
-                    "chainID": "calendar-chain",
-                },
-                child={"uuid": "00000000-0000-4000-8000-000000000128"},
-                child_due=child_due,
-                child_short="beeswax",
-                next_no=2,
-                parent_short="00000000",
-                cap_no=None,
-                finals=[],
-                now_utc=mod.core.now_utc(),
-                until_dt=None,
-                until_cap_no=None,
-                dnf=dnf,
-                meta={"mode": "skip"},
-                stripped_attrs=[],
-                deferred_spawn=False,
-                spawn_intent_id=None,
-                chain_by_short=None,
-                analytics_advice=None,
-                integrity_warnings=None,
-                base_no=1,
-            )
-    finally:
-        mod.core.PANEL_MODE = previous_mode
-
-    calendar_panels = [rows for title, rows in panels if title == "⚓ Business calendar adjusted"]
-    expect(len(calendar_panels) == 1, f"completion should emit one displacement panel: {panels!r}")
-    rows = calendar_panels[0]
-    expect(("Calendar", "work") in rows, f"calendar name missing: {rows!r}")
-    expect(("Original", "Fri 2026-04-24") in rows, f"original occurrence missing: {rows!r}")
-    expect(("Adjusted", "Mon 2026-04-27 (+3d)") in rows, f"adjusted occurrence missing: {rows!r}")
-
-
 def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
     """Timed anchors should show a warning when timezone data is unavailable."""
     hook = _find_hook_file("on-modify.nautical")
@@ -6223,7 +5979,7 @@ TESTS = [
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
     *STORAGE_TESTS,
-    test_on_modify_reports_business_calendar_displacement,
+    *MODIFY_TESTS[:1],
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
     *OPERATOR_TESTS[:2],
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
@@ -6251,11 +6007,8 @@ TESTS = [
     test_modify_overnight_window_advances_past_second_dst_fold,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
-    *MODIFY_TESTS,
-    test_on_modify_recurrence_update_emits_ack_panel,
-    test_on_modify_recurrence_update_groups_and_flattens_changes,
-    test_on_modify_native_until_update_explains_carry,
-    test_on_modify_limit_update_emits_effective_boundaries,
+    *MODIFY_TESTS[1:6],
+    *MODIFY_TESTS[6:],
     test_on_add_requires_integration_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
     test_on_modify_build_child_carries_until_across_dst,

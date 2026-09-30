@@ -807,8 +807,6 @@ _parser_support_api = _LazyApiBundle(
     "parsing.parser_support_api",
     (
         "_parse_hhmm",
-        "_parse_atom_head",
-        "_parse_atom_mods",
         "_parse_y_token_cached",
         "_parse_y_token",
         "_rewrite_year_month_aliases_in_context",

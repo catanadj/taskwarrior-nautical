@@ -18,14 +18,17 @@ import nautical_core.scheduler_api as scheduler_api
 
 
 class ParserOwnerApiContractTests(unittest.TestCase):
-    def test_parser_api_uses_frontend_owner_without_root_bad_colon_alias(self) -> None:
+    def test_parser_api_uses_parser_owners_without_root_callbacks(self) -> None:
         namespace = vars(core).copy()
         namespace["ParseError"] = core.ParseError
         namespace.pop("_raise_on_bad_colon_year_tokens", None)
+        namespace.pop("_parse_atom_head", None)
+        namespace.pop("_parse_atom_mods", None)
         parser = parser_api.for_core(namespace=namespace)
 
         with self.assertRaisesRegex(core.ParseError, "uses ':' between numbers"):
             parser.parse_anchor_expr_to_dnf("y:01:02")
+        self.assertEqual(parser.parse_anchor_expr_to_dnf("w:mon@t=09:00")[0][0]["mods"]["t"], (9, 0))
 
     def test_incompatible_moon_phases_are_rejected_by_both_public_parsers(self) -> None:
         for parser in (core.validate_anchor_expr_strict, core.parse_anchor_expr_to_dnf):

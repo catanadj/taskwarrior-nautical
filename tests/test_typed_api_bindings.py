@@ -105,11 +105,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 100)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 100)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 98)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 98)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "d5369db22165b1d72d0fa0f0e108bf95485b83c2ba8b891e1e0d464c937556be",
+            "98ec48d4a9c17824eb8909cabc98eed43c091b18a0835cbdaafeea8a277bb7ba",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -173,6 +173,8 @@ class ApiBindingContractTests(unittest.TestCase):
             "_quick_yearly_and_check",
             "_term_has_any_match_within",
             "_raise_on_bad_colon_year_tokens",
+            "_parse_atom_head",
+            "_parse_atom_mods",
         ):
             with self.subTest(name=name):
                 self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)

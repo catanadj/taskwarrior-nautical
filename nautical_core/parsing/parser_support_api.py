@@ -279,7 +279,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             else:
                 item_spec, item_mods_str = token, ""
             item_spec = item_spec.strip().lower()
-            item_mods = core["_parse_atom_mods"](item_mods_str.strip())
+            item_mods = parse_atom_mods(item_mods_str.strip())
             if item_mods_str.strip() and (
                 item_mods.get("roll")
                 or item_mods.get("wd") is not None

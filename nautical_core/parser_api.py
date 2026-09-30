@@ -274,15 +274,36 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def normalize_monthly_ordinal_spec(spec: str) -> str:
         return parser_atoms.normalize_monthly_ordinal_spec(spec, re_mod=deps["re"])
 
+    def parse_hhmm(value: str) -> Any:
+        return parser_atoms.parse_hhmm(value, hhmm_re=deps["_hhmm_re"])
+
+    def parse_atom_head(head: str) -> Any:
+        return parser_atoms.parse_atom_head(
+            head,
+            re_mod=deps["re"],
+            parse_error_cls=deps["ParseError"],
+        )
+
+    def parse_atom_mods(mods_str: str) -> Any:
+        return parser_atoms.parse_atom_mods(
+            mods_str,
+            split_csv_tokens=deps["_split_csv_tokens"],
+            parse_hhmm=parse_hhmm,
+            next_prev_wd_re=deps["_next_prev_wd_re"],
+            weekdays=deps["_WEEKDAYS"],
+            day_offset_re=deps["_day_offset_re"],
+            parse_error_cls=deps["ParseError"],
+        )
+
     def build_anchor_atom_dnf(head: str, full_tail: str) -> Any:
         return parser_atoms.build_anchor_atom_dnf(
             head,
             full_tail,
-            parse_atom_head=deps["_parse_atom_head"],
+            parse_atom_head=parse_atom_head,
             parse_group_with_inline_mods=deps["_parse_group_with_inline_mods"],
             normalize_monthly_ordinal_spec=normalize_monthly_ordinal_spec,
             split_csv_lower=deps["_split_csv_lower"],
-            parse_atom_mods=deps["_parse_atom_mods"],
+            parse_atom_mods=parse_atom_mods,
             parse_error_cls=deps["ParseError"],
         )
 
@@ -473,7 +494,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             normalize_input=normalize_anchor_expr_input,
             raise_bad_year_colons=raise_bad_year_colons,
             parse_atom=parse_anchor_atom_at,
-            parse_mods=deps["_parse_atom_mods"],
+            parse_mods=parse_atom_mods,
             skip_ws=deps["_skip_ws_pos"],
             rewrite_quarters=deps["_rewrite_quarters_in_context"],
             rewrite_year_month=deps["_rewrite_year_month_aliases_in_context"],

@@ -933,6 +933,11 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             "test_core_live_panel_duration_config_defaults_and_clamps",
             "test_core_live_panel_footer_config_defaults_and_customizes",
             "test_core_uda_aliases_config_defaults_disabled_and_can_enable",
+            "test_discovered_malformed_config_blocks_taskdata_reload",
+            "test_taskdata_reload_exposes_consistent_validated_fingerprints",
+            "test_hook_on_modify_uda_aliases_route_through_thin_wrapper",
+            "test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel",
+            "test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper",
         )
         registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
         top_level = {
@@ -1026,11 +1031,11 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
-        self.assertEqual(len(top_level), 98)
+        self.assertEqual(len(top_level), 93)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
-        self.assertEqual(len(configuration.TESTS), 10)
+        self.assertEqual(len(configuration.TESTS), 15)
         self.assertEqual(len(installer.TESTS), 9)
         self.assertEqual(len(performance.TESTS), 7)
         modify = importlib.import_module("dev_tools.golden_tests.modify")

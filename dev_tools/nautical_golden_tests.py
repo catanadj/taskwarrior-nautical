@@ -1453,88 +1453,6 @@ def test_soak_runner_reports_ok():
     expect(not obj.get("violations"), f"soak runner reported violations: {obj}")
 
 
-def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
-    """Alias-bearing plain modifies must not be swallowed by the thin fast path."""
-    hook = _find_hook_file("on-modify.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        config = Path(td) / "nautical.toml"
-        config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
-        old = {
-            "uuid": "00000000-0000-4000-8000-000000000115",
-            "description": "plain",
-            "status": "pending",
-        }
-        new = dict(old, description="plain a:w:mon")
-        raw = json.dumps(old) + "\n" + json.dumps(new)
-        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
-        proc = _run_hook_script_raw(hook, raw, env_extra=env)
-        expect(proc.returncode == 0, f"enabled alias modify hook failed: {proc.stderr[:600]!r}")
-        _assert_stdout_json_only(proc.stdout)
-        normalized = _extract_last_json(proc.stdout)
-        expect(normalized.get("description") == "plain", f"modify alias remained in description: {normalized!r}")
-        expect(normalized.get("anchor") == "w:mon", f"modify alias did not reach canonical UDA: {normalized!r}")
-
-        alias_only = dict(old, description="a:w:tue")
-        proc = _run_hook_script_raw(hook, json.dumps(old) + "\n" + json.dumps(alias_only), env_extra=env)
-        expect(proc.returncode == 0, f"alias-only modify failed: {proc.stderr[:600]!r}")
-        _assert_stdout_json_only(proc.stdout)
-        normalized = _extract_last_json(proc.stdout)
-        expect(normalized.get("description") == "plain", f"alias-only modify erased description: {normalized!r}")
-        expect(normalized.get("anchor") == "w:tue", f"alias-only modify did not update canonical UDA: {normalized!r}")
-
-
-def test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel():
-    """A description alias changing an existing anchor must still acknowledge the edit."""
-    hook = _find_hook_file("on-modify.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        config = Path(td) / "nautical.toml"
-        config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
-        old = {
-            "uuid": "00000000-0000-4000-8000-000000000117",
-            "description": "plain",
-            "status": "pending",
-            "anchor": "w:mon",
-            "chain": "on",
-            "chainID": "abcd1234",
-            "link": 1,
-        }
-        new = dict(old, description="plain a:w:tue")
-        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
-        proc = _run_hook_script_raw(hook, json.dumps(old) + "\n" + json.dumps(new), env_extra=env)
-
-    expect(proc.returncode == 0, f"alias anchor modify failed: {proc.stderr[:600]!r}")
-    _assert_stdout_json_only(proc.stdout)
-    normalized = _extract_last_json(proc.stdout)
-    expect(normalized.get("anchor") == "w:tue", f"alias anchor was not normalized: {normalized!r}")
-    expect("Nautical recurrence updated" in proc.stderr, f"alias anchor acknowledgement missing: {proc.stderr!r}")
-    expect("Anchor: w:mon" in proc.stderr and "w:tue" in proc.stderr, f"alias anchor diff missing: {proc.stderr!r}")
-
-
-def test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper():
-    """The native empty-value clearing form must survive the wrapper boundary."""
-    hook = _find_hook_file("on-modify.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        config = Path(td) / "nautical.toml"
-        config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
-        old = {
-            "uuid": "00000000-0000-4000-8000-000000000116",
-            "description": "plain",
-            "status": "pending",
-            "anchor": "w:mon",
-            "anchor_mode": "skip",
-            "chain": "on",
-        }
-        new = dict(old, description="plain a:")
-        raw = json.dumps(old) + "\n" + json.dumps(new)
-        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
-        proc = _run_hook_script_raw(hook, raw, env_extra=env)
-        expect(proc.returncode == 0, f"empty alias clear failed: {proc.stderr[:600]!r}")
-        _assert_stdout_json_only(proc.stdout)
-        normalized = _extract_last_json(proc.stdout)
-        expect(normalized.get("description") == "plain", f"empty alias remained in description: {normalized!r}")
-        expect("anchor" not in normalized, f"empty alias did not clear anchor: {normalized!r}")
-
-
 def test_on_modify_expands_and_clears_description_uda_aliases():
     """on-modify aliases should update unchanged fields and support explicit clearing."""
     hook = _find_hook_file("on-modify.nautical")
@@ -1849,79 +1767,6 @@ def test_prev_weekday_natural_text():
         "previous Friday before month end",
     ]
     assert any(w in nat for w in want_any), f"Natural missing expected phrasing: {nat!r}"
-
-
-def test_discovered_malformed_config_blocks_taskdata_reload():
-    """A malformed Taskdata-discovered config must not silently select defaults."""
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td)
-        (taskdata / "config-nautical.toml").write_text(
-            "tz = \"Europe/Athens\"\n[broken\n", encoding="utf-8"
-        )
-        env = os.environ.copy()
-        env["TASKDATA"] = str(taskdata)
-        env["TASKRC"] = str(taskdata / "taskrc")
-        env.pop("NAUTICAL_CONFIG", None)
-        env["PYTHONPATH"] = str(ROOT)
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import os, nautical_core as c; c.reload_taskdata_config(os.environ['TASKDATA'])",
-            ],
-            cwd=str(ROOT),
-            env=env,
-            text=True,
-            capture_output=True,
-        )
-        expect(proc.returncode != 0, "malformed discovered config was accepted")
-        detail = f"{proc.stdout}\n{proc.stderr}".lower()
-        expect("config parse failed" in detail, f"parse failure detail missing: {detail[:800]!r}")
-
-
-def test_taskdata_reload_exposes_consistent_validated_fingerprints():
-    """All lifecycle tools should receive one effective configuration identity."""
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td)
-        (taskdata / "config-nautical.toml").write_text(
-            'tz = "Europe/Athens"\nseason_hemisphere = "north"\n', encoding="utf-8"
-        )
-        env = os.environ.copy()
-        env.pop("NAUTICAL_CONFIG", None)
-        env["PYTHONPATH"] = str(ROOT)
-        script = (
-            "import json, os, nautical_core as c\n"
-            "a = c.reload_taskdata_config(os.environ['TASKDATA'])\n"
-            "drift = c.configuration_drift()\n"
-            "b = c.reload_taskdata_config(os.environ['TASKDATA'])\n"
-            "print(json.dumps({'a': a, 'b': b, 'drift': drift,"
-            " 'effective': c.effective_config_fingerprint(),"
-            " 'scheduler': c.scheduler_config_fingerprint()}))\n"
-        )
-        env["TASKDATA"] = str(taskdata)
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=str(ROOT),
-            env=env,
-            text=True,
-            capture_output=True,
-        )
-        expect(proc.returncode == 0, f"validated reload process failed: {proc.stderr[:500]!r}")
-        payload = json.loads(proc.stdout.strip().splitlines()[-1])
-        first = payload["a"]
-        second = payload["b"]
-        expect(first["ok"] and second["ok"], f"reload did not report success: {payload!r}")
-        expect(first["fingerprint"] == second["fingerprint"], "effective fingerprint changed on identical reload")
-        expect(
-            first["scheduler_fingerprint"] == second["scheduler_fingerprint"],
-            "scheduler fingerprint changed on identical reload",
-        )
-        expect(first["fingerprint"] == payload["effective"], "reload and core effective fingerprints differ")
-        expect(
-            first["scheduler_fingerprint"] == payload["scheduler"],
-            "reload and core scheduler fingerprints differ",
-        )
-        expect(payload["drift"]["status"] == "ok", f"identical reload left configuration drifted: {payload!r}")
 
 
 def test_modifier_boundary_paths_agree_and_advance_strictly():
@@ -5844,8 +5689,7 @@ TESTS = [
     test_year_ordinals_hooks_modes_calendar_and_timeline,
     test_seasonal_selection_modify_modes_times_and_timeline,
     *CONFIGURATION_TESTS[5:6],
-    test_discovered_malformed_config_blocks_taskdata_reload,
-    test_taskdata_reload_exposes_consistent_validated_fingerprints,
+    *CONFIGURATION_TESTS[10:12],
     test_modifier_boundary_paths_agree_and_advance_strictly,
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
@@ -5935,10 +5779,8 @@ TESTS = [
     test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
     *CONFIGURATION_TESTS[:3],
-    *CONFIGURATION_TESTS[6:],
-    test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
-    test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel,
-    test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,
+    *CONFIGURATION_TESTS[6:10],
+    *CONFIGURATION_TESTS[12:15],
     test_on_modify_expands_and_clears_description_uda_aliases,
     test_astronomical_season_selection_scheduler_uses_transition_dates,
     test_on_modify_build_child_carries_configured_uda_datetime,

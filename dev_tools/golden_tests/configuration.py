@@ -12,7 +12,14 @@ import sys
 import tempfile
 
 import nautical_core as core
-from dev_tools.golden_tests.support import expect, load_core_module
+from dev_tools.golden_tests.support import (
+    assert_stdout_json_only,
+    expect,
+    extract_last_json,
+    find_hook_file,
+    load_core_module,
+    run_hook_script_raw,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -371,6 +378,179 @@ def test_core_uda_aliases_config_defaults_disabled_and_can_enable():
             )
 
 
+def test_discovered_malformed_config_blocks_taskdata_reload():
+    """A malformed Taskdata-discovered config must not silently select defaults."""
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td)
+        (taskdata / "config-nautical.toml").write_text(
+            'tz = "Europe/Athens"\n[broken\n', encoding="utf-8"
+        )
+        env = os.environ.copy()
+        env["TASKDATA"] = str(taskdata)
+        env["TASKRC"] = str(taskdata / "taskrc")
+        env.pop("NAUTICAL_CONFIG", None)
+        env["PYTHONPATH"] = str(ROOT)
+        process = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import os, nautical_core as c; c.reload_taskdata_config(os.environ['TASKDATA'])",
+            ],
+            cwd=str(ROOT),
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        expect(process.returncode != 0, "malformed discovered config was accepted")
+        detail = f"{process.stdout}\n{process.stderr}".lower()
+        expect("config parse failed" in detail, f"parse failure detail missing: {detail[:800]!r}")
+
+
+def test_taskdata_reload_exposes_consistent_validated_fingerprints():
+    """Lifecycle tools receive one consistent effective configuration identity."""
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td)
+        (taskdata / "config-nautical.toml").write_text(
+            'tz = "Europe/Athens"\nseason_hemisphere = "north"\n', encoding="utf-8"
+        )
+        env = os.environ.copy()
+        env.pop("NAUTICAL_CONFIG", None)
+        env["PYTHONPATH"] = str(ROOT)
+        env["TASKDATA"] = str(taskdata)
+        script = (
+            "import json, os, nautical_core as c\n"
+            "a = c.reload_taskdata_config(os.environ['TASKDATA'])\n"
+            "drift = c.configuration_drift()\n"
+            "b = c.reload_taskdata_config(os.environ['TASKDATA'])\n"
+            "print(json.dumps({'a': a, 'b': b, 'drift': drift,"
+            " 'effective': c.effective_config_fingerprint(),"
+            " 'scheduler': c.scheduler_config_fingerprint()}))\n"
+        )
+        process = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(ROOT),
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        expect(process.returncode == 0, f"validated reload process failed: {process.stderr[:500]!r}")
+        payload = json.loads(process.stdout.strip().splitlines()[-1])
+        first, second = payload["a"], payload["b"]
+        expect(first["ok"] and second["ok"], f"reload did not report success: {payload!r}")
+        expect(first["fingerprint"] == second["fingerprint"], "effective fingerprint changed on identical reload")
+        expect(
+            first["scheduler_fingerprint"] == second["scheduler_fingerprint"],
+            "scheduler fingerprint changed on identical reload",
+        )
+        expect(first["fingerprint"] == payload["effective"], "reload and core effective fingerprints differ")
+        expect(
+            first["scheduler_fingerprint"] == payload["scheduler"],
+            "reload and core scheduler fingerprints differ",
+        )
+        expect(payload["drift"]["status"] == "ok", f"identical reload left config drifted: {payload!r}")
+
+
+def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
+    """Alias-bearing plain modifies must not be swallowed by the thin fast path."""
+    hook = find_hook_file("on-modify.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text('enable_uda_aliases = true\ntz = "UTC"\n', encoding="utf-8")
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000115",
+            "description": "plain",
+            "status": "pending",
+        }
+        new = dict(old, description="plain a:w:mon")
+        env = {
+            "NAUTICAL_CONFIG": str(config),
+            "NAUTICAL_TRUST_CONFIG_PATH": "1",
+            "TASKDATA": td,
+            "NO_COLOR": "1",
+        }
+        process = run_hook_script_raw(hook, json.dumps(old) + "\n" + json.dumps(new), env_extra=env)
+        expect(process.returncode == 0, f"enabled alias modify failed: {process.stderr[:600]!r}")
+        assert_stdout_json_only(process.stdout)
+        normalized = extract_last_json(process.stdout)
+        expect(normalized.get("description") == "plain", f"modify alias remained in description: {normalized!r}")
+        expect(normalized.get("anchor") == "w:mon", f"modify alias did not reach canonical UDA: {normalized!r}")
+
+        alias_only = dict(old, description="a:w:tue")
+        process = run_hook_script_raw(
+            hook, json.dumps(old) + "\n" + json.dumps(alias_only), env_extra=env
+        )
+        expect(process.returncode == 0, f"alias-only modify failed: {process.stderr[:600]!r}")
+        assert_stdout_json_only(process.stdout)
+        normalized = extract_last_json(process.stdout)
+        expect(normalized.get("description") == "plain", f"alias-only modify erased description: {normalized!r}")
+        expect(normalized.get("anchor") == "w:tue", f"alias-only modify did not update canonical UDA: {normalized!r}")
+
+
+def test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel():
+    """A description alias changing an existing anchor must acknowledge the edit."""
+    hook = find_hook_file("on-modify.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text('enable_uda_aliases = true\ntz = "UTC"\n', encoding="utf-8")
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000117",
+            "description": "plain",
+            "status": "pending",
+            "anchor": "w:mon",
+            "chain": "on",
+            "chainID": "abcd1234",
+            "link": 1,
+        }
+        new = dict(old, description="plain a:w:tue")
+        env = {
+            "NAUTICAL_CONFIG": str(config),
+            "NAUTICAL_TRUST_CONFIG_PATH": "1",
+            "TASKDATA": td,
+            "NO_COLOR": "1",
+        }
+        process = run_hook_script_raw(
+            hook, json.dumps(old) + "\n" + json.dumps(new), env_extra=env
+        )
+
+    expect(process.returncode == 0, f"alias anchor modify failed: {process.stderr[:600]!r}")
+    assert_stdout_json_only(process.stdout)
+    normalized = extract_last_json(process.stdout)
+    expect(normalized.get("anchor") == "w:tue", f"alias anchor was not normalized: {normalized!r}")
+    expect("Nautical recurrence updated" in process.stderr, f"alias anchor acknowledgement missing: {process.stderr!r}")
+    expect("Anchor: w:mon" in process.stderr and "w:tue" in process.stderr, f"alias anchor diff missing: {process.stderr!r}")
+
+
+def test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper():
+    """The native empty-value clearing form survives the wrapper boundary."""
+    hook = find_hook_file("on-modify.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text('enable_uda_aliases = true\ntz = "UTC"\n', encoding="utf-8")
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000116",
+            "description": "plain",
+            "status": "pending",
+            "anchor": "w:mon",
+            "anchor_mode": "skip",
+            "chain": "on",
+        }
+        new = dict(old, description="plain a:")
+        env = {
+            "NAUTICAL_CONFIG": str(config),
+            "NAUTICAL_TRUST_CONFIG_PATH": "1",
+            "TASKDATA": td,
+            "NO_COLOR": "1",
+        }
+        process = run_hook_script_raw(
+            hook, json.dumps(old) + "\n" + json.dumps(new), env_extra=env
+        )
+        expect(process.returncode == 0, f"empty alias clear failed: {process.stderr[:600]!r}")
+        assert_stdout_json_only(process.stdout)
+        normalized = extract_last_json(process.stdout)
+        expect(normalized.get("description") == "plain", f"empty alias remained in description: {normalized!r}")
+        expect("anchor" not in normalized, f"empty alias did not clear anchor: {normalized!r}")
+
+
 TESTS = (
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
@@ -382,4 +562,9 @@ TESTS = (
     test_core_live_panel_duration_config_defaults_and_clamps,
     test_core_live_panel_footer_config_defaults_and_customizes,
     test_core_uda_aliases_config_defaults_disabled_and_can_enable,
+    test_discovered_malformed_config_blocks_taskdata_reload,
+    test_taskdata_reload_exposes_consistent_validated_fingerprints,
+    test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
+    test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel,
+    test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,
 )

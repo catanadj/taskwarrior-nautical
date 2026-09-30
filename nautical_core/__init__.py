@@ -747,7 +747,6 @@ _quarter_api = _LazyApiBundle(
         "_quarters_from_start_day_tokens",
         "_quarters_from_end_day_tokens",
         "_format_quarter_set",
-        "_rewrite_quarter_spec_mode",
         "_quarter_atom_spec",
         "_has_quarter_tokens",
         "_has_plain_quarter_tokens",

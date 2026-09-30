@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import sqlite3
@@ -15,146 +14,6 @@ from dev_tools.golden_tests.support import expect, load_hook_module
 
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def _load_perf_module():
-    path = ROOT / "dev_tools" / "nautical_perf_budget.py"
-    spec = importlib.util.spec_from_file_location(
-        "_nautical_perf_import_profile_test", path
-    )
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_perf_cold_import_records_module_profile():
-    """Cold-import benchmarks should expose loaded-module counts for profiling."""
-    perf = _load_perf_module()
-    elapsed = perf._bench_cold_import("core", 1)
-    if elapsed < 0.0:
-        raise AssertionError("cold import benchmark returned an invalid duration")
-    if int(perf.IMPORT_PROFILES.get("core", 0)) <= 0:
-        raise AssertionError("cold import module profile was not recorded")
-
-
-def test_ops_templates_present_and_runner_executable():
-    """Operations templates should exist and the health-check runner be executable."""
-    ops = ROOT / "dev_tools" / "ops"
-    files = (
-        "README.md",
-        "nautical-health-check.crontab",
-        "nautical-health-check.service",
-        "nautical-health-check.timer",
-        "nautical_health_check_cron.sh",
-    )
-    for name in files:
-        expect((ops / name).is_file(), f"missing ops template: {ops / name}")
-    runner = ops / "nautical_health_check_cron.sh"
-    expect(runner.stat().st_mode & 0o111, f"runner should be executable: {runner}")
-
-
-def test_perf_hint_benchmark_isolates_persistent_cache():
-    """Hint timing uses a temporary cache and restores production settings."""
-    perf = load_hook_module(
-        str(ROOT / "dev_tools" / "nautical_perf_budget.py"),
-        "_nautical_perf_cache_isolation_test",
-    )
-    original_build = perf.core.build_and_cache_hints
-    original_override = getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
-    seen = []
-    try:
-
-        def fake_build(*_args, **_kwargs):
-            seen.append(str(getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")))
-            payload = perf.core.cache_load("perf-isolation")
-            if payload is None:
-                payload = {"dnf": []}
-                perf.core.cache_save("perf-isolation", payload)
-            return payload
-
-        perf.core.build_and_cache_hints = fake_build
-        perf._bench_build_hints(["w:mon"], 1, mode="warm")
-        expect(
-            seen and "nautical-perf-cache-" in seen[0],
-            f"benchmark used a non-isolated cache: {seen!r}",
-        )
-        expect(
-            getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "") == original_override,
-            "benchmark did not restore cache configuration",
-        )
-    finally:
-        perf.core.build_and_cache_hints = original_build
-
-
-def test_perf_hook_fast_path_ratio_enforcement():
-    """Hook latency checks enforce the normalized fast/full median ratio."""
-    perf = load_hook_module(
-        str(ROOT / "dev_tools" / "nautical_perf_budget.py"),
-        "_nautical_hook_perf_ratio_test",
-    )
-
-    def timed_latency(_hook_path, *, input_text, env, expected_task):
-        _ = (input_text, expected_task)
-        return 0.100 if env.get("NAUTICAL_BENCH_FORCE_FULL") == "1" else 0.050
-
-    perf._run_hook_timed = timed_latency
-    passing = perf._measure_hook_fast_path(
-        "hook_test",
-        Path("unused-hook"),
-        input_text="{}",
-        expected_task={},
-        base_env={},
-        repeats=3,
-        max_ratio=0.8,
-    )
-    expect(
-        passing.get("pass") is True,
-        f"clear fast-path improvement should pass: {passing}",
-    )
-    expect(
-        abs(float(passing.get("fast_to_full_ratio")) - 0.5) < 0.001,
-        f"unexpected ratio: {passing}",
-    )
-
-    def insufficient_gain(_hook_path, *, input_text, env, expected_task):
-        _ = (input_text, expected_task)
-        return 0.100 if env.get("NAUTICAL_BENCH_FORCE_FULL") == "1" else 0.090
-
-    perf._run_hook_timed = insufficient_gain
-    failing = perf._measure_hook_fast_path(
-        "hook_test",
-        Path("unused-hook"),
-        input_text="{}",
-        expected_task={},
-        base_env={},
-        repeats=3,
-        max_ratio=0.8,
-    )
-    expect(
-        failing.get("pass") is False, f"insufficient improvement should fail: {failing}"
-    )
-
-    perf._run_hook_timed = lambda *_args, **_kwargs: 0.060
-    managed = perf._measure_managed_hook_latency(
-        "managed_hook_test",
-        Path("unused-hook"),
-        input_text="{}",
-        expected_task={},
-        base_env={"NAUTICAL_CORE_PATH": "/source", "NAUTICAL_TRUST_CORE_PATH": "1"},
-        repeats=3,
-        baseline_median_s=0.050,
-        max_ratio=1.5,
-    )
-    expect(
-        managed.get("pass") is True,
-        f"reasonable managed-layout overhead should pass: {managed}",
-    )
-    expect(
-        abs(float(managed.get("managed_to_source_ratio")) - 1.2) < 0.001,
-        f"unexpected managed/source ratio: {managed}",
-    )
 
 
 def test_hook_replay_harness_reports_ok():
@@ -241,10 +100,6 @@ def test_soak_runner_reports_ok():
 
 
 TESTS = (
-    test_perf_cold_import_records_module_profile,
-    test_ops_templates_present_and_runner_executable,
-    test_perf_hint_benchmark_isolates_persistent_cache,
-    test_perf_hook_fast_path_ratio_enforcement,
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,
     test_soak_runner_reports_ok,

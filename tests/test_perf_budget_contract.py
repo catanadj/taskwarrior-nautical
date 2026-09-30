@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from dev_tools import nautical_perf_budget as budget
 from dev_tools.perf import reporting
@@ -18,6 +19,63 @@ import nautical_core
 
 
 class PerformanceBudgetContractTests(unittest.TestCase):
+    def test_cold_import_benchmark_records_module_profile(self) -> None:
+        elapsed = budget._bench_cold_import("core", 1)
+
+        self.assertGreaterEqual(elapsed, 0.0)
+        self.assertGreater(int(budget.IMPORT_PROFILES.get("core", 0)), 0)
+
+    def test_hint_benchmark_uses_temporary_cache_and_restores_configuration(self) -> None:
+        original_override = getattr(budget.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
+        seen: list[str] = []
+
+        def fake_build(*_args: object, **_kwargs: object) -> dict[str, object]:
+            seen.append(str(getattr(budget.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")))
+            payload = budget.core.cache_load("perf-isolation")
+            if payload is None:
+                payload = {"dnf": []}
+                budget.core.cache_save("perf-isolation", payload)
+            return payload
+
+        with patch.object(budget.core, "build_and_cache_hints", side_effect=fake_build):
+            budget._bench_build_hints(["w:mon"], 1, mode="warm")
+
+        self.assertTrue(seen and "nautical-perf-cache-" in seen[0], seen)
+        self.assertEqual(getattr(budget.core, "ANCHOR_CACHE_DIR_OVERRIDE", ""), original_override)
+
+    def test_hook_fast_path_ratio_enforcement(self) -> None:
+        def timed_latency(_hook_path, *, input_text, env, expected_task):
+            _ = (input_text, expected_task)
+            return 0.100 if env.get("NAUTICAL_BENCH_FORCE_FULL") == "1" else 0.050
+
+        with patch.object(budget, "_run_hook_timed", side_effect=timed_latency):
+            passing = budget._measure_hook_fast_path(
+                "hook_test", Path("unused-hook"), input_text="{}", expected_task={},
+                base_env={}, repeats=3, max_ratio=0.8,
+            )
+        self.assertIs(passing.get("pass"), True)
+        self.assertAlmostEqual(float(passing.get("fast_to_full_ratio", 0.0)), 0.5, places=3)
+
+        def insufficient_gain(_hook_path, *, input_text, env, expected_task):
+            _ = (input_text, expected_task)
+            return 0.100 if env.get("NAUTICAL_BENCH_FORCE_FULL") == "1" else 0.090
+
+        with patch.object(budget, "_run_hook_timed", side_effect=insufficient_gain):
+            failing = budget._measure_hook_fast_path(
+                "hook_test", Path("unused-hook"), input_text="{}", expected_task={},
+                base_env={}, repeats=3, max_ratio=0.8,
+            )
+        self.assertIs(failing.get("pass"), False)
+
+        with patch.object(budget, "_run_hook_timed", return_value=0.060):
+            managed = budget._measure_managed_hook_latency(
+                "managed_hook_test", Path("unused-hook"), input_text="{}", expected_task={},
+                base_env={"NAUTICAL_CORE_PATH": "/source", "NAUTICAL_TRUST_CORE_PATH": "1"},
+                repeats=3, baseline_median_s=0.050, max_ratio=1.5,
+            )
+        self.assertIs(managed.get("pass"), True)
+        self.assertAlmostEqual(float(managed.get("managed_to_source_ratio", 0.0)), 1.2, places=3)
+
     def test_extracted_reporting_helpers_preserve_schema(self) -> None:
         result: dict = {}
         reporting.attach_timing_breakdown(

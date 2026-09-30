@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -37,6 +41,64 @@ class NauticalCliContractTests(unittest.TestCase):
             text=True,
             check=False,
         )
+
+    def test_nautical_dispatches_supported_subcommands(self) -> None:
+        entrypoint = runpy.run_path(str(LAUNCHER), run_name="_nautical_dispatch_contract")
+        previous_argv = list(sys.argv)
+        previous_run_path = entrypoint["runpy"].run_path
+        calls: list[tuple[str, str | None, list[str]]] = []
+        targets = {
+            "install": str(ROOT / "nautical_core" / "tools" / "nautical_install.py"),
+            "doctor": str(ROOT / "nautical_core" / "tools" / "nautical_doctor.py"),
+            "queue-status": str(ROOT / "nautical_core" / "tools" / "nautical_queue_status.py"),
+            "reconcile": str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"),
+            "navigator": str(ROOT / "nautical_navigator.py"),
+        }
+
+        def fake_run_path(target: str, run_name: str | None = None) -> dict[str, object]:
+            calls.append((target, run_name, list(sys.argv)))
+            return {}
+
+        try:
+            entrypoint["runpy"].run_path = fake_run_path
+            for command in targets:
+                sys.argv = ["nautical", command, "--json"]
+                self.assertEqual(entrypoint["main"](), 0, command)
+            sys.argv = ["nautical", "unknown"]
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(entrypoint["main"](), 2)
+        finally:
+            entrypoint["runpy"].run_path = previous_run_path
+            sys.argv = previous_argv
+
+        self.assertEqual(len(calls), len(targets))
+        for (target, run_name, argv), (command, expected_target) in zip(calls, targets.items()):
+            with self.subTest(command=command):
+                self.assertEqual(target, expected_target)
+                self.assertEqual(run_name, "__main__")
+                self.assertEqual(argv[0], expected_target)
+                if command == "install":
+                    self.assertEqual(argv[1:3], ["--source", str(ROOT)])
+
+        previous_install_target = entrypoint["COMMANDS"]["install"]
+        previous_source = os.environ.get("NAUTICAL_SOURCE")
+        try:
+            entrypoint["COMMANDS"]["install"] = Path("/tmp/nautical-missing-install.py")
+            os.environ["NAUTICAL_SOURCE"] = str(ROOT)
+            entrypoint["runpy"].run_path = fake_run_path
+            calls.clear()
+            sys.argv = ["nautical", "install"]
+            self.assertEqual(entrypoint["main"](), 0)
+            self.assertTrue(calls)
+            self.assertEqual(calls[0][0], targets["install"])
+        finally:
+            entrypoint["COMMANDS"]["install"] = previous_install_target
+            if previous_source is None:
+                os.environ.pop("NAUTICAL_SOURCE", None)
+            else:
+                os.environ["NAUTICAL_SOURCE"] = previous_source
+            entrypoint["runpy"].run_path = previous_run_path
+            sys.argv = previous_argv
 
     def test_help_describes_global_options_and_commands(self) -> None:
         result = self.run_launcher(LAUNCHER, "--help")

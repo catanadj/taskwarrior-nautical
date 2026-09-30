@@ -21,6 +21,22 @@ ROOT = Path(__file__).parents[1]
 
 
 class DeploymentSanityContractTests(unittest.TestCase):
+    def test_ops_templates_present_and_health_runner_executable(self) -> None:
+        ops = ROOT / "dev_tools" / "ops"
+        files = (
+            "README.md",
+            "nautical-health-check.crontab",
+            "nautical-health-check.service",
+            "nautical-health-check.timer",
+            "nautical_health_check_cron.sh",
+        )
+        for name in files:
+            with self.subTest(name=name):
+                self.assertTrue((ops / name).is_file(), f"missing ops template: {name}")
+
+        runner = ops / "nautical_health_check_cron.sh"
+        self.assertTrue(runner.stat().st_mode & 0o111, f"runner should be executable: {runner}")
+
     def test_deploy_sanity_script_reports_ok(self) -> None:
         script = ROOT / "dev_tools" / "nautical_deploy_sanity.py"
         process = subprocess.run(

@@ -826,38 +826,6 @@ def test_on_modify_link_limit():
     expect(out.get("link") == 3, "should pass task through unchanged")
 
 
-def test_on_modify_completion_chain_snapshot_modes_and_query():
-    """Completion presentation modes share one authoritative chain read."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_completion_snapshot_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    from nautical_core.integration_models import Found
-
-    saved = (mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY)
-    calls = []
-    repository = SimpleNamespace(
-        chain_snapshot=lambda chain_id: calls.append(chain_id) or Found(tuple(), "chain snapshot")
-    )
-
-    try:
-        mod._SHOW_ANALYTICS = False
-        mod._CHECK_CHAIN_INTEGRITY = False
-        mod.core.PANEL_MODE = "line"
-        next_only = mod._completion_effects.chain_snapshot("cid", 5, 6, repository)
-        expect(next_only.mode == "next" and next_only.loaded, f"unexpected line snapshot: {next_only}")
-
-        mod.core.PANEL_MODE = "rich"
-        recent = mod._completion_effects.chain_snapshot("cid", 5, 6, repository)
-        expect(recent.mode == "recent" and recent.loaded, f"unexpected recent snapshot: {recent}")
-
-        mod._CHECK_CHAIN_INTEGRITY = True
-        full = mod._completion_effects.chain_snapshot("cid", 5, 6, repository)
-        expect(full.mode == "full" and full.loaded, f"unexpected full snapshot: {full}")
-        expect(calls == ["cid", "cid", "cid"], f"completion bypassed repository chain reads: {calls!r}")
-    finally:
-        mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
 
 
 def test_navigator_uses_anchor_and_anchor_file_sources():
@@ -1618,134 +1586,8 @@ def test_ui_live_test_term_guard_restores_environment():
             os.environ["TERM"] = original
 
 
-def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
-    """Re-completing a reactivated task should not spawn when nextLink already exists."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_recomplete_skip_spawn_test")
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._SHOW_ANALYTICS = False
-    mod._CHECK_CHAIN_INTEGRITY = False
-
-    called = {"spawn": False}
-
-    def _spawn_child_atomic_stub(_child, _parent):
-        called["spawn"] = True
-        return ("beeswax", set(), False, True, "queued", "si_test1")
-
-    spawn_effects = mod._module("modify_spawn_effects")
-    original_spawn = spawn_effects.spawn_child_atomic
-    spawn_effects.spawn_child_atomic = lambda _ports, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
-
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000111",
-        "status": "pending",
-        "description": "reactivated duplicate guard",
-        "cp": "P1D",
-        "chainID": "abcd1234",
-        "link": 1,
-        "nextLink": "beeswax",
-        "due": "20250101T090000Z",
-    }
-    new = dict(old)
-    new.update(
-        {
-            "status": "completed",
-            "end": "20250102T090000Z",
-        }
-    )
-
-    raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
-    buf_out = io.StringIO()
-    buf_err = io.StringIO()
-    buf_in = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
-    prev_stdin = sys.stdin
-    try:
-        sys.stdin = buf_in
-        with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
-            mod.main()
-    finally:
-        sys.stdin = prev_stdin
-        spawn_effects.spawn_child_atomic = original_spawn
-
-    out_task = _extract_last_json(buf_out.getvalue())
-    spawn_effects.spawn_child_atomic = original_spawn
-    expect(not called["spawn"], "re-completion should not trigger duplicate spawn")
-    expect(out_task.get("nextLink") == "beeswax", "existing nextLink should be preserved")
 
 
-def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
-    """Re-completing should not spawn when link #N+1 already exists in chain even if nextLink is empty."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_recomplete_link_guard_test")
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._SHOW_ANALYTICS = False
-    mod._CHECK_CHAIN_INTEGRITY = False
-
-    called = {"spawn": False}
-
-    def _spawn_child_atomic_stub(_child, _parent):
-        called["spawn"] = True
-        return ("cafebabe", set(), False, True, "queued", "si_test2")
-
-    spawn_effects = mod._module("modify_spawn_effects")
-    original_spawn = spawn_effects.spawn_child_atomic
-    spawn_effects.spawn_child_atomic = lambda _ports, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
-    modify_models = mod._module("modify_models")
-    mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next: modify_models.CompletionChainSnapshot(
-        mode="recent", rows=[], loaded=False, chain_id=str(chain_id)
-    )
-    def _existing_next_guard(task, *_args, **_kwargs):
-        mod._print_task(task)
-        return False
-
-    mod._completion_effects.existing_next_or_fail = _existing_next_guard
-
-    def _get_chain_export_stub(chain_id, since=None, extra=None, env=None):
-        if chain_id == "abcd1234" and extra and "link:2" in extra:
-            return [
-                {
-                    "uuid": "00000000-0000-4000-8000-000000000222",
-                    "status": "pending",
-                    "link": 2,
-                    "chainID": "abcd1234",
-                }
-            ]
-        return []
-
-    mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export = _get_chain_export_stub
-
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000111",
-        "status": "pending",
-        "description": "reactivated duplicate guard via link check",
-        "cp": "P1D",
-        "chainID": "abcd1234",
-        "link": 1,
-        "due": "20250101T090000Z",
-    }
-    new = dict(old)
-    new.update(
-        {
-            "status": "completed",
-            "end": "20250102T090000Z",
-        }
-    )
-
-    raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
-    buf_out = io.StringIO()
-    buf_err = io.StringIO()
-    buf_in = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
-    prev_stdin = sys.stdin
-    try:
-        sys.stdin = buf_in
-        with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
-            mod.main()
-    finally:
-        sys.stdin = prev_stdin
-        spawn_effects.spawn_child_atomic = original_spawn
-
-    _ = _extract_last_json(buf_out.getvalue())
-    expect(not called["spawn"], "existing link #N+1 should prevent duplicate spawn")
 
 
 
@@ -2124,148 +1966,8 @@ def test_reconcile_planning_configuration_drift_is_partial():
 
 
 
-def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
-    """on-modify should reuse one full-chain export across preflight and later feedback prep when chain context is needed."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_single_chain_export_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    mod._SHOW_ANALYTICS = True
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHECK_CHAIN_INTEGRITY = False
-    prev_panel_mode = mod.core.PANEL_MODE
-    mod.core.PANEL_MODE = "text"
-
-    now_utc = mod.core.now_utc()
-    child_due = now_utc + timedelta(days=1)
-    export_calls = {"count": 0}
-    parent_uuid = "00000000-0000-4000-8000-000000000111"
-    child_uuid = "00000000-0000-4000-8000-000000000222"
-
-    chain_rows = [
-        {
-            "uuid": parent_uuid,
-            "status": "completed",
-            "description": "cp spawn test",
-            "cp": "P1D",
-            "chainID": "abcd1234",
-            "chain": "on",
-            "link": 1,
-            "due": "20250101T090000Z",
-            "entry": "2025-01-01T09:00:00Z",
-            "nextLink": "",
-        }
-    ]
-
-    modify_models = mod._module("modify_models")
-    mod._completion_effects.compute_next_and_limits = lambda *_a, **_k: modify_models.CompletionComputeResult(
-        child_due=child_due,
-        meta={},
-        dnf=None,
-        until_dt=None,
-        cpmax=0,
-        cap_no=None,
-        finals=[],
-        until_cap_no=None,
-    )
-    mod._completion_effects.build_and_spawn_child = lambda *_a, **_k: modify_models.CompletionSpawnResult(
-        child={
-            "uuid": child_uuid,
-            "status": "pending",
-            "description": "next cp",
-            "chainID": "abcd1234",
-            "link": 2,
-            "prevLink": parent_uuid[:8],
-            "due": mod.core.fmt_isoz(child_due),
-        },
-        child_short=child_uuid[:8],
-        stripped_attrs=[],
-        verified=True,
-        deferred_spawn=False,
-        spawn_intent_id=None,
-    )
-    mod._presentation_effects.render_cp_completion_feedback = lambda **_k: None
-    mod._diagnostics_effects.chain_health_advice = lambda *_a, **_k: None
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._module("lifecycle_read_service").clear_cached_chain_exports()
-    mod._reset_modify_runtime_state()
-
-    old = {
-        "uuid": parent_uuid,
-        "status": "pending",
-        "description": "cp spawn test",
-        "cp": "P1D",
-        "chainID": "abcd1234",
-        "link": 1,
-        "due": "20250101T090000Z",
-    }
-    new = dict(old)
-    new.update({"status": "completed", "end": "20250102T090000Z"})
-
-    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
-
-    uow = _test_operator_uow()
-
-    class Client:
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            export_calls["count"] += 1
-            command = TaskCommand(("task", *args), purpose, timeout)
-            return TaskCommandResult(
-                command,
-                0,
-                json.dumps(chain_rows),
-                "",
-                CommandFailureKind.SUCCESS,
-                1,
-                0.001,
-            )
-
-    uow.client = Client()
-
-    try:
-        _modify_effect(mod, "handle_completion", old, new, uow)
-    finally:
-        mod.core.PANEL_MODE = prev_panel_mode
-
-    expect(export_calls["count"] == 1, f"expected one underlying chain export, got {export_calls}")
 
 
-def test_on_modify_completion_snapshot_reuses_full_chain_read():
-    """A completion chain snapshot should satisfy the exact child-slot read."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_completion_snapshot_reuse_test")
-    mod._reset_modify_runtime_state()
-    saved_analytics = mod._SHOW_ANALYTICS
-    mod._SHOW_ANALYTICS = True
-    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
-
-    uow = _test_operator_uow()
-    calls = {"count": 0}
-
-    class Client:
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            calls["count"] += 1
-            rows = [{
-                "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                "chainID": "reuse01",
-                "link": 2,
-                "chain": "on",
-                "status": "pending",
-            }]
-            command = TaskCommand(("task", *args), purpose, timeout)
-            return TaskCommandResult(command, 0, json.dumps(rows), "", CommandFailureKind.SUCCESS, 1, 0.001)
-
-    uow.client = Client()
-    try:
-        snapshot = mod._completion_effects.chain_snapshot("reuse01", 1, 2, uow.repository)
-        expect(snapshot.loaded and snapshot.coverage == "full", f"unexpected full snapshot: {snapshot!r}")
-        reused = uow.repository.exact_child_slot("reuse01", 2)
-        expect(isinstance(reused, Found), f"full snapshot did not satisfy child-slot read: {reused!r}")
-        expect(calls["count"] == 1, f"full snapshot was exported more than once: {calls}")
-    finally:
-        mod._SHOW_ANALYTICS = saved_analytics
-        mod._reset_modify_runtime_state()
 
 
 def test_on_modify_lifecycle_export_reuses_completion_chain_snapshot():
@@ -2351,7 +2053,7 @@ TESTS = [
     *MODIFY_TESTS[30:34],
     test_on_modify_link_limit,
     *MODIFY_TESTS[15:20],
-    test_on_modify_completion_chain_snapshot_modes_and_query,
+    *LIFECYCLE_TESTS[25:26],
     *SCHEDULING_TESTS[10:],
     *TIMELINE_TESTS[3:5],
     *TIMELINE_TESTS[5:6],
@@ -2359,10 +2061,7 @@ TESTS = [
     test_on_modify_panel_fallback,
     test_on_modify_panel_forwards_live_duration,
     test_ui_live_test_term_guard_restores_environment,
-    test_on_modify_recompleted_task_with_nextlink_skips_spawn,
-    test_on_modify_recompleted_task_with_existing_link_skips_spawn,
-    test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
-    test_on_modify_completion_snapshot_reuses_full_chain_read,
+    *LIFECYCLE_TESTS[26:30],
     test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,
     *LIFECYCLE_TESTS[23:24],
     *LIFECYCLE_TESTS[19:20],

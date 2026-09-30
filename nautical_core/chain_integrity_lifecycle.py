@@ -833,7 +833,6 @@ def plan_recovery_decision(
             generation=generation,
         )
 
-    next_link = int_or_default(parent_values.get("link"), 1) + 1
     try:
         calendar_context = use_task_calendar(parent_values)
     except Exception as exc:

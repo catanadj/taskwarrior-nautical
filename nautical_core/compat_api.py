@@ -115,7 +115,6 @@ PUBLIC_OWNER_MODULES.update({
     "_clear_all_caches": "nautical_core.cache_api",
     "_emit_cache_metrics": "nautical_core.cache_api",
     "_normalize_spec_for_acf_cached": "nautical_core.cache_api",
-    "parse_anchor_expr_to_dnf_cached": "nautical_core.cache_api",
     "build_and_cache_hints": "nautical_core.hint_builder_api",
     "DiagnosticEvent": "nautical_core.diagnostic_models",
     "RecurrenceModeResult": "nautical_core.recurrence_evaluator",

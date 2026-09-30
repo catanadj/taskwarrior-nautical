@@ -158,7 +158,6 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
 
     parser = parser_api.for_core()
     parse_anchor_expr_to_dnf_cached = parser.parse_anchor_expr_to_dnf_cached
-    resolve_anchor_presets = parser.resolve_anchor_presets
     resolve_omit_presets = parser.resolve_omit_presets
     validate_anchor_expr_strict = parser.validate_anchor_expr_strict
 

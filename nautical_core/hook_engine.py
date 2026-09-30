@@ -84,7 +84,6 @@ def handle_on_add(
             now_utc = core.now_utc()
             now_local = core.to_local(now_utc)
 
-    observation = getattr(request, "observation", None)
     application = services.workflow_application()
     ctx = application.build_context(
         task,

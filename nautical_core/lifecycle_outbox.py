@@ -788,7 +788,6 @@ class _LifecycleOutboxRepository:
         if isinstance(prepared, OutboxResult):
             return prepared
         config, schedule, encoded_plan, plan_fingerprint, guard_json = prepared
-        intent_id = plan.identity.idempotency_key
         now = self._clock()
 
         def operation(conn: sqlite3.Connection) -> OutboxResult:

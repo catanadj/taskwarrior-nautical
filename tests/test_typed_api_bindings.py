@@ -211,6 +211,7 @@ class ApiBindingContractTests(unittest.TestCase):
         owners = compat_api.PUBLIC_OWNER_MODULES
         self.assertEqual(set(owners), set(compat_api.PUBLIC_EXPORTS))
         self.assertEqual(owners["parse_anchor_expr_to_dnf"], "nautical_core.parser_api")
+        self.assertEqual(owners["parse_anchor_expr_to_dnf_cached"], "nautical_core.parser_api")
         for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
             self.assertNotIn(name, owners)
         for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):

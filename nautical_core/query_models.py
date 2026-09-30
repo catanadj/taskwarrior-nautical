@@ -278,22 +278,22 @@ class OccurrenceQueryRequest:
         start_inclusive = _bool(self.start_inclusive, "start_inclusive")
         validate_omission_policy(self.omission_policy)
         normalized_limits: dict[str, int] = {}
-        for field, value, maximum in (
+        for field_name, value, maximum in (
             ("max_tasks", self.max_tasks, HARD_MAX_TASKS),
             ("max_occurrences", self.max_occurrences, HARD_MAX_OCCURRENCES),
             ("max_total_occurrences", self.max_total_occurrences, HARD_MAX_TOTAL_OCCURRENCES),
             ("max_iterations", self.max_iterations, HARD_MAX_ITERATIONS),
             ("max_file_skips", self.max_file_skips, HARD_MAX_FILE_SKIPS),
         ):
-            normalized_limits[field] = _positive_int(value, field, maximum)
+            normalized_limits[field_name] = _positive_int(value, field_name, maximum)
         if isinstance(self.version, bool) or self.version != QUERY_API_VERSION:
             raise QueryContractError(f"unsupported query API version: {self.version!r}")
         if self.operation not in {OCCURRENCE_OPERATION, NEXT_OPERATION}:
             raise QueryContractError(f"unsupported query operation: {self.operation!r}")
         object.__setattr__(self, "count", count)
         object.__setattr__(self, "start_inclusive", start_inclusive)
-        for field, normalized in normalized_limits.items():
-            object.__setattr__(self, field, normalized)
+        for field_name, normalized in normalized_limits.items():
+            object.__setattr__(self, field_name, normalized)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "OccurrenceQueryRequest":
@@ -407,7 +407,7 @@ class TaskIdentity:
         object.__setattr__(self, "chain_id", _text(self.chain_id, "task chainID"))
         if self.link is not None and (isinstance(self.link, bool) or not isinstance(self.link, int) or self.link < 0):
             raise QueryContractError("task link must be a non-negative integer")
-        for field in (
+        for field_name in (
             "description",
             "recurrence_kind",
             "expression",
@@ -415,7 +415,7 @@ class TaskIdentity:
             "current_due",
             "current_scheduled",
         ):
-            object.__setattr__(self, field, str(getattr(self, field) or ""))
+            object.__setattr__(self, field_name, str(getattr(self, field_name) or ""))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -444,10 +444,10 @@ class OccurrenceRecord:
     omission_reason: str = ""
 
     def __post_init__(self) -> None:
-        for field in ("local", "utc"):
-            value = getattr(self, field)
+        for field_name in ("local", "utc"):
+            value = getattr(self, field_name)
             if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
-                raise QueryContractError(f"occurrence {field} must be timezone-aware")
+                raise QueryContractError(f"occurrence {field_name} must be timezone-aware")
         if self.utc.astimezone(timezone.utc) != self.local.astimezone(timezone.utc):
             raise QueryContractError("occurrence local and UTC timestamps identify different instants")
         object.__setattr__(self, "timezone", _text(self.timezone, "occurrence timezone"))

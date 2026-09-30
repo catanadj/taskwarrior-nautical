@@ -753,8 +753,6 @@ _quarter_api = _LazyApiBundle(
         "_has_plain_quarter_tokens",
         "_is_start_month_selector",
         "_is_end_month_selector",
-        "_quarter_month_selector_mode",
-        "_term_quarter_rewrite_mode",
         "_rewrite_quarter_year_atoms",
         "_rewrite_quarters_in_context",
     ),

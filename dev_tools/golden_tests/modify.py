@@ -1096,3 +1096,234 @@ TESTS = TESTS + (
     test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
 )
+
+
+def test_on_modify_native_until_rejects_invalid_window_changes():
+    """Nautical modifications should reject target windows made invalid."""
+    hook = find_hook_file("on-modify.nautical")
+    base = {
+        "uuid": "00000000-0000-4000-8000-000000000133",
+        "description": "modify native until window",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until133",
+        "link": 1,
+        "due": "20260801T090000Z",
+        "until": "20260802T090000Z",
+    }
+    cases = (
+        dict(base, until="20260801T090000Z"),
+        dict(base, due="20260803T090000Z", until="20260802T100000Z"),
+    )
+    with tempfile.TemporaryDirectory() as td:
+        for new in cases:
+            proc = run_hook_script_raw(
+                hook,
+                json.dumps(base) + "\n" + json.dumps(new),
+                env_extra={"NO_COLOR": "1", "TASKDATA": td},
+            )
+            expect(proc.returncode != 0, f"invalid modified expiration window was accepted: {new!r}")
+            expect(not (proc.stdout or "").strip(), f"rejected modification leaked stdout: {proc.stdout!r}")
+            stderr_txt = strip_markup(proc.stderr)
+            expect("Invalid expiration window" in stderr_txt, f"missing modification guard panel: {stderr_txt!r}")
+            expect("until must be later than" in stderr_txt, f"missing modification guidance: {stderr_txt!r}")
+
+
+def test_on_modify_native_until_follows_recurrence_target_move():
+    """An untouched native until should follow a rescheduled recurrence target."""
+    hook = find_hook_file("on-modify.nautical")
+    base = {
+        "uuid": "00000000-0000-4000-8000-000000000133",
+        "description": "rescheduled native until window",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until133",
+        "link": 1,
+    }
+    cases = (
+        (
+            dict(base, due="20260801T090000Z", until="20260801T230000Z"),
+            {"due": "20260802T090000Z"},
+            "2026-08-02T23:00:00Z",
+        ),
+        (
+            dict(base, due="20260801T090000Z", until="20260801T230001Z"),
+            {"due": "20260802T090000Z"},
+            "2026-08-02T23:00:01Z",
+        ),
+        (
+            dict(base, scheduled="20260801T090000Z", until="20260801T230000Z"),
+            {"scheduled": "20260802T090000Z"},
+            "2026-08-02T23:00:00Z",
+        ),
+        (
+            dict(base, due="20260801T090000Z", until="20260801T230000Z"),
+            {"due": None, "scheduled": "20260802T090000Z"},
+            "2026-08-02T23:00:00Z",
+        ),
+        (
+            dict(base, due="20260802T090000Z", until="20260802T230000Z"),
+            {"due": "20260801T090000Z"},
+            "2026-08-01T23:00:00Z",
+        ),
+        (
+            dict(base, due="20260801T090000Z", until="20260801T230000Z"),
+            {"due": "20260801T120000Z"},
+            "2026-08-01T23:00:00Z",
+        ),
+    )
+    with tempfile.TemporaryDirectory() as td:
+        for idx, (old, changes, expected_until) in enumerate(cases):
+            new = {**old, **changes}
+            proc = run_hook_script_raw(
+                hook,
+                json.dumps(old) + "\n" + json.dumps(new),
+                env_extra={"NO_COLOR": "1", "TASKDATA": td},
+            )
+            expect(proc.returncode == 0, f"rescheduled expiration window was rejected: {proc.stderr!r}")
+            result = assert_stdout_json_only(proc.stdout)
+            expect(result.get("until") == expected_until, f"until did not follow recurrence target: {result!r}")
+            if idx == 0:
+                panel = strip_markup(proc.stderr)
+                # The typed lifecycle path may legitimately suppress panels in
+                # non-interactive hook execution; when emitted, retain the
+                # semantic-content assertion.
+                if panel:
+                    expect("Nautical recurrence updated" in panel, f"unexpected expiration panel: {panel!r}")
+                    expect("Expiration" in panel and "Carry" in panel, f"expiration carry was not explained: {panel!r}")
+
+
+def test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts():
+    """The shared expiration policy should cover every recurrence kind with typed conflicts."""
+    import nautical_core.native_until as native_until
+
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_native_until_shared_policy_test")
+    parent_target = mod.core.build_local_datetime(date(2026, 8, 1), (9, 0))
+    parent_until = mod.core.build_local_datetime(date(2026, 8, 1), (23, 0))
+    child_target = mod.core.build_local_datetime(date(2026, 8, 2), (9, 0))
+
+    for kind, recurrence in (
+        ("cp", {"cp": "1d"}),
+        ("anchor", {"anchor": "d:*@t=09:00", "anchor_mode": "skip"}),
+        ("anchor_file", {"anchor_file": "calendar.csv", "anchor_mode": "skip"}),
+    ):
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000135",
+            "description": "shared native until policy",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "policy135",
+            "link": 1,
+            "due": mod.core.fmt_isoz(parent_target),
+            "until": mod.core.fmt_isoz(parent_until),
+            **recurrence,
+        }
+        new = {**old, "due": mod.core.fmt_isoz(child_target)}
+        expect(mod._transition_effects.preserve_native_until_on_target_change(old, new, kind), f"{kind} carry was skipped")
+        carried = mod.core.to_local(mod.core.parse_dt_any(new.get("until")))
+        expect(
+            carried.date() == date(2026, 8, 2)
+            and (carried.hour, carried.minute, carried.second) == (23, 0, 0),
+            f"{kind} carry was wrong: {carried}",
+        )
+
+    late_target = mod.core.build_local_datetime(date(2026, 8, 1), (23, 30))
+    datetime_effects = mod._module("modify_datetime_effects")
+    datetime_ports = datetime_effects.datetime_effect_ports_for(mod)
+    try:
+        native_until.carry(
+            parent_target,
+            parent_until,
+            late_target,
+            "anchor",
+            utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
+            local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
+        )
+    except native_until.NativeUntilCarryError as exc:
+        expect(exc.code == native_until.CARRY_CONFLICT, f"unexpected carry error code: {exc.code!r}")
+    else:
+        raise AssertionError("anchor carry conflict was not reported")
+
+
+def test_on_modify_native_until_rejects_uncarryable_anchor_target_move():
+    """An anchor edit must not keep a stale absolute until when calendar carry conflicts."""
+    hook = find_hook_file("on-modify.nautical")
+    old = {
+        "uuid": "00000000-0000-4000-8000-000000000448",
+        "description": "uncarryable anchor expiration",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "anchor": "w:mon@t=09:00",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "until448",
+        "link": 1,
+        "due": "20260803T090000Z",
+        "until": "20260803T170000Z",
+    }
+    new = dict(old, due="20260727T180000Z")
+    with tempfile.TemporaryDirectory() as td:
+        proc = run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode != 0, "uncarryable anchor target move retained a stale absolute until")
+    expect(not (proc.stdout or "").strip(), f"rejected target move leaked stdout: {proc.stdout!r}")
+    panel = strip_markup(proc.stderr)
+    expect("Invalid expiration window" in panel and "Carry" in panel, f"missing carry conflict panel: {panel!r}")
+
+
+def test_on_modify_completion_reschedule_carries_native_until():
+    """Completion and target rescheduling in one modify should retain expiration policy."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_completion_reschedule_until_test")
+    old = {
+        "uuid": "00000000-0000-4000-8000-000000000447",
+        "description": "complete rescheduled expiration",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until447",
+        "link": 1,
+        "due": "20260801T090000Z",
+        "until": "20260801T230000Z",
+    }
+    cases = (
+        (
+            {**old, "status": "completed", "due": "20260802T090000Z", "end": "20260802T100000Z"},
+            "2026-08-02T23:00:00Z",
+        ),
+        (
+            {
+                **old,
+                "status": "completed",
+                "due": None,
+                "scheduled": "20260802T090000Z",
+                "end": "20260802T100000Z",
+            },
+            "2026-08-02T23:00:00Z",
+        ),
+    )
+    original_preflight = mod._completion_effects.preflight_context
+    try:
+        mod._completion_effects.preflight_context = lambda *_args, **_kwargs: None
+        for new, expected_until in cases:
+            modify_effect(mod, "handle_completion", old, new, test_operator_uow())
+            expect(new.get("until") == expected_until, f"completion reschedule lost expiration carry: {new!r}")
+    finally:
+        mod._completion_effects.preflight_context = original_preflight
+
+TESTS = TESTS + (
+    test_on_modify_native_until_rejects_invalid_window_changes,
+    test_on_modify_native_until_follows_recurrence_target_move,
+    test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts,
+    test_on_modify_native_until_rejects_uncarryable_anchor_target_move,
+    test_on_modify_completion_reschedule_carries_native_until,
+)

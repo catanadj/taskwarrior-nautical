@@ -1030,6 +1030,25 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(tuple(test.__name__ for test in modify.TESTS[-5:]), expected)
         self.assertFalse(set(expected) & top_level)
 
+    def test_outbox_and_mutation_cases_are_owned_by_lifecycle_domain(self):
+        lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
+        expected = (
+            "test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed",
+            "test_lifecycle_outbox_persists_typed_plans_and_recovers_claims",
+            "test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema",
+            "test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them",
+            "test_on_modify_spawn_intent_queue_failure_is_reported",
+        )
+        registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+        self.assertTrue(set(expected) <= registered)
+        self.assertEqual(tuple(test.__name__ for test in lifecycle.TESTS[-5:]), expected)
+        self.assertFalse(set(expected) & top_level)
+
     def test_temporal_cases_are_owned_by_scheduling_domain(self):
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
         expected = (
@@ -1099,7 +1118,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
-        self.assertEqual(len(top_level), 68)
+        self.assertEqual(len(top_level), 63)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
@@ -1108,7 +1127,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(performance.TESTS), 12)
         modify = importlib.import_module("dev_tools.golden_tests.modify")
         self.assertEqual(len(modify.TESTS), 15)
-        self.assertEqual(len(lifecycle.TESTS), 15)
+        self.assertEqual(len(lifecycle.TESTS), 20)
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)

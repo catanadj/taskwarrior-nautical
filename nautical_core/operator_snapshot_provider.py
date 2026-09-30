@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
-
+from .chain_integrity_models import ChainSnapshot
 from .chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
+from .integration_models import TaskRead
 from .taskwarrior_uow import TaskwarriorUnitOfWork
 
 
@@ -23,7 +23,7 @@ class OperatorSnapshotProvider:
             configuration_fingerprint=configuration.fingerprint,
         ))
 
-    def collect(self, request: IntegritySnapshotRequest) -> Any:
+    def collect(self, request: IntegritySnapshotRequest) -> TaskRead[ChainSnapshot]:
         """Read one exact scope without broadening or reconstructing the reader."""
         return self.service.collect(request)
 

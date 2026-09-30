@@ -17,10 +17,8 @@ Optional:
 """
 
 import importlib
-import sys, os, re, json, io, contextlib
+import sys, os, json, io, contextlib
 import random
-import time
-import sqlite3
 import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
@@ -35,9 +33,6 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 
-from tests.support.lifecycle_execution import LifecycleExecutionFixture
-from nautical_core.query_service import OccurrenceQueryRuntime
-from nautical_core.panel_colours import chain_colour_root
 from dev_tools.golden_tests.recurrence import TESTS as RECURRENCE_TESTS
 from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
 from dev_tools.golden_tests.installer import TESTS as INSTALLER_TESTS
@@ -50,57 +45,12 @@ from dev_tools.golden_tests.configuration import TESTS as CONFIGURATION_TESTS
 from dev_tools.golden_tests.modify import TESTS as MODIFY_TESTS
 from dev_tools.golden_tests.scheduling import TESTS as SCHEDULING_TESTS
 from dev_tools.golden_tests.support import (
-    astral_test_available as _astral_test_available,
-    chain_node as _chain_node,
     expect,
-    iso,
-    parse_due,
-    scheduler_for_fixture as _scheduler_for_fixture,
-    seed_sqlite_queue as _seed_sqlite_queue,
-    build_preview,
-    doctor_findings as _doctor_findings,
-    doctor_hook_installation as _doctor_hook_installation,
-    doctor_obsolete_queue_state as _doctor_obsolete_queue_state,
-    install_doctor_hook_wrappers as _install_doctor_hook_wrappers,
-    write_fake_task_for_doctor as _write_fake_task_for_doctor,
     test_operator_uow as _test_operator_uow,
-    load_core_module as _load_core_module,
     load_hook_module as _load_hook_module,
-    load_hook_protocol_module as _load_hook_protocol_module,
-    load_exit_probe_module as _load_exit_probe_module,
-    must_preview as _must_preview,
-    run_hook_script as _run_hook_script,
-    run_hook_script_raw as _run_hook_script_raw,
-    modify_effect as _modify_effect,
-    strip_markup as _strip_markup,
-    fixture_task as _fixture_task,
     find_hook_file as _find_hook_file,
-    generation_service as _generation_service,
-    compute_anchor_child_due as _compute_anchor_child_due,
-    compute_cp_child_due as _compute_cp_child_due,
-    carry_relative_datetime as _carry_relative_datetime,
-    carry_native_until as _carry_native_until,
-    build_child_draft_for_test as _build_child_draft_for_test,
-    force_tz_utc as _force_tz_utc,
-    extract_last_json as _extract_last_json,
-    assert_stdout_json_only as _assert_stdout_json_only,
     assert_hook_requires_integration_context,
-    call_with_supported_kwargs as _call_with_supported_kwargs,
-    has_function,
-    child_payload_from_values as _child_payload_from_values,
-    metadata_payload_from_values as _metadata_payload_from_values,
-    must_parse as _must_parse,
-    new_lifecycle_read_service as _new_lifecycle_read_service,
-    recovery_action as _recovery_action,
-    recovery_child as _recovery_child,
-    recovery_plan as _recovery_plan,
-    task_draft as _task_draft,
-    task_observation as _task_observation,
-    task_observations as _task_observations,
-    task_snapshot as _task_snapshot,
-    test_term as _test_term,
     typed_command_result as _typed_command_result,
-    unavailable_task as _unavailable_task,
 )
 
 core = importlib.import_module("nautical_core")
@@ -115,11 +65,8 @@ _hook = importlib.import_module("nautical_core.hooks.modify_impl")
 # level, to catch regressions that can slip through core-only tests.
 
 import subprocess
-import shutil
 import importlib.util
 import importlib.machinery
-import inspect
-import time as _time
 
 def test_on_add_requires_integration_context_helper():
     """on-add should fail closed when the integration context is unavailable."""

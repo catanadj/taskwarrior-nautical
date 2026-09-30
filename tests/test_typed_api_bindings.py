@@ -105,11 +105,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 112)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 112)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 111)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 111)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "390ea02be28195a2191be2588ac7b80979eb07e97183cb3a3ef31f4c34b02d89",
+            "f22126006bf7e843e4a7bb3e24f4d250c09b5e4dece6cf0110a9a3bb19a19460",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -151,6 +151,14 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertFalse(hasattr(facade, "_warn_rate_limited_any"))
         self.assertFalse(hasattr(facade, "validate_scheduling_configuration"))
 
+    def test_root_facade_does_not_export_parser_builder_test_seam(self) -> None:
+        import nautical_core as facade
+
+        self.assertNotIn("_build_anchor_atom_dnf", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("_build_anchor_atom_dnf", compat_api.PUBLIC_OWNER_MODULES)
+        self.assertNotIn("_build_anchor_atom_dnf", compat_api.PUBLIC_EXPORT_CATEGORIES)
+        self.assertFalse(hasattr(facade, "_build_anchor_atom_dnf"))
+
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES
         self.assertEqual(set(owners), set(compat_api.PUBLIC_EXPORTS))
@@ -171,7 +179,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertNotIn("TaskDict", owners)
         self.assertNotIn("AnchorValidationResult", owners)
         self.assertEqual(owners["render_panel"], "nautical_core.ui")
-        self.assertEqual(owners["_build_anchor_atom_dnf"], "nautical_core.parser_api")
+        self.assertNotIn("_build_anchor_atom_dnf", owners)
         self.assertEqual(owners["_weeks_between"], "nautical_core.scheduler_api")
         self.assertEqual(owners["resolve_task_data_context"], "nautical_core.runtime")
         self.assertNotIn("fcntl", owners)
@@ -187,7 +195,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertTrue(set(categories.values()) <= allowed)
         self.assertNotIn("normalize_task_business_calendar", categories)
         self.assertEqual(categories["diag"], "installed_runtime")
-        self.assertEqual(categories["_build_anchor_atom_dnf"], "test_seam")
+        self.assertNotIn("_build_anchor_atom_dnf", categories)
 
     def test_canonical_owner_modules_are_importable(self) -> None:
         owners = set(compat_api.PUBLIC_OWNER_MODULES.values())

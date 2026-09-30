@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial as _partial
 from typing import Any, Callable, Protocol
 from .api_bindings import ApiBinding, core_namespace
 
@@ -69,7 +69,6 @@ class SchedulerFactorDependencies:
     with_business_calendar: Callable[..., Any]
     selection_inner_matcher: SchedulerCallback
     apply_selection_date_modifiers: SchedulerCallback
-    partial: Callable[..., Any]
     business_calendar_fingerprint: SchedulerCallback
     next_after_atom_with_mods: SchedulerCallback
     atom_matches_on: SchedulerCallback
@@ -320,7 +319,7 @@ def _next_after_factor_impl(
         factor,
         ref_d,
         matches_on=deps.selection_inner_matcher(business_calendar),
-        apply_modifiers=deps.partial(
+        apply_modifiers=_partial(
             deps.apply_selection_date_modifiers, business_calendar=business_calendar
         ),
         default_seed=default_seed or ref_d,
@@ -353,7 +352,7 @@ def _factor_matches_on_impl(
         factor,
         previous,
         matches_on=deps.selection_inner_matcher(business_calendar),
-        apply_modifiers=deps.partial(
+        apply_modifiers=_partial(
             deps.apply_selection_date_modifiers, business_calendar=business_calendar
         ),
         default_seed=default_seed or day,
@@ -588,7 +587,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
 
     @lru_cache(maxsize=32)
     def selection_inner_matcher(business_calendar: Any) -> Any:
-        return deps["partial"](deps["atom_matches_on"], business_calendar=business_calendar)
+        return _partial(deps["atom_matches_on"], business_calendar=business_calendar)
 
     def apply_selection_date_modifiers(base: Any, mods: Any, business_calendar: Any = None) -> Any:
         business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
@@ -837,7 +836,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         with_business_calendar=deps["_with_business_calendar"],
         selection_inner_matcher=selection_inner_matcher,
         apply_selection_date_modifiers=apply_selection_date_modifiers,
-        partial=deps["partial"],
         business_calendar_fingerprint=deps["business_calendar_fingerprint"],
         next_after_atom_with_mods=next_after_atom_with_mods,
         atom_matches_on=atom_matches_on,

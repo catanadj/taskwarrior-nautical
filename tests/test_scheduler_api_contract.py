@@ -220,7 +220,6 @@ class SchedulerApiDelegationTests(unittest.TestCase):
             with_business_calendar=lambda callback, _calendar: callback,
             selection_inner_matcher=lambda _calendar: None,
             apply_selection_date_modifiers=lambda *_args, **_kwargs: None,
-            partial=lambda callback, **_kwargs: callback,
             business_calendar_fingerprint=lambda _calendar: "default",
             next_after_atom_with_mods=lambda *_args, **_kwargs: date(2026, 1, 12),
             atom_matches_on=lambda *_args, **_kwargs: False,

@@ -5,14 +5,11 @@ Shared core for Taskwarrior Nautical hooks.
 
 """
 from __future__ import annotations
-import math
 import os, re, sys
 from collections import OrderedDict
-from typing import Any, Callable, Mapping, TYPE_CHECKING, cast
-from functools import partial
+from typing import Any, Callable, Mapping, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .parsing.parser_models import AnchorDNF as AnchorDNFType
     from .core_config import ConfigReloadResult
 
     resolve_anchor_presets: Callable[..., str]
@@ -449,11 +446,6 @@ def _refresh_facade_config_exports() -> None:
     """Resolve deferred config and synchronize facade compatibility exports."""
     global CONFIG_ERROR, _CONF, MAX_ANCHOR_DNF_TERMS, _FACADE_CONFIG_SYNCED
     _core_config.ensure_loaded()
-    configured_hemisphere = getattr(_core_config, "SEASON_HEMISPHERE", "north")
-    season_override = (
-        not _FACADE_CONFIG_SYNCED
-        and _season_support.active_hemisphere() != configured_hemisphere
-    )
     names = (
         "WRAND_SALT", "LOCAL_TZ_NAME", "SEASON_HEMISPHERE", "SEASON_MODE",
         "ANCHOR_FILE_DIR", "OMIT_FILE_DIR", "ANCHOR_PRESETS", "OMIT_PRESETS",
@@ -850,7 +842,6 @@ _parser_api = _LazyApiBundle(
         ("_resolve_omit_presets_impl", "resolve_omit_presets"),
         "_normalize_anchor_expr_input",
         "_normalize_monthly_ordinal_spec",
-        "_build_anchor_atom_dnf",
         "_parse_anchor_atom_at",
         "_yearly_pair_from_fmt",
         "_yearly_mmdd_error",

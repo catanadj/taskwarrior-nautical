@@ -992,6 +992,25 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(tuple(test.__name__ for test in modify.TESTS), expected)
         self.assertFalse(set(expected) & top_level)
 
+    def test_temporal_cases_are_owned_by_scheduling_domain(self):
+        scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
+        expected = (
+            "test_year_ordinals_hooks_modes_calendar_and_timeline",
+            "test_local_datetime_non_hour_dst_gap_is_shared_by_modify",
+            "test_modify_completion_advances_past_second_dst_fold",
+            "test_modify_overnight_window_advances_past_second_dst_fold",
+            "test_anchor_preview_explains_nonexistent_wall_time_adjustment",
+        )
+        registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+        self.assertTrue(set(expected) <= registered)
+        self.assertEqual(tuple(test.__name__ for test in scheduling.TESTS), expected)
+        self.assertFalse(set(expected) & top_level)
+
     def test_installer_runtime_cases_are_owned_by_installer_domain(self):
         installer = importlib.import_module("dev_tools.golden_tests.installer")
         expected = (
@@ -1031,7 +1050,8 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
-        self.assertEqual(len(top_level), 93)
+        scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
+        self.assertEqual(len(top_level), 88)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
@@ -1044,6 +1064,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)
+        self.assertEqual(len(scheduling.TESTS), 5)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
         self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 664)
 

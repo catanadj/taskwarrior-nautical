@@ -18,10 +18,11 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
             performance,
             reconcile,
             recurrence,
+            scheduling,
             timeline,
         )
 
-        for module in (configuration, installer, lifecycle, modify, operator, performance, reconcile, recurrence, timeline):
+        for module in (configuration, installer, lifecycle, modify, operator, performance, reconcile, recurrence, scheduling, timeline):
             self.assertIsInstance(module.TESTS, tuple)
             self.assertTrue(all(callable(test) for test in module.TESTS))
 
@@ -92,6 +93,25 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
                 "loaded = sorted(name for name in sys.modules "
                 "if name.startswith('dev_tools.golden_tests.') "
                 "and name not in {'dev_tools.golden_tests.configuration', "
+                "'dev_tools.golden_tests.support'}); "
+                "print(loaded); raise SystemExit(bool(loaded))",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_scheduling_domain_import_does_not_load_sibling_domains(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import importlib, sys; "
+                "importlib.import_module('dev_tools.golden_tests.scheduling'); "
+                "loaded = sorted(name for name in sys.modules "
+                "if name.startswith('dev_tools.golden_tests.') "
+                "and name not in {'dev_tools.golden_tests.scheduling', "
                 "'dev_tools.golden_tests.support'}); "
                 "print(loaded); raise SystemExit(bool(loaded))",
             ],

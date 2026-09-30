@@ -8,6 +8,8 @@ domain collection without duplicating lifecycle helpers.
 from __future__ import annotations
 
 import importlib
+import contextlib
+import io
 import json
 import os
 import sqlite3
@@ -15,18 +17,23 @@ import subprocess
 import tempfile
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from dev_tools.golden_tests.support import (
     child_payload_from_values,
+    build_child_draft_for_test,
+    extract_last_json,
     expect,
     find_hook_file,
     load_hook_module,
     metadata_payload_from_values,
+    modify_effect,
     plan_from_values,
     task_draft,
     task_observation,
+    test_operator_uow,
 )
 from tests.support.lifecycle_execution import LifecycleExecutionFixture
 
@@ -1808,4 +1815,316 @@ TESTS = TESTS + (
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
     test_on_modify_spawn_intent_queue_failure_is_reported,
+)
+def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
+    """The hook helper must expose the typed result returned by finalization."""
+    import nautical_core as core
+
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_completion_result_boundary_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    models = core._import_sibling("modify_models")
+    expected = models.CompletionLifecycleResult(state="applied", child_short="child123")
+    ctx = SimpleNamespace(
+        parent_short="parent01",
+        base_no=1,
+        next_no=2,
+        kind="anchor",
+        chain_id="chain01",
+        chain_snapshot=SimpleNamespace(rows=[], mode="next", loaded=False),
+    )
+    computed = SimpleNamespace(
+        child_due=core.now_utc(),
+        meta={"target_field": "due"},
+        dnf=[],
+        until_dt=None,
+        cpmax=0,
+        cap_no=None,
+        finals=[],
+        until_cap_no=None,
+    )
+    fake_flow = SimpleNamespace(
+        CompletionFlowServices=lambda **kwargs: kwargs,
+        CompletionFinalizeServices=lambda **kwargs: kwargs,
+        finalize_completion_modify=lambda **_kwargs: expected,
+        handle_completion_modify=lambda *_args, **_kwargs: expected,
+    )
+    validation = mod._module("modify_validation_effects")
+    original = {
+        "validate_cp": validation.validate_cp,
+        "preserve_cp": mod._transition_effects.preserve_cp_relative_offsets_on_due_change,
+        "preserve_until": mod._transition_effects.preserve_native_until_on_target_change,
+        "validate_until": mod._module("modify_validation_effects").validate_native_until,
+        "validate_slots": mod._module("modify_validation_effects").validate_native_until_slots,
+        "preflight": mod._completion_effects.preflight_context,
+        "compute": mod._completion_effects.compute_next_and_limits,
+        "import_module": mod.importlib.import_module,
+    }
+    try:
+        validation.validate_cp = lambda *_a, **_k: None
+        mod._transition_effects.preserve_cp_relative_offsets_on_due_change = lambda *_a, **_k: None
+        mod._transition_effects.preserve_native_until_on_target_change = lambda *_a, **_k: None
+        mod._module("modify_validation_effects").validate_native_until = lambda *_a, **_k: None
+        mod._module("modify_validation_effects").validate_native_until_slots = lambda *_a, **_k: None
+        mod._completion_effects.preflight_context = lambda *_a, **_k: ctx
+        mod._completion_effects.compute_next_and_limits = lambda *_a, **_k: computed
+
+        def fake_import(name):
+            if name == "nautical_core.modify_completion_flow":
+                return fake_flow
+            return original["import_module"](name)
+
+        mod.importlib.import_module = fake_import
+        result = modify_effect(mod, "handle_completion",
+            {"uuid": "parent", "status": "pending"},
+            {"uuid": "parent", "status": "completed"},
+            test_operator_uow(),
+        )
+    finally:
+        validation.validate_cp = original["validate_cp"]
+        mod._transition_effects.preserve_cp_relative_offsets_on_due_change = original["preserve_cp"]
+        mod._transition_effects.preserve_native_until_on_target_change = original["preserve_until"]
+        mod._module("modify_validation_effects").validate_native_until = original["validate_until"]
+        mod._module("modify_validation_effects").validate_native_until_slots = original["validate_slots"]
+        mod._completion_effects.preflight_context = original["preflight"]
+        mod._completion_effects.compute_next_and_limits = original["compute"]
+        mod.importlib.import_module = original["import_module"]
+
+    expect(result is expected, f"completion helper dropped finalized result: {result!r}")
+
+def test_on_modify_completion_build_and_spawn_child_happy_path():
+    """completion spawn wrapper should return child info and stamp nextLink when verified."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_completion_spawn_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    new = {
+        "uuid": "00000000-0000-4000-8000-000000000111",
+        "status": "completed",
+        "chainID": "abcd1234",
+        "link": 1,
+        "cp": "P1D",
+    }
+    child = {"uuid": "00000000-0000-4000-8000-000000000222", "link": 2}
+    from nautical_core.chain_generation import ChainGenerationService
+
+    class StubGeneration(ChainGenerationService):
+        def build_child_draft(self, parent, child_due, child_field, next_link_no, *_args, **_kwargs):
+            return task_draft({
+                **child,
+                "description": "typed child fixture",
+                "chain": "on",
+                "status": "pending",
+                "chainID": parent.observation.to_mapping()["chainID"],
+                "link": next_link_no,
+                "cp": "P1D",
+                "anchor_mode": "skip",
+                child_field: child_due,
+            })
+
+    generation_effects = mod._module("modify_generation_effects")
+    original_generation = generation_effects.chain_generation_service
+    generation_effects.chain_generation_service = lambda _host: StubGeneration.from_core(mod.core)
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
+    spawn_effects.spawn_child_atomic = lambda _ports, _child, _parent, **_kwargs: ("beeswax", set(), True, False, None, "si_test")
+    try:
+        out = mod._completion_effects.build_and_spawn_child(
+            new,
+            child_due=mod.core.now_utc(),
+            child_field="due",
+            next_no=2,
+            parent_short="00000000",
+            kind="cp",
+            cpmax=0,
+            until_dt=None,
+        )
+    finally:
+        generation_effects.chain_generation_service = original_generation
+        spawn_effects.spawn_child_atomic = original_spawn
+    expect(bool(out), f"expected spawn result, got {out}")
+    expect(out.child.get("uuid") == child["uuid"], f"unexpected child payload: {out}")
+    expect(out.child.get("link") == 2, f"typed child lost link: {out}")
+    expect(out.child_short == "beeswax", f"unexpected child short: {out}")
+    expect(out.verified is True and out.deferred_spawn is False, f"unexpected verification state: {out}")
+    expect(out.spawn_intent_id == "si_test", f"unexpected spawn intent id: {out}")
+    expect(new.get("nextLink") == "beeswax", f"verified spawn should stamp nextLink: {new}")
+
+
+def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
+    """A spawn command exception must remain typed and actionable for finalization."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_completion_spawn_exception_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    parent = {
+        "uuid": "00000000-0000-4000-8000-000000000121",
+        "status": "completed",
+        "chainID": "spawn121",
+        "link": 1,
+        "cp": "P1D",
+    }
+    child = {"uuid": "00000000-0000-4000-8000-000000000122", "link": 2}
+    from nautical_core.chain_generation import ChainGenerationService
+
+    class StubGeneration(ChainGenerationService):
+        def build_child_draft(self, parent, child_due, child_field, next_link_no, *_args, **_kwargs):
+            return task_draft({
+                **child,
+                "description": "typed child fixture",
+                "chain": "on",
+                "status": "pending",
+                "chainID": parent.observation.to_mapping()["chainID"],
+                "link": next_link_no,
+                "cp": "P1D",
+                "anchor_mode": "skip",
+                child_field: child_due,
+            })
+
+    generation_effects = mod._module("modify_generation_effects")
+    original_generation = generation_effects.chain_generation_service
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
+    original_panel = mod._panel
+    original_print = mod._print_task
+    panels = []
+    try:
+        generation_effects.chain_generation_service = lambda _host: StubGeneration.from_core(mod.core)
+        spawn_effects.spawn_child_atomic = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Taskwarrior lock busy"))
+        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
+        mod._print_task = lambda _task: None
+        result = mod._completion_effects.build_and_spawn_child(
+            parent,
+            child_due=mod.core.now_utc(),
+            child_field="due",
+            next_no=2,
+            parent_short="00000000",
+            kind="cp",
+            cpmax=0,
+            until_dt=None,
+        )
+    finally:
+        generation_effects.chain_generation_service = original_generation
+        spawn_effects.spawn_child_atomic = original_spawn
+        mod._panel = original_panel
+        mod._print_task = original_print
+
+    expect(result is not None and result.outcome_state == "retryable", f"spawn exception lost typed state: {result!r}")
+    expect("Taskwarrior lock busy" in result.reason, f"spawn exception lost reason: {result!r}")
+    expect(not panels, f"spawn helper should not render before finalization: {panels!r}")
+
+
+
+
+def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait():
+    """scheduled-only child spawn should carry relative dates from scheduled."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_build_child_sched_only_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    parent = {
+        "uuid": "00000000-0000-4000-8000-000000000333",
+        "status": "completed",
+        "link": 1,
+        "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (9, 0))),
+        "wait": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (7, 0))),
+        "until": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 2), (17, 0))),
+        "cp": "1d",
+        "chainID": "cid_sched",
+    }
+    child_due = mod.core.build_local_datetime(date(2025, 1, 2), (9, 0))
+    child = build_child_draft_for_test(mod,
+        parent,
+        child_due,
+        "scheduled",
+        2,
+        "beef",
+        "cp",
+        0,
+        None,
+    )
+    expect(not child.get("due"), f"scheduled-only child should not get due: {child}")
+    expect(child.get("scheduled") == mod.core.fmt_isoz(child_due), f"unexpected child scheduled: {child}")
+    wait_local = mod.core.to_local(mod.core.parse_dt_any(child.get("wait")))
+    expect((wait_local.hour, wait_local.minute) == (7, 0), f"unexpected carried wait: {wait_local}")
+    until_local = mod.core.to_local(mod.core.parse_dt_any(child.get("until")))
+    expect(
+        until_local.date() == date(2025, 1, 3) and (until_local.hour, until_local.minute) == (17, 0),
+        f"unexpected carried until: {until_local}",
+    )
+
+def test_on_modify_cp_completion_spawns_next_link():
+    """on-modify should spawn the next CP link on completion."""
+    hook = find_hook_file("on-modify.nautical")
+    mod = load_hook_module(hook, "_nautical_on_modify_cp_spawn_test")
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._SHOW_ANALYTICS = False
+    mod._CHECK_CHAIN_INTEGRITY = False
+
+    spawned = {}
+
+    def _spawn_child_atomic_stub(child, parent):
+        spawned["child"] = child
+        return ("beeswax", set(), False, True, "queued", "si_test3")
+
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
+    spawn_effects.spawn_child_atomic = lambda _ports, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
+    modify_models = mod._module("modify_models")
+    mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next: modify_models.CompletionChainSnapshot(
+        mode="next", rows=[], loaded=True, chain_id=str(chain_id)
+    )
+    mod._completion_effects.existing_next_or_fail = lambda *_a, **_k: True
+    # A confirmed empty chain is distinct from an unavailable Taskwarrior
+    # export; keep this spawn-path test deterministic and network-free.
+    mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export = lambda *_a, **_k: []
+
+    old = {
+        "uuid": "00000000-0000-4000-8000-000000000111",
+        "status": "pending",
+        "description": "cp spawn test",
+        "cp": "P1D",
+        "chainID": "abcd1234",
+        "link": 1,
+        "due": "20250101T090000Z",
+    }
+    new = dict(old)
+    new.update(
+        {
+            "status": "completed",
+            "end": "20250102T090000Z",
+        }
+    )
+
+    raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
+    buf_out = io.StringIO()
+    buf_err = io.StringIO()
+    buf_in = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+    prev_stdin = sys.stdin
+    try:
+        sys.stdin = buf_in
+        with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
+            try:
+                mod.main()
+            except SystemExit as e:
+                raise AssertionError(f"on-modify exited unexpectedly (code={e.code})")
+    finally:
+        sys.stdin = prev_stdin
+        spawn_effects.spawn_child_atomic = original_spawn
+
+    out_task = extract_last_json(buf_out.getvalue())
+    expect("child" in spawned, "CP completion did not trigger spawn")
+    expect(out_task.get("nextLink") in (None, ""), "CP completion should not set nextLink in decision-only mode")
+
+TESTS = TESTS + (
+    test_on_modify_completion_build_and_spawn_child_happy_path,
+    test_on_modify_completion_spawn_exception_is_retryable_with_reason,
+    test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
+    test_on_modify_cp_completion_spawns_next_link,
+    test_on_modify_completion_helper_returns_finalized_lifecycle_result,
 )

@@ -341,14 +341,25 @@ class OccurrenceQueryService:
                 return ()
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
         if selector.chain_id:
-            read = repository.chain_snapshot(selector.chain_id, statuses=ALL_TASK_STATUSES, complete_history=True)
-            if isinstance(read, Found):
+            chain_read = repository.chain_snapshot(
+                selector.chain_id,
+                statuses=ALL_TASK_STATUSES,
+                complete_history=True,
+            )
+            if isinstance(chain_read, Found):
                 return _ordered_rows(
-                    tuple(_decode_repository_row(row, source_query="query chain") for row in read.value)
+                    tuple(
+                        _decode_repository_row(row, source_query="query chain")
+                        for row in chain_read.value
+                    )
                 )
-            if isinstance(read, Absent):
-                return _failure("chain_absent", read.reason)
-            return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
+            if isinstance(chain_read, Absent):
+                return _failure("chain_absent", chain_read.reason)
+            return _failure(
+                "task_read_unavailable",
+                chain_read.evidence.detail,
+                retryable=chain_read.retryable,
+            )
         if len(selector.uuids) > 1:
             read = repository.broad_snapshot(
                 identity="query:uuids",
@@ -372,18 +383,18 @@ class OccurrenceQueryService:
             return tuple(uuid_rows)
         single_rows: list[TaskRow] = []
         for uuid_value in selector.uuids:
-            read = repository.by_uuid(uuid_value, statuses=ALL_TASK_STATUSES)
-            if isinstance(read, Found):
-                single_rows.append(_decode_repository_row(read.value, source_query="query UUID"))
+            uuid_read = repository.by_uuid(uuid_value, statuses=ALL_TASK_STATUSES)
+            if isinstance(uuid_read, Found):
+                single_rows.append(_decode_repository_row(uuid_read.value, source_query="query UUID"))
                 continue
-            if isinstance(read, Absent):
+            if isinstance(uuid_read, Absent):
                 single_rows.append(_AbsentTask(uuid_value))
                 continue
             return _failure(
                 "task_read_unavailable",
-                read.evidence.detail,
+                uuid_read.evidence.detail,
                 task_uuid=uuid_value,
-                retryable=read.retryable,
+                retryable=uuid_read.retryable,
             )
         return tuple(single_rows)
 

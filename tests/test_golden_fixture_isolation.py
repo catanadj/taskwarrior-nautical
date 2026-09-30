@@ -11,6 +11,7 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
     def test_domain_collections_are_immutable_tuples(self):
         from dev_tools.golden_tests import (
             installer,
+            configuration,
             lifecycle,
             operator,
             performance,
@@ -19,7 +20,7 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
             timeline,
         )
 
-        for module in (installer, lifecycle, operator, performance, reconcile, recurrence, timeline):
+        for module in (configuration, installer, lifecycle, operator, performance, reconcile, recurrence, timeline):
             self.assertIsInstance(module.TESTS, tuple)
             self.assertTrue(all(callable(test) for test in module.TESTS))
 
@@ -71,6 +72,25 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
                 "loaded = sorted(name for name in sys.modules "
                 "if name.startswith('dev_tools.golden_tests.') "
                 "and name not in {'dev_tools.golden_tests.installer', "
+                "'dev_tools.golden_tests.support'}); "
+                "print(loaded); raise SystemExit(bool(loaded))",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_configuration_domain_import_does_not_load_sibling_domains(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import importlib, sys; "
+                "importlib.import_module('dev_tools.golden_tests.configuration'); "
+                "loaded = sorted(name for name in sys.modules "
+                "if name.startswith('dev_tools.golden_tests.') "
+                "and name not in {'dev_tools.golden_tests.configuration', "
                 "'dev_tools.golden_tests.support'}); "
                 "print(loaded); raise SystemExit(bool(loaded))",
             ],

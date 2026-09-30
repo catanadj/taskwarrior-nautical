@@ -46,6 +46,7 @@ from dev_tools.golden_tests.storage import TESTS as STORAGE_TESTS
 from dev_tools.golden_tests.timeline import TESTS as TIMELINE_TESTS
 from dev_tools.golden_tests.lifecycle import TESTS as LIFECYCLE_TESTS
 from dev_tools.golden_tests.reconcile import TESTS as RECONCILE_TESTS
+from dev_tools.golden_tests.configuration import TESTS as CONFIGURATION_TESTS
 from dev_tools.golden_tests.support import (
     astral_test_available as _astral_test_available,
     absent_task as _absent_task,
@@ -1628,83 +1629,6 @@ def _test_modify_engine_services(
     )
 
 
-def test_config_fingerprint_invalidates_persistent_cache_keys():
-    """Changing the selected config file must produce a new cache fingerprint and key."""
-    previous = os.environ.get("NAUTICAL_CONFIG")
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            path = Path(td) / "config-nautical.toml"
-            path.write_text('tz = "UTC"\nlive_panel_footer = "ONE"\n', encoding="utf-8")
-            os.environ["NAUTICAL_CONFIG"] = str(path)
-            first = core.effective_config_snapshot()
-            path.write_text('tz = "Europe/Bucharest"\nlive_panel_footer = "TWO"\n', encoding="utf-8")
-            second = core.effective_config_snapshot()
-            expect(first.get("fingerprint") != second.get("fingerprint"), "config edits did not change fingerprint")
-
-            def key_in_fresh_process(config_text):
-                path.write_text(config_text, encoding="utf-8")
-                env = os.environ.copy()
-                env.update(
-                    {
-                        "NAUTICAL_CONFIG": str(path),
-                        "NAUTICAL_TRUST_CONFIG_PATH": "1",
-                        "PYTHONPATH": ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""),
-                    }
-                )
-                proc = subprocess.run(
-                    [sys.executable, "-c", "import nautical_core; print(nautical_core.cache_key_for_task('w:mon', 'skip'))"],
-                    text=True,
-                    capture_output=True,
-                    env=env,
-                    timeout=8.0,
-                )
-                expect(proc.returncode == 0, f"fresh cache-key process failed: {proc.stderr!r}")
-                return (proc.stdout or "").strip().splitlines()[-1]
-
-            footer_one_key = key_in_fresh_process('tz = "UTC"\nlive_panel_footer = "ONE"\n')
-            footer_two_key = key_in_fresh_process('tz = "UTC"\nlive_panel_footer = "TWO"\n')
-            expect(footer_one_key == footer_two_key, "UI-only config edits unnecessarily invalidated cache key")
-            tz_one_key = key_in_fresh_process('tz = "UTC"\nlive_panel_footer = "TWO"\n')
-            tz_two_key = key_in_fresh_process('tz = "Europe/Bucharest"\nlive_panel_footer = "TWO"\n')
-            expect(tz_one_key != tz_two_key, "scheduler config edits did not invalidate cache key")
-    finally:
-        if previous is None:
-            os.environ.pop("NAUTICAL_CONFIG", None)
-        else:
-            os.environ["NAUTICAL_CONFIG"] = previous
-
-
-
-
-def test_configuration_drift_detects_edit_and_removal():
-    """A long-lived core process should report config edits and removal without reloading partially."""
-    with tempfile.TemporaryDirectory() as td:
-        path = Path(td) / "config-nautical.toml"
-        path.write_text('tz = "UTC"\n', encoding="utf-8")
-        script = (
-            "import json, os\n"
-            "from pathlib import Path\n"
-            "import nautical_core as core\n"
-            "p = Path(os.environ['NAUTICAL_CONFIG'])\n"
-            "before = core.configuration_drift()\n"
-            "p.write_text('tz = \\\"Europe/Bucharest\\\"\\n', encoding='utf-8')\n"
-            "edited = core.configuration_drift()\n"
-            "p.unlink()\n"
-            "removed = core.configuration_drift()\n"
-            "print(json.dumps({'before': before, 'edited': edited, 'removed': removed}))\n"
-        )
-        env = os.environ.copy()
-        env["PYTHONPATH"] = ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-        env["NAUTICAL_CONFIG"] = str(path)
-        env["NAUTICAL_TRUST_CONFIG_PATH"] = "1"
-        proc = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True, env=env, timeout=10)
-        expect(proc.returncode == 0, f"configuration drift probe failed: {proc.stderr}")
-        payload = json.loads(proc.stdout)
-        expect(payload["before"]["status"] == "ok", f"fresh config reported drift: {payload}")
-        expect(payload["edited"]["status"] == "changed", f"edited config drift missing: {payload}")
-        expect(payload["removed"]["status"] == "changed", f"removed config drift missing: {payload}")
-
-
 def test_perf_hint_benchmark_isolates_persistent_cache():
     """Hint timing must use a temporary cache and restore production settings."""
     perf = _load_hook_module(
@@ -2080,99 +2004,6 @@ def test_ops_templates_present_and_runner_executable():
         expect(os.path.isfile(p), f"missing ops template: {p}")
     runner = os.path.join(ops, "nautical_health_check_cron.sh")
     expect(os.access(runner, os.X_OK), f"runner should be executable: {runner}")
-
-def test_core_invalid_timezone_warns_and_falls_back_to_utc():
-    """Invalid timezone config should fall back to UTC and emit diagnostic warning when enabled."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write('tz = "Invalid/Timezone"\n')
-
-        prev_diag = os.environ.get("NAUTICAL_DIAG")
-        prev_xdg = os.environ.get("XDG_CACHE_HOME")
-        os.environ["NAUTICAL_DIAG"] = "1"
-        os.environ["XDG_CACHE_HOME"] = td
-        try:
-            buf = io.StringIO()
-            with contextlib.redirect_stderr(buf):
-                mod = _load_core_module(core_path, "_nautical_core_bad_tz_fallback_test", cfg)
-            expect(getattr(mod, "_LOCAL_TZ", None) is None, "invalid timezone should use UTC fallback")
-            expect(
-                "invalid or unavailable" in mod.scheduling_configuration_error(),
-                "invalid timezone should block Nautical scheduling",
-            )
-            stderr_text = buf.getvalue().lower()
-            expect("utc fallback" in stderr_text, f"expected timezone fallback warning in stderr, got: {stderr_text!r}")
-        finally:
-            if prev_diag is None:
-                os.environ.pop("NAUTICAL_DIAG", None)
-            else:
-                os.environ["NAUTICAL_DIAG"] = prev_diag
-            if prev_xdg is None:
-                os.environ.pop("XDG_CACHE_HOME", None)
-            else:
-                os.environ["XDG_CACHE_HOME"] = prev_xdg
-
-
-def test_explicit_unsafe_config_blocks_scheduling_with_actionable_error():
-    """An explicit world-writable config must not silently fall back to UTC."""
-    script = (
-        "import nautical_core\n"
-        "print(nautical_core.scheduling_configuration_error())\n"
-    )
-    with tempfile.TemporaryDirectory() as td:
-        path = Path(td) / "nautical.toml"
-        path.write_text('tz = "Pacific/Auckland"\n', encoding="utf-8")
-        try:
-            path.chmod(0o666)
-        except OSError:
-            return
-        env = os.environ.copy()
-        env.update({"NAUTICAL_CONFIG": str(path), "PYTHONPATH": str(ROOT)})
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            env=env,
-            cwd=str(ROOT),
-        )
-        expect(proc.returncode == 0, f"unsafe config verification process failed: {proc.stderr[:500]!r}")
-        expect(str(path) in proc.stdout, f"rejected config path missing: {proc.stdout!r}")
-        expect("world-writable" in proc.stdout, f"rejected config reason missing: {proc.stdout!r}")
-
-
-def test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone():
-    """The shared Taskdata reload must reject malformed files and invalid timezones."""
-    script = (
-        "import sys\n"
-        "import nautical_core\n"
-        "from nautical_core.integration_context import IntegrationRuntime, build_operator_context\n"
-        "try:\n"
-        "    build_operator_context(runtime=IntegrationRuntime.from_compatibility_facade(nautical_core), task_binary=sys.executable, taskdata=sys.argv[1])\n"
-        "except Exception as exc:\n"
-        "    print(type(exc).__name__ + ': ' + str(exc))\n"
-        "else:\n"
-        "    raise SystemExit('reload unexpectedly succeeded')\n"
-    )
-    env = os.environ.copy()
-    env.pop("NAUTICAL_CONFIG", None)
-    env.pop("TASKDATA", None)
-    env["PYTHONPATH"] = str(ROOT)
-    cases = (("tz = [\n", "config parse failed"), ("tz = \"Invalid/Timezone\"\n", "invalid or unavailable"))
-    for contents, expected in cases:
-        with tempfile.TemporaryDirectory() as td:
-            Path(td, "config-nautical.toml").write_text(contents, encoding="utf-8")
-            proc = subprocess.run(
-                [sys.executable, "-c", script, td],
-                capture_output=True,
-                text=True,
-                env=env,
-                cwd=str(ROOT),
-            )
-            expect(proc.returncode == 0, f"Taskdata config reload process failed: {proc.stderr[:500]!r}")
-            expect(expected in proc.stdout, f"reload error was not actionable: {proc.stdout!r}")
-
 
 def test_core_recurrence_update_udas_config_aliases():
     """recurrence UDA carry config should accept top-level and [recurrence] alias forms."""
@@ -6844,9 +6675,7 @@ TESTS = [
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
-    test_core_invalid_timezone_warns_and_falls_back_to_utc,
-    test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
-    test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
+    *CONFIGURATION_TESTS[:3],
     test_core_recurrence_update_udas_config_aliases,
     test_core_live_panel_duration_config_defaults_and_clamps,
     test_core_live_panel_footer_config_defaults_and_customizes,
@@ -7026,8 +6855,7 @@ TESTS.extend([
     test_random_time_window_is_stable_across_processes,
     test_navigator_reads_through_read_only_invocation_repository,
     test_navigator_uses_anchor_and_anchor_file_sources,
-    test_config_fingerprint_invalidates_persistent_cache_keys,
-    test_configuration_drift_detects_edit_and_removal,
+    *CONFIGURATION_TESTS[3:],
     *INSTALLER_TESTS[8:],
 ])
 

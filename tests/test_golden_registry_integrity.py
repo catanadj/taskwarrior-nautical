@@ -920,6 +920,25 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertTrue(set(expected) <= {test.__name__ for test in operator.TESTS})
         self.assertFalse(set(expected) & top_level)
 
+    def test_configuration_cases_are_owned_by_configuration_domain(self):
+        configuration = importlib.import_module("dev_tools.golden_tests.configuration")
+        expected = (
+            "test_core_invalid_timezone_warns_and_falls_back_to_utc",
+            "test_explicit_unsafe_config_blocks_scheduling_with_actionable_error",
+            "test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone",
+            "test_config_fingerprint_invalidates_persistent_cache_keys",
+            "test_configuration_drift_detects_edit_and_removal",
+        )
+        registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+        self.assertTrue(set(expected) <= registered)
+        self.assertEqual(tuple(test.__name__ for test in configuration.TESTS), expected)
+        self.assertFalse(set(expected) & top_level)
+
     def test_installer_runtime_cases_are_owned_by_installer_domain(self):
         installer = importlib.import_module("dev_tools.golden_tests.installer")
         expected = (
@@ -952,16 +971,18 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         ]
         recurrence = importlib.import_module("dev_tools.golden_tests.recurrence")
         operator = importlib.import_module("dev_tools.golden_tests.operator")
+        configuration = importlib.import_module("dev_tools.golden_tests.configuration")
         installer = importlib.import_module("dev_tools.golden_tests.installer")
         performance = importlib.import_module("dev_tools.golden_tests.performance")
         lifecycle = importlib.import_module("dev_tools.golden_tests.lifecycle")
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
-        self.assertEqual(len(top_level), 123)
+        self.assertEqual(len(top_level), 118)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
+        self.assertEqual(len(configuration.TESTS), 5)
         self.assertEqual(len(installer.TESTS), 9)
         self.assertEqual(len(performance.TESTS), 2)
         self.assertEqual(len(lifecycle.TESTS), 15)

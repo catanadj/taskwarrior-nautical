@@ -1087,10 +1087,6 @@ def __getattr__(name: str) -> Any:
     }:
         _ensure_business_calendar_exports()
         return globals()[name]
-    if name == "_DIAG_LOG_REDACT_KEYS":
-        value = _runtime.DIAG_LOG_REDACT_KEYS
-        globals()[name] = value
-        return value
     if name == "RecurrenceModeResult":
         value = _import_sibling("recurrence_evaluator").RecurrenceModeResult
         globals()[name] = value

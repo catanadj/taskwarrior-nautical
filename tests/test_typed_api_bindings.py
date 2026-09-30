@@ -200,6 +200,7 @@ class ApiBindingContractTests(unittest.TestCase):
             "_parse_hhmm",
             "_parse_atom_head",
             "_parse_atom_mods",
+            "_DIAG_LOG_REDACT_KEYS",
         ):
             with self.subTest(name=name):
                 self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)

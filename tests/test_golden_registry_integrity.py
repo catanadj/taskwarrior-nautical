@@ -958,6 +958,25 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertTrue(set(expected) <= {test.__name__ for test in performance.TESTS})
         self.assertFalse(set(expected) & top_level)
 
+    def test_modify_feedback_cases_are_owned_by_modify_domain(self):
+        modify = importlib.import_module("dev_tools.golden_tests.modify")
+        expected = (
+            "test_on_modify_promotes_chain_emits_upgrade_panel",
+            "test_on_modify_promotes_cp_emits_period_explanation",
+            "test_on_modify_disables_chain_emits_disabled_panel",
+            "test_on_modify_resumes_chain_emits_resumed_panel",
+            "test_on_modify_resume_wrapper_preserves_json_and_emits_panel",
+        )
+        registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
+        top_level = {
+            name
+            for name, value in vars(self.golden).items()
+            if name.startswith("test_") and callable(value)
+        }
+        self.assertTrue(set(expected) <= registered)
+        self.assertEqual(tuple(test.__name__ for test in modify.TESTS), expected)
+        self.assertFalse(set(expected) & top_level)
+
     def test_installer_runtime_cases_are_owned_by_installer_domain(self):
         installer = importlib.import_module("dev_tools.golden_tests.installer")
         expected = (
@@ -997,13 +1016,15 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         reconcile = importlib.import_module("dev_tools.golden_tests.reconcile")
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
-        self.assertEqual(len(top_level), 113)
+        self.assertEqual(len(top_level), 108)
         self.assertEqual(len(registered), 202)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 21)
         self.assertEqual(len(configuration.TESTS), 5)
         self.assertEqual(len(installer.TESTS), 9)
         self.assertEqual(len(performance.TESTS), 7)
+        modify = importlib.import_module("dev_tools.golden_tests.modify")
+        self.assertEqual(len(modify.TESTS), 5)
         self.assertEqual(len(lifecycle.TESTS), 15)
         self.assertEqual(len(reconcile.TESTS), 33)
         self.assertEqual(len(storage.TESTS), 1)

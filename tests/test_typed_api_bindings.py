@@ -105,11 +105,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 110)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 110)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 107)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 107)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "b0e2b26694f04b46fcb93c415943fa80422c9505c2056384821274cbd97808c5",
+            "c79c2d55d6287853302e502d0b4d5b7c1a921207b281cf1723cc1d52ca837772",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -151,7 +151,7 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertFalse(hasattr(facade, "_warn_rate_limited_any"))
         self.assertFalse(hasattr(facade, "validate_scheduling_configuration"))
 
-    def test_root_facade_does_not_export_parser_builder_test_seam(self) -> None:
+    def test_root_facade_does_not_export_unconsumed_owner_helpers(self) -> None:
         import nautical_core as facade
 
         self.assertNotIn("_build_anchor_atom_dnf", compat_api.PUBLIC_EXPORTS)
@@ -162,6 +162,16 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertNotIn("_weeks_between", compat_api.PUBLIC_OWNER_MODULES)
         self.assertNotIn("_weeks_between", compat_api.PUBLIC_EXPORT_CATEGORIES)
         self.assertFalse(hasattr(facade, "_weeks_between"))
+        for name in (
+            "_interval_allowed_for_atom",
+            "_first_hit_after_probe_in_month",
+            "_month_has_hit",
+        ):
+            with self.subTest(name=name):
+                self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)
+                self.assertNotIn(name, compat_api.PUBLIC_OWNER_MODULES)
+                self.assertNotIn(name, compat_api.PUBLIC_EXPORT_CATEGORIES)
+                self.assertFalse(hasattr(facade, name))
 
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES

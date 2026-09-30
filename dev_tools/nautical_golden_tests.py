@@ -1227,94 +1227,6 @@ def _test_modify_engine_services(
     )
 
 
-def test_perf_hint_benchmark_isolates_persistent_cache():
-    """Hint timing must use a temporary cache and restore production settings."""
-    perf = _load_hook_module(
-        os.path.join(DEV_TOOLS, "nautical_perf_budget.py"),
-        "_nautical_perf_cache_isolation_test",
-    )
-    original_build = perf.core.build_and_cache_hints
-    original_override = getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
-    seen = []
-    try:
-        def fake_build(*_args, **_kwargs):
-            seen.append(str(getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")))
-            key = "perf-isolation"
-            payload = perf.core.cache_load(key)
-            if payload is None:
-                payload = {"dnf": []}
-                perf.core.cache_save(key, payload)
-            return payload
-
-        perf.core.build_and_cache_hints = fake_build
-        perf._bench_build_hints(["w:mon"], 1, mode="warm")
-        expect(seen and "nautical-perf-cache-" in seen[0], f"benchmark used a non-isolated cache: {seen!r}")
-        expect(
-            getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "") == original_override,
-            "benchmark did not restore cache configuration",
-        )
-    finally:
-        perf.core.build_and_cache_hints = original_build
-
-
-def test_perf_hook_fast_path_ratio_enforcement():
-    """Hook latency checks should enforce the normalized fast/full median ratio."""
-    perf = _load_hook_module(
-        os.path.join(DEV_TOOLS, "nautical_perf_budget.py"),
-        "_nautical_hook_perf_ratio_test",
-    )
-
-    def clearly_faster(_hook_path, *, input_text, env, expected_task):
-        _ = (input_text, expected_task)
-        return 0.100 if env.get("NAUTICAL_BENCH_FORCE_FULL") == "1" else 0.050
-
-    perf._run_hook_timed = clearly_faster
-    passing = perf._measure_hook_fast_path(
-        "hook_test",
-        Path("unused-hook"),
-        input_text="{}",
-        expected_task={},
-        base_env={},
-        repeats=3,
-        max_ratio=0.8,
-    )
-    expect(passing.get("pass") is True, f"clear fast-path improvement should pass: {passing}")
-    expect(abs(float(passing.get("fast_to_full_ratio")) - 0.5) < 0.001, f"unexpected ratio: {passing}")
-
-    def insufficient_gain(_hook_path, *, input_text, env, expected_task):
-        _ = (input_text, expected_task)
-        return 0.100 if env.get("NAUTICAL_BENCH_FORCE_FULL") == "1" else 0.090
-
-    perf._run_hook_timed = insufficient_gain
-    failing = perf._measure_hook_fast_path(
-        "hook_test",
-        Path("unused-hook"),
-        input_text="{}",
-        expected_task={},
-        base_env={},
-        repeats=3,
-        max_ratio=0.8,
-    )
-    expect(failing.get("pass") is False, f"insufficient fast-path improvement should fail: {failing}")
-
-    perf._run_hook_timed = lambda *_args, **_kwargs: 0.060
-    managed = perf._measure_managed_hook_latency(
-        "managed_hook_test",
-        Path("unused-hook"),
-        input_text="{}",
-        expected_task={},
-        base_env={"NAUTICAL_CORE_PATH": "/source", "NAUTICAL_TRUST_CORE_PATH": "1"},
-        repeats=3,
-        baseline_median_s=0.050,
-        max_ratio=1.5,
-    )
-    expect(managed.get("pass") is True, f"reasonable managed-layout overhead should pass: {managed}")
-    expect(
-        abs(float(managed.get("managed_to_source_ratio")) - 1.2) < 0.001,
-        f"unexpected managed/source ratio: {managed}",
-    )
-
-
 def test_load_benchmark_installs_complete_hook_runtime():
     """The end-to-end benchmark must install on-exit and the Nautical UDAs."""
     load_test = _load_hook_module(
@@ -1386,72 +1298,6 @@ def test_load_benchmark_queue_and_lineage_verification():
     rows[1]["prevLink"] = "wrong"
     invalid = load_test._verify_link_rows(rows, [parent_uuid])
     expect(invalid.get("verified") == 0 and invalid.get("failures"), f"broken lineage was accepted: {invalid!r}")
-
-
-def test_hook_replay_harness_reports_ok():
-    """Replay harness should pass the seeded hook corpus."""
-    path = os.path.join(DEV_TOOLS, "nautical_hook_replay.py")
-    corpus = os.path.join(DEV_TOOLS, "nautical_hook_replay_corpus.jsonl")
-    p = subprocess.run(
-        [sys.executable, path, "--json", "--corpus", corpus],
-        text=True,
-        capture_output=True,
-        timeout=12.0,
-    )
-    expect(p.returncode == 0, f"replay harness returned {p.returncode}: stderr={p.stderr!r}")
-    obj = json.loads((p.stdout or "").strip() or "{}")
-    expect(obj.get("status") == "ok", f"unexpected replay harness status: {obj}")
-    results = obj.get("results") if isinstance(obj.get("results"), list) else []
-    expect(results, "replay harness should report per-case results")
-    expect(all(bool(r.get("ok")) for r in results if isinstance(r, dict)), f"failing replay result: {results}")
-
-
-def test_mixed_recurrence_loop_harness_reports_ok():
-    """Mixed recurrence loop harness should complete a small deterministic cycle run."""
-    path = os.path.join(DEV_TOOLS, "nautical_mixed_recurrence_loop.py")
-    p = subprocess.run(
-        [sys.executable, path, "--cycles", "3", "--json"],
-        text=True,
-        capture_output=True,
-        timeout=30.0,
-    )
-    expect(p.returncode == 0, f"mixed recurrence loop returned {p.returncode}: stderr={p.stderr!r}")
-    obj = json.loads((p.stdout or "").strip() or "{}")
-    expect(obj.get("ok") is True, f"unexpected mixed loop status: {obj}")
-    expect(int(obj.get("cycles_completed") or 0) >= 1, f"expected loop progress: {obj}")
-    expect(not obj.get("violations"), f"mixed loop reported violations: {obj}")
-
-
-def test_soak_runner_reports_ok():
-    """Short soak runner should complete without violations."""
-    path = os.path.join(DEV_TOOLS, "nautical_soak_test.py")
-    p = subprocess.run(
-        [
-            sys.executable,
-            path,
-            "--seconds",
-            "2",
-            "--batch-size",
-            "4",
-            "--anchor-rate",
-            "0.5",
-            "--cp-rate",
-            "0.5",
-            "--done-rate",
-            "0.5",
-            "--progress-every-seconds",
-            "0",
-            "--json",
-            "--enforce",
-        ],
-        text=True,
-        capture_output=True,
-        timeout=240,
-    )
-    expect(p.returncode == 0, f"soak runner returned {p.returncode}: stderr={p.stderr!r}")
-    obj = json.loads((p.stdout or "").strip() or "{}")
-    expect(obj.get("ok") is True, f"unexpected soak status: {obj}")
-    expect(not obj.get("violations"), f"soak runner reported violations: {obj}")
 
 
 def test_on_modify_expands_and_clears_description_uda_aliases():
@@ -5491,16 +5337,14 @@ TESTS = [
     *INSTALLER_TESTS[6:8],
     *OPERATOR_TESTS[12:13],
     *OPERATOR_TESTS[13:17],
-    test_perf_hint_benchmark_isolates_persistent_cache,
+    *PERFORMANCE_TESTS[7:8],
     *PERFORMANCE_TESTS[:3],
-    test_perf_hook_fast_path_ratio_enforcement,
+    *PERFORMANCE_TESTS[8:9],
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,
     *PERFORMANCE_TESTS[3:6],
-    test_hook_replay_harness_reports_ok,
-    test_mixed_recurrence_loop_harness_reports_ok,
-    test_soak_runner_reports_ok,
-    *PERFORMANCE_TESTS[6:],
+    *PERFORMANCE_TESTS[9:],
+    *PERFORMANCE_TESTS[6:7],
     *SCHEDULING_TESTS[1:],
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     *MODIFY_TESTS[1:6],

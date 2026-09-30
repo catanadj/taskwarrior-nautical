@@ -21,6 +21,146 @@ ROOT = Path(__file__).parents[1]
 
 
 class DeploymentSanityContractTests(unittest.TestCase):
+    def test_deploy_sanity_script_reports_ok(self) -> None:
+        script = ROOT / "dev_tools" / "nautical_deploy_sanity.py"
+        process = subprocess.run(
+            [sys.executable, str(script), "--json"],
+            text=True,
+            capture_output=True,
+            timeout=12.0,
+            check=False,
+        )
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        payload = json.loads(process.stdout or "{}")
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        self.assertEqual(payload.get("status"), "ok", payload)
+        self.assertTrue(results)
+        self.assertTrue(all(item.get("ok") for item in results), payload)
+
+    def test_deploy_sanity_enforces_removed_lifecycle_ownership(self) -> None:
+        self.assertFalse(
+            [item for item in deploy._check_removed_ownership(ROOT) if not item.get("ok")]
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            staged = Path(td)
+            tools = staged / "nautical_core" / "tools"
+            tools.mkdir(parents=True)
+            shutil.copy2(ROOT / "nautical_core" / "runtime_manifest.py", staged / "nautical_core" / "runtime_manifest.py")
+            (staged / "nautical_core" / "exit_models.py").write_text("# stale module\n", encoding="utf-8")
+            (tools / "nautical_reconcile.py").write_text("_validate_hook_protocol = object()\n", encoding="utf-8")
+
+            failures = [item for item in deploy._check_removed_ownership(staged) if not item.get("ok")]
+
+        self.assertGreaterEqual(len(failures), 2, failures)
+
+        with tempfile.TemporaryDirectory() as td:
+            staged = Path(td)
+            tools = staged / "nautical_core" / "tools"
+            tools.mkdir(parents=True)
+            shutil.copy2(ROOT / "nautical_core" / "runtime_manifest.py", staged / "nautical_core" / "runtime_manifest.py")
+            (tools / "nautical_reconcile.py").write_text(
+                "from nautical_core.hooks import modify_impl\n", encoding="utf-8"
+            )
+
+            failures = [item for item in deploy._check_removed_ownership(staged) if not item.get("ok")]
+
+        self.assertTrue(
+            any(
+                item.get("name")
+                == "operator-hook-imports:nautical_core/tools/nautical_reconcile.py"
+                for item in failures
+            ),
+            failures,
+        )
+        results = deploy._check_removed_ownership(ROOT)
+        self.assertTrue(
+            any(item.get("name") == "pure-integrity:nautical_core/chain_graph.py" for item in results),
+            results,
+        )
+
+    def test_deploy_sanity_rejects_missing_lazy_lifecycle_module(self) -> None:
+        script = ROOT / "dev_tools" / "nautical_deploy_sanity.py"
+        with tempfile.TemporaryDirectory() as td:
+            candidate = Path(td) / "candidate"
+            shutil.copytree(
+                ROOT,
+                candidate,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", ".nautical-cache", ".nautical_cache"),
+            )
+            (candidate / "nautical_core" / "modify_completion_compute.py").unlink()
+            process = subprocess.run(
+                [sys.executable, str(script), "--root", str(candidate), "--no-require-exec", "--json"],
+                text=True,
+                capture_output=True,
+                timeout=20.0,
+            )
+
+        self.assertNotEqual(process.returncode, 0)
+        payload = json.loads((process.stdout or "{}").strip() or "{}")
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        self.assertTrue(
+            any(
+                item.get("path") == "nautical_core/modify_completion_compute.py" and not item.get("ok")
+                for item in results
+                if isinstance(item, dict)
+            ),
+            results,
+        )
+        self.assertTrue(
+            any(
+                item.get("kind") == "lazy-modules"
+                and item.get("name") == "on-modify"
+                and not item.get("ok")
+                for item in results
+                if isinstance(item, dict)
+            ),
+            results,
+        )
+
+    def test_deploy_sanity_rejects_missing_operator_runtime_tool(self) -> None:
+        script = ROOT / "dev_tools" / "nautical_deploy_sanity.py"
+        with tempfile.TemporaryDirectory() as td:
+            candidate = Path(td) / "candidate"
+            shutil.copytree(
+                ROOT,
+                candidate,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", ".nautical-cache", ".nautical_cache"),
+            )
+            (candidate / "nautical_core" / "tools" / "nautical_doctor.py").unlink()
+            process = subprocess.run(
+                [sys.executable, str(script), "--root", str(candidate), "--no-require-exec", "--json"],
+                text=True,
+                capture_output=True,
+                timeout=20.0,
+            )
+
+        self.assertNotEqual(process.returncode, 0)
+        payload = json.loads((process.stdout or "{}").strip() or "{}")
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        self.assertTrue(
+            any(
+                item.get("path") == "nautical_core/tools/nautical_doctor.py" and not item.get("ok")
+                for item in results
+                if isinstance(item, dict)
+            ),
+            results,
+        )
+
+    def test_deploy_sanity_rejects_unowned_taskwarrior_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            core_dir = Path(td) / "nautical_core"
+            core_dir.mkdir()
+            (core_dir / "bad_runner.py").write_text(
+                "import subprocess\nsubprocess.run(['task', 'export'])\n", encoding="utf-8"
+            )
+
+            findings = deploy._check_taskwarrior_process_ownership(Path(td))
+
+        self.assertTrue(findings and not findings[0]["ok"], findings)
+        self.assertIn("bad_runner.py:2", findings[0]["message"])
+
     def test_strict_json_object_accepts_unicode_and_rejects_non_object_envelopes(self) -> None:
         ok, message = deploy._strict_json_object('{"status":"ok","label":"café"}')
         self.assertTrue(ok, message)

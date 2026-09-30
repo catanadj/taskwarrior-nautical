@@ -159,7 +159,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                 validate_weekly_spec=deps["_validate_weekly_spec"],
                 validate_monthly_spec=deps["_validate_monthly_spec"],
                 active_mod_keys=deps["_active_mod_keys"],
-                validate_yearly_token_format=deps["_validate_yearly_token_format"],
+                validate_yearly_token_format=validate_yearly_token_format,
                 position_selection=position_selection,
             )
             validation_deps_state[0] = bound
@@ -530,7 +530,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             parse_error=deps["ParseError"],
             today=date.today,
             parser_dnf=parser_dnf,
-            resolve_presets=resolve_anchor_presets,
+            resolve_presets=resolve_anchor_presets_impl,
         )
         return _parse_anchor_expr_to_dnf_impl(s, owner_deps)
 
@@ -575,64 +575,4 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     )
 
 
-def build_acf(expr: str) -> str:
-    return _compat_build_acf(expr)
-
-
-def resolve_anchor_presets(expr: str, *, _seen: Any = None) -> str:
-    return _core_module()._resolve_anchor_presets_impl(expr, _seen=_seen)
-
-
-def resolve_omit_presets(expr: str, *, _seen: Any = None) -> str:
-    return _core_module()._resolve_omit_presets_impl(expr, _seen=_seen)
-
-
-def parse_anchor_expr_to_dnf(s: str) -> Any:
-    return for_core(module=_core_module()).parse_anchor_expr_to_dnf(s)
-
-
-def parse_anchor_expr_to_dnf_cached(s: str) -> Any:
-    return _compat_parse_anchor_expr_to_dnf_cached(s)
-
-
-def validate_anchor_expr_strict(expr: Any) -> Any:
-    return _validate_anchor_expr_strict_impl(_compat_validation_dependencies(), expr)
-
-
-def _compat_build_acf(expr: str) -> str:
-    """Bridge the legacy public call to the facade's current ACF binding."""
-    module = _core_module()
-    return module._build_acf_impl(expr)
-
-
-def _compat_parse_anchor_expr_to_dnf_cached(s: str) -> Any:
-    """Bridge the legacy public call to the facade's cached parser binding."""
-    module = _core_module()
-    return module._parse_anchor_expr_to_dnf_cached_impl(s)
-
-
-def _compat_validation_dependencies() -> ParserValidationDependencies:
-    """Snapshot strict-validation collaborators at the compatibility edge."""
-    module = _core_module()
-    position_selection = module._position_selection
-    return ParserValidationDependencies(
-        strict_validation=module._strict_validation,
-        parse_cached=module._parse_anchor_expr_to_dnf_cached_impl,
-        parse_error=module.ParseError,
-        is_atom_like=module._is_atom_like,
-        validate_weekly_spec=module._validate_weekly_spec,
-        validate_monthly_spec=module._validate_monthly_spec,
-        active_mod_keys=module._active_mod_keys,
-        validate_yearly_token_format=module._validate_yearly_token_format,
-        position_selection=position_selection,
-    )
-
-
-__all__ = (
-    "build_acf",
-    "parse_anchor_expr_to_dnf",
-    "parse_anchor_expr_to_dnf_cached",
-    "resolve_anchor_presets",
-    "resolve_omit_presets",
-    "validate_anchor_expr_strict",
-)
+__all__ = ("for_core",)

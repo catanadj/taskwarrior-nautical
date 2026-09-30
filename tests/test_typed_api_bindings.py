@@ -89,6 +89,19 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertIn("ApiBinding", str(annotation))
                 self.assertNotIn("SimpleNamespace", source)
 
+    def test_parser_owner_has_no_legacy_root_bridge_functions(self) -> None:
+        parser_owner = importlib.import_module("nautical_core.parser_api")
+        for name in (
+            "build_acf",
+            "resolve_anchor_presets",
+            "resolve_omit_presets",
+            "parse_anchor_expr_to_dnf",
+            "parse_anchor_expr_to_dnf_cached",
+            "validate_anchor_expr_strict",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(parser_owner, name))
+
     def test_core_namespace_rejects_missing_binding_source_explicitly(self) -> None:
         with self.assertRaisesRegex(TypeError, "time_api.for_core"):
             core_namespace(None, None, None, "time_api")
@@ -105,11 +118,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 93)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 93)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 92)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 92)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "7b8e630e04c78e216f387ac6d46a5307da0eea9bee03aad6357966df846945f1",
+            "7676847239a013aa3257ad2b186eeeed2c294eb5c03e53f46c33e2cf9e1c00d1",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -178,6 +191,7 @@ class ApiBindingContractTests(unittest.TestCase):
             "_rewrite_quarter_spec_mode",
             "_rewrite_quarters_in_context",
             "_validate_yearly_spec_token",
+            "_validate_yearly_token_format",
             "_parse_hhmm",
             "_parse_atom_head",
             "_parse_atom_mods",

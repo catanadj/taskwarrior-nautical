@@ -835,7 +835,6 @@ _parser_api = _LazyApiBundle(
         "_yearly_mmdd_error",
         "_validate_yearly_token_allowlist",
         "_validate_yearly_token_detailed",
-        "_validate_yearly_token_format",
         "_validate_year_tokens_in_dnf",
         "_validate_yearly_token",
         "_yearly_last_day",

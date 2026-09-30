@@ -11,7 +11,6 @@ import sys
 import sqlite3
 import subprocess
 import tempfile
-import sys
 import os
 import re
 import time as _time

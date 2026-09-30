@@ -22,7 +22,6 @@ from nautical_core.integration_context import (
 from nautical_core.integration_models import (
     CommandFailureKind, FailureEvidence, TaskCommand, Unavailable,
 )
-from nautical_core.operator_models import OperatorFailure
 from nautical_core.operator_plans import OperatorPlan
 from nautical_core.operator_context import OperatorInvocationContext
 from nautical_core.operator_context import OperatorInvocationBudget

@@ -5,7 +5,6 @@ import io
 import json
 import unittest
 from unittest.mock import patch
-from unittest.mock import patch
 
 from nautical_core.tools import nautical_query
 

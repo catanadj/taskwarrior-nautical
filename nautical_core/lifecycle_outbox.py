@@ -28,7 +28,7 @@ from nautical_core.lifecycle_outbox_codec import (
 )
 from nautical_core.lifecycle_outbox_schema import (
     OUTBOX_SCHEMA_VERSION,
-    OUTBOX_LEGACY_SCHEMA_VERSION,
+    OUTBOX_LEGACY_SCHEMA_VERSION as OUTBOX_LEGACY_SCHEMA_VERSION,
     _INIT_BACKOFF_S,
     _INIT_RETRIES,
     _MAX_INIT_BACKOFF_S,

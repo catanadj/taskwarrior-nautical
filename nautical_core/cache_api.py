@@ -223,45 +223,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         ) as acquired:
             yield acquired
 
-    @contextmanager
-    def safe_lock(
-        path: str,
-        *,
-        retries: int = 6,
-        sleep_base: float = 0.05,
-        jitter: float = 0.0,
-        mode: int = 0o600,
-        mkdir: bool = True,
-        stale_after: float | None = 60.0,
-    ) -> Any:
-        with cache_locking.safe_lock(
-            path,
-            retries=retries,
-            sleep_base=sleep_base,
-            jitter=jitter,
-            mode=mode,
-            mkdir=mkdir,
-            stale_after=stale_after,
-            fcntl_mod=runtime.fcntl,
-            os_mod=runtime.filesystem,
-            time_mod=runtime.clock,
-            random_mod=runtime.random,
-        ) as acquired:
-            yield acquired
-
-    @contextmanager
-    def cache_lock(key: str) -> Any:
-        with cache_locking.cache_lock(
-            key,
-            cache_lock_path=cache_lock_path,
-            safe_lock=safe_lock,
-            cache_lock_retries=deps["_CACHE_LOCK_RETRIES"],
-            cache_lock_sleep_base=deps["_CACHE_LOCK_SLEEP_BASE"],
-            cache_lock_jitter=deps["_CACHE_LOCK_JITTER"],
-            cache_lock_stale_after=deps["_CACHE_LOCK_STALE_AFTER"],
-        ) as acquired:
-            yield acquired
-
     def cache_dir() -> str:
         current = cache_dir_state[0]
         chosen = cache_locking.cache_dir(

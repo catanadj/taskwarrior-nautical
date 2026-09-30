@@ -810,7 +810,6 @@ class OperatorHealthService:
         """Validate configured file-provider directories without performing writes."""
         from pathlib import Path
         import os
-        import os
         base = Path(str(config_dir)).expanduser()
         result: list[OperatorFinding] = []
         for key in ("anchor_file_dir", "omit_file_dir"):

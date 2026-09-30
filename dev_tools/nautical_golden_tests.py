@@ -653,7 +653,7 @@ def main():
                 print(f"✗ {fn.__name__}: {message}")
 
     print(f"\n{'='*60}")
-    print(f"TEST SUMMARY")
+    print("TEST SUMMARY")
     print(f"{'='*60}")
     print(f"Total tests run: {total_tests}")
     print(f"Passed: {total_tests - fails}")

@@ -17,6 +17,7 @@ from .integration_models import (
     TaskRead,
     Unavailable,
 )
+from .integration_context import IntegrationContext
 from .task_read_repository import ALL_TASK_STATUSES, AuthoritativeTaskSnapshot
 from .task_models import TaskObservation
 
@@ -35,6 +36,9 @@ class _SnapshotRepository(Protocol):
 
 
 class _SnapshotUnitOfWork(Protocol):
+    @property
+    def context(self) -> IntegrationContext | None: ...
+
     @property
     def repository(self) -> _SnapshotRepository: ...
 
@@ -140,8 +144,8 @@ class ChainSnapshotService:
         self._uow = unit_of_work
         self._repository = unit_of_work.repository
         self._configuration_fingerprint = str(configuration_fingerprint or "").strip()
-        context = getattr(unit_of_work, "context", None)
-        validated = getattr(getattr(context, "configuration", None), "fingerprint", "")
+        context = unit_of_work.context
+        validated = context.configuration.fingerprint if context is not None else ""
         if validated and self._configuration_fingerprint and validated != self._configuration_fingerprint:
             raise ValueError("integrity snapshot configuration fingerprint differs from invocation context")
         if not self._configuration_fingerprint and validated:

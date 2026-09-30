@@ -166,11 +166,11 @@ _ttl_lru_cache = _config_call("ttl_lru_cache")
 def _emit_cache_metrics() -> None:
     _cache_facade.emit_metrics(
         (
-            ("normalize_acf", _normalize_spec_for_acf_cached),
-            ("year_pair", _year_pair_cached),
-            ("parse_y_token", _parse_y_token_cached),
-            ("expand_monthly", expand_monthly_cached),
-            ("expand_weekly", expand_weekly_cached),
+            ("normalize_acf", _acf_api._normalize_spec_for_acf_cached),
+            ("year_pair", _acf_api._year_pair_cached),
+            ("parse_y_token", _parser_support_api._parse_y_token_cached),
+            ("expand_monthly", _scheduler_api.expand_monthly_cached),
+            ("expand_weekly", _scheduler_api.expand_weekly_cached),
         ),
         _warn_once_per_day,
     )
@@ -180,15 +180,15 @@ def _clear_all_caches() -> None:
     _cache_facade.clear_all(
         _CACHE_LOAD_MEM,
         (
-            _normalize_spec_for_acf_cached,
-            _year_pair_cached,
-            _parse_y_token_cached,
-            expand_monthly_cached,
-            expand_weekly_cached,
-            _cache_key_for_task_cached,
+            _acf_api._normalize_spec_for_acf_cached,
+            _acf_api._year_pair_cached,
+            _parser_support_api._parse_y_token_cached,
+            _scheduler_api.expand_monthly_cached,
+            _scheduler_api.expand_weekly_cached,
+            _cache_api._cache_key_for_task_cached,
         ),
         position_selection=_position_selection,
-        selection_matcher=_selection_inner_matcher,
+        selection_matcher=_scheduler_api._selection_inner_matcher,
     )
 
 
@@ -372,10 +372,10 @@ def _validate_scheduling_configuration() -> None:
         astronomy_config=ASTRONOMY_CONFIG,
         anchor_presets=ANCHOR_PRESETS,
         omit_presets=OMIT_PRESETS,
-        resolve_anchor_presets=resolve_anchor_presets,
-        validate_anchor_expr=validate_anchor_expr_strict,
-        resolve_omit_presets=resolve_omit_presets,
-        configured_business_calendars=configured_business_calendars,
+        resolve_anchor_presets=_parser_api.resolve_anchor_presets,
+        validate_anchor_expr=_parser_api.validate_anchor_expr_strict,
+        resolve_omit_presets=_parser_api.resolve_omit_presets,
+        configured_business_calendars=_business_calendar_api.configured_business_calendars,
         import_sibling=_import_sibling,
     )
 

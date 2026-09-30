@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import argparse, json, subprocess, sys
+import argparse, json, subprocess
+import sys as sys
 from collections import defaultdict
 
 from nautical_core.common import short_uuid

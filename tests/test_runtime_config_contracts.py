@@ -2,7 +2,6 @@
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import nautical_core as core
 import nautical_core.core_config as core_config

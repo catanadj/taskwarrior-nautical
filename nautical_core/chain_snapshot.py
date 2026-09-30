@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 import json
-from typing import Any, Protocol, Sequence
+from typing import Protocol, Sequence
 
 from .chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
 from .integration_models import (
@@ -165,7 +165,7 @@ class ChainSnapshotService:
             return Unavailable(self._query(request), self._invalid_response(
                 read.value, "authoritative chain export was truncated",
             ))
-        validation_error = self._validate_rows(request, read.value)
+        validation_error = self._validate_rows(request, read.value.rows)
         if validation_error:
             return Unavailable(self._query(request), self._invalid_response(read.value, validation_error))
         normalized_snapshot = self.from_rows(request, read.value.rows, source="taskwarrior.authoritative_export")
@@ -219,7 +219,7 @@ class ChainSnapshotService:
     @staticmethod
     def _validate_rows(
         request: IntegritySnapshotRequest,
-        snapshot: Any,
+        rows: Sequence[TaskObservation],
     ) -> str:
         """Reject impossible identity evidence before graph construction.
 
@@ -230,7 +230,7 @@ class ChainSnapshotService:
         """
         seen: set[str] = set()
         allowed_statuses = frozenset(request.statuses)
-        for row in snapshot.rows:
+        for row in rows:
             uuid_state = row.field("uuid")
             uuid_value = str(getattr(uuid_state.value, "value", uuid_state.value) or "").strip().lower()
             if not uuid_value:
@@ -259,10 +259,7 @@ class ChainSnapshotService:
         request: IntegritySnapshotRequest,
         rows: Sequence[TaskObservation],
     ) -> str:
-        class _Rows:
-            def __init__(self, values: Sequence[TaskObservation]) -> None:
-                self.rows = tuple(values)
-        return ChainSnapshotService._validate_rows(request, _Rows(rows))
+        return ChainSnapshotService._validate_rows(request, rows)
 
     def _read(self, request: IntegritySnapshotRequest) -> TaskRead[AuthoritativeTaskSnapshot]:
         if request.kind is IntegritySnapshotKind.CHAIN:

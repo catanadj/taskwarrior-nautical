@@ -842,7 +842,6 @@ _parser_api = _LazyApiBundle(
         "_validate_yearly_token",
         "_yearly_last_day",
         "_yearly_check_day_month",
-        "_validate_yearly_spec_token",
         "_validate_yearly_spec",
         "_weekday_set_from_weekly_atom",
         "_md_pairs_from_yearly_spec",

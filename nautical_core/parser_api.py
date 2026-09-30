@@ -295,6 +295,16 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             parse_error_cls=deps["ParseError"],
         )
 
+    def skip_ws_pos(value: str, index: int, length: int) -> int:
+        return parser_frontend.skip_ws_pos(value, index, length)
+
+    def raise_if_comma_joined_anchors(full_tail: str) -> None:
+        parser_frontend.raise_if_comma_joined_anchors(
+            full_tail,
+            re_mod=deps["re"],
+            parse_error_cls=deps["ParseError"],
+        )
+
     def build_anchor_atom_dnf(head: str, full_tail: str) -> Any:
         return parser_atoms.build_anchor_atom_dnf(
             head,
@@ -312,8 +322,8 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             value,
             index,
             length,
-            skip_ws_pos=deps["_skip_ws_pos"],
-            raise_if_comma_joined_anchors=deps["_raise_if_comma_joined_anchors"],
+            skip_ws_pos=skip_ws_pos,
+            raise_if_comma_joined_anchors=raise_if_comma_joined_anchors,
             build_anchor_atom_dnf=build_anchor_atom_dnf,
             parse_error_cls=deps["ParseError"],
         )
@@ -495,7 +505,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             raise_bad_year_colons=raise_bad_year_colons,
             parse_atom=parse_anchor_atom_at,
             parse_mods=parse_atom_mods,
-            skip_ws=deps["_skip_ws_pos"],
+            skip_ws=skip_ws_pos,
             rewrite_quarters=deps["_rewrite_quarters_in_context"],
             rewrite_year_month=deps["_rewrite_year_month_aliases_in_context"],
             validate_year_tokens=validate_year_tokens_in_dnf,

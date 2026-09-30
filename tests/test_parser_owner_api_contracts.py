@@ -24,10 +24,14 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         namespace.pop("_raise_on_bad_colon_year_tokens", None)
         namespace.pop("_parse_atom_head", None)
         namespace.pop("_parse_atom_mods", None)
+        namespace.pop("_skip_ws_pos", None)
+        namespace.pop("_raise_if_comma_joined_anchors", None)
         parser = parser_api.for_core(namespace=namespace)
 
         with self.assertRaisesRegex(core.ParseError, "uses ':' between numbers"):
             parser.parse_anchor_expr_to_dnf("y:01:02")
+        with self.assertRaisesRegex(core.ParseError, "Anchors must be joined"):
+            parser.parse_anchor_expr_to_dnf("m:31,w:sun")
         self.assertEqual(parser.parse_anchor_expr_to_dnf("w:mon@t=09:00")[0][0]["mods"]["t"], (9, 0))
 
     def test_incompatible_moon_phases_are_rejected_by_both_public_parsers(self) -> None:

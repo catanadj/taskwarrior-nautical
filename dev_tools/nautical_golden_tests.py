@@ -33,7 +33,6 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 
-from dev_tools.golden_tests.recurrence import TESTS as RECURRENCE_TESTS
 from dev_tools.golden_tests.operator import TESTS as OPERATOR_TESTS
 from dev_tools.golden_tests.installer import TESTS as INSTALLER_TESTS
 from dev_tools.golden_tests.storage import TESTS as STORAGE_TESTS
@@ -443,7 +442,6 @@ TESTS = [
     *SCHEDULING_TESTS[:1],
     *SCHEDULING_TESTS[9:10],
     *SCHEDULING_TESTS[15:16],
-    *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
     *SCHEDULING_TESTS[5:6],
     *MODIFY_TESTS[42:43],

@@ -28,9 +28,9 @@ class GoldenRunnerContractTests(unittest.TestCase):
     def test_repeated_filters_verbose_and_shuffle_are_deterministic(self):
         args = (
             "--only",
-            "test_random_salt_namespaces_draws",
+            "test_safe_lock_fcntl_contention",
             "--only",
-            "test_modifier_boundary_paths_agree_and_advance_strictly",
+            "test_random_time_window_is_stable_across_processes",
             "--verbose",
             "--shuffle-seed",
             "20260925",
@@ -40,9 +40,9 @@ class GoldenRunnerContractTests(unittest.TestCase):
         second = self._run(*args)
         registered_order = self._run(
             "--only",
-            "test_random_salt_namespaces_draws",
+            "test_safe_lock_fcntl_contention",
             "--only",
-            "test_modifier_boundary_paths_agree_and_advance_strictly",
+            "test_random_time_window_is_stable_across_processes",
             "--verbose",
         )
 
@@ -59,14 +59,14 @@ class GoldenRunnerContractTests(unittest.TestCase):
             r"^✓ (test_[^:]+):", registered_order.stdout, re.MULTILINE
         )
         expected = {
-            "test_random_salt_namespaces_draws",
-            "test_modifier_boundary_paths_agree_and_advance_strictly",
+            "test_safe_lock_fcntl_contention",
+            "test_random_time_window_is_stable_across_processes",
         }
         self.assertEqual(set(first_names), expected)
         self.assertEqual(first_names, second_names)
         self.assertEqual(
             ordered_names,
-            ["test_modifier_boundary_paths_agree_and_advance_strictly", "test_random_salt_namespaces_draws"],
+            ["test_safe_lock_fcntl_contention", "test_random_time_window_is_stable_across_processes"],
         )
         self.assertIn("Total tests run: 2", first.stdout)
         self.assertIn("Passed: 2", first.stdout)

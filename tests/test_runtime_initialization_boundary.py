@@ -346,6 +346,45 @@ class RuntimeInitializationBoundaryTests(HookSubprocessFixture):
             self.assertIn(str(config), result.stdout)
             self.assertIn("world-writable", result.stdout)
 
+    def test_random_salt_replays_and_namespaces_random_draws(self) -> None:
+        start = "2026-06-07"
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config-nautical.toml"
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "NAUTICAL_CONFIG": str(config),
+                    "NAUTICAL_TRUST_CONFIG_PATH": "1",
+                    "PYTHONPATH": str(ROOT),
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                }
+            )
+
+            def sequence(salt: str) -> list[str]:
+                config.write_text(f'wrand_salt = "{salt}"\n', encoding="utf-8")
+                code = (
+                    "import json\nfrom datetime import date\n"
+                    "import nautical_core as core\n"
+                    "core.effective_config_snapshot()\n"
+                    f"start = date.fromisoformat({start!r})\n"
+                    "dnf = core.parse_anchor_expr_to_dnf_cached('w:rand')\n"
+                    "current = start\noutput = []\n"
+                    "for _ in range(12):\n"
+                    "    current, _metadata = core.next_after_expr("
+                    "dnf, current, default_seed=start, seed_base='salt-test-chain')\n"
+                    "    output.append(current.isoformat())\n"
+                    "print(json.dumps(output))\n"
+                )
+                result = self.run_python_code(code, cwd=ROOT, env=environment)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads(result.stdout)
+
+            first = sequence("salt-a")
+            replay = sequence("salt-a")
+            changed_salt = sequence("salt-b")
+            self.assertEqual(first, replay)
+            self.assertNotEqual(first, changed_salt)
+
     def test_explicit_config_is_loaded_on_runtime_access_not_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config-nautical.toml"

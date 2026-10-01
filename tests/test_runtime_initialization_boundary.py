@@ -228,6 +228,28 @@ class RuntimeInitializationBoundaryTests(HookSubprocessFixture):
         self.assertEqual(first["scheduler_fingerprint"], payload["scheduler"])
         self.assertEqual(payload["drift"]["status"], "ok")
 
+    def test_taskdata_discovery_rejects_malformed_configuration(self) -> None:
+        config = Path(self.taskdata) / "config-nautical.toml"
+        config.write_text('tz = "Europe/Athens"\n[broken\n', encoding="utf-8")
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "TASKDATA": self.taskdata,
+                "TASKRC": str(Path(self.taskdata) / "taskrc"),
+                "PYTHONPATH": str(ROOT),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+        )
+        result = self.run_python_code(
+            "import os, nautical_core as core\n"
+            "core.reload_taskdata_config(os.environ['TASKDATA'])\n",
+            cwd=ROOT,
+            env=environment,
+            clear_environment=("NAUTICAL_CONFIG",),
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("config parse failed", f"{result.stdout}\n{result.stderr}".lower())
+
     def test_explicit_config_is_loaded_on_runtime_access_not_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config-nautical.toml"

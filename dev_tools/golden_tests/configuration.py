@@ -140,34 +140,6 @@ def test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone():
             )
 
 
-def test_discovered_malformed_config_blocks_taskdata_reload():
-    """A malformed Taskdata-discovered config must not silently select defaults."""
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td)
-        (taskdata / "config-nautical.toml").write_text(
-            'tz = "Europe/Athens"\n[broken\n', encoding="utf-8"
-        )
-        env = os.environ.copy()
-        env["TASKDATA"] = str(taskdata)
-        env["TASKRC"] = str(taskdata / "taskrc")
-        env.pop("NAUTICAL_CONFIG", None)
-        env["PYTHONPATH"] = str(ROOT)
-        process = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import os, nautical_core as c; c.reload_taskdata_config(os.environ['TASKDATA'])",
-            ],
-            cwd=str(ROOT),
-            env=env,
-            text=True,
-            capture_output=True,
-        )
-        expect(process.returncode != 0, "malformed discovered config was accepted")
-        detail = f"{process.stdout}\n{process.stderr}".lower()
-        expect("config parse failed" in detail, f"parse failure detail missing: {detail[:800]!r}")
-
-
 def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
     """Alias-bearing plain modifies must not be swallowed by the thin fast path."""
     hook = find_hook_file("on-modify.nautical")
@@ -273,7 +245,6 @@ TESTS = (
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
     test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
-    test_discovered_malformed_config_blocks_taskdata_reload,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
     test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel,
     test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,

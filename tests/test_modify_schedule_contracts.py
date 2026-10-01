@@ -6,17 +6,43 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import nautical_core as core
 import nautical_core.modify_completion_compute as modify_completion_compute
 import nautical_core.modify_runtime as modify_runtime
 import nautical_core.modify_schedule_effects as modify_schedule_effects
+import nautical_core.timezone_facade as timezone_facade
+from nautical_core.add_anchor_compute import anchor_next_occurrence_after_local_dt
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 from nautical_core.task_datetime import parser_for_core
 from nautical_core.timeutil import compare_datetimes
 
 
 class ModifyScheduleContractTests(unittest.TestCase):
+    def test_overnight_window_advances_past_second_dst_fold(self) -> None:
+        zone = ZoneInfo("Europe/Bucharest")
+        dnf = core.validate_anchor_expr_strict("w:sat@t=22:20..03:20/6")
+        cursor = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+        ports = modify_schedule_effects.OccurrencePorts(
+            lambda expression, after, **kwargs: anchor_next_occurrence_after_local_dt(
+                expression, after, core=core, **kwargs
+            )
+        )
+
+        with patch.object(timezone_facade, "_local_timezone", zone):
+            result = modify_schedule_effects.next_occurrence_after_local_dt(
+                ports,
+                dnf,
+                cursor,
+                default_seed_date=date(2026, 10, 24),
+                seed_base="dst-overnight-second-fold",
+                fallback_hhmm=(22, 20),
+            )
+
+        self.assertEqual(result.date(), date(2026, 10, 31))
+        self.assertEqual((result.hour, result.minute), (22, 20))
+
     def test_cp_chain_max_estimate_advances_through_sequence_intervals(self) -> None:
         ports = modify_schedule_effects.CPCompletionPorts(
             compute=modify_completion_compute,

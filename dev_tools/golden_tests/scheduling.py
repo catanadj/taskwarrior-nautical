@@ -224,45 +224,6 @@ def test_modify_completion_advances_past_second_dst_fold():
     )
 
 
-def test_modify_overnight_window_advances_past_second_dst_fold():
-    """An overnight window rejects its first-fold slot after a second-fold cursor."""
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_modify_overnight_second_fold_test")
-    zone = ZoneInfo("Europe/Bucharest")
-    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone
-    try:
-        mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
-        mod.timezone_facade._local_timezone = zone
-        dnf = mod.core.validate_anchor_expr_strict("w:sat@t=22:20..03:20/6")
-        cursor = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-        schedule = mod._module("modify_schedule_effects")
-        from nautical_core.add_anchor_compute import (
-            anchor_next_occurrence_after_local_dt,
-        )
-
-        result = schedule.next_occurrence_after_local_dt(
-            schedule.OccurrencePorts(
-                lambda expression,
-                after,
-                **kwargs: anchor_next_occurrence_after_local_dt(
-                    expression, after, core=mod.core, **kwargs
-                )
-            ),
-            dnf,
-            cursor,
-            default_seed_date=date(2026, 10, 24),
-            seed_base="dst-overnight-second-fold",
-            fallback_hhmm=(22, 20),
-        )
-    finally:
-        mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone = old_name, old_tz
-    expect(
-        result.date() == date(2026, 10, 31)
-        and (result.hour, result.minute) == (22, 20),
-        f"overnight second-fold cursor selected a backward occurrence: {result}",
-    )
-
-
 def test_anchor_preview_explains_nonexistent_wall_time_adjustment():
     """The add panel identifies a fixed anchor time shifted by DST."""
     hook = find_hook_file("on-add.nautical")
@@ -892,7 +853,6 @@ TESTS = (
     test_year_ordinals_hooks_modes_calendar_and_timeline,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_modify_completion_advances_past_second_dst_fold,
-    test_modify_overnight_window_advances_past_second_dst_fold,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
     test_random_anchor_and_omit_presets_keep_chain_scope,
     test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,

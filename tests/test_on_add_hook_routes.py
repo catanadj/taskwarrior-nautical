@@ -735,6 +735,9 @@ class OnAddHookRouteTests(HookSubprocessFixture):
 
     def test_combined_anchor_sources_choose_earliest_occurrence(self) -> None:
         file_date = date.today() + timedelta(days=1)
+        weekday_two_days_after_file = (
+            "mon", "tue", "wed", "thu", "fri", "sat", "sun"
+        )[(file_date.weekday() + 2) % 7]
         (self.anchor_files / "calendar.csv").write_text(
             f"date,description\n{file_date.isoformat()},Special date\n", encoding="utf-8"
         )
@@ -745,7 +748,7 @@ class OnAddHookRouteTests(HookSubprocessFixture):
             chain="on",
             chainID="fixture-anchor-union",
             link=1,
-            anchor="w:sat@t=09:00",
+            anchor=f"w:{weekday_two_days_after_file}@t=09:00",
             anchor_file="calendar.csv@t=12:00",
         )
 

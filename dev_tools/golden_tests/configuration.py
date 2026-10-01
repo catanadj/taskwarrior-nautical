@@ -256,42 +256,6 @@ def test_configuration_drift_detects_edit_and_removal():
         )
 
 
-def test_business_calendar_toml_section_resolves_lazily():
-    """A real business-calendar TOML section resolves through the public core facade."""
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / "config-nautical.toml"
-        config_path.write_text(
-            '[business_calendar.work]\nanchor = "w:mon..fri"\nomit = "y:04-20"\n',
-            encoding="utf-8",
-        )
-        script = (
-            "import json\nfrom datetime import date\nimport nautical_core as core\n"
-            "policy = core.get_configured_business_calendar('WORK')\n"
-            "print(json.dumps({'names': sorted(core.business_calendar_definitions()), "
-            "'open': policy.is_business_day(date(2026, 4, 21)), "
-            "'closed': policy.is_business_day(date(2026, 4, 20))}))\n"
-        )
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env.get("PYTHONPATH", ""))
-        env["NAUTICAL_CONFIG"] = str(config_path)
-        process = subprocess.run(
-            [sys.executable, "-c", script],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=10,
-        )
-        expect(
-            process.returncode == 0,
-            f"calendar TOML subprocess failed: {process.stderr}",
-        )
-        payload = json.loads(process.stdout)
-        expect(
-            payload == {"names": ["work"], "open": True, "closed": False},
-            f"unexpected TOML result: {payload!r}",
-        )
-
-
 def test_discovered_malformed_config_blocks_taskdata_reload():
     """A malformed Taskdata-discovered config must not silently select defaults."""
     with tempfile.TemporaryDirectory() as td:
@@ -471,7 +435,6 @@ TESTS = (
     test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
     test_config_fingerprint_invalidates_persistent_cache_keys,
     test_configuration_drift_detects_edit_and_removal,
-    test_business_calendar_toml_section_resolves_lazily,
     test_discovered_malformed_config_blocks_taskdata_reload,
     test_taskdata_reload_exposes_consistent_validated_fingerprints,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,

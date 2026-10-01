@@ -88,6 +88,39 @@ class RuntimeInitializationBoundaryTests(HookSubprocessFixture):
                     expected,
                 )
 
+    def test_business_calendar_toml_resolves_through_public_core_api(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config-nautical.toml"
+            config.write_text(
+                '[business_calendar.work]\n'
+                'anchor = "w:mon..fri"\n'
+                'omit = "y:04-20"\n',
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "NAUTICAL_CONFIG": str(config),
+                    "PYTHONPATH": str(ROOT),
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                }
+            )
+            result = self.run_python_code(
+                "import json\nfrom datetime import date\n"
+                "import nautical_core as core\n"
+                "policy = core.get_configured_business_calendar('WORK')\n"
+                "print(json.dumps({'names': sorted(core.business_calendar_definitions()), "
+                "'open': policy.is_business_day(date(2026, 4, 21)), "
+                "'closed': policy.is_business_day(date(2026, 4, 20))}))\n",
+                cwd=ROOT,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(result.stdout),
+                {"names": ["work"], "open": True, "closed": False},
+            )
+
     def test_explicit_config_is_loaded_on_runtime_access_not_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config-nautical.toml"

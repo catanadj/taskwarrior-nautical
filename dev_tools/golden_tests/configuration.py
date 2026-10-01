@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
-import io
 import json
-import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 
 from dev_tools.golden_tests.support import (
@@ -16,87 +11,8 @@ from dev_tools.golden_tests.support import (
     expect,
     extract_last_json,
     find_hook_file,
-    load_core_module,
     run_hook_script_raw,
 )
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def test_core_invalid_timezone_warns_and_falls_back_to_utc():
-    """Invalid timezone config falls back to UTC and emits a diagnostic warning."""
-    core_path = ROOT / "nautical_core" / "__init__.py"
-    with tempfile.TemporaryDirectory() as td:
-        config = Path(td) / "nautical.toml"
-        config.write_text('tz = "Invalid/Timezone"\n', encoding="utf-8")
-
-        previous_diag = os.environ.get("NAUTICAL_DIAG")
-        previous_cache = os.environ.get("XDG_CACHE_HOME")
-        os.environ["NAUTICAL_DIAG"] = "1"
-        os.environ["XDG_CACHE_HOME"] = td
-        try:
-            stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr):
-                module = load_core_module(
-                    str(core_path), "_nautical_core_bad_tz_fallback_test", str(config)
-                )
-            expect(
-                module.timezone_facade.current_timezone() is None,
-                "invalid timezone should use UTC fallback",
-            )
-            expect(
-                "invalid or unavailable" in module.scheduling_configuration_error(),
-                "invalid timezone should block Nautical scheduling",
-            )
-            expect(
-                "utc fallback" in stderr.getvalue().lower(),
-                f"expected timezone fallback warning: {stderr.getvalue()!r}",
-            )
-        finally:
-            if previous_diag is None:
-                os.environ.pop("NAUTICAL_DIAG", None)
-            else:
-                os.environ["NAUTICAL_DIAG"] = previous_diag
-            if previous_cache is None:
-                os.environ.pop("XDG_CACHE_HOME", None)
-            else:
-                os.environ["XDG_CACHE_HOME"] = previous_cache
-
-
-def test_explicit_unsafe_config_blocks_scheduling_with_actionable_error():
-    """An explicit world-writable config must not silently fall back to UTC."""
-    script = (
-        "import nautical_core\nprint(nautical_core.scheduling_configuration_error())\n"
-    )
-    with tempfile.TemporaryDirectory() as td:
-        config = Path(td) / "nautical.toml"
-        config.write_text('tz = "Pacific/Auckland"\n', encoding="utf-8")
-        try:
-            config.chmod(0o666)
-        except OSError:
-            return
-        env = os.environ.copy()
-        env.update({"NAUTICAL_CONFIG": str(config), "PYTHONPATH": str(ROOT)})
-        process = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            env=env,
-            cwd=str(ROOT),
-        )
-        expect(
-            process.returncode == 0,
-            f"unsafe config verification failed: {process.stderr[:500]!r}",
-        )
-        expect(
-            str(config) in process.stdout,
-            f"rejected config path missing: {process.stdout!r}",
-        )
-        expect(
-            "world-writable" in process.stdout,
-            f"rejected config reason missing: {process.stdout!r}",
-        )
 
 
 def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
@@ -201,8 +117,6 @@ def test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper():
 
 
 TESTS = (
-    test_core_invalid_timezone_warns_and_falls_back_to_utc,
-    test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
     test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel,
     test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,

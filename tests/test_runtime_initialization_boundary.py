@@ -289,6 +289,63 @@ class RuntimeInitializationBoundaryTests(HookSubprocessFixture):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(expected, result.stdout)
 
+    def test_invalid_timezone_uses_utc_fallback_and_blocks_scheduling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config-nautical.toml"
+            config.write_text('tz = "Invalid/Timezone"\n', encoding="utf-8")
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "NAUTICAL_CONFIG": str(config),
+                    "NAUTICAL_DIAG": "1",
+                    "PYTHONPATH": str(ROOT),
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "XDG_CACHE_HOME": directory,
+                }
+            )
+            result = self.run_python_code(
+                "import json, zoneinfo\nimport nautical_core as core\n"
+                "from nautical_core import core_config, timezone_facade\n"
+                "core_config.ensure_loaded()\n"
+                "timezone_facade.resolve(core_config.LOCAL_TZ_NAME, zoneinfo, "
+                "core_config.warn_once_per_day)\n"
+                "print(json.dumps({'timezone_missing': timezone_facade.current_timezone() is None, "
+                "'error': core.scheduling_configuration_error()}))\n",
+                cwd=ROOT,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["timezone_missing"])
+            self.assertIn("invalid or unavailable", payload["error"])
+            self.assertIn("utc fallback", result.stderr.lower())
+
+    def test_world_writable_explicit_config_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config-nautical.toml"
+            config.write_text('tz = "Pacific/Auckland"\n', encoding="utf-8")
+            try:
+                config.chmod(0o666)
+            except OSError as error:
+                self.skipTest(f"could not set world-writable mode: {error}")
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "NAUTICAL_CONFIG": str(config),
+                    "PYTHONPATH": str(ROOT),
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                }
+            )
+            result = self.run_python_code(
+                "import nautical_core as core\n"
+                "print(core.scheduling_configuration_error())\n",
+                cwd=ROOT,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(str(config), result.stdout)
+            self.assertIn("world-writable", result.stdout)
+
     def test_explicit_config_is_loaded_on_runtime_access_not_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config-nautical.toml"

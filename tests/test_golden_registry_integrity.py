@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "8c02254a33a35ca9ea4cbae373fdceb487dc2ee5c14b31c25b50d3690af85813"
+    "ee827261d5857c0dabf8e7f46fa577d2c4d120e98b4645c05954ff26a0b3b4ab"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -35,8 +35,8 @@ GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
 )
 EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
     "configuration and bootstrap": (
-        2,
-        "4c511a29e1033c3cfea0e1403adae144ad6fcee923121e8627a40f6fe4fdf2cf",
+        1,
+        "2e6634db21ef0824b2069d5a122310169c6ea361592970b98c8491b2e3017fb6",
     ),
     "install and deployment": (
         10,
@@ -59,8 +59,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "cb19880068ed0fe952886429d5e47c53516d9cffa740e4a1bbc6456c23af5568",
     ),
     "recurrence and hook integration": (
-        80,
-        "ebb1e05f676ff38f925251b44709bb7a5542a9a821d98ebb21a47d8123e95f81",
+        79,
+        "8bb77813560439c5fddad463bdc3027e458f3aa31738e962ba31ed1925af1292",
     ),
     "storage and filesystem safety": (
         1,
@@ -89,6 +89,8 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_taskdata_reload_keeps_validated_fingerprints_consistent",
         "test_taskdata_discovery_rejects_malformed_configuration",
         "test_operator_context_rejects_malformed_toml_and_invalid_timezone",
+        "test_invalid_timezone_uses_utc_fallback_and_blocks_scheduling",
+        "test_world_writable_explicit_config_fails_closed",
         "test_on_add_requires_integration_context_helper",
         "test_deploy_sanity_script_reports_ok",
         "test_deploy_sanity_enforces_removed_lifecycle_ownership",
@@ -975,8 +977,6 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
     def test_configuration_cases_are_owned_by_configuration_domain(self):
         configuration = importlib.import_module("dev_tools.golden_tests.configuration")
         expected = (
-            "test_core_invalid_timezone_warns_and_falls_back_to_utc",
-            "test_explicit_unsafe_config_blocks_scheduling_with_actionable_error",
             "test_hook_on_modify_uda_aliases_route_through_thin_wrapper",
             "test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel",
             "test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper",
@@ -1377,10 +1377,10 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
         self.assertEqual(len(top_level), 7)
-        self.assertEqual(len(registered), 171)
+        self.assertEqual(len(registered), 169)
         self.assertEqual(len(recurrence.TESTS), 1)
         self.assertEqual(len(operator.TESTS), 16)
-        self.assertEqual(len(configuration.TESTS), 5)
+        self.assertEqual(len(configuration.TESTS), 3)
         self.assertEqual(len(installer.TESTS), 9)
         modify = importlib.import_module("dev_tools.golden_tests.modify")
         self.assertEqual(len(modify.TESTS), 43)
@@ -1390,7 +1390,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(len(timeline.TESTS), 9)
         self.assertEqual(len(scheduling.TESTS), 16)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 0)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 695)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 697)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
         storage = importlib.import_module("dev_tools.golden_tests.storage")

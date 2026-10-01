@@ -44,37 +44,6 @@ def _run(command, *, environment=None, input_text=None, cwd=None, timeout=30):
     )
 
 
-def test_query_process_boundary_emits_one_json_document():
-    """The managed launcher keeps capability and invalid-request stdout strict."""
-    launcher = str(ROOT / "nautical")
-    env = {"PYTHONPATH": str(ROOT)}
-    capability = _run([sys.executable, launcher, "query", "capabilities"], environment=env)
-    if capability.returncode != 0 or len(capability.stdout.splitlines()) != 1 or capability.stderr:
-        raise AssertionError(f"capability protocol changed: {capability!r}")
-    if json.loads(capability.stdout).get("schema") != "nautical.query.capabilities":
-        raise AssertionError("capability schema changed")
-
-    inline = _run(
-        [sys.executable, launcher, "query", "occurrences", "--request", "{}"],
-        environment=env,
-    )
-    stdin = _run(
-        [sys.executable, launcher, "query", "occurrences", "--request", "-"],
-        input_text="{}",
-        environment=env,
-    )
-    if inline.returncode != 2 or stdin.returncode != 2 or inline.stdout != stdin.stdout:
-        raise AssertionError("inline and stdin invalid responses differ")
-    json.loads(inline.stdout)
-
-    diagnostic = _run(
-        [sys.executable, launcher, "query", "occurrences", "--request", "{}"],
-        environment={**env, "NAUTICAL_DIAG": "1"},
-    )
-    if diagnostic.returncode != 2 or not diagnostic.stderr.startswith("[nautical] query:"):
-        raise AssertionError("query diagnostics changed protocol")
-
-
 def test_operator_processes_concurrent_contracts_share_taskdata_safely():
     """Concurrent query/reconcile operators keep isolated JSON contracts."""
     with tempfile.TemporaryDirectory(prefix="nautical-concurrent-operators-") as taskdata:
@@ -689,7 +658,6 @@ TESTS = (
     test_operator_doctor_loads_colocated_queue_helper,
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
-    test_query_process_boundary_emits_one_json_document,
     test_operator_processes_concurrent_contracts_share_taskdata_safely,
     test_query_installed_layout_runs_outside_checkout,
     test_navigator_import_and_help_are_noninteractive_without_rich,

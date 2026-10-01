@@ -102,6 +102,58 @@ class OperatorProcessContractTests(HookSubprocessFixture):
         decoded = QueryCapabilities.from_mapping(payload)
         self.assertEqual(decoded.to_dict(), payload)
 
+    def test_query_launcher_keeps_one_document_stdout_and_separates_diagnostics(self) -> None:
+        """The managed query CLI keeps invalid-request forms equivalent and diagnostics on stderr."""
+        launcher = ROOT / "nautical"
+        environment = {**os.environ, "PYTHONPATH": str(ROOT)}
+
+        capabilities = subprocess.run(
+            [sys.executable, str(launcher), "query", "capabilities"],
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=15,
+        )
+        self.assertEqual(capabilities.returncode, 0, capabilities.stderr)
+        self.assertEqual(capabilities.stderr, "")
+        self.assertEqual(len(capabilities.stdout.splitlines()), 1)
+        self.assertEqual(json.loads(capabilities.stdout).get("schema"), "nautical.query.capabilities")
+
+        inline = subprocess.run(
+            [sys.executable, str(launcher), "query", "occurrences", "--request", "{}"],
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=15,
+        )
+        stdin = subprocess.run(
+            [sys.executable, str(launcher), "query", "occurrences", "--request", "-"],
+            input="{}",
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=15,
+        )
+        self.assertEqual(inline.returncode, 2)
+        self.assertEqual(stdin.returncode, 2)
+        self.assertEqual(inline.stderr, "")
+        self.assertEqual(stdin.stderr, "")
+        self.assertEqual(inline.stdout, stdin.stdout)
+        self.assertEqual(len(inline.stdout.splitlines()), 1)
+        self.assertEqual(json.loads(inline.stdout).get("schema"), "nautical.query.occurrences")
+
+        diagnostic = subprocess.run(
+            [sys.executable, str(launcher), "query", "occurrences", "--request", "{}"],
+            text=True,
+            capture_output=True,
+            env={**environment, "NAUTICAL_DIAG": "1"},
+            timeout=15,
+        )
+        self.assertEqual(diagnostic.returncode, 2)
+        self.assertEqual(len(diagnostic.stdout.splitlines()), 1)
+        self.assertEqual(json.loads(diagnostic.stdout).get("schema"), "nautical.query.occurrences")
+        self.assertTrue(diagnostic.stderr.startswith("[nautical] query:"), diagnostic.stderr)
+
     def test_process_interruption_is_typed_and_retryable(self) -> None:
         client = TaskwarriorClient((sys.executable, "-c", "import signal; signal.pause()"))
         result = client.execute((), purpose="interruption-test", timeout=0.1, attempts=1)

@@ -5,12 +5,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import textwrap
-import unittest
 
+from tests.support.hook_process import HookSubprocessFixture
 
 ROOT = Path(__file__).resolve().parents[1]
 _CONTEXT_SCRIPT = textwrap.dedent(
@@ -60,7 +58,7 @@ _CONTEXT_SCRIPT = textwrap.dedent(
 )
 
 
-class OnAddTaskdataContextTests(unittest.TestCase):
+class OnAddTaskdataContextTests(HookSubprocessFixture):
     def _resolve(
         self,
         hook_name: str,
@@ -73,16 +71,17 @@ class OnAddTaskdataContextTests(unittest.TestCase):
         environment["NAUTICAL_TRUST_CORE_PATH"] = "1"
         if taskdata_env is None:
             environment.pop("TASKDATA", None)
+            clear_environment = ("TASKDATA",)
         else:
             environment["TASKDATA"] = taskdata_env
-        result = subprocess.run(
-            [sys.executable, "-c", _CONTEXT_SCRIPT, str(ROOT), hook_name, *arguments],
+            clear_environment = ()
+        result = self.run_python_code(
+            _CONTEXT_SCRIPT,
+            (str(ROOT), hook_name, *arguments),
             cwd=ROOT,
             env=environment,
-            text=True,
-            capture_output=True,
+            clear_environment=clear_environment,
             timeout=20,
-            check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result.stdout)

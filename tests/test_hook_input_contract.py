@@ -135,6 +135,8 @@ class HookInputContractTests(HookSubprocessFixture):
             print("ok", file=sys.__stdout__)
             """
         ).replace("__RAW__", repr(raw))
+        # Keep the raw interpreter here: the contract specifically exercises
+        # the original sys.__stdout__ stream while replacing sys.stdout.
         process = subprocess.run(
             [sys.executable, "-c", script, str(ROOT)],
             cwd=ROOT,
@@ -145,7 +147,7 @@ class HookInputContractTests(HookSubprocessFixture):
         )
 
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
-        self.assertEqual(process.stdout.strip(), "ok")
+        self.assertEqual(process.stdout.strip(), "ok", process.stderr)
 
     def test_on_exit_ignores_malformed_and_oversized_input_silently(self) -> None:
         for payload in ("", "{not-json", "[]", "x" * (10 * 1024 * 1024 + 1)):
@@ -244,13 +246,11 @@ class HookInputContractTests(HookSubprocessFixture):
                 raise SystemExit(3)
             """
         ).replace("__EXPECTED__", repr(json.dumps(task)))
-        process = subprocess.run(
-            [sys.executable, "-c", script],
+        process = self.run_python_code(
+            script,
             input=json.dumps(task),
-            text=True,
-            capture_output=True,
+            cwd=ROOT,
             timeout=15,
-            check=False,
         )
 
         self.assertEqual(process.returncode, 0, process.stderr)

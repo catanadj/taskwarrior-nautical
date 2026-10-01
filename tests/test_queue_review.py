@@ -2,7 +2,6 @@ import tempfile
 import unittest
 from pathlib import Path
 import json
-import subprocess
 from contextlib import redirect_stdout
 from io import StringIO
 import sys
@@ -11,9 +10,10 @@ from unittest.mock import patch
 import nautical_core.queue_status_service as queue_status_service
 from nautical_core.queue_status_service import QueueStatusService
 from nautical_core.tools import nautical_queue_review
+from tests.support.hook_process import HookSubprocessFixture
 
 
-class QueueReviewTests(unittest.TestCase):
+class QueueReviewTests(HookSubprocessFixture):
     def test_human_review_output_is_compact_for_integrity_finding(self) -> None:
         payload = {
             "status": "found",
@@ -111,7 +111,7 @@ class QueueReviewTests(unittest.TestCase):
 
     def test_review_next_json_is_bounded_to_one_item(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            result = subprocess.run(
+            result = self.run_python_command(
                 ["python3", "nautical", "review", "--next", "--json", "--taskdata", directory],
                 capture_output=True, text=True, check=False,
             )

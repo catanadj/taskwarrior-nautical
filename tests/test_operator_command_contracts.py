@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 
+from tests.support.hook_process import HookSubprocessFixture
 
 ROOT = Path(__file__).resolve().parents[1]
 QUERY = ROOT / "nautical_core" / "tools" / "nautical_query.py"
@@ -16,7 +17,7 @@ DOCTOR = ROOT / "nautical_core" / "tools" / "nautical_doctor.py"
 RECONCILE = ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"
 
 
-class OperatorCommandContractTests(unittest.TestCase):
+class OperatorCommandContractTests(HookSubprocessFixture):
     def _run(
         self,
         path: Path,
@@ -24,14 +25,14 @@ class OperatorCommandContractTests(unittest.TestCase):
         env: dict[str, str] | None = None,
         input_text: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        merged = os.environ.copy()
-        merged.update(env or {})
-        return subprocess.run(
+        environment = os.environ.copy()
+        environment.update(env or {})
+        return self.run_python_command(
             [sys.executable, str(path), *args],
             input=input_text,
-            text=True,
             capture_output=True,
-            env=merged,
+            text=True,
+            env=environment,
             timeout=15,
         )
 

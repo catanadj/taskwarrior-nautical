@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import io
 import json
-import subprocess
-import sys
-import unittest
 from pathlib import Path
 
 import nautical_core.hook_protocol as hook_protocol
+from tests.support.hook_process import HookSubprocessFixture
 
 
-class HookProtocolTests(unittest.TestCase):
+class HookProtocolTests(HookSubprocessFixture):
     def test_protocol_file_load_does_not_import_the_core_package(self) -> None:
         root = Path(__file__).resolve().parents[1]
         protocol = root / "nautical_core" / "hook_protocol.py"
@@ -22,12 +20,10 @@ class HookProtocolTests(unittest.TestCase):
             "assert 'nautical_core' not in sys.modules"
         )
 
-        result = subprocess.run(
-            [sys.executable, "-c", code, str(protocol)],
+        result = self.run_python_code(
+            code,
+            (str(protocol),),
             cwd=root,
-            check=False,
-            capture_output=True,
-            text=True,
             timeout=5,
         )
 

@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import textwrap
-import unittest
 
+from tests.support.hook_process import HookSubprocessFixture
 
 ROOT = Path(__file__).resolve().parents[1]
 _MISSING_CONTEXT_SCRIPT = textwrap.dedent(
@@ -44,7 +42,7 @@ _MISSING_CONTEXT_SCRIPT = textwrap.dedent(
 )
 
 
-class HookContextRequirementTests(unittest.TestCase):
+class HookContextRequirementTests(HookSubprocessFixture):
     def _assert_context_helper_required(self, hook_name: str) -> None:
         with tempfile.TemporaryDirectory() as td:
             fake_core = Path(td) / "nautical_core"
@@ -53,13 +51,11 @@ class HookContextRequirementTests(unittest.TestCase):
                 "",
                 encoding="utf-8",
             )
-            result = subprocess.run(
-                [sys.executable, "-c", _MISSING_CONTEXT_SCRIPT, str(ROOT), hook_name, td],
+            result = self.run_python_code(
+                _MISSING_CONTEXT_SCRIPT,
+                (str(ROOT), hook_name, td),
                 cwd=ROOT,
-                text=True,
-                capture_output=True,
                 timeout=20,
-                check=False,
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

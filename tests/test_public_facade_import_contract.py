@@ -2,28 +2,24 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import subprocess
-import sys
 import unittest
 
+from tests.support.hook_process import HookSubprocessFixture
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class PublicFacadeImportContractTests(unittest.TestCase):
-    def _run_probe(self, source: str) -> subprocess.CompletedProcess[str]:
+class PublicFacadeImportContractTests(HookSubprocessFixture):
+    def _run_probe(self, source: str):
         environment = os.environ.copy()
         environment["PYTHONPATH"] = os.pathsep.join(
             part for part in (str(ROOT), environment.get("PYTHONPATH", "")) if part
         )
-        return subprocess.run(
-            [sys.executable, "-c", source],
+        return self.run_python_code(
+            source,
             cwd=ROOT,
             env=environment,
-            capture_output=True,
-            text=True,
             timeout=15,
-            check=False,
         )
 
     def test_core_import_defers_panel_colour_module(self) -> None:

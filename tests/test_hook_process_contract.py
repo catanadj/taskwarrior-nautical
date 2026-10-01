@@ -18,6 +18,61 @@ from tests.support.hook_process import ROOT, HookSubprocessFixture
 
 
 class HookProcessContractTests(HookSubprocessFixture):
+    def test_script_runner_forwards_cli_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "argv.py"
+            script.write_text(
+                "import json, sys\nprint(json.dumps(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            process = self.run_python_command(
+                [sys.executable, str(script), "--json", "value"],
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(json.loads(process.stdout), ["--json", "value"])
+
+    def test_python_command_runner_forwards_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "cwd.py"
+            script.write_text(
+                "import os\nprint(os.getcwd())\n",
+                encoding="utf-8",
+            )
+            process = self.run_python_command(
+                [sys.executable, str(script)],
+                cwd=temporary,
+            )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(Path(process.stdout.strip()), Path(temporary))
+
+    def test_python_code_runner_forwards_arguments(self) -> None:
+        process = self.run_python_code(
+            "import sys\nprint(sys.argv[1:])\n",
+            arguments=("contract-value",),
+            instrument_coverage=False,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(process.stdout.strip(), "['contract-value']")
+
+    def test_python_command_runner_supports_module_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as coverage_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "NAUTICAL_SUBPROCESS_COVERAGE_DIR": coverage_dir,
+                    "COVERAGE_FILE": str(Path(coverage_dir) / ".coverage"),
+                },
+            ):
+                process = self.run_python_command(
+                    [sys.executable, "-m", "json.tool"],
+                    input="{}",
+                )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(json.loads(process.stdout), {})
+        self.assertEqual(process.stderr, "")
+
     def test_plain_fast_paths_avoid_loading_core_and_preserve_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

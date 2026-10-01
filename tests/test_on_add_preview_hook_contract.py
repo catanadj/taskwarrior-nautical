@@ -9,10 +9,10 @@ import json
 import os
 from datetime import date, timezone
 from pathlib import Path
-import subprocess
 import sys
-import unittest
 from unittest.mock import patch
+
+from tests.support.hook_process import HookSubprocessFixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,8 +31,9 @@ def _load_add_hook():
     return module
 
 
-class OnAddPreviewHookContractTests(unittest.TestCase):
+class OnAddPreviewHookContractTests(HookSubprocessFixture):
     def setUp(self) -> None:
+        super().setUp()
         self._run_isolated = os.environ.get("NAUTICAL_ADD_HOOK_CONTRACT_CHILD") != "1"
         if self._run_isolated:
             return
@@ -58,14 +59,12 @@ class OnAddPreviewHookContractTests(unittest.TestCase):
         test_id = self.id()
         if test_id.startswith("test_on_add_preview_hook_contract."):
             test_id = f"tests.{test_id}"
-        result = subprocess.run(
+        result = self.run_python_command(
             [sys.executable, "-m", "unittest", test_id, "-q"],
             cwd=ROOT,
             env=environment,
-            text=True,
-            capture_output=True,
+            instrument_coverage=True,
             timeout=20,
-            check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

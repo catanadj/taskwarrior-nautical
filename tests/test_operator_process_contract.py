@@ -17,6 +17,7 @@ from nautical_core.installation_report import InstallationVerificationReport
 from nautical_core.operator_models import OperatorV2Result
 from nautical_core.query_models import QueryCapabilities
 from nautical_core.taskwarrior_client import TaskwarriorClient
+from tests.support.hook_process import HookSubprocessFixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,8 +30,14 @@ DEV_QUEUE_STATUS = ROOT / "dev_tools" / "nautical_queue_status.py"
 HEALTH_CHECK = ROOT / "dev_tools" / "nautical_health_check.py"
 
 
-class OperatorProcessContractTests(unittest.TestCase):
+class OperatorProcessContractTests(HookSubprocessFixture):
     def _run(self, path: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        if path.resolve().is_relative_to((ROOT / "nautical_core").resolve()):
+            return self.run_python_command(
+                [sys.executable, str(path), *args],
+                env=env,
+                timeout=15,
+            )
         merged = os.environ.copy()
         merged.update(env or {})
         return subprocess.run(

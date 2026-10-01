@@ -334,6 +334,9 @@ class ApiBindingContractTests(unittest.TestCase):
         parser_api = importlib.import_module("nautical_core.parser_api")
         scheduler_api = importlib.import_module("nautical_core.scheduler_api")
 
+        # Resolve the facade's configuration-backed key before building an
+        # owner snapshot so both calls observe the same runtime configuration.
+        facade_cache_key = facade.cache_key_for_task("w:mon", "skip")
         public_dnf = facade.parse_anchor_expr_to_dnf("w:mon")
         parser = parser_api.for_core(module=facade)
         scheduler = scheduler_api.for_core(module=facade)
@@ -352,7 +355,7 @@ class ApiBindingContractTests(unittest.TestCase):
         )
         self.assertEqual(
             cache.cache_key_for_task("w:mon", "skip"),
-            facade.cache_key_for_task("w:mon", "skip"),
+            facade_cache_key,
         )
 
 

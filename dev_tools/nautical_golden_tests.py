@@ -21,7 +21,7 @@ import sys, os, json, io, contextlib
 import random
 import tempfile
 from pathlib import Path
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta, timezone
 from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -45,8 +45,6 @@ from dev_tools.golden_tests.scheduling import TESTS as SCHEDULING_TESTS
 from dev_tools.golden_tests.support import (
     expect,
     test_operator_uow as _test_operator_uow,
-    load_hook_module as _load_hook_module,
-    find_hook_file as _find_hook_file,
     typed_command_result as _typed_command_result,
 )
 
@@ -257,39 +255,6 @@ def test_navigator_fallback_export_uses_empty_filter():
         expect(not any("all" in call for call in calls), f"invalid Taskwarrior 'all' filter remains: {calls!r}")
     finally:
         sys.modules.pop(module_name, None)
-
-
-def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
-    """add, modify, and Navigator should resolve the same symbolic slot and offset."""
-    import nautical_core.time_slots as time_slots
-
-    add_mod = _load_hook_module(_find_hook_file("on-add.nautical"), "_nautical_add_time_slots_parity_test")
-    modify_mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_time_slots_parity_test")
-    original_event = time_slots.astronomy.resolve_event
-    original_to_local = core.to_local
-    original_add_to_local = add_mod.core.to_local
-    original_modify_to_local = modify_mod.core.to_local
-    try:
-        time_slots.astronomy.resolve_event = lambda *_args, **_kwargs: datetime(2026, 7, 6, 18, 0, tzinfo=timezone.utc)
-        core.to_local = lambda value: value
-        add_mod.core.to_local = lambda value: value
-        modify_mod.core.to_local = lambda value: value
-        value = {"t": "sunset", "time_offset_minutes": 45}
-        expected = [(18, 45)]
-        expect(time_slots.resolve_time_slots(value, date(2026, 7, 6), to_local=core.to_local) == expected, "shared resolver drifted")
-        expect(add_mod._resolve_time_slots(value, date(2026, 7, 6)) == expected, "on-add resolver drifted")
-        modify_time = modify_mod._module("modify_time_effects")
-        expect(
-            modify_time.normalize_hhmm_list(
-                modify_time.time_slot_ports_for(modify_mod), value, date(2026, 7, 6)
-            ) == expected,
-            "on-modify resolver drifted",
-        )
-    finally:
-        time_slots.astronomy.resolve_event = original_event
-        core.to_local = original_to_local
-        add_mod.core.to_local = original_add_to_local
-        modify_mod.core.to_local = original_modify_to_local
 
 
 def test_navigator_projects_all_slots_in_a_time_window():
@@ -649,7 +614,6 @@ TESTS.extend([
     test_navigator_surfaces_configuration_drift_warning,
     test_navigator_reloads_validated_taskdata_configuration,
     test_navigator_fallback_export_uses_empty_filter,
-    test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_navigator_projects_all_slots_in_a_time_window,
     *SCHEDULING_TESTS[6:8],
     test_navigator_reads_through_read_only_invocation_repository,

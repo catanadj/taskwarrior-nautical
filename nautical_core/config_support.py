@@ -42,7 +42,7 @@ class ConfigReadResult:
         return self.state == "invalid"
 
 
-def env_flag_true(name: str, env_map: dict | None = None) -> bool:
+def env_flag_true(name: str, env_map: Mapping[str, Any] | None = None) -> bool:
     src = env_map if env_map is not None else os.environ
     try:
         raw = src.get(name, "") if hasattr(src, "get") else ""
@@ -128,7 +128,7 @@ def validated_user_dir(
     *,
     label: str,
     trust_env: str = "",
-    env_map: dict | None = None,
+    env_map: Mapping[str, Any] | None = None,
     warn_on_error: bool = True,
 ) -> str:
     raw = str(path_value or "").strip()

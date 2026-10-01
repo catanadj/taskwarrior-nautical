@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import importlib
 from types import MappingProxyType
-from typing import Any, TypedDict
+from typing import Any, Mapping, TypedDict
 
 from . import config_schema
 
@@ -70,7 +70,7 @@ class ConfigReloadResult(TypedDict, total=False):
     scheduler_fingerprint: str
 
 
-def env_flag_true(name: str, env_map: dict | None = None) -> bool:
+def env_flag_true(name: str, env_map: Mapping[str, Any] | None = None) -> bool:
     return _load_support_module("config_support").env_flag_true(name, env_map=env_map)
 
 
@@ -99,7 +99,7 @@ def validated_user_dir(
     *,
     label: str,
     trust_env: str = "",
-    env_map: dict | None = None,
+    env_map: Mapping[str, Any] | None = None,
     warn_on_error: bool = True,
 ) -> str:
     return _load_support_module("config_support").validated_user_dir(

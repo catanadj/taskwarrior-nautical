@@ -71,6 +71,11 @@ _LIFECYCLE_APPLICATION_NAMES = {
 }
 _DOMAIN_NAMES = {"common", "hint_models", "task_models", "diagnostic_models"}
 _BOUND_OWNER_APIS = {"parser_api", "scheduler_api", "cache_api"}
+# These adapters still use the package module as a mutable namespace carrier.
+_ROOT_NAMESPACE_IMPORTS = {
+    "nautical_core/add_anchor_compute.py": frozenset({"_PKG_PROXY"}),
+    "nautical_core/recurrence_evaluator.py": frozenset({"_PKG_PROXY"}),
+}
 
 
 @dataclass(frozen=True)
@@ -373,6 +378,32 @@ def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
                     "primary production modules may not depend on the compatibility implementation",
                     reference.line,
                 ))
+        if path.parent == root / "nautical_core":
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.ImportFrom)
+                    and node.level == 1
+                    and node.module is None
+                ):
+                    continue
+                for alias in node.names:
+                    if (
+                        not alias.name.startswith("_")
+                        or alias.name in _ROOT_NAMESPACE_IMPORTS.get(relative, ())
+                    ):
+                        continue
+                    owner_module = path.parent / f"{alias.name}.py"
+                    owner_package = path.parent / alias.name / "__init__.py"
+                    if owner_module.is_file() or owner_package.is_file():
+                        continue
+                    if layer not in facade_allowed:
+                        violations.append(ArchitectureViolation(
+                            relative,
+                            "nautical_core",
+                            layer,
+                            "internal production modules may not import private names from the root facade",
+                            node.lineno,
+                        ))
     return tuple(sorted(violations, key=lambda item: (item.importing_file, item.line, item.dependency)))
 
 

@@ -4,9 +4,12 @@ import json
 import os
 import sys
 import time
-from typing import Any
+from typing import Any, Mapping
 
-from . import _normalized_abspath, _validated_user_dir
+from .core_config import (
+    normalized_abspath as _normalized_abspath,
+    validated_user_dir as _validated_user_dir,
+)
 from .hook_bootstrap import env_int
 
 
@@ -33,7 +36,7 @@ def hook_arg_value(argv: list[str], keys: tuple[str, ...]) -> str:
 def resolve_task_data_context(
     *,
     argv: list[str] | None = None,
-    env: dict | None = None,
+    env: Mapping[str, Any] | None = None,
     tw_dir: str | None = None,
 ) -> tuple[str, bool, str]:
     """

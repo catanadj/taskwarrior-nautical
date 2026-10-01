@@ -396,6 +396,42 @@ facade.__all__
         self.assertFalse(result["ok"])
         self.assertEqual(result["violations"][0]["dependency"], "nautical_core")
 
+    def test_private_relative_root_facade_import_is_rejected_for_internal_owner(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nautical-architecture-contract-") as td:
+            root = Path(td)
+            package = root / "nautical_core"
+            package.mkdir()
+            (package / "__init__.py").write_text(
+                "_private_helper = object()\n", encoding="utf-8"
+            )
+            (package / "runtime.py").write_text(
+                "from . import _private_helper\n", encoding="utf-8"
+            )
+
+            violations = architecture_contract.validate(root)
+
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].importing_file, "nautical_core/runtime.py")
+        self.assertEqual(violations[0].dependency, "nautical_core")
+        self.assertIn("root facade", violations[0].rule)
+
+    def test_root_namespace_carrier_exception_is_limited_to_existing_adapters(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nautical-architecture-contract-") as td:
+            root = Path(td)
+            package = root / "nautical_core"
+            package.mkdir()
+            (package / "__init__.py").write_text(
+                "_PKG_PROXY = object()\n", encoding="utf-8"
+            )
+            (package / "runtime.py").write_text(
+                "from . import _PKG_PROXY\n", encoding="utf-8"
+            )
+
+            violations = architecture_contract.validate(root)
+
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].dependency, "nautical_core")
+
     def test_owner_namespace_reads_are_rejected_except_at_composition_adapters(self) -> None:
         with tempfile.TemporaryDirectory(prefix="nautical-architecture-contract-") as td:
             root = Path(td)

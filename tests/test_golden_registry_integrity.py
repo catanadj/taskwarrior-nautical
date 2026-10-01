@@ -846,6 +846,29 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         }
         self.assertFalse(legacy_helpers & definitions)
 
+    def test_runner_does_not_define_golden_case_bodies(self):
+        source = Path(self.golden.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        top_level_cases = [
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+        ]
+        self.assertEqual(top_level_cases, [])
+
+    def test_navigator_cases_are_owned_by_their_golden_domain(self):
+        navigator = importlib.import_module("dev_tools.golden_tests.navigator")
+        expected = (
+            "test_navigator_surfaces_configuration_drift_warning",
+            "test_navigator_reloads_validated_taskdata_configuration",
+            "test_navigator_fallback_export_uses_empty_filter",
+            "test_navigator_projects_all_slots_in_a_time_window",
+            "test_navigator_reads_through_read_only_invocation_repository",
+            "test_navigator_uses_anchor_and_anchor_file_sources",
+        )
+        self.assertEqual(tuple(test.__name__ for test in navigator.TESTS), expected)
+
     def test_golden_domains_do_not_import_the_runner_as_a_helper_library(self):
         domain_dir = Path(self.golden.__file__).parent / "golden_tests"
         offenders = []
@@ -893,14 +916,15 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_navigator_anchor_source_golden_restores_shared_core_state(self):
-        core = self.golden.core
+        navigator = importlib.import_module("dev_tools.golden_tests.navigator")
+        core = navigator.core
         previous = (
             core._FACADE_CONFIG_SYNCED,
             core.ANCHOR_FILE_DIR,
             core._core_config.ANCHOR_FILE_DIR,
         )
         try:
-            self.golden.test_navigator_uses_anchor_and_anchor_file_sources()
+            navigator.test_navigator_uses_anchor_and_anchor_file_sources()
             self.assertEqual(
                 (
                     core._FACADE_CONFIG_SYNCED,
@@ -1379,7 +1403,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         storage = importlib.import_module("dev_tools.golden_tests.storage")
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
-        self.assertEqual(len(top_level), 6)
+        self.assertEqual(len(top_level), 0)
         self.assertEqual(len(registered), 165)
         self.assertEqual(len(operator.TESTS), 14)
         self.assertEqual(len(configuration.TESTS), 3)

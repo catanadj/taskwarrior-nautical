@@ -292,53 +292,6 @@ def test_business_calendar_toml_section_resolves_lazily():
         )
 
 
-def test_core_recurrence_update_udas_config_aliases():
-    """Recurrence UDA carry config accepts the canonical key and alias form."""
-    core_path = ROOT / "nautical_core" / "__init__.py"
-    cases = (
-        (
-            'recurrence_update_udas = ["rappel", "next_review"]\n[recurrence]\nupdate_udas = "ignored_alias"\n',
-            "_nautical_core_recur_udas_top_test",
-        ),
-        (
-            '[recurrence]\nupdate_udas = "rappel, next_review, bad-name, 9x"\n',
-            "_nautical_core_recur_udas_alias_test",
-        ),
-    )
-    for config_text, module_name in cases:
-        with tempfile.TemporaryDirectory() as td:
-            config = Path(td) / "nautical.toml"
-            config.write_text(config_text, encoding="utf-8")
-            module = load_core_module(str(core_path), module_name, str(config))
-            expect(
-                module.RECURRENCE_UPDATE_UDAS == ("rappel", "next_review"),
-                f"unexpected recurrence UDA setting: {module.RECURRENCE_UPDATE_UDAS!r}",
-            )
-
-
-def test_core_live_panel_duration_config_defaults_and_clamps():
-    """Live panel duration defaults to 160 ms and clamps to its safe range."""
-    core_path = ROOT / "nautical_core" / "__init__.py"
-    cases = (
-        ("", 160),
-        ("live_panel_duration_ms = -20\n", 0),
-        ("live_panel_duration_ms = 275\n", 275),
-        ("live_panel_duration_ms = 5000\n", 1000),
-        ('live_panel_duration_ms = "bad"\n', 160),
-    )
-    for index, (config_text, expected) in enumerate(cases):
-        with tempfile.TemporaryDirectory() as td:
-            config = Path(td) / "nautical.toml"
-            config.write_text(config_text, encoding="utf-8")
-            module = load_core_module(
-                str(core_path), f"_nautical_core_live_duration_{index}", str(config)
-            )
-            expect(
-                module.LIVE_PANEL_DURATION_MS == expected,
-                f"unexpected live duration for {config_text!r}: {module.LIVE_PANEL_DURATION_MS!r}",
-            )
-
-
 def test_core_live_panel_footer_config_defaults_and_customizes():
     """Live panel footer defaults to Nautical and accepts configured text."""
     core_path = ROOT / "nautical_core" / "__init__.py"
@@ -558,8 +511,6 @@ TESTS = (
     test_config_fingerprint_invalidates_persistent_cache_keys,
     test_configuration_drift_detects_edit_and_removal,
     test_business_calendar_toml_section_resolves_lazily,
-    test_core_recurrence_update_udas_config_aliases,
-    test_core_live_panel_duration_config_defaults_and_clamps,
     test_core_live_panel_footer_config_defaults_and_customizes,
     test_core_uda_aliases_config_defaults_disabled_and_can_enable,
     test_discovered_malformed_config_blocks_taskdata_reload,

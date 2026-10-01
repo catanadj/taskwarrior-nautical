@@ -4,7 +4,10 @@ import os
 import re
 import sys
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rich.console import RenderableType
 
 
 _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
@@ -392,7 +395,7 @@ def _build_rich_panel(
     live: bool = False,
     active_row: int | None = None,
     live_footer: str = "NAUTICAL",
-) -> object:
+) -> RenderableType:
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
@@ -464,12 +467,7 @@ def _build_rich_panel(
 
         t.add_row(label_text, value_text)
 
-    panel_kwargs = {}
-    if live and footer:
-        panel_kwargs = {
-            "subtitle": Text(footer, style=f"dim {tstyle}"),
-            "subtitle_align": "right",
-        }
+    subtitle = Text(footer, style=f"dim {tstyle}") if live and footer else None
 
     return Panel(
         t,
@@ -477,7 +475,8 @@ def _build_rich_panel(
         border_style=f"bold {border}" if live and active_row is not None else border,
         expand=False,
         padding=(0, 1),
-        **panel_kwargs,
+        subtitle=subtitle,
+        subtitle_align="right" if subtitle is not None else "center",
     )
 
 

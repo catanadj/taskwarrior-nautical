@@ -47,7 +47,9 @@ def load_core(host: Any) -> None:
     initialize_core(host)
     core = host.core
     try:
-        core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
+        core._import_sibling("core_config").warn_once_per_day_any(
+            "core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}"
+        )
     except Exception:
         pass
     try:

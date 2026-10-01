@@ -12,6 +12,8 @@ import sys
 from typing import Any, Callable, Mapping, Protocol, TypeAlias
 import uuid
 
+from . import timezone_facade
+
 
 class IntegrationContextError(RuntimeError):
     """Raised when a full Nautical invocation cannot be validated safely."""
@@ -70,7 +72,7 @@ class IntegrationRuntime:
             ports[name] = value
 
         def timezone_state() -> tuple[tzinfo | None, str]:
-            local_timezone = getattr(facade, "_LOCAL_TZ", None)
+            local_timezone = timezone_facade.current_timezone()
             timezone_name = str(getattr(facade, "LOCAL_TZ_NAME", "") or "").strip()
             return local_timezone if isinstance(local_timezone, tzinfo) else None, timezone_name
 

@@ -421,10 +421,10 @@ def test_on_modify_carry_wall_clock_across_dst():
         return
 
     previous_tz_name = mod.core.LOCAL_TZ_NAME
-    previous_tz = mod.core._LOCAL_TZ
+    previous_tz = mod.timezone_facade._local_timezone
     try:
         mod.core.LOCAL_TZ_NAME = "America/New_York"
-        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+        mod.timezone_facade._local_timezone = ZoneInfo("America/New_York")
 
         due_local = date(2025, 3, 9)
         due_utc = mod.core.build_local_datetime(due_local, (1, 30))
@@ -445,7 +445,7 @@ def test_on_modify_carry_wall_clock_across_dst():
         expect(wait_local.hour == 3 and wait_local.minute == 30, f"unexpected local wait: {wait_local}")
     finally:
         mod.core.LOCAL_TZ_NAME = previous_tz_name
-        mod.core._LOCAL_TZ = previous_tz
+        mod.timezone_facade._local_timezone = previous_tz
 
 
 
@@ -462,10 +462,10 @@ def test_on_modify_build_child_carries_until_across_dst():
         return
 
     previous_tz_name = mod.core.LOCAL_TZ_NAME
-    previous_tz = mod.core._LOCAL_TZ
+    previous_tz = mod.timezone_facade._local_timezone
     try:
         mod.core.LOCAL_TZ_NAME = "America/New_York"
-        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+        mod.timezone_facade._local_timezone = ZoneInfo("America/New_York")
 
         parent_due = mod.core.build_local_datetime(date(2025, 3, 8), (9, 0))
         parent_until = mod.core.build_local_datetime(date(2025, 3, 9), (17, 0))
@@ -511,7 +511,7 @@ def test_on_modify_build_child_carries_until_across_dst():
         )
     finally:
         mod.core.LOCAL_TZ_NAME = previous_tz_name
-        mod.core._LOCAL_TZ = previous_tz
+        mod.timezone_facade._local_timezone = previous_tz
 
 
 
@@ -691,10 +691,10 @@ def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
         return
 
     previous_tz_name = mod.core.LOCAL_TZ_NAME
-    previous_tz = mod.core._LOCAL_TZ
+    previous_tz = mod.timezone_facade._local_timezone
     try:
         mod.core.LOCAL_TZ_NAME = "America/New_York"
-        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+        mod.timezone_facade._local_timezone = ZoneInfo("America/New_York")
         parent_due = mod.core.build_local_datetime(date(2025, 3, 8), (9, 0))
         parent_until = mod.core.build_local_datetime(date(2025, 3, 9), (17, 0)) + timedelta(seconds=1)
         child_due = mod.core.build_local_datetime(date(2025, 3, 15), (9, 0))
@@ -730,7 +730,7 @@ def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
         )
     finally:
         mod.core.LOCAL_TZ_NAME = previous_tz_name
-        mod.core._LOCAL_TZ = previous_tz
+        mod.timezone_facade._local_timezone = previous_tz
 
 
 
@@ -1736,11 +1736,11 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
 
     prev_cfg = getattr(mod, "_RECURRENCE_UPDATE_UDAS", ())
     prev_tz_name = getattr(mod.core, "LOCAL_TZ_NAME", None)
-    prev_local_tz = getattr(mod.core, "_LOCAL_TZ", None)
+    prev_local_tz = mod.timezone_facade.current_timezone()
     try:
         mod._RECURRENCE_UPDATE_UDAS = ("rappel",)
         mod.core.LOCAL_TZ_NAME = "America/New_York"
-        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+        mod.timezone_facade._local_timezone = ZoneInfo("America/New_York")
 
         due_local = date(2025, 3, 9)
         due_utc = mod.core.build_local_datetime(due_local, (1, 30))
@@ -1774,7 +1774,7 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
     finally:
         mod._RECURRENCE_UPDATE_UDAS = prev_cfg
         mod.core.LOCAL_TZ_NAME = prev_tz_name
-        mod.core._LOCAL_TZ = prev_local_tz
+        mod.timezone_facade._local_timezone = prev_local_tz
 
 TESTS = TESTS + (
     test_on_modify_build_child_transitions_flex_to_all,
@@ -1800,10 +1800,10 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
 
     captured = {}
     mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
-    prev_local_tz = getattr(mod.core, "_LOCAL_TZ", None)
+    prev_local_tz = mod.timezone_facade.current_timezone()
     prev_panel_mode = mod.core.PANEL_MODE
     try:
-        mod.core._LOCAL_TZ = None
+        mod.timezone_facade._local_timezone = None
         mod.core.PANEL_MODE = "panel"
         mod._presentation_effects.render_anchor_completion_feedback(
             new={"anchor": "w:mon", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
@@ -1828,7 +1828,7 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
             base_no=1,
         )
     finally:
-        mod.core._LOCAL_TZ = prev_local_tz
+        mod.timezone_facade._local_timezone = prev_local_tz
         mod.core.PANEL_MODE = prev_panel_mode
 
     fb = captured.get("fb") or []

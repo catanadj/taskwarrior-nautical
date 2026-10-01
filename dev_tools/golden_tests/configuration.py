@@ -43,7 +43,7 @@ def test_core_invalid_timezone_warns_and_falls_back_to_utc():
                     str(core_path), "_nautical_core_bad_tz_fallback_test", str(config)
                 )
             expect(
-                getattr(module, "_LOCAL_TZ", None) is None,
+                module.timezone_facade.current_timezone() is None,
                 "invalid timezone should use UTC fallback",
             )
             expect(

@@ -84,7 +84,6 @@ def _bind_lazy_api_aliases(bundle: Any) -> None:
 if TYPE_CHECKING:
     # These names are installed by lazy API bundles below.  They are declared
     # for diagnostics/cache helpers without eagerly resolving those bundles.
-    _normalize_spec_for_acf_cached: Any
     _year_pair_cached: Any
     _parse_y_token_cached: Any
     expand_monthly_cached: Any
@@ -113,7 +112,6 @@ _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[tuple[int, int, int, int], dict, float]] = OrderedDict()
 _core_config = _LazySibling("core_config")
 _configuration_facade = _LazySibling("configuration_facade")
-_cache_facade = _LazySibling("cache_facade")
 _timezone_facade = _LazySibling("timezone_facade")
 
 
@@ -138,8 +136,6 @@ _warn_env_config_missing = _config_call("_warn_env_config_missing")
 _normalize_keys = _config_call("_normalize_keys")
 _load_config = _config_call("_load_config")
 _nautical_cache_dir = _config_call("nautical_cache_dir")
-_warn_once_per_day = _config_call("warn_once_per_day")
-_warn_once_per_day_any = _config_call("warn_once_per_day_any")
 _warn_toml_parse_error = _config_call("_warn_toml_parse_error")
 _get_config = _config_call("_get_config")
 def effective_config_snapshot() -> dict:
@@ -161,35 +157,6 @@ _conf_csv_or_list = _config_call("conf_csv_or_list")
 _conf_uda_field_list = _config_call("conf_uda_field_list")
 _trueish = _config_call("trueish")
 _ttl_lru_cache = _config_call("ttl_lru_cache")
-
-
-def _emit_cache_metrics() -> None:
-    _cache_facade.emit_metrics(
-        (
-            ("normalize_acf", _acf_api._normalize_spec_for_acf_cached),
-            ("year_pair", _acf_api._year_pair_cached),
-            ("parse_y_token", _parser_support_api._parse_y_token_cached),
-            ("expand_monthly", _scheduler_api.expand_monthly_cached),
-            ("expand_weekly", _scheduler_api.expand_weekly_cached),
-        ),
-        _warn_once_per_day,
-    )
-
-
-def _clear_all_caches() -> None:
-    _cache_facade.clear_all(
-        _CACHE_LOAD_MEM,
-        (
-            _acf_api._normalize_spec_for_acf_cached,
-            _acf_api._year_pair_cached,
-            _parser_support_api._parse_y_token_cached,
-            _scheduler_api.expand_monthly_cached,
-            _scheduler_api.expand_weekly_cached,
-            _cache_api._cache_key_for_task_cached,
-        ),
-        position_selection=_position_selection,
-        selection_matcher=_scheduler_api._selection_inner_matcher,
-    )
 
 
 # -------- UI helpers ----------------------------------------------------------
@@ -337,16 +304,11 @@ try:
 except Exception:
     _zoneinfo = None
 
-_LOCAL_TZ: Any = None
-_TIMEZONE_CONFIG_ERROR = ""
-
-
 def _refresh_timezone() -> None:
-    global _LOCAL_TZ, _TIMEZONE_CONFIG_ERROR
-    _LOCAL_TZ, _TIMEZONE_CONFIG_ERROR = _timezone_facade.resolve(
+    _timezone_facade.resolve(
         LOCAL_TZ_NAME,
         _zoneinfo,
-        _warn_once_per_day,
+        _core_config.warn_once_per_day,
     )
 
 
@@ -359,7 +321,7 @@ def scheduling_configuration_error() -> str:
     return _configuration_facade.scheduling_error(
         _core_config,
         CONFIG_ERROR,
-        _TIMEZONE_CONFIG_ERROR,
+        _timezone_facade.configuration_error(),
     )
 
 
@@ -768,7 +730,6 @@ _acf_api = _LazyApiBundle(
         "_year_pair_cached",
         "_year_pair",
         "_normalize_spec_for_acf_uncached",
-        "_normalize_spec_for_acf_cached",
         "_normalize_spec_for_acf",
         "_mods_to_acf",
         "_acf_mods_to_string",
@@ -1029,7 +990,6 @@ _cache_api = _LazyApiBundle(
         "_safe_lock_stale_pid",
         "_safe_lock_fcntl_context",
         "_safe_lock_excl_context",
-        "_cache_lock",
         "_is_atom_like",
         "_is_dnf_like",
         "_clone_mod_value",
@@ -1039,10 +999,8 @@ _cache_api = _LazyApiBundle(
         "_clone_cache_payload",
         "_normalize_dnf_cached",
         "_cache_payload_shape_ok",
-        "_cache_atomic_replace",
         "_cache_dir",
         "_cache_key",
-        "_cache_path",
         "_cache_lock_path",
         "_quarantine_cache",
         "_cache_load_impl",

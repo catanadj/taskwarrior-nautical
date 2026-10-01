@@ -20,6 +20,18 @@ from nautical_core.add_anchor_preview import (
     handle_anchor_preview_on_add,
 )
 
+ROOT_TEST_SEAMS = {
+    "_LOCAL_TZ",
+    "_cache_atomic_replace",
+    "_cache_lock",
+    "_cache_path",
+    "_clear_all_caches",
+    "_emit_cache_metrics",
+    "_normalize_spec_for_acf_cached",
+    "_warn_once_per_day",
+    "_warn_once_per_day_any",
+}
+
 
 def _private_facade_accesses(source: str, filename: str) -> list[tuple[int, str]]:
     tree = ast.parse(source, filename=filename)
@@ -83,6 +95,74 @@ def _private_facade_accesses(source: str, filename: str) -> list[tuple[int, str]
 
 
 class ArchitectureContractTests(unittest.TestCase):
+    def test_production_modules_do_not_read_root_test_seams(self) -> None:
+        repo_root = Path(__file__).parents[1]
+        roots = (repo_root / "nautical_core", repo_root / "dev_tools")
+        test_seams = ROOT_TEST_SEAMS
+        violations: list[str] = []
+        for root in roots:
+            for path in sorted(root.rglob("*.py")):
+                if path.name == "__init__.py":
+                    continue
+                source = path.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(path))
+                aliases = {
+                    alias.asname or alias.name.split(".", 1)[0]
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Import)
+                    for alias in node.names
+                    if alias.name == "nautical_core"
+                }
+
+                def is_core_namespace(node: ast.AST) -> bool:
+                    return (
+                        isinstance(node, ast.Name)
+                        and (node.id in aliases or node.id in {"core", "facade"})
+                    ) or (isinstance(node, ast.Attribute) and node.attr == "core")
+
+                for node in ast.walk(tree):
+                    name = None
+                    if isinstance(node, ast.Attribute) and node.attr in test_seams:
+                        if is_core_namespace(node.value):
+                            name = node.attr
+                    elif (
+                        isinstance(node, ast.Subscript)
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id == "core"
+                        and isinstance(node.slice, ast.Constant)
+                        and node.slice.value in test_seams
+                    ):
+                        name = node.slice.value
+                    elif isinstance(node, ast.Call) and node.args:
+                        if (
+                            isinstance(node.func, ast.Name)
+                            and node.func.id == "getattr"
+                            and len(node.args) > 1
+                            and is_core_namespace(node.args[0])
+                            and isinstance(node.args[1], ast.Constant)
+                            and node.args[1].value in test_seams
+                        ):
+                            name = node.args[1].value
+                        elif (
+                            isinstance(node.func, ast.Attribute)
+                            and node.func.attr == "get"
+                            and is_core_namespace(node.func.value)
+                            and isinstance(node.args[0], ast.Constant)
+                            and node.args[0].value in test_seams
+                        ):
+                            name = node.args[0].value
+                    if name is not None:
+                        violations.append(
+                            f"{path.relative_to(repo_root)}:{node.lineno}: {name}"
+                        )
+
+        self.assertEqual(
+            violations,
+            [],
+            "production modules must use owner dependencies, not root test seams:\n"
+            + "\n".join(violations),
+        )
+
     def test_owner_contracts_do_not_access_private_facade_exports(self) -> None:
         tests = Path(__file__).parent
         private_reads: dict[str, list[str]] = {}
@@ -101,10 +181,6 @@ class ArchitectureContractTests(unittest.TestCase):
             "recurrence/test_season_calendar_contracts.py": [
                 "_refresh_facade_config_exports",
                 "_refresh_facade_config_exports",
-            ],
-            "recurrence/test_scheduler_cross_path_conformance.py": [
-                "_LOCAL_TZ",
-                "_LOCAL_TZ",
             ],
         }
         private_reads = {path: names for path, names in private_reads.items() if names}

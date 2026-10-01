@@ -175,16 +175,16 @@ def test_local_datetime_non_hour_dst_gap_is_shared_by_modify():
 
     hook = find_hook_file("on-modify.nautical")
     mod = load_hook_module(hook, "_nautical_modify_non_hour_dst_gap_test")
-    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ
+    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone
     try:
         mod.core.LOCAL_TZ_NAME = "Australia/Lord_Howe"
-        mod.core._LOCAL_TZ = zone
+        mod.timezone_facade._local_timezone = zone
         effects = mod._module("modify_datetime_effects")
         carried = effects.local_naive_to_utc(
             effects.datetime_effect_ports_for(mod), datetime(2026, 10, 4, 2, 15)
         )
     finally:
-        mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ = old_name, old_tz
+        mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone = old_name, old_tz
     carried_local = carried.astimezone(zone)
     expect(
         (carried_local.hour, carried_local.minute) == (2, 45),
@@ -197,10 +197,10 @@ def test_modify_completion_advances_past_second_dst_fold():
     hook = find_hook_file("on-modify.nautical")
     mod = load_hook_module(hook, "_nautical_modify_second_fold_completion_test")
     zone = ZoneInfo("Europe/Bucharest")
-    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ
+    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone
     try:
         mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
-        mod.core._LOCAL_TZ = zone
+        mod.timezone_facade._local_timezone = zone
         due = datetime(2026, 10, 25, 3, 0, tzinfo=zone, fold=0)
         completed = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
         child_due, _meta, _dnf = compute_anchor_child_due(
@@ -215,7 +215,7 @@ def test_modify_completion_advances_past_second_dst_fold():
             },
         )
     finally:
-        mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ = old_name, old_tz
+        mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone = old_name, old_tz
     child_local = child_due.astimezone(zone)
     expect(
         child_local.date() == date(2026, 11, 1)
@@ -229,10 +229,10 @@ def test_modify_overnight_window_advances_past_second_dst_fold():
     hook = find_hook_file("on-modify.nautical")
     mod = load_hook_module(hook, "_nautical_modify_overnight_second_fold_test")
     zone = ZoneInfo("Europe/Bucharest")
-    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ
+    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone
     try:
         mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
-        mod.core._LOCAL_TZ = zone
+        mod.timezone_facade._local_timezone = zone
         dnf = mod.core.validate_anchor_expr_strict("w:sat@t=22:20..03:20/6")
         cursor = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
         schedule = mod._module("modify_schedule_effects")
@@ -255,7 +255,7 @@ def test_modify_overnight_window_advances_past_second_dst_fold():
             fallback_hhmm=(22, 20),
         )
     finally:
-        mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ = old_name, old_tz
+        mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone = old_name, old_tz
     expect(
         result.date() == date(2026, 10, 31)
         and (result.hour, result.minute) == (22, 20),
@@ -449,8 +449,8 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
     season_support.configure_hemisphere("north")
     mod.core.SEASON_HEMISPHERE = "north"
 
-    previous_tz = mod.core._LOCAL_TZ
-    mod.core._LOCAL_TZ = ZoneInfo("Europe/Helsinki")
+    previous_tz = mod.timezone_facade._local_timezone
+    mod.timezone_facade._local_timezone = ZoneInfo("Europe/Helsinki")
     expression = "(w:mon)@in-spring=first,last@t=09:00,17:00"
 
     def stamp(day, hhmm):
@@ -503,7 +503,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
         expect(flex_meta.get("basis") == "flex", f"flex metadata drifted: {flex_meta}")
         expect(flex_meta.get("source") == "anchor", f"flex mode source drifted: {flex_meta}")
 
-        evaluator = evaluator_for_fixture(common, timezone=mod.core._LOCAL_TZ)
+        evaluator = evaluator_for_fixture(common, timezone=mod.timezone_facade._local_timezone)
         for mode, hook_due, hook_meta in (
             ("all", all_due, all_meta),
             ("skip", skip_due, skip_meta),
@@ -565,7 +565,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
         expect("2027-03-01" in timeline, f"timeline omitted seasonal child: {timeline}")
         expect("2027-05-31" in timeline, f"timeline omitted later spring slot: {timeline}")
     finally:
-        mod.core._LOCAL_TZ = previous_tz
+        mod.timezone_facade._local_timezone = previous_tz
         mod.core.SEASON_HEMISPHERE = previous_hemisphere
         season_support.configure_hemisphere(previous_hemisphere)
 
@@ -601,7 +601,7 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
 
             evaluator = evaluator_for_fixture(
                 parent,
-                timezone=mod.core._LOCAL_TZ,
+                timezone=mod.timezone_facade._local_timezone,
                 anchor_file_dir=str(anchor_dir),
             )
             result = evaluator.select_mode(
@@ -731,7 +731,7 @@ def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
 
             evaluator = evaluator_for_fixture(
                 parent,
-                timezone=mod.core._LOCAL_TZ,
+                timezone=mod.timezone_facade._local_timezone,
                 anchor_file_dir=str(anchor_dir),
             )
             result = evaluator.select_mode(

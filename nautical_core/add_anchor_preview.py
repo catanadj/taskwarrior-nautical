@@ -739,11 +739,11 @@ def handle_anchor_file_preview_on_add(
     panel("⚓︎ Anchor Preview", format_anchor_rows(rows), kind="preview_anchor", task=task)
 
 
-def _timezone_fallback_warning_needed(core: Any, anchor_str: str, anchor_file_str: str) -> bool:
+def _timezone_fallback_warning_needed(anchor_str: str, anchor_file_str: str) -> bool:
     from .modify_models import TaskView
 
     task = TaskView.from_mapping({"anchor": anchor_str, "anchor_file": anchor_file_str})
-    return bool(panel_diagnostics.recurrence_timezone_warning(core, task))
+    return bool(panel_diagnostics.recurrence_timezone_warning(task))
 
 
 def _append_dst_adjustment_row(

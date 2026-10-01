@@ -575,6 +575,9 @@ def load_core_module(path: str, module_name: str, config_path: str):
             sys.path.insert(0, root)
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
+        module.timezone_facade = importlib.import_module(
+            f"{module_name}.timezone_facade"
+        )
         refresh = getattr(module, "_refresh_facade_config_exports", None)
         if callable(refresh):
             try:
@@ -794,6 +797,11 @@ def load_hook_module(path: str, module_name: str):
     load_core = getattr(module, "_load_core", None)
     if callable(load_core) and os.path.basename(path) in {"add_impl.py", "modify_impl.py", "exit_impl.py"}:
         load_core()
+    core_module = getattr(module, "core", None)
+    if core_module is not None:
+        module.timezone_facade = importlib.import_module(
+            f"{core_module.__package__}.timezone_facade"
+        )
     if os.path.basename(path) == "modify_impl.py":
         module._completion_effects = _BoundCompletionEffects(module)
         module._transition_effects = _BoundTransitionEffects(module)

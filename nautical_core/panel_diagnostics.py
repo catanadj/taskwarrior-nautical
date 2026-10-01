@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from . import timezone_facade
 from .modify_models import TaskView
 
 
-def recurrence_timezone_warning(core: Any, task: TaskView) -> str:
-    if getattr(core, "_LOCAL_TZ", None) is not None:
+def recurrence_timezone_warning(task: TaskView) -> str:
+    if timezone_facade.current_timezone() is not None:
         return ""
     if not _has_recurrence_source(task):
         return ""
@@ -61,7 +62,7 @@ def file_source_warnings(core: Any, task: TaskView) -> list[str]:
 
 def panel_warnings(core: Any, task: TaskView, *, include_files: bool = True) -> list[str]:
     warnings: list[str] = []
-    tz_warning = recurrence_timezone_warning(core, task)
+    tz_warning = recurrence_timezone_warning(task)
     if tz_warning:
         warnings.append(tz_warning)
     warnings.extend(config_warnings())

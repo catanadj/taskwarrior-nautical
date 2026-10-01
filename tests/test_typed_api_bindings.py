@@ -118,11 +118,11 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 87)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 87)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 78)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 78)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "e41ebc7ca72a83cdefbd789c94cb13e4c45de85e3ae381c5e4db0e616675a5b4",
+            "4e095b6a77cbcadfd929e09d3fe99666a84d199a630fbf554aad1bd36f7faf55",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
@@ -163,6 +163,29 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertFalse(hasattr(facade, "_fatal_bad_colon_in_year_tail"))
         self.assertFalse(hasattr(facade, "_warn_rate_limited_any"))
         self.assertFalse(hasattr(facade, "validate_scheduling_configuration"))
+
+    def test_root_facade_exposes_no_test_seam_exports(self) -> None:
+        import nautical_core as facade
+
+        test_seams = {
+            name
+            for name, category in compat_api.PUBLIC_EXPORT_CATEGORIES.items()
+            if category == "test_seam"
+        }
+        self.assertEqual(test_seams, set())
+        for name in (
+            "_LOCAL_TZ",
+            "_cache_atomic_replace",
+            "_cache_lock",
+            "_cache_path",
+            "_clear_all_caches",
+            "_emit_cache_metrics",
+            "_normalize_spec_for_acf_cached",
+            "_warn_once_per_day",
+            "_warn_once_per_day_any",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(facade, name))
 
     def test_root_facade_does_not_export_unconsumed_owner_helpers(self) -> None:
         import nautical_core as facade

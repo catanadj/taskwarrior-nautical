@@ -301,9 +301,9 @@ def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_ch
     mod = load_hook_module(hook, "_nautical_on_modify_shifted_anchor_file_timeline_test")
     setattr(mod, "_collect_prev_two", lambda _task: [])
     previous_tz_name = mod.core.LOCAL_TZ_NAME
-    previous_tz = mod.core._LOCAL_TZ
+    previous_tz = mod.timezone_facade._local_timezone
     mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
-    mod.core._LOCAL_TZ = ZoneInfo("Europe/Bucharest")
+    mod.timezone_facade._local_timezone = ZoneInfo("Europe/Bucharest")
     try:
         with tempfile.TemporaryDirectory() as td:
             anchor_dir = Path(td)
@@ -340,7 +340,7 @@ def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_ch
                 mod.core.ANCHOR_FILE_DIR = old_dir
     finally:
         mod.core.LOCAL_TZ_NAME = previous_tz_name
-        mod.core._LOCAL_TZ = previous_tz
+        mod.timezone_facade._local_timezone = previous_tz
     txt = strip_markup("\n".join(lines))
     expect("Fri 2026-04-24 12:00" in txt, f"expected shifted anchor_file child in timeline: {txt!r}")
     expect("Sat 2026-04-25 12:00" in txt, f"expected original file date preserved via anchor match: {txt!r}")
@@ -354,9 +354,9 @@ def test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_strea
     mod = load_hook_module(hook, "_nautical_on_modify_shifted_anchor_file_omit_timeline_test")
     setattr(mod, "_collect_prev_two", lambda _task: [])
     previous_tz_name = mod.core.LOCAL_TZ_NAME
-    previous_tz = mod.core._LOCAL_TZ
+    previous_tz = mod.timezone_facade._local_timezone
     mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
-    mod.core._LOCAL_TZ = ZoneInfo("Europe/Bucharest")
+    mod.timezone_facade._local_timezone = ZoneInfo("Europe/Bucharest")
     try:
         with tempfile.TemporaryDirectory() as td:
             anchor_dir = Path(td)
@@ -393,7 +393,7 @@ def test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_strea
                 mod.core.ANCHOR_FILE_DIR = old_dir
     finally:
         mod.core.LOCAL_TZ_NAME = previous_tz_name
-        mod.core._LOCAL_TZ = previous_tz
+        mod.timezone_facade._local_timezone = previous_tz
     txt = strip_markup("\n".join(lines))
     expect("Thu 2026-04-30 12:00" in txt and "(omitted)" in txt, f"shifted omitted anchor_file date was not marked: {txt!r}")
     expect("Thu 2026-04-30 18:00" in txt and "(omitted)" in txt, f"shifted omitted anchor_file date was not marked: {txt!r}")
@@ -409,9 +409,9 @@ def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_str
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
     previous_tz_name = mod.core.LOCAL_TZ_NAME
-    previous_tz = mod.core._LOCAL_TZ
+    previous_tz = mod.timezone_facade._local_timezone
     mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
-    mod.core._LOCAL_TZ = ZoneInfo("Europe/Bucharest")
+    mod.timezone_facade._local_timezone = ZoneInfo("Europe/Bucharest")
     try:
         with tempfile.TemporaryDirectory() as td:
             anchor_dir = Path(td)
@@ -453,7 +453,7 @@ def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_str
                 mod.core.OMIT_FILE_DIR = old_omit_dir
     finally:
         mod.core.LOCAL_TZ_NAME = previous_tz_name
-        mod.core._LOCAL_TZ = previous_tz
+        mod.timezone_facade._local_timezone = previous_tz
     txt = strip_markup("\n".join(lines))
     expect("Tue 2026-05-05" in txt, f"expected omitted anchor-side date to remain visible: {txt!r}")
     expect("(omitted)" in txt, f"expected merged timeline omitted marker for anchor-side omit_file date: {txt!r}")

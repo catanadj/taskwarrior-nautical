@@ -104,7 +104,21 @@ def _load_budget_config(path: Path) -> dict:
 
 def _clear_caches() -> None:
     try:
-        core._clear_all_caches()
+        import nautical_core.cache_facade as cache_facade
+
+        cache_facade.clear_all(
+            core._CACHE_LOAD_MEM,
+            (
+                core._acf_api._normalize_spec_for_acf_cached,
+                core._acf_api._year_pair_cached,
+                core._parser_support_api._parse_y_token_cached,
+                core._scheduler_api.expand_monthly_cached,
+                core._scheduler_api.expand_weekly_cached,
+                core._cache_api._cache_key_for_task_cached,
+            ),
+            position_selection=core._position_selection,
+            selection_matcher=core._scheduler_api._selection_inner_matcher,
+        )
     except Exception:
         pass
 

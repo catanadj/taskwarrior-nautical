@@ -444,6 +444,12 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         deps = SchedulerDependencies.from_mapping(
             core_namespace(module, namespace, context, "scheduler_api")
         )
+    core_config = (
+        context.import_sibling("core_config")
+        if context is not None
+        else deps["_core_config"]
+    )
+    warn_once_per_day = core_config.warn_once_per_day
     scheduler_expr = context.import_sibling("scheduler_expr") if context is not None else deps["_scheduler_expr"]
     cached_expansion = context.import_sibling("cached_expansion") if context is not None else deps["_cached_expansion"]
     ttl_lru_cache = deps["_ttl_lru_cache"]
@@ -762,7 +768,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             next_after_atom_with_mods=next_atom,
             atom_matches_on=matches,
             max_anchor_iter=deps["MAX_ANCHOR_ITER"],
-            warn_once_per_day=deps["_warn_once_per_day"],
+            warn_once_per_day=warn_once_per_day,
             parse_error_cls=deps["ParseError"],
             os_mod=deps["os"],
         )
@@ -784,7 +790,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             next_after_atom_with_mods=next_atom,
             atom_matches_on=matches,
             max_anchor_iter=deps["MAX_ANCHOR_ITER"],
-            warn_once_per_day=deps["_warn_once_per_day"],
+            warn_once_per_day=warn_once_per_day,
             parse_error_cls=deps["ParseError"],
             os_mod=deps["os"],
             date_cls=date,
@@ -947,7 +953,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         day_offset=apply_day_offset,
         accept_roll=accept_roll_candidate,
         max_anchor_iter=deps["MAX_ANCHOR_ITER"],
-        warn_once=deps["_warn_once_per_day"],
+        warn_once=warn_once_per_day,
         os_mod=deps["os"],
         resolve_moon=resolve_moon_phase_date,
         moon_matches=moon_phase_matches_date,

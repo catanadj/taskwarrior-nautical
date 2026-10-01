@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from .api_bindings import ApiBinding, core_namespace
 from .core_context import CoreContext
+from . import timezone_facade
 
 
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
@@ -27,7 +28,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             context_type = core["_import_sibling"]("recurrence_context").RecurrenceContext
             context = context_type(
                 chain_id="preview",
-                timezone=core.get("_LOCAL_TZ"),
+                timezone=timezone_facade.current_timezone(),
                 business_calendar=business_calendar,
                 astronomy_config=core.get("ASTRONOMY_CONFIG"),
                 anchor_file_dir=core.get("ANCHOR_FILE_DIR", ""),

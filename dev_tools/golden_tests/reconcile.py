@@ -118,9 +118,9 @@ def test_non_hour_dst_carry_and_reconcile_share_core_policy():
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
     mod = load_hook_module(find_hook_file("on-modify.nautical"), "_nautical_non_hour_dst_carry_test")
     zone = ZoneInfo("Australia/Lord_Howe")
-    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ
+    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone
     try:
-        mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ = "Australia/Lord_Howe", zone
+        mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone = "Australia/Lord_Howe", zone
         parent_due = mod.core.build_local_datetime(date(2026, 9, 27), (1, 45))
         parent_limit = mod.core.build_local_datetime(date(2026, 9, 27), (2, 15))
         child_due = mod.core.build_local_datetime(date(2026, 10, 4), (1, 45))
@@ -132,7 +132,7 @@ def test_non_hour_dst_carry_and_reconcile_share_core_policy():
         carry_native_until(mod, parent, child, child_due, "anchor")
         repaired, repair_error = reconcile.repair_native_until_from_previous(parent_obs, current_obs, kind="anchor", safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse, fmt_isoz=mod.core.fmt_isoz, utc_to_local_naive=mod.core.utc_to_local_naive, local_naive_to_utc=mod.core.local_naive_to_utc)
     finally:
-        mod.core.LOCAL_TZ_NAME, mod.core._LOCAL_TZ = old_name, old_tz
+        mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone = old_name, old_tz
     expect(repair_error is None and repaired, f"non-hour reconcile repair failed: {repair_error!r}")
     for field, value in zip(("wait", "until", "repaired until"), (child.get("wait"), child.get("until"), repaired)):
         local = mod.core.parse_dt_any(value).astimezone(zone)

@@ -7,9 +7,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import os
 import unittest
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import nautical_core as core
+import nautical_core.timezone_facade as timezone_facade
 from nautical_core.occurrence_outcomes import FoundOccurrence
 from nautical_core.occurrence_provider import Occurrence
 from nautical_core.recurrence_context import RecurrenceContext
@@ -50,6 +52,13 @@ def _astral_test_available() -> bool:
 
 
 class SchedulerCrossPathConformanceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        timezone_override = patch.object(
+            timezone_facade, "_local_timezone", timezone.utc
+        )
+        timezone_override.start()
+        self.addCleanup(timezone_override.stop)
+
     def assert_monotonic(self, items: tuple[Occurrence, ...], name: str) -> None:
         signatures = tuple(_occurrence_signature(item) for item in items)
         self.assertTrue(
@@ -154,7 +163,6 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
         core_port = SimpleNamespace(
             parse_dt_any=core.parse_dt_any,
             to_local=lambda value: value.astimezone(timezone.utc),
-            _LOCAL_TZ=timezone.utc,
             DEFAULT_BUSINESS_CALENDAR=None,
             ASTRONOMY_CONFIG=None,
             ANCHOR_FILE_DIR="",
@@ -382,7 +390,7 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
         self.assertEqual(projected[0], expected_local)
 
         with patch.object(core, "LOCAL_TZ_NAME", "Europe/Sofia"), patch.object(
-            core, "_LOCAL_TZ", zone
+            timezone_facade, "_local_timezone", zone
         ):
             recovery = plan_recovery_decision(observation, existing_children=[], hook=None)
         self.assertEqual(recovery.plan.action.value, "spawn_child")
@@ -456,7 +464,7 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
 
         core.to_local(datetime(2026, 1, 1, tzinfo=timezone.utc))
         local_timezone = ZoneInfo("America/New_York")
-        with patch.object(core, "_LOCAL_TZ", local_timezone):
+        with patch.object(timezone_facade, "_local_timezone", local_timezone):
             due_utc = core.build_local_datetime(date(2025, 3, 9), (1, 30))
             end_utc = core.build_local_datetime(date(2025, 3, 9), (2, 0))
             due_local = core.to_local(due_utc)

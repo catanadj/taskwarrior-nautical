@@ -10,6 +10,7 @@ from .recurrence_context import RecurrenceContext
 from .scheduler_service import SchedulerService
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_models import NauticalTask
+from . import timezone_facade
 
 
 def _compare_datetimes(host: Any, left: datetime, right: datetime) -> int:
@@ -288,7 +289,7 @@ def render_anchor(host: Any, *, task: Any, anchor_str: Any, anchor_file_str: Any
     def scheduler_service_for_task(value: Any) -> Any:
         recurrence_context = RecurrenceContext(
             chain_id=str(value.get("chainID") or host._root_uuid_from(value) or "preview"),
-            timezone=getattr(core, "_LOCAL_TZ", None),
+            timezone=timezone_facade.current_timezone(),
             business_calendar=core.business_calendar_for_task(value),
             astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),

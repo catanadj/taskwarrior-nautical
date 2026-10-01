@@ -19,11 +19,7 @@ PUBLIC_EXPORTS = (
     'scheduler_config_fingerprint', 'configuration_drift', 'DEFAULT_BUSINESS_CALENDAR',
     'ENABLE_ANCHOR_CACHE', 'LOCAL_TZ_NAME', 'SEASON_HEMISPHERE', 'SEASON_MODE', 'OMIT_FILE_DIR',
     'MAX_LINK_NUMBER', 'PANEL_MODE', 'LIVE_PANEL_DURATION_MS', 'LIVE_PANEL_FOOTER',
-    'EXIT_PROGRESS', 'DEFAULT_DUE_HOUR', '_LOCAL_TZ',
-    '_cache_atomic_replace', '_cache_lock', '_cache_path', '_clear_all_caches',
-    '_emit_cache_metrics',
-    '_normalize_spec_for_acf_cached',
-    '_warn_once_per_day', '_warn_once_per_day_any',
+    'EXIT_PROGRESS', 'DEFAULT_DUE_HOUR',
     'anchor_preset_display', 'build_acf',
     'build_and_cache_hints', 'build_local_datetime', 'business_calendar_fingerprint',
     'business_calendar_displacement_for_date', 'business_calendar_for_task',
@@ -109,12 +105,6 @@ PUBLIC_OWNER_MODULES.update({
     "cache_load": "nautical_core.cache_api",
     "cache_save": "nautical_core.cache_api",
     "cache_gc": "nautical_core.cache_api",
-    "_cache_atomic_replace": "nautical_core.cache_api",
-    "_cache_lock": "nautical_core.cache_api",
-    "_cache_path": "nautical_core.cache_api",
-    "_clear_all_caches": "nautical_core.cache_api",
-    "_emit_cache_metrics": "nautical_core.cache_api",
-    "_normalize_spec_for_acf_cached": "nautical_core.cache_api",
     "build_and_cache_hints": "nautical_core.hint_builder_api",
     "DiagnosticEvent": "nautical_core.diagnostic_models",
     "RecurrenceModeResult": "nautical_core.recurrence_evaluator",
@@ -134,22 +124,16 @@ PUBLIC_OWNER_MODULES.update({
     "panel_line": "nautical_core.ui",
     "render_panel": "nautical_core.ui",
     "diag": "nautical_core.runtime",
-    "_warn_once_per_day": "nautical_core.diagnostic_warnings",
-    "_warn_once_per_day_any": "nautical_core.diagnostic_warnings",
-    "_LOCAL_TZ": "nautical_core.core_config",
     "anchor_preset_display": "nautical_core.parser_api",
     "omit_preset_display": "nautical_core.parser_api",
     "resolve_task_data_context": "nautical_core.runtime",
 })
 
-# Every exported name is deliberately classified before any compatibility
-# removal is considered.  Private helpers remain test seams; hook/bootstrap
-# entry points are installed-runtime contracts; the remainder are supported
-# public API until a documented deprecation changes that status.
+# Every root export is either part of Nautical's supported Python API or an
+# executable runtime requirement. Test seams remain in their owner modules.
 PUBLIC_EXPORT_CATEGORIES = {
     name: (
-        "test_seam" if name.startswith("_") or name == "tempfile"
-        else "installed_runtime" if name in {"diag", "resolve_task_data_context"}
+        "installed_runtime" if name in {"diag", "resolve_task_data_context"}
         else "supported_public_api"
     )
     for name in PUBLIC_EXPORTS

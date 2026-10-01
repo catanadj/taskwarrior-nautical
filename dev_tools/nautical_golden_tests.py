@@ -52,6 +52,7 @@ from dev_tools.golden_tests.support import (
 )
 
 core = importlib.import_module("nautical_core")
+timezone_facade = importlib.import_module("nautical_core.timezone_facade")
 reconcile_report = importlib.import_module("nautical_core.reconcile_report")
 _hook = importlib.import_module("nautical_core.hooks.modify_impl")
 
@@ -300,12 +301,12 @@ def test_navigator_projects_all_slots_in_a_time_window():
     navigator = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = navigator
     old_tz_name = core.LOCAL_TZ_NAME
-    old_tz = core._LOCAL_TZ
+    old_tz = timezone_facade.current_timezone()
     try:
         loader.exec_module(navigator)
         core.LOCAL_TZ_NAME = "Etc/GMT-3"
-        core._LOCAL_TZ = timezone(timedelta(hours=3))
-        navigator.LOCAL_ZONE = core._LOCAL_TZ
+        timezone_facade._local_timezone = timezone(timedelta(hours=3))
+        navigator.LOCAL_ZONE = timezone_facade.current_timezone()
         analyzer = navigator.TaskAnalyzer()
         dates = analyzer._project_anchor_dates(
             {"anchor": "w:mon..sun@t=04:30..19:30/3h30min", "uuid": "00000000-0000-4000-8000-000000000910", "chainID": "navigator-window", "status": "pending", "link": 1},
@@ -380,7 +381,7 @@ def test_navigator_projects_all_slots_in_a_time_window():
         expect("next day" in (overnight_natural or "").lower(), f"Navigator omitted overnight ownership wording: {overnight_natural!r}")
     finally:
         core.LOCAL_TZ_NAME = old_tz_name
-        core._LOCAL_TZ = old_tz
+        timezone_facade._local_timezone = old_tz
         sys.modules.pop(module_name, None)
 
 

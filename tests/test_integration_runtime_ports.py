@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 from nautical_core.integration_context import (
     IntegrationAccess,
@@ -16,9 +17,17 @@ from nautical_core.integration_context import (
     build_integration_context,
     build_operator_context,
 )
+import nautical_core.timezone_facade as timezone_facade
 
 
 class IntegrationRuntimePortTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._timezone_override = patch.object(
+            timezone_facade, "_local_timezone", timezone.utc
+        )
+        self._timezone_override.start()
+        self.addCleanup(self._timezone_override.stop)
+
     def test_invocation_context_freezes_one_read_only_runtime_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             taskdata = Path(td).resolve()
@@ -47,7 +56,6 @@ class IntegrationRuntimePortTests(unittest.TestCase):
             facade.effective_config_snapshot = effective_config_snapshot
             facade.scheduling_configuration_error = lambda: ""
             facade.LOCAL_TZ_NAME = "UTC"
-            facade._LOCAL_TZ = timezone.utc
 
             class FixedClock:
                 def now_utc(self):
@@ -105,7 +113,6 @@ class IntegrationRuntimePortTests(unittest.TestCase):
                 "values": {"tz": "UTC"},
             }
             facade.LOCAL_TZ_NAME = "UTC"
-            facade._LOCAL_TZ = timezone.utc
 
             context = build_operator_context(
                 runtime=IntegrationRuntime.from_compatibility_facade(facade),
@@ -137,7 +144,6 @@ class IntegrationRuntimePortTests(unittest.TestCase):
             effective_config_snapshot=lambda: {"values": {}},
             scheduling_configuration_error=lambda: "",
             LOCAL_TZ_NAME="UTC",
-            _LOCAL_TZ=timezone.utc,
         )
         runtime = IntegrationRuntime.from_compatibility_facade(core)
 

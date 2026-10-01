@@ -20,6 +20,7 @@ from .recurrence_context import RecurrenceContext
 from .task_codec import TaskCodec
 from .task_models import TaskDraft, NauticalTask
 from .task_datetime import TaskDatetimeParser, parser_for_core
+from . import timezone_facade
 
 
 _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
@@ -200,7 +201,7 @@ class ChainGenerationService:
             return cached
         # Capture the active timezone before calendar lookup; the calendar
         # adapter may refresh facade configuration as a side effect.
-        local_timezone = getattr(self.core, "_LOCAL_TZ", None)
+        local_timezone = timezone_facade.current_timezone()
         business_calendar = (
             self.core.business_calendar_for_task(task.observation)
             if str(task.get("bc") or "").strip()

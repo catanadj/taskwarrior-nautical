@@ -25,6 +25,7 @@ from nautical_core.modify_models import (
     WaitScheduleRowsCallback,
 )
 from nautical_core.task_models import TaskPayload
+import nautical_core.timezone_facade as timezone_facade
 
 
 @dataclass(slots=True)
@@ -141,7 +142,7 @@ def scheduler_service_for_task(
         business_calendar = core.business_calendar_for_task(task)
     context = RecurrenceContext.from_observation(
         observation,
-        timezone=core._LOCAL_TZ,
+        timezone=timezone_facade.current_timezone(),
         business_calendar=business_calendar,
         astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),

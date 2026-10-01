@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import nautical_core as core
 import nautical_core.anchor_inclusion as anchor_inclusion
+import nautical_core.timezone_facade as timezone_facade
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
 from nautical_core.cp_parser import cp_sequence_interval_for_token, parse_cp_sequence_tokens
@@ -26,7 +27,6 @@ class _Core:
     DEFAULT_BUSINESS_CALENDAR = None
     ASTRONOMY_CONFIG = None
     ANCHOR_FILE_DIR = ""
-    _LOCAL_TZ = timezone.utc
 
     @staticmethod
     def parse_dt_any(value):
@@ -112,6 +112,11 @@ def _observation(**updates):
 
 class ChainGenerationContractTests(unittest.TestCase):
     def setUp(self):
+        timezone_override = patch.object(
+            timezone_facade, "_local_timezone", timezone.utc
+        )
+        timezone_override.start()
+        self.addCleanup(timezone_override.stop)
         self.service = ChainGenerationService.from_core(_Core())
 
     def test_cp_generation_uses_link_sequence_and_durable_metadata(self):

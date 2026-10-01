@@ -1,11 +1,13 @@
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import nautical_core.add_anchor_compute as add_anchor_compute
 import nautical_core.add_anchor_preview as add_anchor_preview
 import nautical_core.add_preview_composition as add_preview_composition
 import nautical_core.anchor_omit as anchor_omit
+import nautical_core.timezone_facade as timezone_facade
 from nautical_core.occurrence_provider import Occurrence, OccurrenceBatch
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 
@@ -98,27 +100,29 @@ class AddPreviewCompositionTests(unittest.TestCase):
         self.assertEqual(add_anchor_preview._initial_occurrence_limit(3, False), 19)
 
     def test_timezone_fallback_warning_requires_a_timed_or_recurrence_source(self):
-        core = SimpleNamespace(_LOCAL_TZ=None)
-        self.assertTrue(
-            add_anchor_preview._timezone_fallback_warning_needed(
-                core, "w:mon@t=09:00", ""
+        with patch.object(timezone_facade, "_local_timezone", None):
+            self.assertTrue(
+                add_anchor_preview._timezone_fallback_warning_needed(
+                    "w:mon@t=09:00", ""
+                )
             )
-        )
-        self.assertTrue(
-            add_anchor_preview._timezone_fallback_warning_needed(
-                core, "", "calendar.csv@t=09:00"
+            self.assertTrue(
+                add_anchor_preview._timezone_fallback_warning_needed(
+                    "", "calendar.csv@t=09:00"
+                )
             )
-        )
-        self.assertTrue(
-            add_anchor_preview._timezone_fallback_warning_needed(core, "w:mon", "")
-        )
-        self.assertFalse(add_anchor_preview._timezone_fallback_warning_needed(core, "", ""))
-        core._LOCAL_TZ = object()
-        self.assertFalse(
-            add_anchor_preview._timezone_fallback_warning_needed(
-                core, "w:mon@t=09:00", ""
+            self.assertTrue(
+                add_anchor_preview._timezone_fallback_warning_needed("w:mon", "")
             )
-        )
+            self.assertFalse(
+                add_anchor_preview._timezone_fallback_warning_needed("", "")
+            )
+        with patch.object(timezone_facade, "_local_timezone", UTC):
+            self.assertFalse(
+                add_anchor_preview._timezone_fallback_warning_needed(
+                    "w:mon@t=09:00", ""
+                )
+            )
 
     def test_daily_period_preserves_local_clock_and_sequence_preview(self):
         host = _Host()

@@ -50,7 +50,7 @@ class HookContextRequirementTests(unittest.TestCase):
             fake_core = Path(td) / "nautical_core"
             fake_core.mkdir()
             (fake_core / "__init__.py").write_text(
-                "def _warn_once_per_day_any(*_args, **_kwargs):\n    return None\n",
+                "",
                 encoding="utf-8",
             )
             result = subprocess.run(

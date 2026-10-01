@@ -152,6 +152,39 @@ class RuntimeInitializationBoundaryTests(HookSubprocessFixture):
             self.assertEqual(payload["edited"]["status"], "changed")
             self.assertEqual(payload["removed"]["status"], "changed")
 
+    def test_scheduler_config_changes_cache_keys_but_ui_changes_do_not(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config-nautical.toml"
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "NAUTICAL_CONFIG": str(config),
+                    "NAUTICAL_TRUST_CONFIG_PATH": "1",
+                    "PYTHONPATH": str(ROOT),
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                }
+            )
+
+            def cache_key(config_text: str) -> str:
+                config.write_text(config_text, encoding="utf-8")
+                result = self.run_python_code(
+                    "import nautical_core as core\n"
+                    "print(core.cache_key_for_task('w:mon', 'skip'))\n",
+                    cwd=ROOT,
+                    env=environment,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.strip()
+
+            footer_one = cache_key('tz = "UTC"\nlive_panel_footer = "ONE"\n')
+            footer_two = cache_key('tz = "UTC"\nlive_panel_footer = "TWO"\n')
+            timezone_utc = cache_key('tz = "UTC"\nlive_panel_footer = "TWO"\n')
+            timezone_bucharest = cache_key(
+                'tz = "Europe/Bucharest"\nlive_panel_footer = "TWO"\n'
+            )
+            self.assertEqual(footer_one, footer_two)
+            self.assertNotEqual(timezone_utc, timezone_bucharest)
+
     def test_explicit_config_is_loaded_on_runtime_access_not_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config-nautical.toml"

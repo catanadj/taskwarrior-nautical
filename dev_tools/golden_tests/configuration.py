@@ -11,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 
-import nautical_core as core
 from dev_tools.golden_tests.support import (
     assert_stdout_json_only,
     expect,
@@ -139,74 +138,6 @@ def test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone():
                 expected in process.stdout,
                 f"reload error was not actionable: {process.stdout!r}",
             )
-
-
-def test_config_fingerprint_invalidates_persistent_cache_keys():
-    """Config changes update scheduling fingerprints but ignore UI-only edits."""
-    previous = os.environ.get("NAUTICAL_CONFIG")
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            config = Path(td) / "config-nautical.toml"
-            config.write_text(
-                'tz = "UTC"\nlive_panel_footer = "ONE"\n', encoding="utf-8"
-            )
-            os.environ["NAUTICAL_CONFIG"] = str(config)
-            first = core.effective_config_snapshot()
-            config.write_text(
-                'tz = "Europe/Bucharest"\nlive_panel_footer = "TWO"\n', encoding="utf-8"
-            )
-            second = core.effective_config_snapshot()
-            expect(
-                first.get("fingerprint") != second.get("fingerprint"),
-                "config edits did not change fingerprint",
-            )
-
-            def key_in_fresh_process(config_text):
-                config.write_text(config_text, encoding="utf-8")
-                env = os.environ.copy()
-                env.update(
-                    {
-                        "NAUTICAL_CONFIG": str(config),
-                        "NAUTICAL_TRUST_CONFIG_PATH": "1",
-                        "PYTHONPATH": str(ROOT)
-                        + (os.pathsep + env.get("PYTHONPATH", "")),
-                    }
-                )
-                process = subprocess.run(
-                    [
-                        sys.executable,
-                        "-c",
-                        "import nautical_core; print(nautical_core.cache_key_for_task('w:mon', 'skip'))",
-                    ],
-                    text=True,
-                    capture_output=True,
-                    env=env,
-                    timeout=8.0,
-                )
-                expect(
-                    process.returncode == 0,
-                    f"fresh cache-key process failed: {process.stderr!r}",
-                )
-                return (process.stdout or "").strip().splitlines()[-1]
-
-            footer_one = key_in_fresh_process('tz = "UTC"\nlive_panel_footer = "ONE"\n')
-            footer_two = key_in_fresh_process('tz = "UTC"\nlive_panel_footer = "TWO"\n')
-            expect(
-                footer_one == footer_two,
-                "UI-only config edits unnecessarily invalidated cache key",
-            )
-            tz_one = key_in_fresh_process('tz = "UTC"\nlive_panel_footer = "TWO"\n')
-            tz_two = key_in_fresh_process(
-                'tz = "Europe/Bucharest"\nlive_panel_footer = "TWO"\n'
-            )
-            expect(
-                tz_one != tz_two, "scheduler config edits did not invalidate cache key"
-            )
-    finally:
-        if previous is None:
-            os.environ.pop("NAUTICAL_CONFIG", None)
-        else:
-            os.environ["NAUTICAL_CONFIG"] = previous
 
 
 def test_discovered_malformed_config_blocks_taskdata_reload():
@@ -386,7 +317,6 @@ TESTS = (
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
     test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
-    test_config_fingerprint_invalidates_persistent_cache_keys,
     test_discovered_malformed_config_blocks_taskdata_reload,
     test_taskdata_reload_exposes_consistent_validated_fingerprints,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,

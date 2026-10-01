@@ -185,6 +185,49 @@ class RuntimeInitializationBoundaryTests(HookSubprocessFixture):
             self.assertEqual(footer_one, footer_two)
             self.assertNotEqual(timezone_utc, timezone_bucharest)
 
+    def test_taskdata_reload_keeps_validated_fingerprints_consistent(self) -> None:
+        config = Path(self.taskdata) / "config-nautical.toml"
+        config.write_text(
+            'tz = "Europe/Athens"\nseason_hemisphere = "north"\n',
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment.pop("NAUTICAL_CONFIG", None)
+        environment.update(
+            {
+                "TASKDATA": self.taskdata,
+                "PYTHONPATH": str(ROOT),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+        )
+        code = (
+            "import json, os, nautical_core as core\n"
+            "first = core.reload_taskdata_config(os.environ['TASKDATA'])\n"
+            "drift = core.configuration_drift()\n"
+            "second = core.reload_taskdata_config(os.environ['TASKDATA'])\n"
+            "print(json.dumps({'first': first, 'second': second, 'drift': drift, "
+            "'effective': core.effective_config_fingerprint(), "
+            "'scheduler': core.scheduler_config_fingerprint()}))\n"
+        )
+        result = self.run_python_code(
+            code,
+            cwd=ROOT,
+            env=environment,
+            clear_environment=("NAUTICAL_CONFIG",),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        first = payload["first"]
+        second = payload["second"]
+        self.assertTrue(first["ok"] and second["ok"], payload)
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+        self.assertEqual(
+            first["scheduler_fingerprint"], second["scheduler_fingerprint"]
+        )
+        self.assertEqual(first["fingerprint"], payload["effective"])
+        self.assertEqual(first["scheduler_fingerprint"], payload["scheduler"])
+        self.assertEqual(payload["drift"]["status"], "ok")
+
     def test_explicit_config_is_loaded_on_runtime_access_not_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config-nautical.toml"

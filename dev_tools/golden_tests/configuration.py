@@ -292,45 +292,6 @@ def test_business_calendar_toml_section_resolves_lazily():
         )
 
 
-def test_core_live_panel_footer_config_defaults_and_customizes():
-    """Live panel footer defaults to Nautical and accepts configured text."""
-    core_path = ROOT / "nautical_core" / "__init__.py"
-    for index, (config_text, expected) in enumerate(
-        (("", "NAUTICAL"), ('live_panel_footer = "STATUS"\n', "STATUS"))
-    ):
-        with tempfile.TemporaryDirectory() as td:
-            config = Path(td) / "nautical.toml"
-            config.write_text(config_text, encoding="utf-8")
-            module = load_core_module(
-                str(core_path), f"_nautical_core_live_footer_{index}", str(config)
-            )
-            expect(
-                module.LIVE_PANEL_FOOTER == expected,
-                f"unexpected live footer: {module.LIVE_PANEL_FOOTER!r}",
-            )
-
-
-def test_core_uda_aliases_config_defaults_disabled_and_can_enable():
-    """Description-based UDA aliases remain opt-in through config."""
-    core_path = ROOT / "nautical_core" / "__init__.py"
-    cases = (
-        ("", False),
-        ("enable_uda_aliases = true\n", True),
-        ("enable_uda_aliases = false\n", False),
-    )
-    for index, (config_text, expected) in enumerate(cases):
-        with tempfile.TemporaryDirectory() as td:
-            config = Path(td) / "nautical.toml"
-            config.write_text(config_text, encoding="utf-8")
-            module = load_core_module(
-                str(core_path), f"_nautical_core_uda_aliases_{index}", str(config)
-            )
-            expect(
-                module.ENABLE_UDA_ALIASES is expected,
-                f"unexpected UDA alias setting for {config_text!r}: {module.ENABLE_UDA_ALIASES!r}",
-            )
-
-
 def test_discovered_malformed_config_blocks_taskdata_reload():
     """A malformed Taskdata-discovered config must not silently select defaults."""
     with tempfile.TemporaryDirectory() as td:
@@ -511,8 +472,6 @@ TESTS = (
     test_config_fingerprint_invalidates_persistent_cache_keys,
     test_configuration_drift_detects_edit_and_removal,
     test_business_calendar_toml_section_resolves_lazily,
-    test_core_live_panel_footer_config_defaults_and_customizes,
-    test_core_uda_aliases_config_defaults_disabled_and_can_enable,
     test_discovered_malformed_config_blocks_taskdata_reload,
     test_taskdata_reload_exposes_consistent_validated_fingerprints,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,

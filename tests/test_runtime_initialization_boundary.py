@@ -65,6 +65,29 @@ class RuntimeInitializationBoundaryTests(HookSubprocessFixture):
                     expected,
                 )
 
+    def test_live_panel_footer_defaults_and_accepts_configured_text(self) -> None:
+        self.assertEqual(
+            self._read_configured_core_value("", "core_config.LIVE_PANEL_FOOTER"),
+            "NAUTICAL",
+        )
+        self.assertEqual(
+            self._read_configured_core_value(
+                'live_panel_footer = "STATUS"\n', "core_config.LIVE_PANEL_FOOTER"
+            ),
+            "STATUS",
+        )
+
+    def test_uda_aliases_remain_opt_in_through_configuration(self) -> None:
+        cases = (("", False), ("enable_uda_aliases = true\n", True), ("enable_uda_aliases = false\n", False))
+        for config_text, expected in cases:
+            with self.subTest(config_text=config_text):
+                self.assertEqual(
+                    self._read_configured_core_value(
+                        config_text, "core_config.ENABLE_UDA_ALIASES"
+                    ),
+                    expected,
+                )
+
     def test_explicit_config_is_loaded_on_runtime_access_not_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config-nautical.toml"

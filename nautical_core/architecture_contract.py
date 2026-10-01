@@ -71,11 +71,6 @@ _LIFECYCLE_APPLICATION_NAMES = {
 }
 _DOMAIN_NAMES = {"common", "hint_models", "task_models", "diagnostic_models"}
 _BOUND_OWNER_APIS = {"parser_api", "scheduler_api", "cache_api"}
-# These adapters still use the package module as a mutable namespace carrier.
-_ROOT_NAMESPACE_IMPORTS = {
-    "nautical_core/add_anchor_compute.py": frozenset({"_PKG_PROXY"}),
-    "nautical_core/recurrence_evaluator.py": frozenset({"_PKG_PROXY"}),
-}
 
 
 @dataclass(frozen=True)
@@ -387,10 +382,7 @@ def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
                 ):
                     continue
                 for alias in node.names:
-                    if (
-                        not alias.name.startswith("_")
-                        or alias.name in _ROOT_NAMESPACE_IMPORTS.get(relative, ())
-                    ):
+                    if not alias.name.startswith("_"):
                         continue
                     owner_module = path.parent / f"{alias.name}.py"
                     owner_package = path.parent / alias.name / "__init__.py"

@@ -16,25 +16,14 @@ if TYPE_CHECKING:
     resolve_omit_presets: Callable[..., str]
     validate_anchor_expr_strict: Callable[..., Any]
 import importlib
-import types
 from types import MappingProxyType
 from . import compat_api as _compat_api
 _PKG_BASENAME = os.path.basename(os.path.dirname(__file__))
-_PKG_DIR = os.path.dirname(__file__)
 
 if not __package__:
     __package__ = (__name__ if __name__ != _PKG_BASENAME else _PKG_BASENAME)
 
 _PKG_IMPORT_ROOT = str(__package__ or _PKG_BASENAME)
-_PKG_PROXY = sys.modules.get(_PKG_IMPORT_ROOT)
-if _PKG_PROXY is None:
-    _PKG_PROXY = types.ModuleType(_PKG_IMPORT_ROOT)
-    sys.modules[_PKG_IMPORT_ROOT] = _PKG_PROXY
-_PKG_PROXY.__file__ = __file__
-_PKG_PROXY.__package__ = _PKG_IMPORT_ROOT
-_PKG_PROXY.__path__ = [_PKG_DIR]
-
-
 
 _PUBLIC_MODEL_NAMES = _compat_api.PUBLIC_MODEL_NAMES
 
@@ -44,7 +33,6 @@ def _ensure_public_models() -> None:
 
 
 def _import_sibling(module_name: str) -> Any:
-    _PKG_PROXY.__dict__.update(globals())
     return importlib.import_module(f"{_PKG_IMPORT_ROOT}.{module_name}")
 
 

@@ -339,20 +339,13 @@ def anchor_next_occurrence_after_local_dt(
     omit_dnf: Any = None,
     *,
     default_seed_date: Any = None,
-    core: Any | None = None,
+    core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]] | None = None,
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
     project_time: Callable[[Any, date], Any] | None = None,
 ) -> datetime | None:
     if default_seed_date is not None:
         interval_seed = default_seed_date
-    if core is None:
-        from . import _PKG_PROXY
-        import sys
-        package = sys.modules.get(__package__ or "nautical_core")
-        if package is not None:
-            _PKG_PROXY.__dict__.update(vars(package))
-        core = _PKG_PROXY
     if norm_t_mod is None:
         from .anchor_inclusion import _norm_t_mod
         norm_t_mod = _norm_t_mod

@@ -491,7 +491,7 @@ facade.__all__
         self.assertEqual(violations[0].dependency, "nautical_core")
         self.assertIn("root facade", violations[0].rule)
 
-    def test_root_namespace_carrier_exception_is_limited_to_existing_adapters(self) -> None:
+    def test_private_root_namespace_carrier_import_is_rejected_for_adapter(self) -> None:
         with tempfile.TemporaryDirectory(prefix="nautical-architecture-contract-") as td:
             root = Path(td)
             package = root / "nautical_core"
@@ -499,7 +499,7 @@ facade.__all__
             (package / "__init__.py").write_text(
                 "_PKG_PROXY = object()\n", encoding="utf-8"
             )
-            (package / "runtime.py").write_text(
+            (package / "add_anchor_compute.py").write_text(
                 "from . import _PKG_PROXY\n", encoding="utf-8"
             )
 

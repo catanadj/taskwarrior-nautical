@@ -28,6 +28,12 @@ else:
 
 
 class AstronomyContractTests(unittest.TestCase):
+    def test_anchor_scheduler_requires_explicit_core_dependency(self) -> None:
+        with self.assertRaises(TypeError):
+            add_anchor_compute.anchor_next_occurrence_after_local_dt(
+                [], datetime(2027, 7, 1, tzinfo=timezone.utc)
+            )
+
     def test_unavailable_astronomy_candidate_advances_to_next_candidate_date(self) -> None:
         first = date(2027, 7, 1)
 

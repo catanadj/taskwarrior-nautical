@@ -6,8 +6,8 @@ limits, and local-time conversion while callers migrate incrementally.
 
 from __future__ import annotations
 
+import importlib
 import copy
-import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, NoReturn
@@ -822,12 +822,9 @@ class RecurrenceEvaluator:
 
     @staticmethod
     def _core_module() -> Any:
-        from . import _PKG_PROXY
-        package = sys.modules.get(__package__ or "nautical_core")
-        if package is not None:
-            _PKG_PROXY.__dict__.update(vars(package))
-
-        return _PKG_PROXY
+        if not __package__:
+            raise RuntimeError("Recurrence evaluator requires a package context.")
+        return importlib.import_module(__package__)
 
     def _default_next_occurrence_after_local_dt(
         self,

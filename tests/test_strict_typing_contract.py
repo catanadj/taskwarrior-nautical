@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 
@@ -19,3 +20,10 @@ class StrictTypingContractTests(unittest.TestCase):
         gate = workflow.split("- name: Run full strict package mypy", 1)[1]
         self.assertIn("--disallow-untyped-defs", gate)
         self.assertIn("--disallow-incomplete-defs", gate)
+
+    def test_ci_enforces_the_repeatable_branch_coverage_floor(self) -> None:
+        workflow = (self.root / ".github" / "workflows" / "type-check.yml").read_text(encoding="utf-8")
+        match = re.search(r"coverage report --fail-under=(\d+)", workflow)
+        self.assertIsNotNone(match, "CI must enforce a branch-coverage threshold")
+        assert match is not None
+        self.assertGreaterEqual(int(match.group(1)), 70)

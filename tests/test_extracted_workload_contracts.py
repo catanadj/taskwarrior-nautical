@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from dev_tools.golden_tests import installer, operator, recurrence
+from dev_tools.golden_tests import installer, operator
 from dev_tools.perf import (
     anchor_file_workloads,
     cache_workloads,
@@ -21,7 +21,7 @@ from nautical_core.lifecycle.models import ExecutionStage
 
 class ExtractedWorkloadContractTests(unittest.TestCase):
     def test_extracted_golden_modules_register_callable_cases(self) -> None:
-        for module in (installer, operator, recurrence):
+        for module in (installer, operator):
             self.assertTrue(module.TESTS)
             self.assertTrue(all(callable(case) for case in module.TESTS))
 

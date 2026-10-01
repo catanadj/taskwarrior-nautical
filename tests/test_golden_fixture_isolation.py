@@ -36,12 +36,11 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
             modify,
             operator,
             reconcile,
-            recurrence,
             scheduling,
             timeline,
         )
 
-        for module in (configuration, installer, lifecycle, modify, operator, reconcile, recurrence, scheduling, timeline):
+        for module in (configuration, installer, lifecycle, modify, operator, reconcile, scheduling, timeline):
             self.assertIsInstance(module.TESTS, tuple)
             self.assertTrue(all(callable(test) for test in module.TESTS))
 

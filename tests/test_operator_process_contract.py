@@ -400,6 +400,10 @@ class OperatorProcessContractTests(HookSubprocessFixture):
                     payload = json.loads(process.stdout)
                     self.assertIsInstance(payload, dict)
                     self.assertTrue(str(payload.get("schema", "")).startswith("nautical."), args)
+                    if args == ("query", "capabilities"):
+                        self.assertEqual(process.stderr, "")
+                        self.assertEqual(len(process.stdout.splitlines()), 1)
+                        self.assertEqual(payload.get("schema"), "nautical.query.capabilities")
 
     def test_malformed_request_fails_with_json_and_exit_code(self) -> None:
         process = self._run(QUERY, "occurrences", "--request", "{not-json")

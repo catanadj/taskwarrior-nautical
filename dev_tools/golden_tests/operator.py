@@ -70,24 +70,6 @@ def test_operator_processes_concurrent_contracts_share_taskdata_safely():
             raise AssertionError(f"concurrent operator leaked traceback: {command}: {stderr!r}")
 
 
-def test_query_installed_layout_runs_outside_checkout():
-    """The managed launcher resolves its own staged core package."""
-    with tempfile.TemporaryDirectory(prefix="nautical-query-runtime-") as runtime_dir:
-        runtime = Path(runtime_dir)
-        shutil.copy2(ROOT / "nautical", runtime / "nautical")
-        (runtime / "nautical").chmod(0o755)
-        shutil.copytree(ROOT / "nautical_core", runtime / "nautical_core")
-        process = _run(
-            [sys.executable, str(runtime / "nautical"), "query", "capabilities"],
-            cwd="/tmp",
-            environment={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": ""},
-        )
-    if process.returncode != 0 or process.stderr:
-        raise AssertionError(f"installed-layout query failed: {process.stderr or process.stdout}")
-    if json.loads(process.stdout).get("schema") != "nautical.query.capabilities":
-        raise AssertionError("installed-layout query schema changed")
-
-
 def test_navigator_import_and_help_are_noninteractive_without_rich():
     """Cold import and non-TTY help must not require the interactive renderer."""
     env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(ROOT)}
@@ -659,6 +641,5 @@ TESTS = (
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
     test_operator_processes_concurrent_contracts_share_taskdata_safely,
-    test_query_installed_layout_runs_outside_checkout,
     test_navigator_import_and_help_are_noninteractive_without_rich,
 )

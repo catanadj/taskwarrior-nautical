@@ -121,6 +121,37 @@ class RuntimeInitializationBoundaryTests(HookSubprocessFixture):
                 {"names": ["work"], "open": True, "closed": False},
             )
 
+    def test_configuration_drift_detects_edit_and_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config-nautical.toml"
+            config.write_text('tz = "UTC"\n', encoding="utf-8")
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "NAUTICAL_CONFIG": str(config),
+                    "NAUTICAL_TRUST_CONFIG_PATH": "1",
+                    "PYTHONPATH": str(ROOT),
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                }
+            )
+            code = (
+                "import json, os\nfrom pathlib import Path\n"
+                "import nautical_core as core\n"
+                "config = Path(os.environ['NAUTICAL_CONFIG'])\n"
+                "before = core.configuration_drift()\n"
+                "config.write_text('tz = \\\"Europe/Bucharest\\\"\\n', encoding='utf-8')\n"
+                "edited = core.configuration_drift()\n"
+                "config.unlink()\n"
+                "removed = core.configuration_drift()\n"
+                "print(json.dumps({'before': before, 'edited': edited, 'removed': removed}))\n"
+            )
+            result = self.run_python_code(code, cwd=ROOT, env=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["before"]["status"], "ok")
+            self.assertEqual(payload["edited"]["status"], "changed")
+            self.assertEqual(payload["removed"]["status"], "changed")
+
     def test_explicit_config_is_loaded_on_runtime_access_not_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config-nautical.toml"

@@ -209,53 +209,6 @@ def test_config_fingerprint_invalidates_persistent_cache_keys():
             os.environ["NAUTICAL_CONFIG"] = previous
 
 
-def test_configuration_drift_detects_edit_and_removal():
-    """A long-lived core process detects config edits and removal."""
-    with tempfile.TemporaryDirectory() as td:
-        config = Path(td) / "config-nautical.toml"
-        config.write_text('tz = "UTC"\n', encoding="utf-8")
-        script = (
-            "import json, os\n"
-            "from pathlib import Path\n"
-            "import nautical_core as core\n"
-            "p = Path(os.environ['NAUTICAL_CONFIG'])\n"
-            "before = core.configuration_drift()\n"
-            "p.write_text('tz = \\\"Europe/Bucharest\\\"\\n', encoding='utf-8')\n"
-            "edited = core.configuration_drift()\n"
-            "p.unlink()\n"
-            "removed = core.configuration_drift()\n"
-            "print(json.dumps({'before': before, 'edited': edited, 'removed': removed}))\n"
-        )
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env.get("PYTHONPATH", ""))
-        env["NAUTICAL_CONFIG"] = str(config)
-        env["NAUTICAL_TRUST_CONFIG_PATH"] = "1"
-        process = subprocess.run(
-            [sys.executable, "-c", script],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=10,
-        )
-        expect(
-            process.returncode == 0,
-            f"configuration drift probe failed: {process.stderr}",
-        )
-        payload = json.loads(process.stdout)
-        expect(
-            payload["before"]["status"] == "ok",
-            f"fresh config reported drift: {payload}",
-        )
-        expect(
-            payload["edited"]["status"] == "changed",
-            f"edited config drift missing: {payload}",
-        )
-        expect(
-            payload["removed"]["status"] == "changed",
-            f"removed config drift missing: {payload}",
-        )
-
-
 def test_discovered_malformed_config_blocks_taskdata_reload():
     """A malformed Taskdata-discovered config must not silently select defaults."""
     with tempfile.TemporaryDirectory() as td:
@@ -434,7 +387,6 @@ TESTS = (
     test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
     test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
     test_config_fingerprint_invalidates_persistent_cache_keys,
-    test_configuration_drift_detects_edit_and_removal,
     test_discovered_malformed_config_blocks_taskdata_reload,
     test_taskdata_reload_exposes_consistent_validated_fingerprints,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,

@@ -442,7 +442,7 @@ def test_navigator_reads_through_read_only_invocation_repository():
 TESTS = [
     *SCHEDULING_TESTS[:1],
     *SCHEDULING_TESTS[9:10],
-    *CONFIGURATION_TESTS[5:7],
+    *CONFIGURATION_TESTS[4:6],
     *SCHEDULING_TESTS[15:16],
     *RECURRENCE_TESTS,
     *RECONCILE_TESTS,
@@ -486,7 +486,7 @@ TESTS = [
     *LIFECYCLE_TESTS[19:20],
     *MODIFY_TESTS[38:39],
     *CONFIGURATION_TESTS[:3],
-    *CONFIGURATION_TESTS[7:10],
+    *CONFIGURATION_TESTS[6:9],
     *MODIFY_TESTS[39:40],
     *SCHEDULING_TESTS[8:9],
     *MODIFY_TESTS[34:35],
@@ -658,7 +658,7 @@ TESTS.extend([
     *SCHEDULING_TESTS[6:8],
     test_navigator_reads_through_read_only_invocation_repository,
     test_navigator_uses_anchor_and_anchor_file_sources,
-    *CONFIGURATION_TESTS[3:5],
+    *CONFIGURATION_TESTS[3:4],
     *INSTALLER_TESTS[8:],
 ])
 

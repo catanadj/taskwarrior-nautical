@@ -61,6 +61,7 @@ class PublicFacadeImportContractTests(HookSubprocessFixture):
             "names=('rich','nautical_core.ui','nautical_core.astronomy',"
             "'nautical_core.natural_language','nautical_core.linting',"
             "'nautical_core.parser_api','nautical_core.parser_support_api',"
+            "'nautical_core.core_config','nautical_core.config_schema',"
             "'nautical_core.acf_api','nautical_core.expansion_api',"
             "'nautical_core.quarter_api','nautical_core.scheduler_api',"
             "'nautical_core.cached_expansion','nautical_core.monthly_support',"

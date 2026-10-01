@@ -292,11 +292,15 @@ try:
 except Exception:
     _zoneinfo = None
 
+def _warn_timezone_once_per_day(key: str, message: str) -> None:
+    _core_config.warn_once_per_day(key, message)
+
+
 def _refresh_timezone() -> None:
     _timezone_facade.resolve(
         LOCAL_TZ_NAME,
         _zoneinfo,
-        _core_config.warn_once_per_day,
+        _warn_timezone_once_per_day,
     )
 
 

@@ -99,47 +99,6 @@ def test_explicit_unsafe_config_blocks_scheduling_with_actionable_error():
         )
 
 
-def test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone():
-    """Taskdata reload rejects malformed config and invalid timezones."""
-    script = (
-        "import sys\n"
-        "import nautical_core\n"
-        "from nautical_core.integration_context import IntegrationRuntime, build_operator_context\n"
-        "try:\n"
-        "    build_operator_context(runtime=IntegrationRuntime.from_compatibility_facade(nautical_core), task_binary=sys.executable, taskdata=sys.argv[1])\n"
-        "except Exception as exc:\n"
-        "    print(type(exc).__name__ + ': ' + str(exc))\n"
-        "else:\n"
-        "    raise SystemExit('reload unexpectedly succeeded')\n"
-    )
-    env = os.environ.copy()
-    env.pop("NAUTICAL_CONFIG", None)
-    env.pop("TASKDATA", None)
-    env["PYTHONPATH"] = str(ROOT)
-    cases = (
-        ("tz = [\n", "config parse failed"),
-        ('tz = "Invalid/Timezone"\n', "invalid or unavailable"),
-    )
-    for contents, expected in cases:
-        with tempfile.TemporaryDirectory() as td:
-            (Path(td) / "config-nautical.toml").write_text(contents, encoding="utf-8")
-            process = subprocess.run(
-                [sys.executable, "-c", script, td],
-                capture_output=True,
-                text=True,
-                env=env,
-                cwd=str(ROOT),
-            )
-            expect(
-                process.returncode == 0,
-                f"Taskdata config reload process failed: {process.stderr[:500]!r}",
-            )
-            expect(
-                expected in process.stdout,
-                f"reload error was not actionable: {process.stdout!r}",
-            )
-
-
 def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
     """Alias-bearing plain modifies must not be swallowed by the thin fast path."""
     hook = find_hook_file("on-modify.nautical")
@@ -244,7 +203,6 @@ def test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper():
 TESTS = (
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
-    test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
     test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel,
     test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,

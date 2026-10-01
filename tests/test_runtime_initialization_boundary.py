@@ -250,6 +250,45 @@ class RuntimeInitializationBoundaryTests(HookSubprocessFixture):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("config parse failed", f"{result.stdout}\n{result.stderr}".lower())
 
+    def test_operator_context_rejects_malformed_toml_and_invalid_timezone(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("NAUTICAL_CONFIG", None)
+        environment.pop("TASKDATA", None)
+        environment.update(
+            {
+                "PYTHONPATH": str(ROOT),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+        )
+        code = (
+            "import sys\nimport nautical_core\n"
+            "from nautical_core.integration_context import IntegrationRuntime, build_operator_context\n"
+            "try:\n"
+            "    build_operator_context(runtime=IntegrationRuntime.from_compatibility_facade(nautical_core), "
+            "task_binary=sys.executable, taskdata=sys.argv[1])\n"
+            "except Exception as exc:\n"
+            "    print(type(exc).__name__ + ': ' + str(exc))\n"
+            "else:\n"
+            "    raise SystemExit('reload unexpectedly succeeded')\n"
+        )
+        cases = (
+            ("tz = [\n", "config parse failed"),
+            ('tz = "Invalid/Timezone"\n', "invalid or unavailable"),
+        )
+        for config_text, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "config-nautical.toml").write_text(
+                    config_text, encoding="utf-8"
+                )
+                result = self.run_python_code(
+                    code,
+                    arguments=(directory,),
+                    cwd=ROOT,
+                    env=environment,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(expected, result.stdout)
+
     def test_explicit_config_is_loaded_on_runtime_access_not_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config-nautical.toml"

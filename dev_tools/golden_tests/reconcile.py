@@ -557,34 +557,6 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
     expect(not is_candidate(dict(parent, nextLink="22222222")), "already-linked expiration must not be reconsidered")
 
 
-def test_reconcile_expiration_cp_advances_from_recurrence_target():
-    """Expired CP links advance from due or scheduled, not deletion end."""
-    reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_reconcile_expiration_cp_due_test")
-    due = mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))
-    expired_end = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
-    parent = {
-        "uuid": "00000000-0000-4000-8000-000000000509",
-        "status": "deleted",
-        "cp": "7d",
-        "chainID": "11111111",
-        "link": 1,
-        "due": mod.core.fmt_isoz(due),
-        "end": mod.core.fmt_isoz(expired_end),
-    }
-    child_due, meta = reconcile.compute_expiration_child_due(parent, hook=mod)
-    child_local = mod.core.to_local(child_due)
-    expect(child_local.date() == date(2026, 7, 27) and (child_local.hour, child_local.minute) == (9, 0), f"expired CP should advance from prior due: {child_local}")
-    expect(meta.get("basis") == "due recurrence target (expired)", f"unexpected expiry basis: {meta!r}")
-    scheduled_parent = dict(parent)
-    scheduled_parent.pop("due")
-    scheduled_parent["scheduled"] = mod.core.fmt_isoz(due)
-    child_scheduled, scheduled_meta = reconcile.compute_expiration_child_due(scheduled_parent, hook=mod)
-    expect(mod.core.to_local(child_scheduled).date() == date(2026, 7, 27), f"scheduled-only expiry should advance from scheduled: {child_scheduled}")
-    expect(scheduled_meta.get("target_field") == "scheduled", f"unexpected scheduled metadata: {scheduled_meta!r}")
-
-
 def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
     """A deleted anchor occurrence receives one real linked successor."""
     _find_hook_file = find_hook_file
@@ -1389,5 +1361,4 @@ TESTS = (
     test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
-    test_reconcile_expiration_cp_advances_from_recurrence_target,
 ) + tuple(globals()[name] for name in _NAMES)

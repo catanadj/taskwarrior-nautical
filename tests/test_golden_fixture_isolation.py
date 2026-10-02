@@ -232,7 +232,7 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
                     "--only",
                     "navigator_uses_anchor_and_anchor_file_sources",
                     "--only",
-                    "reconcile_expiration_cp_advances_from_recurrence_target",
+                    "reconcile_expiration_candidate_requires_expiry_evidence",
                 ],
                 check=False,
                 capture_output=True,

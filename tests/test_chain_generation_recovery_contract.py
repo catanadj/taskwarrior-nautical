@@ -141,6 +141,39 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual(child_due, datetime(2026, 7, 13, 9, tzinfo=timezone.utc))
         self.assertEqual(metadata.get("basis"), "due recurrence target (expired)")
 
+    def test_reconcile_expiration_cp_advances_from_recurrence_target(self):
+        from nautical_core.chain_integrity_lifecycle import compute_expiration_child_due
+
+        parent = {
+            "uuid": UUID,
+            "status": "deleted",
+            "cp": "7d",
+            "chain": "on",
+            "chainID": "chain-a",
+            "link": 1,
+            "due": "20260720T090000Z",
+            "end": "20260726T235900Z",
+        }
+
+        child_due, metadata = compute_expiration_child_due(
+            parent, generation=self.service
+        )
+
+        self.assertEqual(child_due, datetime(2026, 7, 27, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata.get("basis"), "due recurrence target (expired)")
+
+        scheduled_parent = dict(parent)
+        scheduled_parent.pop("due")
+        scheduled_parent["scheduled"] = "20260720T090000Z"
+        scheduled_child_due, scheduled_metadata = compute_expiration_child_due(
+            scheduled_parent, generation=self.service
+        )
+
+        self.assertEqual(
+            scheduled_child_due, datetime(2026, 7, 27, 9, tzinfo=timezone.utc)
+        )
+        self.assertEqual(scheduled_metadata.get("target_field"), "scheduled")
+
     def test_cp_generation_uses_link_sequence_and_durable_metadata(self):
         parent = _task(link=1)
         due, metadata = self.service.compute_cp_child_due(parent)

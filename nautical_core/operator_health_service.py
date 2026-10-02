@@ -239,7 +239,7 @@ class OperatorHealthService:
                 f"Configured timezone is available: {timezone_name}.",
                 observed={"timezone": str(timezone_name)},
             ))
-        except Exception as exc:
+        except (KeyError, OSError, TypeError, ValueError) as exc:
             findings.append(OperatorFinding(
                 "config.timezone.deep", "configuration", FindingSeverity.ERROR,
                 FindingActionability.BLOCKING,

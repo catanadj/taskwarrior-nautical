@@ -94,6 +94,15 @@ class OperatorHealthServiceTests(unittest.TestCase):
             self.assertEqual(missing[0].severity.value, "error")
             self.assertEqual(missing[1].severity.value, "info")
 
+    def test_deep_resource_findings_do_not_hide_unexpected_timezone_faults(self) -> None:
+        def broken_timezone(_name: str) -> object:
+            raise RuntimeError("deep timezone resolver invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "deep timezone resolver invariant failed"):
+            OperatorHealthService.deep_resource_findings(
+                "Europe/Bucharest", {}, timezone_factory=broken_timezone
+            )
+
     def test_deep_local_state_checks_are_injectable_and_select_newest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

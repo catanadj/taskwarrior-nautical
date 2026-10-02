@@ -40,6 +40,16 @@ class _Host:
 
 
 class AddPreviewCompositionTests(unittest.TestCase):
+    def test_add_scheduler_calendar_loader_propagates_unexpected_failures(self) -> None:
+        class FailingCalendar:
+            @staticmethod
+            def active_business_calendar():
+                raise RuntimeError("calendar configuration failed")
+
+        core = SimpleNamespace(_import_sibling=lambda _name: FailingCalendar)
+        with self.assertRaisesRegex(RuntimeError, "calendar configuration failed"):
+            add_anchor_compute._scheduler_business_calendar(core)
+
     def test_omit_natural_text_propagates_unexpected_conversion_failures(self):
         class FailingParser:
             @staticmethod
@@ -179,6 +189,7 @@ class AddAnchorComputeTests(unittest.TestCase):
 
         class FakeCore:
             MAX_ANCHOR_ITER = 1
+            business_calendar = object()
 
             @staticmethod
             def _import_sibling(_name):
@@ -204,6 +215,7 @@ class AddAnchorComputeTests(unittest.TestCase):
 
         class FakeCore:
             MAX_ANCHOR_ITER = 1
+            business_calendar = object()
 
             @staticmethod
             def _import_sibling(_name):

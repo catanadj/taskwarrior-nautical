@@ -61,7 +61,15 @@ def _parse_datetime_value(port: DatetimeValuePort, value: object) -> Any:
     return datetime_value(port.parser, value)
 
 
-def chain_health_advice(ports: AnalyticsPorts, chain: Any, kind: str, task: Any, tol_secs: int, style: str) -> Any:
+def chain_health_advice(
+    ports: AnalyticsPorts,
+    chain: Any,
+    kind: str,
+    task: Any,
+    *,
+    tol_secs: int = 60,
+    style: str,
+) -> Any:
     return ports.core._import_sibling("modify_analytics").chain_health_advice(
         chain,
         kind,

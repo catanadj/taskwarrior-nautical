@@ -93,6 +93,30 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             first = next(iter(inspect.signature(getattr(diagnostics, name)).parameters.values()))
             self.assertIn(first.name, {"port", "ports"}, name)
 
+    def test_chain_health_advice_uses_default_completion_tolerance(self) -> None:
+        from nautical_core.modify_diagnostics_effects import AnalyticsPorts, chain_health_advice
+
+        calls: list[dict[str, object]] = []
+
+        class Core:
+            def _import_sibling(self, _name: str) -> SimpleNamespace:
+                return SimpleNamespace(
+                    chain_health_advice=lambda *_args, **kwargs: calls.append(kwargs) or "advice"
+                )
+
+        ports = AnalyticsPorts(
+            core=Core(),
+            parse_datetime=lambda _value: None,
+            format_delta=str,
+            coerce_int=lambda _value, default: default,
+            short_uuid=str,
+        )
+
+        self.assertEqual(chain_health_advice(ports, [], "P1D", {}, style="rich"), "advice")
+        self.assertEqual(calls, [{"core": ports.core, "parse_datetime": ports.parse_datetime,
+                                  "format_delta": ports.format_delta, "coerce_int": ports.coerce_int,
+                                  "tol_secs": 60, "style": "rich"}])
+
 
 if __name__ == "__main__":
     unittest.main()

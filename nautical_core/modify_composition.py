@@ -92,7 +92,8 @@ class _ModifyDiagnosticsEffects(Protocol):
         chain: Sequence[TaskPayload],
         kind: str,
         task: TaskPayload,
-        tol_secs: int,
+        *,
+        tol_secs: int = 60,
         style: str,
     ) -> Any: ...
 
@@ -157,6 +158,18 @@ class _ModifyCompositionAdapters(Protocol):
     def render_anchor_completion_feedback_for(self, host: Any, *, request: Any) -> None: ...
 
     def render_cp_completion_feedback_for(self, host: Any, *, request: Any) -> None: ...
+
+
+class _ChainHealthAdviceCallback(Protocol):
+    def __call__(
+        self,
+        chain: Sequence[TaskPayload],
+        kind: str,
+        task: TaskPayload,
+        *,
+        tol_secs: int = 60,
+        style: str,
+    ) -> Any: ...
 
 
 class _TaskHookResponseFactory(Protocol):
@@ -640,7 +653,7 @@ class ModifyRuntimeServices:
     analytics_style: str
     seed_runtime_lookup_tasks: Callable[..., None]
     lifecycle_read_service: Callable[[], Any]
-    chain_health_advice: Callable[..., Any]
+    chain_health_advice: _ChainHealthAdviceCallback
     chain_integrity_warnings: Callable[..., list[str]]
     render_anchor_completion_feedback: Callable[..., None]
     render_cp_completion_feedback: Callable[..., None]

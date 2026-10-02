@@ -180,7 +180,9 @@ class ModifyIsolationTests(unittest.TestCase):
             "validate_native_until_slots",
             "compute_next_and_limits",
         }
+        callback_fields.remove("chain_health_advice")
         self.assertTrue(all(get_origin(annotations[name]) is CallableOrigin for name in callback_fields))
+        self.assertEqual(annotations["chain_health_advice"].__name__, "_ChainHealthAdviceCallback")
 
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone

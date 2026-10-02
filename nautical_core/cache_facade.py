@@ -19,6 +19,7 @@ def emit_metrics(
         try:
             lines.append(f"{name}: {cache.cache_info()}")
         except Exception:
+            # Metrics are optional; a broken cache must not hide other metrics.
             continue
     if lines:
         warn_once("cache_metrics", "[nautical-metrics] " + " | ".join(lines))
@@ -46,6 +47,7 @@ def clear_all(
         try:
             operation()
         except Exception:
+            # Caches are disposable; keep clearing independent caches after one fails.
             continue
 
 

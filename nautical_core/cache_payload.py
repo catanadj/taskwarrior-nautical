@@ -231,21 +231,18 @@ def cache_atomic_replace(src: str, dst: str, *, os_mod: Any) -> None:
     except OSError:
         if os_mod.name != "nt":
             raise
-    try:
-        import ctypes
+    import ctypes
 
-        flags = 0x1 | 0x8
-        kernel32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
-        move_file = getattr(kernel32, "MoveFileExW", None)
-        if move_file is None:
-            raise OSError("MoveFileExW is unavailable")
-        ok = move_file(str(src), str(dst), flags)
-        if ok:
-            return
-        err = getattr(ctypes, "GetLastError", lambda: 0)()
-        raise OSError(err, "MoveFileExW failed")
-    except Exception:
-        raise
+    flags = 0x1 | 0x8
+    kernel32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
+    move_file = getattr(kernel32, "MoveFileExW", None)
+    if move_file is None:
+        raise OSError("MoveFileExW is unavailable")
+    ok = move_file(str(src), str(dst), flags)
+    if ok:
+        return
+    err = getattr(ctypes, "GetLastError", lambda: 0)()
+    raise OSError(err, "MoveFileExW failed")
 
 
 def cache_load(

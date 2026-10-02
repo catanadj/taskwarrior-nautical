@@ -411,6 +411,49 @@ class CacheApiContractTests(unittest.TestCase):
                 emit_metrics()
             self.assertEqual(stderr.getvalue(), "")
 
+    def test_cache_metrics_continue_after_one_cache_info_failure(self) -> None:
+        class BrokenCache:
+            @staticmethod
+            def cache_info() -> str:
+                raise RuntimeError("optional metrics failure")
+
+        messages: list[str] = []
+        with patch.dict(os.environ, {"NAUTICAL_DIAG_METRICS": "1"}):
+            cache_facade.emit_metrics(
+                (("broken", BrokenCache()), ("healthy", SimpleNamespace(cache_info=lambda: "hits=3"))),
+                lambda _key, message: messages.append(message),
+            )
+
+        self.assertEqual(len(messages), 1)
+        self.assertIn("healthy: hits=3", messages[0])
+        self.assertNotIn("broken", messages[0])
+
+    def test_cache_clear_continues_after_one_cache_clear_failure(self) -> None:
+        calls: list[str] = []
+
+        class Cache:
+            def __init__(self, name: str, broken: bool = False) -> None:
+                self.name = name
+                self.broken = broken
+
+            def cache_clear(self) -> None:
+                calls.append(self.name)
+                if self.broken:
+                    raise RuntimeError("cache clear failed")
+
+        memory_cache = SimpleNamespace(clear=lambda: calls.append("memory"))
+        position = SimpleNamespace(clear_candidate_cache=lambda: calls.append("position"))
+        matcher = Cache("matcher")
+
+        cache_facade.clear_all(
+            memory_cache,
+            (Cache("broken", broken=True), Cache("healthy")),
+            position_selection=position,
+            selection_matcher=matcher,
+        )
+
+        self.assertEqual(calls, ["memory", "broken", "healthy", "position", "matcher"])
+
     def test_unsupported_schema_and_invalid_shape_are_quarantined(self) -> None:
         import base64
         import zlib

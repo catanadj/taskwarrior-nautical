@@ -124,6 +124,46 @@ class _ModifyOrdinaryEffects(Protocol):
     ) -> None: ...
 
 
+class _ModifyCompositionAdapters(Protocol):
+    def handle_non_completion(
+        self,
+        host: Any,
+        old: TaskPayload,
+        new: TaskPayload,
+        unit_of_work: Any,
+        *,
+        transition: Any = None,
+        runtime: Any = None,
+    ) -> None: ...
+
+    def handle_completion(
+        self,
+        host: Any,
+        old: TaskPayload,
+        new: TaskPayload,
+        unit_of_work: Any,
+        *,
+        transition: Any = None,
+        runtime: Any = None,
+    ) -> Any: ...
+
+    def handle_deleted(
+        self,
+        host: Any,
+        old: TaskPayload,
+        new: TaskPayload,
+        unit_of_work: Any,
+        *,
+        transition: Any = None,
+        terminal_decision: Any = None,
+        runtime: Any = None,
+    ) -> None: ...
+
+    def render_anchor_completion_feedback_for(self, host: Any, *, request: Any) -> None: ...
+
+    def render_cp_completion_feedback_for(self, host: Any, *, request: Any) -> None: ...
+
+
 class _ModifyDeletionDiagnosticsEffects(_ModifyDiagnosticsEffects, Protocol):
     def end_chain_summary_ports_for(self, host: Any) -> object: ...
 
@@ -359,7 +399,7 @@ class ModifyHookCapabilities:
     """
 
     modify_ordinary: _ModifyOrdinaryEffects
-    modify_composition_adapters: Any
+    modify_composition_adapters: _ModifyCompositionAdapters
     hook_results: Any
     hook_context: Any
     hook_engine: Any

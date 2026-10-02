@@ -243,7 +243,6 @@ class CompletionRouteCapabilities:
     modify_completion_effects: Any
     modify_presentation_effects: Any
     modify_diagnostics_effects: Any
-    modify_validation_effects: Any
 
 
 @dataclass(frozen=True)
@@ -400,7 +399,6 @@ class ModifyRuntimeServices:
                 modify_completion_effects=capabilities.modify_completion_effects,
                 modify_presentation_effects=capabilities.modify_presentation_effects,
                 modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
-                modify_validation_effects=capabilities.modify_validation_effects,
             ),
             deletion=DeletionRouteCapabilities(
                 modify_presentation_effects=capabilities.modify_presentation_effects,

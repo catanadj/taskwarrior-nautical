@@ -187,6 +187,8 @@ def _format_local_until(hook: Any, value: Any) -> str:
         if parsed is not None and not error:
             return str(formatter(parsed))
     except Exception:
+        # Local-time rendering is optional; retain Taskwarrior's raw timestamp
+        # rather than hiding or blocking the recovery result's presentation.
         pass
     return raw
 

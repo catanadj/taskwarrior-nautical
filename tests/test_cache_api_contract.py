@@ -708,6 +708,13 @@ class CacheApiContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "permission adapter invariant failed"):
                     cache_support.ensure_cache_dir(td)
 
+    def test_cache_payload_shape_validator_does_not_hide_runtime_errors(self) -> None:
+        def broken_validator(_value: object) -> bool:
+            raise RuntimeError("payload validator invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "payload validator invariant failed"):
+            cache_payload.cache_payload_shape_ok({"dnf": []}, is_dnf_like=broken_validator)
+
     def test_cache_directory_selection_rejects_symlink_override(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

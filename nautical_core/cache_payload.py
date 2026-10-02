@@ -187,29 +187,26 @@ def normalize_dnf_cached(dnf: Any) -> Any:
 
 
 def cache_payload_shape_ok(obj: dict, *, is_dnf_like: Any) -> bool:
-    try:
-        if "dnf" in obj and not is_dnf_like(obj.get("dnf")):
+    if "dnf" in obj and not is_dnf_like(obj.get("dnf")):
+        return False
+    natural = obj.get("natural")
+    if natural is not None and not isinstance(natural, str):
+        return False
+    next_dates = obj.get("next_dates")
+    if next_dates is not None:
+        if not isinstance(next_dates, list):
             return False
-        natural = obj.get("natural")
-        if natural is not None and not isinstance(natural, str):
-            return False
-        next_dates = obj.get("next_dates")
-        if next_dates is not None:
-            if not isinstance(next_dates, list):
+        for item in next_dates:
+            if not isinstance(item, str):
                 return False
-            for item in next_dates:
-                if not isinstance(item, str):
-                    return False
-        meta = obj.get("meta")
-        if meta is not None and not isinstance(meta, dict):
-            return False
-        per_year = obj.get("per_year")
-        if per_year is not None and not isinstance(per_year, dict):
-            return False
-        limits = obj.get("limits")
-        if limits is not None and not isinstance(limits, dict):
-            return False
-    except Exception:
+    meta = obj.get("meta")
+    if meta is not None and not isinstance(meta, dict):
+        return False
+    per_year = obj.get("per_year")
+    if per_year is not None and not isinstance(per_year, dict):
+        return False
+    limits = obj.get("limits")
+    if limits is not None and not isinstance(limits, dict):
         return False
     return True
 

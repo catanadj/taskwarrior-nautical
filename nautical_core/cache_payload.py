@@ -470,7 +470,7 @@ def cache_gc(
     def remove_path(path: str, *, kind: str, key: str = "") -> bool:
         try:
             size = int(os_mod.path.getsize(path))
-        except Exception:
+        except OSError:
             size = 0
         try:
             if key:
@@ -486,14 +486,14 @@ def cache_gc(
             result["bytes"] += size
             result[kind] += 1
             return True
-        except Exception:
+        except OSError:
             result["errors"] += 1
             return False
 
     entries = []
     try:
         names = os_mod.listdir(base)
-    except Exception:
+    except OSError:
         return result
     for name in names:
         path = os_mod.path.join(base, name)
@@ -513,10 +513,7 @@ def cache_gc(
             if not key:
                 result["locks_skipped"] += 1
                 continue
-            try:
-                stale = bool(stale_lock_check(path, float(stale_lock_age)))
-            except Exception:
-                stale = False
+            stale = bool(stale_lock_check(path, float(stale_lock_age)))
             if stale:
                 try:
                     size = int(os_mod.path.getsize(path))
@@ -524,7 +521,7 @@ def cache_gc(
                     result["removed"] += 1
                     result["bytes"] += size
                     result["locks_removed"] += 1
-                except Exception:
+                except OSError:
                     result["errors"] += 1
             else:
                 result["locks_skipped"] += 1

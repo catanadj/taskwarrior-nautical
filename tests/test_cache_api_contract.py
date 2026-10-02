@@ -332,6 +332,23 @@ class CacheApiContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "filesystem stat invariant failed"):
                     binding.cache_gc()
 
+    def test_cache_gc_does_not_hide_unexpected_unlink_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            candidate = root / ".orphan.tmp"
+            candidate.write_bytes(b"partial")
+            binding = self._binding(root)
+            real_unlink = os.unlink
+
+            def fail_candidate_unlink(path, *args, **kwargs):
+                if os.fspath(path) == str(candidate):
+                    raise RuntimeError("filesystem unlink invariant failed")
+                return real_unlink(path, *args, **kwargs)
+
+            with patch.object(os, "unlink", side_effect=fail_candidate_unlink):
+                with self.assertRaisesRegex(RuntimeError, "filesystem unlink invariant failed"):
+                    binding.cache_gc(stale_tmp_age=0)
+
     def test_cache_metrics_are_emitted_only_when_enabled(self) -> None:
         from functools import lru_cache
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 import sys
 import unittest
-from types import SimpleNamespace
 
 
 class ModifyIsolationTests(unittest.TestCase):
@@ -46,21 +45,31 @@ class ModifyIsolationTests(unittest.TestCase):
         )
 
     def test_completion_validation_uses_explicit_ports_and_transition(self) -> None:
+        from nautical_core.modify_validation import CompletionValidationServices
         from nautical_core.modify_transition_effects import (
             CompletionValidationPorts,
             validate_completion_cp_and_anchor,
         )
+        from nautical_core.task_changes import TaskTransition
+        from nautical_core.task_models import TaskObservation, TaskPayload
 
         observed: dict[str, object] = {}
 
-        def validate(old, new, *, services):
+        def validate(
+            old: TaskPayload,
+            new: TaskPayload,
+            *,
+            services: CompletionValidationServices,
+        ) -> tuple[str, str, str]:
+            self.assertIsInstance(services, CompletionValidationServices)
             observed["changed"] = services.field_changed(old, new, "anchor")
             observed["transition"] = services.apply_transition(old, new)
             return "cp", "anchor", "omit"
 
+        old = TaskObservation.from_mapping({"anchor": "w:mon"}, source_query="test")
+        new = TaskObservation.from_mapping({"anchor": "w:tue"}, source_query="test")
         ports = CompletionValidationPorts(
             validate=validate,
-            services_type=SimpleNamespace,
             strip_quotes=lambda value: value,
             reject_conflicting_types=lambda *_args: None,
             validate_omit=lambda *_args: None,
@@ -74,7 +83,7 @@ class ModifyIsolationTests(unittest.TestCase):
             fail=lambda *_args: None,
             diagnostic=lambda *_args: None,
         )
-        transition = SimpleNamespace(changed=lambda field: field == "anchor")
+        transition = TaskTransition.from_observations(old, new)
 
         result = validate_completion_cp_and_anchor(
             ports, {"anchor": "w:mon"}, {"anchor": "w:tue"}, transition=transition

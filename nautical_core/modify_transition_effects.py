@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable, Protocol
 
+from .modify_validation import CompletionValidationServices
 from .task_changes import TaskTransition
 from .task_models import TaskPayload
 
@@ -49,20 +50,29 @@ class NativePreservePorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionValidationPorts:
-    validate: Any
-    services_type: Any
-    strip_quotes: Any
-    reject_conflicting_types: Any
-    validate_omit: Any
-    validate_chain_limits: Any
-    parse_cp_sequence: Any
-    cp_sequence_parse_error: Any
-    field_changed: Any
-    validate_anchor: Any
-    validate_cp: Any
-    apply_transition: Any
-    fail: Any
-    diagnostic: Any
+    validate: "CompletionValidator"
+    strip_quotes: Callable[[str], str]
+    reject_conflicting_types: Callable[[str, str, str], None]
+    validate_omit: Callable[[str, str, str, str], None]
+    validate_chain_limits: Callable[[TaskPayload], None]
+    parse_cp_sequence: Callable[[str], object]
+    cp_sequence_parse_error: Callable[[str], str | None]
+    field_changed: Callable[[TaskPayload, TaskPayload, str], bool]
+    validate_anchor: Callable[[str], None]
+    validate_cp: Callable[[str, object, object], None]
+    apply_transition: Callable[[TaskPayload, TaskPayload], object]
+    fail: Callable[[str, str], object]
+    diagnostic: Callable[[str], None]
+
+
+class CompletionValidator(Protocol):
+    def __call__(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        *,
+        services: CompletionValidationServices,
+    ) -> tuple[str, str, str]: ...
 
 
 def preserve_cp_relative_offsets_on_due_change(
@@ -173,7 +183,7 @@ def validate_completion_cp_and_anchor(
     return ports.validate(
         old,
         new,
-        services=ports.services_type(
+        services=CompletionValidationServices(
             strip_quotes=ports.strip_quotes,
             reject_conflicting_types=ports.reject_conflicting_types,
             validate_omit=ports.validate_omit,

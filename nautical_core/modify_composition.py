@@ -193,7 +193,6 @@ def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities
     )
     return transition_effects.CompletionValidationPorts(
         validate=modify_validation.validate_completion_cp_and_anchor,
-        services_type=modify_validation.CompletionValidationServices,
         strip_quotes=capabilities.modify_task_fields.strip_quotes,
         reject_conflicting_types=pipeline.reject_recurrence_kind_conflict,
         validate_omit=lambda anchor, anchor_file, omit, omit_file: validation_effects.validate_omit(

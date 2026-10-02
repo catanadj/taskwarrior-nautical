@@ -57,8 +57,8 @@ def validate_configuration(config: dict[str, Any] | None) -> None:
             f"astronomy default_location '{default_name}' is not configured (available: {available})"
         )
     try:
-        from zoneinfo import ZoneInfo
-    except Exception as exc:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    except ImportError as exc:
         raise AstronomyConfigurationError("timezone support is unavailable") from exc
     for raw_name, profile in locations.items():
         name = str(raw_name or "").strip()
@@ -91,7 +91,7 @@ def validate_configuration(config: dict[str, Any] | None) -> None:
             )
         try:
             ZoneInfo(timezone_name)
-        except Exception as exc:
+        except (ValueError, ZoneInfoNotFoundError) as exc:
             raise AstronomyConfigurationError(
                 f"astronomy location '{name}' has invalid timezone '{timezone_name}'"
             ) from exc

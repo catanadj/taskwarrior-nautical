@@ -50,12 +50,12 @@ class ModifyIsolationTests(unittest.TestCase):
 
         self.assertNotIn("modify_datetime_effects", loaded)
 
-    def test_completion_route_does_not_carry_unused_validation_module(self) -> None:
+    def test_completion_route_contains_only_its_consumed_capability(self) -> None:
         from nautical_core.modify_composition import CompletionRouteCapabilities
 
-        self.assertNotIn(
-            "modify_validation_effects",
-            CompletionRouteCapabilities.__dataclass_fields__,
+        self.assertEqual(
+            set(CompletionRouteCapabilities.__dataclass_fields__),
+            {"modify_completion_effects"},
         )
 
     def test_schedule_period_helper_uses_only_explicit_ports(self) -> None:

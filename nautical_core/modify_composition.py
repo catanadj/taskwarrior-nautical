@@ -262,8 +262,6 @@ class CompletionRouteCapabilities:
     """Dependencies used only by the completion route."""
 
     modify_completion_effects: Any
-    modify_presentation_effects: Any
-    modify_diagnostics_effects: Any
 
 
 @dataclass(frozen=True)
@@ -418,8 +416,6 @@ class ModifyRuntimeServices:
             ),
             completion=CompletionRouteCapabilities(
                 modify_completion_effects=capabilities.modify_completion_effects,
-                modify_presentation_effects=capabilities.modify_presentation_effects,
-                modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
             ),
             deletion=DeletionRouteCapabilities(
                 modify_presentation_effects=capabilities.modify_presentation_effects,

@@ -157,6 +157,20 @@ class _ModifyQueries(Protocol):
     ) -> str: ...
 
 
+class _ModifyLifecycle(Protocol):
+    def task_has_nautical_fields(self, task: TaskPayload | None) -> bool: ...
+
+    def task_has_nautical_recurrence_fields(self, task: TaskPayload | None) -> bool: ...
+
+    def apply_nautical_transition(
+        self,
+        old: TaskPayload | None,
+        new: TaskPayload | None,
+        *,
+        short_uuid: Callable[[Any], str],
+    ) -> object: ...
+
+
 class _SeedLookupPortsFactory(Protocol):
     def __call__(self, *, service: Any, decode_row: Any, cache_set: Any) -> object: ...
 
@@ -257,7 +271,7 @@ class ModifyHookCapabilities:
     hook_results: Any
     hook_context: Any
     hook_engine: Any
-    modify_lifecycle: Any
+    modify_lifecycle: _ModifyLifecycle
     modify_transition_effects: Any
     modify_presentation_effects: _ModifyPresentationEffects
     modify_diagnostics_effects: _ModifyDiagnosticsEffects
@@ -307,7 +321,7 @@ class NonCompletionRouteCapabilities:
     """Dependencies used only by the ordinary/recurring-edit route."""
 
     modify_ordinary: Any
-    modify_lifecycle: Any
+    modify_lifecycle: _ModifyLifecycle
     modify_presentation_effects: Any
     modify_diagnostics_effects: Any
     modify_validation_effects: _ModifyValidationEffects

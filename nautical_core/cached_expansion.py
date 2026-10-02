@@ -263,7 +263,7 @@ def month_tokens_for_atom_values(
         try:
             a_i = int(a_s)
             b_i = int(b_s)
-        except Exception:
+        except ValueError:
             return out
 
         def norm(n: Any) -> int:
@@ -282,7 +282,7 @@ def month_tokens_for_atom_values(
             k = days_in_month(y, m) + k + 1
         if 1 <= k <= ndays:
             out.add(k)
-    except Exception:
+    except ValueError:
         pass
     return out
 
@@ -379,7 +379,7 @@ def expand_yearly(
             return None
         try:
             return date(y, m, d)
-        except Exception:
+        except (ValueError, OverflowError):
             return None
 
     def _clamped_date(d: int, m: int) -> date | None:
@@ -388,7 +388,7 @@ def expand_yearly(
         d = max(1, min(d, _mlen(m)))
         try:
             return date(y, m, d)
-        except Exception:
+        except (ValueError, OverflowError):
             return None
 
     def _pair(a: int, b: int) -> tuple[int, int]:
@@ -577,6 +577,6 @@ def expand_monthly(
                 r = resolve_num(int(tok))
                 if r:
                     out.add(r)
-            except Exception:
+            except ValueError:
                 pass
     return sorted(out)

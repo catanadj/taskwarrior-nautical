@@ -1613,7 +1613,15 @@ def main(
                     generation=generation,
                     reconciliation_service=lifecycle_service,
                 )
-            except Exception:
+            except Exception as exc:
+                # Wave planning is speculative; the authoritative per-parent
+                # pass below retries this candidate without batching.
+                if os.environ.get("NAUTICAL_DIAG") == "1":
+                    print(
+                        "[nautical] reconcile wave planning deferred for "
+                        f"{parent_uuid[:8]}: {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
                 continue
             if len(planned_outcomes) == 1:
                 planned_outcome = planned_outcomes[0]

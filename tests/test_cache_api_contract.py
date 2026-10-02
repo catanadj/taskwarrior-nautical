@@ -15,6 +15,7 @@ import tempfile
 import time
 import unittest
 from contextlib import nullcontext
+from typing import Any
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -937,6 +938,22 @@ class CacheApiContractTests(unittest.TestCase):
             second = binding.cache_key_for_task("w:mon", "skip")
 
             self.assertNotEqual(first, second)
+
+    def test_semantic_fingerprint_does_not_hide_unexpected_stat_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding(Path(td))
+            real_stat = os.stat
+
+            def fail_semantic_stat(
+                path: str, *args: Any, **kwargs: Any
+            ) -> os.stat_result:
+                if str(path).endswith("/scheduler_api.py"):
+                    raise RuntimeError("semantic fingerprint stat invariant failed")
+                return real_stat(path, *args, **kwargs)
+
+            with patch.object(os, "stat", side_effect=fail_semantic_stat):
+                with self.assertRaisesRegex(RuntimeError, "semantic fingerprint stat invariant failed"):
+                    binding._cache_semantic_fingerprint()
 
     def test_task_key_memoizes_acf_work_until_its_binding_cache_is_cleared(self) -> None:
         with tempfile.TemporaryDirectory() as td:

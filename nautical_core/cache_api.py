@@ -239,7 +239,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         try:
             stat = runtime.filesystem.stat(path)
             return f"{getattr(stat, 'st_mtime_ns', 0)}:{stat.st_size}"
-        except Exception:
+        except OSError:
             return "unknown"
 
     semantic_source_files = (

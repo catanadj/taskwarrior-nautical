@@ -45,11 +45,6 @@ _NAMES = (
 )
 
 
-def test_doctor_reports_reconcile_backfill_plans():
-    """Retain the historical doctor characterization while planning is shared."""
-    return
-
-
 def test_reconcile_tool_computes_year_ordinal_anchor():
     """The reconciler's installed hook path should schedule ordinal anchor children."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -679,14 +674,6 @@ def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
         expect(len(rows) == 2, f"anchor repair created the wrong number of rows: {rows!r}")
         by_link = {int(float(row.get("link"))): row for row in rows}
         expect(by_link[1].get("nextLink") == str(by_link[2].get("uuid") or "")[:8], f"anchor parent was not linked: {rows!r}")
-def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
-    _find_hook_file = find_hook_file
-    _load_hook_module = load_hook_module
-    _recovery_plan = recovery_plan
-    _recovery_action = recovery_action
-    importlib.import_module("nautical_core.reconcile_report")
-
-
 def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     """Reconcile should compute, spawn, and deduplicate the next seasonal slot."""
     _find_hook_file = find_hook_file
@@ -1408,7 +1395,6 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
         )
 TESTS = (
     test_integration_contract_covers_all_mutation_and_outbox_states,
-    test_doctor_reports_reconcile_backfill_plans,
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_expiration_real_taskwarrior_round_trip,
     test_seasonal_selection_reconcile_spawn_recovery_and_dedup,
@@ -1437,5 +1423,4 @@ TESTS = (
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
-    test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
 ) + tuple(globals()[name] for name in _NAMES)

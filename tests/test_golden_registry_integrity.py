@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "d1521f1d26ddb92f7a4a9e38d11a3fc02a2338295000c0c5f47f053f659f49de"
+    "a87e1fb7afc032b1c63a0672a937776398a155a2c32d85ecfc7ac162f339786a"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -55,8 +55,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     ),
     "reconcile and recovery": (
-        25,
-        "c402d92a51cb3fe0cb8146ef2b1c6374774beb7fd11178fd5dca7d21564d0662",
+        23,
+        "7711c1e19e8a80e423b747eec79beecd7c829afee3f401422c651964b06332c1",
     ),
     "recurrence and hook integration": (
         76,
@@ -75,6 +75,8 @@ REMOVED_INEFFECTIVE_TESTS = frozenset(
         "test_on_add_run_task_falls_back_when_core_load_fails",
         "test_performance_large_expressions",
         "test_on_add_preview_hard_cap",
+        "test_doctor_reports_reconcile_backfill_plans",
+        "test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup",
     }
 )
 MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
@@ -971,7 +973,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         }
         self.assertFalse(REMOVED_INEFFECTIVE_TESTS & registered)
         self.assertFalse(REMOVED_INEFFECTIVE_TESTS & top_level)
-        self.assertEqual(len(REMOVED_INEFFECTIVE_TESTS), 5)
+        self.assertEqual(len(REMOVED_INEFFECTIVE_TESTS), 7)
 
     def test_timeline_golden_cases_are_owned_by_timeline_domain(self):
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
@@ -1424,14 +1426,14 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
         self.assertEqual(len(top_level), 0)
-        self.assertEqual(len(registered), 162)
+        self.assertEqual(len(registered), 160)
         self.assertEqual(len(operator.TESTS), 14)
         self.assertEqual(len(configuration.TESTS), 3)
         self.assertEqual(len(installer.TESTS), 9)
         modify = importlib.import_module("dev_tools.golden_tests.modify")
         self.assertEqual(len(modify.TESTS), 43)
         self.assertEqual(len(lifecycle.TESTS), 31)
-        self.assertEqual(len(reconcile.TESTS), 32)
+        self.assertEqual(len(reconcile.TESTS), 30)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)
         self.assertEqual(len(scheduling.TESTS), 14)

@@ -91,7 +91,7 @@ def validate_after_target(
     try:
         if compare_datetimes(until_dt, target_dt) <= 0:
             return (False, f"until must be later than {label}")
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return (False, f"until and {label} could not be compared")
     return (True, None)
 

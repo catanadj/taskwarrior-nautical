@@ -1,6 +1,6 @@
 """Direct contracts for native-until validation, carry, and descriptions."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 import unittest
 
@@ -9,6 +9,27 @@ import nautical_core.native_until as native_until
 
 
 class NativeUntilContracts(unittest.TestCase):
+    def test_until_validation_does_not_hide_timezone_adapter_failures(self) -> None:
+        class BrokenTimezone(tzinfo):
+            def utcoffset(self, _value):
+                raise RuntimeError("timezone adapter failed")
+
+        until = datetime(2026, 8, 3, 18, tzinfo=BrokenTimezone())
+        target = datetime(2026, 8, 3, 9, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(RuntimeError, "timezone adapter failed"):
+            native_until.validate_after_target(until, target, "due")
+
+    def test_until_validation_classifies_malformed_values_as_uncomparable(self) -> None:
+        valid, reason = native_until.validate_after_target(
+            "not-a-datetime",
+            datetime(2026, 8, 3, 9, tzinfo=timezone.utc),
+            "scheduled",
+        )
+
+        self.assertFalse(valid)
+        self.assertEqual(reason, "until and scheduled could not be compared")
+
     def test_exact_carry_detection_does_not_hide_timestamp_adapter_failures(self) -> None:
         class BrokenTimestamp:
             @property

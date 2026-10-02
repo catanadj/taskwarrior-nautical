@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "58e1f6978c2cd864975ef3504d531b2db59c44df20e121f424f3d5ce432be50b"
+    "ec2634235dd582225707ccc38645e12eb4faaf8a1fc4ac78e71d75e0f6b659c0"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -43,8 +43,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "c37f811dc74ed2c50af824c98849b329be7772e87f71b36fa26a6aa3ed47679c",
     ),
     "lifecycle and durable mutation": (
-        26,
-        "8187aecc067a1027398adc20ca97b53c0a81534d3bf5cc044265ed4098f8dd75",
+        22,
+        "2aa8a39d79f30a39d4cc41845b0f86d303f7cf28ee1b5b06b8afe2e1d6e397f7",
     ),
     "operator/query/Doctor/Navigator": (
         23,
@@ -55,8 +55,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     ),
     "reconcile and recovery": (
-        12,
-        "04d0c98d0bbd3c389ea25d844a896ec1a767ea663387000ca74589db6f071631",
+        11,
+        "613490629c4f4db4c3bea28fa1d1cbb7fad60306e599f1af3e3d06c0df551473",
     ),
     "recurrence and hook integration": (
         76,
@@ -538,6 +538,11 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_shared_outbox_persists_integrity_work_without_lifecycle_claiming",
         "test_reconcile_tool_print_plan_includes_evidence",
         "test_reconcile_tool_defaults_core_path_to_install_base",
+        "test_outbox_drain_limit_config_and_env_override",
+        "test_queue_status_does_not_initialize_missing_outbox",
+        "test_health_check_critical_outbox_bytes",
+        "test_health_check_critical_outbox_rows",
+        "test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry",
         "test_shared_outbox_persists_integrity_work_without_lifecycle_claiming",
         "test_reconcile_startup_config_failure_is_structured",
         "test_reconcile_native_until_manual_review_is_not_a_hard_error",
@@ -1077,6 +1082,70 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             "test_reconcile_tool_defaults_core_path_to_install_base", registered
         )
 
+    def test_outbox_drain_configuration_is_owned_by_runtime_config_suite(self):
+        direct = importlib.import_module("tests.test_runtime_config_contracts")
+        self.assertTrue(
+            callable(
+                getattr(
+                    direct.RuntimeConfigContracts,
+                    "test_outbox_drain_limit_config_and_env_override",
+                    None,
+                )
+            )
+        )
+        registered = {
+            fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)
+        }
+        self.assertNotIn("test_outbox_drain_limit_config_and_env_override", registered)
+
+    def test_read_only_queue_contract_is_owned_by_operator_process_suite(self):
+        direct = importlib.import_module("tests.test_operator_process_contract")
+        self.assertTrue(
+            callable(
+                getattr(
+                    direct.OperatorProcessContractTests,
+                    "test_core_queue_status_does_not_create_missing_outbox",
+                    None,
+                )
+            )
+        )
+        registered = {
+            fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)
+        }
+        self.assertNotIn("test_queue_status_does_not_initialize_missing_outbox", registered)
+
+    def test_health_check_budget_contracts_are_owned_by_operator_process_suite(self):
+        direct = importlib.import_module("tests.test_operator_process_contract")
+        registered = {
+            fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)
+        }
+        for name in (
+            "test_health_check_critical_outbox_bytes",
+            "test_health_check_critical_outbox_rows",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(callable(getattr(direct.OperatorProcessContractTests, name, None)))
+                self.assertNotIn(name, registered)
+
+    def test_hookless_recovery_carry_contract_is_owned_by_generation_suite(self):
+        direct = importlib.import_module("tests.test_chain_generation_recovery_contract")
+        self.assertTrue(
+            callable(
+                getattr(
+                    direct.IntegrityRecoveryContractTests,
+                    "test_hookless_recovery_preserves_scheduled_and_wait_offsets",
+                    None,
+                )
+            )
+        )
+        registered = {
+            fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)
+        }
+        self.assertNotIn(
+            "test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry",
+            registered,
+        )
+
     def test_unit_tests_do_not_import_the_golden_runner_directly(self):
         tests_dir = Path(__file__).resolve().parent
         offenders = []
@@ -1580,19 +1649,19 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
         self.assertEqual(len(top_level), 0)
-        self.assertEqual(len(registered), 148)
+        self.assertEqual(len(registered), 143)
         self.assertEqual(len(operator.TESTS), 14)
         self.assertEqual(len(configuration.TESTS), 3)
         self.assertEqual(len(installer.TESTS), 9)
         modify = importlib.import_module("dev_tools.golden_tests.modify")
         self.assertEqual(len(modify.TESTS), 43)
         self.assertEqual(len(lifecycle.TESTS), 31)
-        self.assertEqual(len(reconcile.TESTS), 18)
+        self.assertEqual(len(reconcile.TESTS), 13)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)
         self.assertEqual(len(scheduling.TESTS), 14)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 0)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 716)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 721)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
         storage = importlib.import_module("dev_tools.golden_tests.storage")

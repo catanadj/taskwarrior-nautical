@@ -232,7 +232,7 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
                     "--only",
                     "navigator_uses_anchor_and_anchor_file_sources",
                     "--only",
-                    "reconcile_hookless_completion_verifies_scheduled_and_wait_carry",
+                    "reconcile_tool_path_computes_timed_anchor_in_configured_timezone",
                 ],
                 check=False,
                 capture_output=True,

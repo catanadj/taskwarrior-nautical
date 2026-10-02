@@ -61,6 +61,73 @@ class OperatorProcessContractTests(HookSubprocessFixture):
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertEqual(self._json(process).get("status"), "ok")
 
+    def test_health_check_critical_outbox_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            outbox = Path(taskdata) / ".nautical-state" / ".nautical_lifecycle_outbox.db"
+            outbox.parent.mkdir()
+            outbox.write_text("x" * 64, encoding="utf-8")
+            process = self._run(
+                HEALTH_CHECK,
+                "--taskdata",
+                taskdata,
+                "--outbox-warn-bytes",
+                "32",
+                "--outbox-crit-bytes",
+                "48",
+                "--json",
+            )
+
+        self.assertEqual(process.returncode, 2, process.stderr)
+        self.assertEqual(self._json(process).get("status"), "crit")
+
+    def test_health_check_critical_outbox_rows(self) -> None:
+        import sqlite3
+
+        from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+
+        with tempfile.TemporaryDirectory() as taskdata:
+            repository = _LifecycleOutboxRepository(Path(taskdata))
+            self.assertTrue(repository.open().ok)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "INSERT INTO lifecycle_outbox "
+                    "(intent_id, plan_json, plan_fingerprint, parent_guard_json, "
+                    "configuration_fingerprint, schedule_fingerprint, "
+                    "lifecycle_stage, processing_state, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "health-row",
+                        "{}",
+                        "test",
+                        "{}",
+                        "test",
+                        "test",
+                        "planned",
+                        "ready",
+                        1.0,
+                        1.0,
+                    ),
+                )
+            process = self._run(
+                HEALTH_CHECK,
+                "--taskdata",
+                taskdata,
+                "--outbox-warn-bytes",
+                "1048576",
+                "--outbox-crit-bytes",
+                "10485760",
+                "--outbox-warn-rows",
+                "1",
+                "--outbox-crit-rows",
+                "1",
+                "--json",
+            )
+
+        self.assertEqual(process.returncode, 2, process.stderr)
+        payload = self._json(process)
+        self.assertEqual(payload.get("status"), "crit")
+        self.assertEqual((payload.get("outbox") or {}).get("rows"), 1)
+
     def test_queue_status_json_ok_empty_taskdata(self) -> None:
         with tempfile.TemporaryDirectory() as taskdata:
             process = self._run(DEV_QUEUE_STATUS, "--taskdata", taskdata, "--json")
@@ -71,6 +138,17 @@ class OperatorProcessContractTests(HookSubprocessFixture):
         outbox = payload.get("outbox") or {}
         self.assertEqual(outbox.get("states"), {})
         self.assertEqual((outbox.get("schema") or {}).get("status"), "absent")
+
+    def test_core_queue_status_does_not_create_missing_outbox(self) -> None:
+        from nautical_core.lifecycle.outbox import lifecycle_outbox_path
+
+        with tempfile.TemporaryDirectory() as taskdata:
+            state_dir = Path(taskdata) / ".nautical-state"
+            process = self._run(QUEUE_STATUS, "--taskdata", taskdata, "--json")
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertEqual(process.stderr, "")
+            self.assertFalse(state_dir.exists())
+            self.assertFalse(lifecycle_outbox_path(Path(taskdata)).exists())
 
     def test_queue_status_explicit_prune_reports_maintenance_result(self) -> None:
         with tempfile.TemporaryDirectory() as taskdata:

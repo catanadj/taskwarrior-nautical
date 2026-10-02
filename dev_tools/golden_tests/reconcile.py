@@ -121,77 +121,6 @@ def test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review():
         expect(any(finding.get("invariant_id") == "slot.duplicate_occupant" for finding in audit.get("findings", ())), f"duplicate-slot finding was not reported: {payload!r}")
 
 
-def test_health_check_critical_outbox_bytes():
-    """health check should return critical when the lifecycle outbox exceeds its byte budget."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = os.path.join(root, "dev_tools", "nautical_health_check.py")
-    with tempfile.TemporaryDirectory() as td:
-        outbox = Path(td) / ".nautical-state" / ".nautical_lifecycle_outbox.db"
-        outbox.parent.mkdir()
-        outbox.write_text("x" * 64, encoding="utf-8")
-        proc = subprocess.run([sys.executable, path, "--taskdata", td, "--outbox-warn-bytes", "32", "--outbox-crit-bytes", "48", "--json"], text=True, capture_output=True, timeout=8.0)
-        expect(proc.returncode == 2, f"expected critical exit code 2, got {proc.returncode}. stderr={proc.stderr!r}")
-        obj = json.loads((proc.stdout or "").strip() or "{}")
-        expect(obj.get("status") == "crit", f"unexpected status: {obj}")
-
-
-def test_health_check_critical_outbox_rows():
-    """health check should return critical when lifecycle outbox rows exceed their budget."""
-    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
-
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = os.path.join(root, "dev_tools", "nautical_health_check.py")
-    with tempfile.TemporaryDirectory() as td:
-        repo = _LifecycleOutboxRepository(Path(td))
-        expect(repo.open().ok, "outbox health test setup failed")
-        with sqlite3.connect(str(repo.path)) as conn:
-            conn.execute("INSERT INTO lifecycle_outbox (intent_id, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, schedule_fingerprint, lifecycle_stage, processing_state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("health-row", "{}", "test", "{}", "test", "test", "planned", "ready", 1.0, 1.0))
-            conn.commit()
-        proc = subprocess.run([sys.executable, path, "--taskdata", td, "--outbox-warn-bytes", "1048576", "--outbox-crit-bytes", "10485760", "--outbox-warn-rows", "1", "--outbox-crit-rows", "1", "--json"], text=True, capture_output=True, timeout=8.0)
-        expect(proc.returncode == 2, f"expected critical exit code 2, got {proc.returncode}. stderr={proc.stderr!r}")
-        obj = json.loads((proc.stdout or "").strip() or "{}")
-        expect(obj.get("status") == "crit", f"unexpected status: {obj}")
-        expect(int((obj.get("outbox") or {}).get("rows") or 0) == 1, f"expected one outbox row, got {obj.get('outbox')}")
-
-
-def test_queue_status_does_not_initialize_missing_outbox():
-    """A read-only queue inspection must not create lifecycle state."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nautical_core.lifecycle.outbox import lifecycle_outbox_path
-
-    path = os.path.join(root, "nautical_core", "tools", "nautical_queue_status.py")
-    with tempfile.TemporaryDirectory() as td:
-        state_dir = Path(td) / ".nautical-state"
-        proc = subprocess.run([sys.executable, path, "--taskdata", td, "--json"], text=True, capture_output=True, timeout=8.0)
-        expect(proc.returncode == 0, f"queue status returned {proc.returncode}: {proc.stderr!r}")
-        expect(not state_dir.exists(), f"queue status initialized state directory: {state_dir}")
-        expect(not lifecycle_outbox_path(Path(td)).exists(), "queue status created an outbox database")
-
-
-def test_outbox_drain_limit_config_and_env_override():
-    """on-exit should use the outbox drain limit unless the process env overrides it."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    with tempfile.TemporaryDirectory() as td:
-        config_path = Path(td) / "nautical.toml"
-        config_path.write_text("\n", encoding="utf-8")
-        script = "import json\nimport nautical_core\nfrom nautical_core.hooks import exit_impl\nexit_impl._load_core()\nprint(json.dumps([nautical_core.OUTBOX_DRAIN_MAX_ITEMS, exit_impl._OUTBOX_BATCH_MAX_ITEMS]))\n"
-        env = os.environ.copy()
-        env["NAUTICAL_CONFIG"] = str(config_path)
-        env["TASKDATA"] = td
-        env.pop("NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS", None)
-        defaulted = subprocess.run([sys.executable, "-c", script], cwd=root, env=env, text=True, capture_output=True, timeout=8.0)
-        expect(defaulted.returncode == 0, f"default outbox drain import failed: {defaulted.stderr!r}")
-        expect(json.loads(defaulted.stdout) == [32, 32], f"unexpected default drain limit: {defaulted.stdout!r}")
-        config_path.write_text("outbox_drain_max_items = 7\n", encoding="utf-8")
-        configured = subprocess.run([sys.executable, "-c", script], cwd=root, env=env, text=True, capture_output=True, timeout=8.0)
-        expect(configured.returncode == 0, f"configured outbox drain import failed: {configured.stderr!r}")
-        expect(json.loads(configured.stdout) == [7, 7], f"config drain limit was not effective: {configured.stdout!r}")
-        env["NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS"] = "3"
-        overridden = subprocess.run([sys.executable, "-c", script], cwd=root, env=env, text=True, capture_output=True, timeout=8.0)
-        expect(overridden.returncode == 0, f"queue drain override import failed: {overridden.stderr!r}")
-        expect(json.loads(overridden.stdout) == [7, 3], f"environment outbox drain override did not win: {overridden.stdout!r}")
-
-
 def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
     """Actual reconcile tool loading should compute @t slots as configured-local time."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -284,26 +213,6 @@ def test_reconcile_apply_refuses_a_second_full_run():
     summary = json.loads(output.getvalue())
     expect(result == 1, f"busy reconcile returned {result}")
     expect(summary.get("stage") == "apply_lock", f"busy reconcile was not reported as a lease conflict: {summary!r}")
-
-
-def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
-    """Hookless recovery should preserve and verify scheduled/wait offsets."""
-    reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    mod = load_hook_module(find_hook_file("on-modify.nautical"), "_nautical_reconcile_hookless_carry_test")
-    due = mod.core.build_local_datetime(date(2026, 7, 20), (10, 0))
-    scheduled = mod.core.build_local_datetime(date(2026, 7, 20), (9, 30))
-    wait = mod.core.build_local_datetime(date(2026, 7, 20), (8, 0))
-    parent = {"uuid": "11111111-0000-4000-8000-000000000001", "status": "completed", "cp": "7d", "chain": "on", "chainID": "11111111", "link": 1, "due": mod.core.fmt_isoz(due), "scheduled": mod.core.fmt_isoz(scheduled), "wait": mod.core.fmt_isoz(wait), "end": mod.core.fmt_isoz(due + timedelta(hours=1))}
-    plan = recovery_plan(reconcile, parent, existing_children=[], hook=mod)
-    child = recovery_child(plan)
-    expect(recovery_action(plan) == "spawn" and child is not None, f"valid hookless carry did not produce a child: {plan}")
-    child_due = mod.core.parse_dt_any(child.get("due"))
-    expect(mod.core.parse_dt_any(child.get("scheduled")) - child_due == scheduled - due, f"scheduled carry drifted: {child!r}")
-    expect(mod.core.parse_dt_any(child.get("wait")) - child_due == wait - due, f"wait carry drifted: {child!r}")
-    failed = recovery_plan(reconcile, dict(parent, scheduled="not-a-date"), existing_children=[], hook=mod)
-    expect(recovery_action(failed) == "error" and "scheduled" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
-    failed_wait = recovery_plan(reconcile, dict(parent, wait="not-a-date"), existing_children=[], hook=mod)
-    expect(recovery_action(failed_wait) == "error" and "wait" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
 
 
 def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
@@ -1091,14 +1000,9 @@ TESTS = (
     test_non_hour_dst_carry_and_reconcile_share_core_policy,
     test_carry_field_failure_defers_completion_and_reconcile_mutation,
     test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review,
-    test_outbox_drain_limit_config_and_env_override,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
-    test_health_check_critical_outbox_bytes,
-    test_health_check_critical_outbox_rows,
-    test_queue_status_does_not_initialize_missing_outbox,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_subprocess_output_contracts,
     test_reconcile_apply_lease_serializes_mutations,
     test_reconcile_apply_refuses_a_second_full_run,
-    test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
 ) + tuple(globals()[name] for name in _NAMES)

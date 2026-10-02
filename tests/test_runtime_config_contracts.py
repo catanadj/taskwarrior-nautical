@@ -1,5 +1,11 @@
 """Direct contracts for effective runtime configuration snapshots."""
 
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 
@@ -33,6 +39,44 @@ def _validate_scheduling_owner(
 
 
 class RuntimeConfigContracts(unittest.TestCase):
+    def test_outbox_drain_limit_config_and_env_override(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "nautical.toml"
+            config_path.write_text("\n", encoding="utf-8")
+            script = (
+                "import json; import nautical_core; "
+                "from nautical_core.hooks import exit_impl; "
+                "exit_impl._load_core(); "
+                "print(json.dumps([nautical_core.OUTBOX_DRAIN_MAX_ITEMS, "
+                "exit_impl._OUTBOX_BATCH_MAX_ITEMS]))"
+            )
+            environment = os.environ.copy()
+            environment.update(
+                {"NAUTICAL_CONFIG": str(config_path), "TASKDATA": directory}
+            )
+            environment.pop("NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS", None)
+
+            def run_configured() -> list[int]:
+                process = subprocess.run(
+                    [sys.executable, "-c", script],
+                    cwd=root,
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                    timeout=8.0,
+                )
+                self.assertEqual(
+                    process.returncode, 0, process.stdout + process.stderr
+                )
+                return json.loads(process.stdout)
+
+            self.assertEqual(run_configured(), [32, 32])
+            config_path.write_text("outbox_drain_max_items = 7\n", encoding="utf-8")
+            self.assertEqual(run_configured(), [7, 7])
+            environment["NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS"] = "3"
+            self.assertEqual(run_configured(), [7, 3])
+
     def test_domain_validation_fails_closed_for_astronomy_presets_and_calendars(self) -> None:
         def invalid_astronomy():
             raise ValueError("latitude must be within range")

@@ -675,6 +675,62 @@ class ChainGenerationContractTests(unittest.TestCase):
 
 
 class IntegrityRecoveryContractTests(unittest.TestCase):
+    def test_hookless_recovery_preserves_scheduled_and_wait_offsets(self):
+        import nautical_core as core
+        from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
+        from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal
+
+        generation = ChainGenerationService.from_core(core)
+        parent = _observation(
+            status="completed",
+            description="typed fixture task",
+            cp="7d",
+            due="2026-07-20T10:00:00Z",
+            end="2026-07-20T11:00:00Z",
+            until="2026-08-03T10:00:00Z",
+            scheduled="2026-07-20T09:30:00Z",
+            wait="2026-07-20T08:00:00Z",
+        )
+        plan = plan_recovery_decision(
+            parent, existing_children=(), hook=None, generation=generation
+        )
+        self.assertIsInstance(plan, RecoveryPlanResult)
+        assert isinstance(plan, RecoveryPlanResult)
+        child = plan.plan.child_dict()
+        child_due = datetime.fromisoformat(child["due"].replace("Z", "+00:00"))
+        child_scheduled = datetime.fromisoformat(
+            child["scheduled"].replace("Z", "+00:00")
+        )
+        child_wait = datetime.fromisoformat(child["wait"].replace("Z", "+00:00"))
+        parent_due = datetime.fromisoformat("2026-07-20T10:00:00+00:00")
+        parent_scheduled = datetime.fromisoformat("2026-07-20T09:30:00+00:00")
+        parent_wait = datetime.fromisoformat("2026-07-20T08:00:00+00:00")
+        self.assertEqual(child_scheduled - child_due, parent_scheduled - parent_due)
+        self.assertEqual(child_wait - child_due, parent_wait - parent_due)
+
+        for field in ("scheduled", "wait"):
+            with self.subTest(field=field):
+                invalid_fields = {
+                    "status": "completed",
+                    "description": "typed fixture task",
+                    "cp": "7d",
+                    "due": "2026-07-20T10:00:00Z",
+                    "end": "2026-07-20T11:00:00Z",
+                    "until": "2026-08-03T10:00:00Z",
+                    "scheduled": "2026-07-20T09:30:00Z",
+                    "wait": "2026-07-20T08:00:00Z",
+                }
+                invalid_fields[field] = "not-a-date"
+                invalid = plan_recovery_decision(
+                    _observation(**invalid_fields),
+                    existing_children=(),
+                    hook=None,
+                    generation=generation,
+                )
+                self.assertIsInstance(invalid, RecoveryRefusal)
+                assert isinstance(invalid, RecoveryRefusal)
+                self.assertIn(field, invalid.reason)
+
     def test_existing_children_and_ambiguous_slots_are_fail_closed(self):
         child = _observation(uuid="22222222-2222-4222-8222-222222222222", link=2)
         service = IntegrityRecoveryService(child_lookup=lambda chain, link: child if (chain, link) == ("chain-a", 2) else None)

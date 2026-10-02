@@ -1,6 +1,7 @@
 """Error contracts for the reconcile operator boundary."""
 
 import contextlib
+from datetime import date, timedelta, timezone
 import io
 import json
 import os
@@ -12,6 +13,10 @@ import unittest
 from unittest.mock import patch
 
 import nautical_core.tools.nautical_reconcile as reconcile
+import nautical_core as core
+import nautical_core.modify_datetime_effects as datetime_effects
+import nautical_core.timezone_facade as timezone_facade
+from nautical_core.task_datetime import parser_for_core
 from nautical_core.lifecycle.reconciliation import (
     LifecycleChildReadUnavailable,
     LifecycleReconciliationService,
@@ -27,6 +32,88 @@ from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_native_until_carry_fallback_and_verification_contract(self) -> None:
+        from nautical_core.chain_integrity_lifecycle import (
+            fallback_native_until_at_day_end,
+            invalid_native_until_reason,
+            repair_native_until_from_previous,
+        )
+
+        parser = parser_for_core(core)
+        ports = datetime_effects.datetime_effect_ports_for(SimpleNamespace(core=core))
+
+        def stamp(day: int, hour: int) -> str:
+            return core.fmt_isoz(core.build_local_datetime(date(2026, 7, day), (hour, 0)))
+
+        def observation(**fields: object) -> TaskObservation:
+            return TaskObservation.from_mapping(
+                {
+                    "uuid": "00000000-0000-4000-8000-000000003241",
+                    "status": "pending", "chain": "on", "chainID": "until-test",
+                    "link": 1, **fields,
+                },
+                source_query="reconcile native-until contract",
+            )
+
+        with patch.object(timezone_facade, "_local_timezone", timezone.utc):
+            previous = observation(
+                status="completed", due=stamp(20, 9), until=stamp(20, 23)
+            )
+            current = observation(due=stamp(22, 9), until=stamp(21, 23))
+            self.assertTrue(invalid_native_until_reason(current, safe_parse_datetime=parser.parse))
+            repaired, error = repair_native_until_from_previous(
+                previous, current, kind="anchor",
+                safe_parse_datetime=parser.parse,
+                fmt_isoz=core.fmt_isoz,
+                utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(ports, value),
+                local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(ports, value),
+            )
+            self.assertIsNone(error)
+            self.assertEqual(repaired, stamp(22, 23))
+
+            fallback, error = fallback_native_until_at_day_end(
+                observation(due=stamp(23, 9)),
+                safe_parse_datetime=parser.parse,
+                fmt_isoz=core.fmt_isoz,
+                utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(ports, value),
+                local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(ports, value),
+            )
+            self.assertIsNone(error)
+            self.assertEqual(fallback, stamp(23, 23))
+
+            late_fallback, error = fallback_native_until_at_day_end(
+                observation(due=stamp(23, 23)),
+                safe_parse_datetime=parser.parse,
+                fmt_isoz=core.fmt_isoz,
+                utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(ports, value),
+                local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(ports, value),
+            )
+            self.assertIsNone(late_fallback)
+            self.assertIn("at or after local 23:00", error or "")
+
+            expected_until = stamp(23, 23)
+            compact_expected = expected_until.replace("-", "").replace(":", "")
+            self.assertTrue(
+                reconcile._native_until_matches(
+                    observation(until=compact_expected), expected_until,
+                    SimpleNamespace(datetime_parser=parser),
+                )
+            )
+            shifted_until = (parser.parse(expected_until)[0] + timedelta(hours=1))
+            self.assertFalse(
+                reconcile._native_until_matches(
+                    observation(until=core.fmt_isoz(shifted_until)), expected_until,
+                    SimpleNamespace(datetime_parser=parser),
+                )
+            )
+            self.assertIn(
+                "due",
+                reconcile._native_until_guard_error(
+                    observation(uuid="parent", due="20260801T090000Z"),
+                    observation(uuid="parent", due="20260802T090000Z"),
+                ) or "",
+            )
+
     def test_apply_lease_is_exclusive_and_released(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             taskdata = Path(directory)

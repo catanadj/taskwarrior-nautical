@@ -41,6 +41,19 @@ class OperatorCommandContractTests(HookSubprocessFixture):
         self.assertIsInstance(payload, dict)
         return payload
 
+    def test_reconcile_startup_failures_keep_mode_specific_output_streams(self) -> None:
+        json_result = self._run(RECONCILE, "--task-bin", "/missing/nautical-task", "--json")
+        self.assertEqual(json_result.returncode, 1)
+        payload = self._json(json_result)
+        self.assertEqual(payload.get("status"), "error")
+        self.assertEqual(payload.get("startup_errors"), 1)
+        self.assertEqual(json_result.stderr, "")
+
+        human_result = self._run(RECONCILE, "--task-bin", "/missing/nautical-task")
+        self.assertEqual(human_result.returncode, 1)
+        self.assertEqual(human_result.stdout, "")
+        self.assertIn("Taskwarrior executable was not found", human_result.stderr)
+
     def test_query_empty_stdin_is_structured_invalid_request(self) -> None:
         process = self._run(QUERY, "occurrences", input_text="\n")
         self.assertEqual(process.returncode, 2)

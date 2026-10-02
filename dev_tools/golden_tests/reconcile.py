@@ -158,30 +158,6 @@ def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
             os.environ["NAUTICAL_CORE_PATH"] = prev_core_path
 
 
-def test_reconcile_subprocess_output_contracts():
-    """Operator subprocess modes keep JSON on stdout and diagnostics on stderr."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    base = [sys.executable, str(tool), "--task-bin", "/missing/nautical-task"]
-    json_run = subprocess.run(
-        [*base, "--json"], cwd=str(root), text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-    )
-    expect(json_run.returncode == 1, f"JSON startup failure returned {json_run.returncode}")
-    payload = json.loads(json_run.stdout)
-    expect(payload.get("status") == "error", f"JSON startup status was not error: {payload!r}")
-    expect(payload.get("startup_errors") == 1, f"JSON startup error count missing: {payload!r}")
-    expect(json_run.stderr == "", f"JSON mode leaked diagnostics to stderr: {json_run.stderr!r}")
-
-    human_run = subprocess.run(
-        base, cwd=str(root), text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-    )
-    expect(human_run.returncode == 1, f"human startup failure returned {human_run.returncode}")
-    expect(human_run.stdout == "", f"human startup failure polluted stdout: {human_run.stdout!r}")
-    expect("Taskwarrior executable was not found" in human_run.stderr, f"human diagnostic was not actionable: {human_run.stderr!r}")
-
-
 def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
     """A deleted anchor occurrence receives one real linked successor."""
     _find_hook_file = find_hook_file
@@ -325,126 +301,6 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     )
     mod.core.SEASON_HEMISPHERE = previous_core_hemisphere
     season_support.configure_hemisphere(previous_hemisphere)
-def test_reconcile_repairs_invalid_native_until_from_previous_link():
-    """Hookless due moves should recover the prior link's native-until carry policy."""
-    _find_hook_file = find_hook_file
-    _load_hook_module = load_hook_module
-    _task_observation = task_observation
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    hook_path = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook_path, "_nautical_until_reconcile_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    def stamp(day, hhmm):
-        return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
-
-    previous = {
-        "uuid": "00000000-0000-4000-8000-000000003241",
-        "description": "previous",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "until-test",
-        "link": 1,
-        "due": stamp(date(2026, 7, 20), (9, 0)),
-        "until": stamp(date(2026, 7, 20), (23, 0)),
-    }
-    current = {
-        "uuid": "00000000-0000-4000-8000-000000003242",
-        "description": "current",
-        "status": "pending",
-        "chain": "on",
-        "chainID": "until-test",
-        "link": 2,
-        "due": stamp(date(2026, 7, 22), (9, 0)),
-        "until": stamp(date(2026, 7, 21), (23, 0)),
-    }
-    datetime_effects = mod._module("modify_datetime_effects")
-    datetime_ports = datetime_effects.datetime_effect_ports_for(mod)
-    expect(
-        reconcile.invalid_native_until_reason(_task_observation(current), safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse),
-        "invalid native-until window was not detected",
-    )
-    repaired, error = reconcile.repair_native_until_from_previous(
-        _task_observation(previous),
-        _task_observation(current),
-        kind="anchor",
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-        fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
-        local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
-    )
-    expect(not error and repaired == stamp(date(2026, 7, 22), (23, 0)), f"wrong carried until: {repaired}, {error}")
-    fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
-        _task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003243", "description": "fallback",
-            "status": "pending", "chain": "on", "chainID": "until-test", "link": 3,
-            "due": stamp(date(2026, 7, 23), (9, 0)),
-        }),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-        fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
-        local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
-    )
-    expect(
-        not fallback_error and fallback == stamp(date(2026, 7, 23), (23, 0)),
-        f"fallback did not use local 23:00: {fallback}, {fallback_error}",
-    )
-    late_fallback, late_error = reconcile.fallback_native_until_at_day_end(
-        _task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003244", "description": "late fallback",
-            "status": "pending", "chain": "on", "chainID": "until-test", "link": 4,
-            "due": stamp(date(2026, 7, 23), (23, 0)),
-        }),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-        fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
-        local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
-    )
-    expect(
-        late_fallback is None and "at or after local 23:00" in (late_error or ""),
-        f"late due did not fail closed: {late_fallback}, {late_error}",
-    )
-    tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-        "_nautical_reconcile_until_format_test",
-    )
-    expected_until = stamp(date(2026, 7, 23), (23, 0))
-    compact_expected = expected_until.replace("-", "").replace(":", "")
-    actual_dt, actual_parse_error = mod._TASK_DATETIME_PARSER.parse(compact_expected)
-    expected_dt, expected_parse_error = mod._TASK_DATETIME_PARSER.parse(expected_until)
-    expect(
-        tool._native_until_matches(_task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003245", "description": "verify",
-            "status": "pending", "chain": "on", "chainID": "until-test", "link": 5,
-            "until": compact_expected,
-        }), expected_until, mod),
-        f"Taskwarrior's compact UTC timestamp should verify against the fallback instant: "
-        f"{actual_dt!r}/{actual_parse_error!r} != {expected_dt!r}/{expected_parse_error!r}",
-    )
-    expect(
-        not tool._native_until_matches(
-            _task_observation({
-                "uuid": "00000000-0000-4000-8000-000000003246", "description": "different",
-                "status": "pending", "chain": "on", "chainID": "until-test", "link": 6,
-                "until": mod.core.fmt_isoz(expected_dt + timedelta(hours=1)),
-            }), expected_until, mod
-        ),
-        "a different native-until instant must fail verification",
-    )
-    guard_error = tool._native_until_guard_error(
-        _task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003247", "description": "guard",
-            "status": "pending", "chain": "on", "chainID": "cid", "link": 2, "due": "20260801T090000Z",
-        }),
-        _task_observation({
-            "uuid": "00000000-0000-4000-8000-000000003247", "description": "guard",
-            "status": "pending", "chain": "on", "chainID": "cid", "link": 2, "due": "20260802T090000Z",
-        }),
-    )
-    expect(guard_error and "due" in guard_error, f"target drift was not detected: {guard_error!r}")
-
 def test_integration_contract_covers_all_mutation_and_outbox_states():
     """Every tagged integration outcome has one valid constructible shape."""
     from nautical_core.integration_models import (
@@ -967,7 +823,5 @@ TESTS = (
     test_non_hour_dst_carry_and_reconcile_share_core_policy,
     test_carry_field_failure_defers_completion_and_reconcile_mutation,
     test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review,
-    test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
-    test_reconcile_subprocess_output_contracts,
 ) + tuple(globals()[name] for name in _NAMES)

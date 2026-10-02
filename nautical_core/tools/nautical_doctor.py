@@ -107,6 +107,8 @@ def _color_enabled(stream: Any = None) -> bool:
     try:
         return bool(target.isatty())
     except Exception:
+        # Terminal capability is presentation-only; a broken stream must not
+        # prevent Doctor from reporting health in plain text.
         return False
 
 

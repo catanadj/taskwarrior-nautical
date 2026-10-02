@@ -16,6 +16,14 @@ doctor = importlib.import_module("nautical_core.tools.nautical_doctor")
 
 
 class DoctorConfigurationContractTests(unittest.TestCase):
+    def test_color_probe_failure_falls_back_to_plain_output(self) -> None:
+        class BrokenTerminalProbe:
+            def isatty(self) -> bool:
+                raise RuntimeError("terminal probe unavailable")
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(doctor._color_enabled(BrokenTerminalProbe()))
+
     def test_timezone_findings_distinguish_missing_and_unavailable_zones(self) -> None:
         service = doctor.OperatorHealthService
         missing = service.timezone_findings({}, ZoneInfo)[0].to_doctor_dict()

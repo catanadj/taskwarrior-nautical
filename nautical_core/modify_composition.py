@@ -146,6 +146,17 @@ class _ModifyUIEffects(Protocol):
     def panel(self, ports: object, title: Any, rows: Any, **kwargs: Any) -> Any: ...
 
 
+class _ModifyQueries(Protocol):
+    def query_ports_for(self, host: Any) -> object: ...
+
+    def cached_format_root_and_age(
+        self,
+        ports: object,
+        task: TaskPayload,
+        now_utc: Any,
+    ) -> str: ...
+
+
 class _ModifyTaskFields(Protocol):
     def field_changed(self, old: TaskPayload, new: TaskPayload, key: str) -> bool: ...
 
@@ -245,7 +256,7 @@ class ModifyHookCapabilities:
     modify_task_fields: _ModifyTaskFields
     modify_completion_effects: _ModifyCompletionEffects
     modify_read_effects: Any
-    modify_queries: Any
+    modify_queries: _ModifyQueries
     modify_expiration: Any
     modify_generation_effects: _ModifyGenerationEffects
     task_codec: _TaskCodecModule
@@ -309,7 +320,7 @@ class DeletionRouteCapabilities:
     modify_diagnostics_effects: Any
     modify_ui_effects: _ModifyUIEffects
     modify_expiration: Any
-    modify_queries: Any
+    modify_queries: _ModifyQueries
 
 
 def _cp_carry_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:

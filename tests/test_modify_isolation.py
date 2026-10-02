@@ -37,6 +37,7 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIsNot(capability_annotations["modify_diagnostics_effects"], Any)
         self.assertIsNot(capability_annotations["modify_completion_effects"], Any)
         self.assertIsNot(capability_annotations["modify_ui_effects"], Any)
+        self.assertIsNot(capability_annotations["modify_queries"], Any)
 
     def test_composition_does_not_load_unused_datetime_capability_module(self) -> None:
         from nautical_core.modify_composition import ModifyHookCapabilities
@@ -63,6 +64,11 @@ class ModifyIsolationTests(unittest.TestCase):
             get_type_hints(CompletionRouteCapabilities)["modify_completion_effects"],
             Any,
         )
+
+    def test_deletion_route_query_capability_is_typed(self) -> None:
+        from nautical_core.modify_composition import DeletionRouteCapabilities
+
+        self.assertIsNot(get_type_hints(DeletionRouteCapabilities)["modify_queries"], Any)
 
     def test_schedule_period_helper_uses_only_explicit_ports(self) -> None:
         from datetime import datetime, timedelta, timezone

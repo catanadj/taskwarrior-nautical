@@ -83,6 +83,40 @@ class ExhaustedService:
 
 
 class LifecycleTerminalPlanTests(unittest.TestCase):
+    def test_planner_preserves_successor_limit_error_context(self) -> None:
+        from nautical_core.lifecycle.planner import LifecyclePlanningError
+
+        source = task_snapshot({
+            "uuid": "00000000-0000-4000-8000-000000000931",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "planner-errors",
+            "link": 4,
+            "cp": "1d",
+        })
+
+        class Recurrence:
+            def next_candidate(self, *_args: object) -> RecurrenceCandidate:
+                return RecurrenceCandidate("2026-08-13T09:00:00Z")
+
+            def build_child(self, *_args: object) -> None:
+                raise AssertionError("limit failure must prevent child construction")
+
+        def fail_limit(*_args: object) -> str | None:
+            raise RuntimeError("limit callback invariant failed")
+
+        with self.assertRaisesRegex(
+            LifecyclePlanningError,
+            "^successor limit evaluation failed: RuntimeError: limit callback invariant failed$",
+        ) as raised:
+            LifecyclePlanner(
+                {"scheduler_fingerprint": "planner-errors"},
+                recurrence_service=Recurrence(),
+                successor_limit_policy=fail_limit,
+            ).plan(source, LifecycleEvent.COMPLETE)
+
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
     def test_parent_mutation_guard_uses_stable_terminal_timestamp(self) -> None:
         guard = MutationGuard(
             task_uuid="00000000-0000-4000-8000-000000000777",

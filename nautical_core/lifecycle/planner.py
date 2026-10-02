@@ -554,7 +554,11 @@ class LifecyclePlanner:
                     candidate,
                     target_link or 0,
                 )
+            except LifecyclePlanningError:
+                raise
             except Exception as exc:
+                # Keep one typed planning boundary while retaining callback
+                # detail and cause for diagnosis by lifecycle callers.
                 raise LifecyclePlanningError(
                     f"could not build {event.value} successor: {type(exc).__name__}: {exc}"
                 ) from exc

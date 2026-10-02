@@ -59,6 +59,12 @@ class ModifyIsolationTests(unittest.TestCase):
             TemporalCarryDecision,
         )
 
+    def test_native_carry_ports_have_concrete_dependencies(self) -> None:
+        from nautical_core.modify_transition_effects import NativeCarryPorts
+
+        annotations = get_type_hints(NativeCarryPorts)
+        self.assertTrue(all(annotation is not Any for annotation in annotations.values()))
+
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone
         from nautical_core.chain_generation import CarryFieldError

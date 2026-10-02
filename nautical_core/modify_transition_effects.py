@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, NoReturn, Protocol
 
 from .modify_carry_workflow import TemporalCarryDecision
 from .modify_validation import CompletionValidationServices
@@ -14,13 +14,33 @@ from .task_models import TaskPayload
 
 @dataclass(frozen=True, slots=True)
 class NativeCarryPorts:
-    describe_carry: Any
-    parse_datetime: Any
-    to_local: Any
-    format_local: Any
-    anchor_field: Any
-    panel: Any
-    abort: Any
+    describe_carry: "NativeCarryDescription"
+    parse_datetime: Callable[[object], datetime | None]
+    to_local: Callable[[datetime], datetime]
+    format_local: Callable[[datetime], str]
+    anchor_field: Callable[[TaskPayload], str]
+    panel: "NativeCarryPanel"
+    abort: Callable[[int], NoReturn]
+
+
+class NativeCarryDescription(Protocol):
+    def __call__(
+        self,
+        until_dt: datetime | None,
+        target_dt: datetime | None,
+        *,
+        to_local: Callable[[datetime], datetime],
+    ) -> str | None: ...
+
+
+class NativeCarryPanel(Protocol):
+    def __call__(
+        self,
+        title: str,
+        rows: list[tuple[str, str]],
+        *,
+        kind: str,
+    ) -> object: ...
 
 
 @dataclass(frozen=True, slots=True)

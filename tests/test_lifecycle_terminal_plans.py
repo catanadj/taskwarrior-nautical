@@ -21,6 +21,7 @@ from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, Recovery
 from nautical_core.lifecycle.planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
 from nautical_core.chain_integrity_lifecycle import (
     deleted_chain_disposition,
+    int_or_default,
     is_orphan_expiration_candidate,
 )
 from nautical_core.reconcile_report import describe_recovery_result
@@ -83,6 +84,14 @@ class ExhaustedService:
 
 
 class LifecycleTerminalPlanTests(unittest.TestCase):
+    def test_link_conversion_does_not_hide_unexpected_integer_adapter_errors(self) -> None:
+        class BrokenFloat(float):
+            def __int__(self) -> int:
+                raise RuntimeError("integer adapter defect")
+
+        with self.assertRaisesRegex(RuntimeError, "integer adapter defect"):
+            int_or_default(BrokenFloat(4.0), 1)
+
     def test_planner_preserves_successor_limit_error_context(self) -> None:
         from nautical_core.lifecycle.planner import LifecyclePlanningError
 

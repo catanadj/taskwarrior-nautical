@@ -158,7 +158,7 @@ def int_or_default(value: object, default: int = 0) -> int:
         return default
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 

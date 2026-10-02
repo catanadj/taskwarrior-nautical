@@ -106,7 +106,7 @@ def safe_lock_stale_pid(
                 age = time_mod.time() - float(parts[1])
                 if age < float(stale_after):
                     return False
-            except Exception:
+            except (ValueError, OverflowError):
                 pass
         try:
             os_mod.kill(pid, 0)
@@ -115,9 +115,9 @@ def safe_lock_stale_pid(
             return False
         except ProcessLookupError:
             return True
-        except Exception:
+        except OSError:
             return False
-    except Exception:
+    except (OSError, UnicodeError, ValueError, OverflowError):
         return False
 
 

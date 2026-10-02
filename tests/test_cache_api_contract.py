@@ -466,6 +466,38 @@ class CacheApiContractTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "clock invariant failed"):
                 cache_locking.safe_lock_age(str(lock_path), time_mod=BrokenClock(), os_mod=os)
 
+    def test_stale_pid_check_does_not_hide_unexpected_clock_errors(self) -> None:
+        class BrokenClock:
+            def time(self) -> float:
+                raise RuntimeError("clock invariant failed")
+
+            def sleep(self, _seconds: float) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "fallback.lock"
+            lock_path.write_text("123 0\n", encoding="ascii")
+
+            with self.assertRaisesRegex(RuntimeError, "clock invariant failed"):
+                cache_locking.safe_lock_stale_pid(
+                    str(lock_path), 1, time_mod=BrokenClock(), os_mod=os
+                )
+
+    def test_stale_pid_check_does_not_hide_unexpected_process_adapter_errors(self) -> None:
+        class BrokenProcessAdapter:
+            @staticmethod
+            def kill(_pid: int, _signal: int) -> None:
+                raise RuntimeError("process adapter invariant failed")
+
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "fallback.lock"
+            lock_path.write_text("123 0\n", encoding="ascii")
+
+            with self.assertRaisesRegex(RuntimeError, "process adapter invariant failed"):
+                cache_locking.safe_lock_stale_pid(
+                    str(lock_path), None, time_mod=_Clock(), os_mod=BrokenProcessAdapter()
+                )
+
     def test_cache_directory_and_lock_permissions_are_private(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache_dir = Path(temporary) / "cache"

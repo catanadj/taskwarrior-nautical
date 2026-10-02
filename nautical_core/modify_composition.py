@@ -6,10 +6,13 @@ import re
 from dataclasses import dataclass
 from contextlib import nullcontext
 from datetime import datetime
-from typing import Any, Callable, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol
 from .callback_ports import CallbackPort
 from .task_datetime import datetime_value, parser_for_core
 from .task_models import NauticalTask, TaskObservation, TaskPayload
+
+if TYPE_CHECKING:
+    from .lifecycle.models import LifecyclePlan
 
 
 class ModifyCallback(Protocol):
@@ -52,6 +55,16 @@ class _TaskCodecModule(Protocol):
 
 class _TaskModelsModule(Protocol):
     NauticalTask: type[NauticalTask]
+
+
+class _ModifySpawnEffects(Protocol):
+    def spawn_intent_ports_for(self, host: Any) -> object: ...
+
+    def enqueue_spawn_intent(
+        self,
+        ports: object,
+        plan: "LifecyclePlan",
+    ) -> tuple[bool, str]: ...
 
 
 class _HookHost:
@@ -97,7 +110,7 @@ class ModifyHookCapabilities:
     task_codec: _TaskCodecModule
     task_models: _TaskModelsModule
     chain_integrity_lifecycle: Any
-    modify_spawn_effects: Any
+    modify_spawn_effects: _ModifySpawnEffects
 
     @classmethod
     def from_host(cls, host: Any) -> "ModifyHookCapabilities":

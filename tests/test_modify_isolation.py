@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 import unittest
-from typing import Any, get_type_hints
+from typing import Any, get_origin, get_type_hints
 
 
 class ModifyIsolationTests(unittest.TestCase):
@@ -155,6 +155,32 @@ class ModifyIsolationTests(unittest.TestCase):
 
         apply_transition = get_type_hints(CompletionValidationPorts)["apply_transition"]
         self.assertIs(apply_transition.__args__[-1], type(None))
+
+    def test_modify_runtime_services_do_not_use_catch_all_callback_protocol(self) -> None:
+        from collections.abc import Callable as CallableOrigin
+        from nautical_core.modify_composition import ModifyRuntimeServices
+
+        annotations = get_type_hints(ModifyRuntimeServices)
+        callback_fields = {
+            "runtime_state",
+            "import_module",
+            "diag_summary",
+            "diagnostic",
+            "seed_runtime_lookup_tasks",
+            "chain_health_advice",
+            "chain_integrity_warnings",
+            "render_anchor_completion_feedback",
+            "render_cp_completion_feedback",
+            "render_lifecycle_result",
+            "print_task",
+            "prepare_recurrence",
+            "preserve_cp_relative_offsets",
+            "preserve_native_until",
+            "validate_native_until",
+            "validate_native_until_slots",
+            "compute_next_and_limits",
+        }
+        self.assertTrue(all(get_origin(annotations[name]) is CallableOrigin for name in callback_fields))
 
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone

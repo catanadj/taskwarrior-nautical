@@ -26,12 +26,6 @@ if TYPE_CHECKING:
     )
 
 
-class ModifyCallback(Protocol):
-    """Callable service port used by modify-route composition services."""
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
 class _NativeUntilGenerationService(Protocol):
     def carry_native_until(
         self,
@@ -637,28 +631,28 @@ class ModifyRuntimeServices:
     non_completion: NonCompletionRouteCapabilities
     completion: CompletionRouteCapabilities
     deletion: DeletionRouteCapabilities
-    runtime_state: ModifyCallback
-    import_module: ModifyCallback
-    diag_summary: ModifyCallback
-    diagnostic: ModifyCallback
+    runtime_state: Callable[[], Any]
+    import_module: Callable[[str], Any]
+    diag_summary: Callable[[], None]
+    diagnostic: Callable[[str], None]
     show_analytics: bool
     check_integrity: bool
     analytics_style: str
-    seed_runtime_lookup_tasks: ModifyCallback
+    seed_runtime_lookup_tasks: Callable[..., None]
     lifecycle_read_service: Callable[[], Any]
-    chain_health_advice: ModifyCallback
-    chain_integrity_warnings: ModifyCallback
-    render_anchor_completion_feedback: ModifyCallback
-    render_cp_completion_feedback: ModifyCallback
-    render_lifecycle_result: ModifyCallback
-    print_task: ModifyCallback
-    prepare_recurrence: ModifyCallback
-    preserve_cp_relative_offsets: ModifyCallback
-    preserve_native_until: ModifyCallback
-    validate_native_until: ModifyCallback
-    validate_native_until_slots: ModifyCallback
-    now_utc: Callable[[], Any]
-    compute_next_and_limits: ModifyCallback
+    chain_health_advice: Callable[..., Any]
+    chain_integrity_warnings: Callable[..., list[str]]
+    render_anchor_completion_feedback: Callable[..., None]
+    render_cp_completion_feedback: Callable[..., None]
+    render_lifecycle_result: Callable[..., None]
+    print_task: Callable[[TaskPayload], None]
+    prepare_recurrence: Callable[[TaskPayload, TaskPayload], tuple[str, str, str]]
+    preserve_cp_relative_offsets: Callable[..., Any]
+    preserve_native_until: Callable[[TaskPayload, TaskPayload, str], Any]
+    validate_native_until: Callable[[TaskPayload], None]
+    validate_native_until_slots: Callable[[TaskPayload], None]
+    now_utc: Callable[[], datetime]
+    compute_next_and_limits: Callable[..., Any]
 
     @classmethod
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None) -> "ModifyRuntimeServices":

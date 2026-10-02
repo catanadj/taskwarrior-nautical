@@ -136,17 +136,25 @@ def safe_lock_fcntl_context(
     os_mod: Any,
 ) -> Any:
     lf = None
+    fd: int | None = None
     acquired = False
     safe_lock_ensure_parent(path_str, mkdir)
     try:
         fd = os_mod.open(path_str, os_mod.O_CREAT | os_mod.O_RDWR, mode)
         try:
             os_mod.fchmod(fd, mode)
-        except Exception:
+        except OSError:
             pass
         lf = os_mod.fdopen(fd, "a", encoding="utf-8")
-    except Exception:
+        fd = None
+    except OSError:
         lf = None
+    finally:
+        if fd is not None:
+            try:
+                os_mod.close(fd)
+            except OSError:
+                pass
     try:
         if lf is not None:
             for _ in range(tries):
@@ -161,13 +169,14 @@ def safe_lock_fcntl_context(
         try:
             if acquired and lf is not None:
                 fcntl_mod.flock(lf.fileno(), fcntl_mod.LOCK_UN)
-        except Exception:
+        except OSError:
             pass
-        try:
+        finally:
             if lf is not None:
-                lf.close()
-        except Exception:
-            pass
+                try:
+                    lf.close()
+                except OSError:
+                    pass
 
 
 @contextmanager
@@ -189,50 +198,54 @@ def safe_lock_excl_context(
 ) -> Any:
     fd = None
     acquired = False
-    for _ in range(tries):
-        safe_lock_ensure_parent(path_str, mkdir)
-        try:
-            fd = os_mod.open(path_str, os_mod.O_CREAT | os_mod.O_EXCL | os_mod.O_WRONLY, mode)
+    try:
+        for _ in range(tries):
+            safe_lock_ensure_parent(path_str, mkdir)
+            try:
+                fd = os_mod.open(path_str, os_mod.O_CREAT | os_mod.O_EXCL | os_mod.O_WRONLY, mode)
+            except FileExistsError:
+                pid_stale = safe_lock_stale_pid(path_str, stale_after)
+                age_stale = False
+                if stale_after is not None:
+                    age = safe_lock_age(path_str)
+                    if age is not None and age >= float(stale_after):
+                        age_stale = True
+                if pid_stale and age_stale:
+                    try:
+                        os_mod.unlink(path_str)
+                    except OSError:
+                        pass
+                else:
+                    safe_lock_sleep_once(sleep_base, jitter)
+                continue
+            except OSError:
+                break
+
+            acquired = True
             try:
                 os_mod.fchmod(fd, mode)
-            except Exception:
+            except OSError:
                 pass
+
             try:
                 payload = f"{os_mod.getpid()} {int(time_mod.time())}\n"
                 os_mod.write(fd, payload.encode("ascii", "replace"))
-            except Exception:
+            except OSError:
                 pass
-            acquired = True
             break
-        except FileExistsError:
-            pid_stale = safe_lock_stale_pid(path_str, stale_after)
-            age_stale = False
-            if stale_after is not None:
-                age = safe_lock_age(path_str)
-                if age is not None and age >= float(stale_after):
-                    age_stale = True
-            if pid_stale and age_stale:
-                try:
-                    os_mod.unlink(path_str)
-                except OSError:
-                    pass
-            else:
-                safe_lock_sleep_once(sleep_base, jitter)
-        except OSError:
-            break
-    try:
         yield acquired
     finally:
         try:
             if acquired and fd is not None:
                 os_mod.close(fd)
-        except Exception:
+        except OSError:
             pass
-        try:
+        finally:
             if acquired and fd is not None:
-                os_mod.unlink(path_str)
-        except Exception:
-            pass
+                try:
+                    os_mod.unlink(path_str)
+                except OSError:
+                    pass
 
 
 @contextmanager

@@ -563,6 +563,100 @@ class CacheApiContractTests(unittest.TestCase):
             ):
                 self.fail("an unexpected stale-lock cleanup error must propagate")
 
+    def test_fcntl_lock_surfaces_fchmod_errors_and_closes_open_descriptor(self) -> None:
+        class BrokenFilesystem:
+            O_CREAT = os.O_CREAT
+            O_RDWR = os.O_RDWR
+
+            def __init__(self) -> None:
+                self.file_descriptor: int | None = None
+
+            def open(self, path: str, flags: int, mode: int) -> int:
+                self.file_descriptor = os.open(path, flags, mode)
+                return self.file_descriptor
+
+            @staticmethod
+            def fchmod(_file_descriptor: int, _mode: int) -> None:
+                raise RuntimeError("chmod adapter invariant failed")
+
+            @staticmethod
+            def fdopen(file_descriptor: int, mode: str, *, encoding: str):
+                return os.fdopen(file_descriptor, mode, encoding=encoding)
+
+            @staticmethod
+            def close(file_descriptor: int) -> None:
+                os.close(file_descriptor)
+
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "fcntl.lock"
+            filesystem = BrokenFilesystem()
+
+            with self.assertRaisesRegex(RuntimeError, "chmod adapter invariant failed"):
+                with cache_locking.safe_lock_fcntl_context(
+                    str(lock_path),
+                    tries=1,
+                    sleep_base=0,
+                    jitter=0,
+                    mode=0o600,
+                    mkdir=False,
+                    safe_lock_ensure_parent=lambda _path, _mkdir: None,
+                    safe_lock_sleep_once=lambda _base, _jitter: None,
+                    fcntl_mod=fcntl,
+                    os_mod=filesystem,
+                ):
+                    self.fail("unexpected chmod failure must not yield a lock result")
+
+            self.assertIsNotNone(filesystem.file_descriptor)
+            assert filesystem.file_descriptor is not None
+            with self.assertRaises(OSError):
+                os.fstat(filesystem.file_descriptor)
+
+    def test_exclusive_lock_cleans_partial_file_after_unexpected_fchmod_error(self) -> None:
+        class BrokenFilesystem:
+            O_CREAT = 1
+            O_EXCL = 2
+            O_WRONLY = 4
+
+            def __init__(self) -> None:
+                self.closed = False
+                self.unlinked = False
+
+            @staticmethod
+            def open(_path: str, _flags: int, _mode: int) -> int:
+                return 19
+
+            @staticmethod
+            def fchmod(_file_descriptor: int, _mode: int) -> None:
+                raise RuntimeError("chmod adapter invariant failed")
+
+            def close(self, _file_descriptor: int) -> None:
+                self.closed = True
+
+            def unlink(self, _path: str) -> None:
+                self.unlinked = True
+
+        filesystem = BrokenFilesystem()
+        with self.assertRaisesRegex(RuntimeError, "chmod adapter invariant failed"):
+            with cache_locking.safe_lock_excl_context(
+                "lock",
+                tries=1,
+                sleep_base=0,
+                jitter=0,
+                mode=0o600,
+                mkdir=False,
+                stale_after=1,
+                safe_lock_ensure_parent=lambda _path, _mkdir: None,
+                safe_lock_stale_pid=lambda _path, _stale_after: False,
+                safe_lock_age=lambda _path: None,
+                safe_lock_sleep_once=lambda _base, _jitter: None,
+                os_mod=filesystem,
+                time_mod=_Clock(),
+            ):
+                self.fail("unexpected chmod failure must not yield a lock result")
+
+        self.assertTrue(filesystem.closed)
+        self.assertTrue(filesystem.unlinked)
+
     def test_cache_directory_and_lock_permissions_are_private(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache_dir = Path(temporary) / "cache"

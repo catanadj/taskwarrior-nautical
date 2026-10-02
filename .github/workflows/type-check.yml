@@ -64,23 +64,6 @@ jobs:
           nautical_core/scheduler_trace.py
           nautical_core/scheduler_service.py
 
-      - name: Run normal-import facade and query boundary mypy
-        run: >-
-          python3 -m mypy --config-file mypy.ini --follow-imports=normal
-          nautical_core/task_datetime.py
-          nautical_core/api_bindings.py
-          nautical_core/compat_api.py
-          nautical_core/architecture_contract.py
-          nautical_core/integration_context.py
-          nautical_core/query_service.py
-          nautical_core/parser_api.py
-          nautical_core/scheduler_api.py
-          nautical_core/cache_api.py
-          nautical_core/core_context.py
-          nautical_core/recurrence_context.py
-          nautical_core/hook_bootstrap.py
-          nautical_core/occurrence_provider.py
-
       - name: Run full strict package mypy
         run: >-
           python3 -m mypy --config-file mypy.ini

@@ -210,6 +210,19 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertEqual(annotations[field].__name__, protocol_name)
 
+    def test_spawn_services_use_named_payload_callback_contracts(self) -> None:
+        from nautical_core.modify_spawn import SpawnServices
+
+        annotations = get_type_hints(SpawnServices)
+        self.assertEqual(
+            annotations["prepare_spawn_child_payload"].__name__,
+            "_PrepareSpawnChildPayload",
+        )
+        self.assertEqual(
+            annotations["child_uuid_for_spawn"].__name__,
+            "_ChildUUIDForSpawn",
+        )
+
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone
         from nautical_core.chain_generation import CarryFieldError

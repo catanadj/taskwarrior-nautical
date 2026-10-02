@@ -4,13 +4,38 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable
+from datetime import datetime
+from typing import Any, Callable, Protocol
+
+from nautical_core.task_models import TaskDraft, TaskPayload
+
+
+class _ChildUUIDForSpawn(Protocol):
+    def __call__(
+        self,
+        parent_task: TaskPayload | None,
+        child_task: TaskPayload | None,
+        env: dict[str, Any],
+    ) -> str: ...
+
+
+class _PrepareSpawnChildPayload(Protocol):
+    def __call__(
+        self,
+        child_task: TaskPayload,
+        parent_task: TaskPayload | None,
+        env: dict[str, Any],
+        *,
+        child_uuid_for_spawn: _ChildUUIDForSpawn,
+        fmt_isoz: Callable[[datetime], str],
+        now_utc: Callable[[], datetime],
+    ) -> tuple[TaskDraft, str, str]: ...
 
 
 @dataclass(slots=True)
 class SpawnServices:
-    prepare_spawn_child_payload: Callable[..., tuple[Any, str, str]]
-    child_uuid_for_spawn: Callable[..., str]
+    prepare_spawn_child_payload: _PrepareSpawnChildPayload
+    child_uuid_for_spawn: _ChildUUIDForSpawn
     fmt_isoz: Callable[[Any], str]
     now_utc: Callable[[], Any]
     lifecycle_models: Any

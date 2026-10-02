@@ -138,6 +138,14 @@ class _ModifyCompletionEffects(Protocol):
     def build_and_spawn_child(self, ports: object, new: TaskPayload, **kwargs: Any) -> Any: ...
 
 
+class _ModifyUIEffects(Protocol):
+    def ui_ports_for(self, host: Any) -> object: ...
+
+    def print_task(self, ports: object, task: TaskPayload) -> None: ...
+
+    def panel(self, ports: object, title: Any, rows: Any, **kwargs: Any) -> Any: ...
+
+
 class _ModifyTaskFields(Protocol):
     def field_changed(self, old: TaskPayload, new: TaskPayload, key: str) -> bool: ...
 
@@ -233,7 +241,7 @@ class ModifyHookCapabilities:
     modify_presentation_effects: _ModifyPresentationEffects
     modify_diagnostics_effects: _ModifyDiagnosticsEffects
     modify_validation_effects: _ModifyValidationEffects
-    modify_ui_effects: Any
+    modify_ui_effects: _ModifyUIEffects
     modify_task_fields: _ModifyTaskFields
     modify_completion_effects: _ModifyCompletionEffects
     modify_read_effects: Any
@@ -282,7 +290,7 @@ class NonCompletionRouteCapabilities:
     modify_presentation_effects: Any
     modify_diagnostics_effects: Any
     modify_validation_effects: _ModifyValidationEffects
-    modify_ui_effects: Any
+    modify_ui_effects: _ModifyUIEffects
     modify_task_fields: _ModifyTaskFields
 
 
@@ -299,7 +307,7 @@ class DeletionRouteCapabilities:
 
     modify_presentation_effects: Any
     modify_diagnostics_effects: Any
-    modify_ui_effects: Any
+    modify_ui_effects: _ModifyUIEffects
     modify_expiration: Any
     modify_queries: Any
 

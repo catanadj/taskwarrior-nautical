@@ -77,12 +77,12 @@ def safe_lock_age(path_str: str, *, time_mod: TimePort, os_mod: Any) -> float | 
         parts = head.strip().split()
         if len(parts) >= 2:
             return time_mod.time() - float(parts[1])
-    except Exception:
+    except (OSError, UnicodeError, ValueError, OverflowError):
         pass
     try:
         st = os_mod.stat(path_str)
         return time_mod.time() - float(st.st_mtime)
-    except Exception:
+    except OSError:
         return None
 
 

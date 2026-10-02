@@ -440,6 +440,21 @@ class CacheApiContractTests(unittest.TestCase):
             ) as acquired:
                 self.assertFalse(acquired)
 
+    def test_fallback_lock_age_does_not_hide_unexpected_clock_errors(self) -> None:
+        class BrokenClock:
+            def time(self) -> float:
+                raise RuntimeError("clock invariant failed")
+
+            def sleep(self, _seconds: float) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "fallback.lock"
+            lock_path.write_text("123 0\n", encoding="ascii")
+
+            with self.assertRaisesRegex(RuntimeError, "clock invariant failed"):
+                cache_locking.safe_lock_age(str(lock_path), time_mod=BrokenClock(), os_mod=os)
+
     def test_cache_directory_and_lock_permissions_are_private(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache_dir = Path(temporary) / "cache"

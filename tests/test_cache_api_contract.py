@@ -1016,6 +1016,16 @@ class CacheApiContractTests(unittest.TestCase):
             binding.cache_key_for_task("w:mon", "skip", "calendar")
             self.assertEqual(calls, ["w:mon", "w:tue", "w:mon"])
 
+    def test_task_cache_key_does_not_hide_unexpected_acf_builder_errors(self) -> None:
+        def broken_acf(_expression: str) -> str:
+            raise RuntimeError("ACF builder invariant failed")
+
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding(Path(td), build_acf=broken_acf)
+
+            with self.assertRaisesRegex(RuntimeError, "ACF builder invariant failed"):
+                binding.cache_key_for_task("w:mon", "skip", "calendar")
+
     def test_instances_do_not_share_memory_entries_or_locks(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

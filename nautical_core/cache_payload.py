@@ -556,10 +556,7 @@ def cache_key_for_task_cached(
     cache_key: Any,
 ) -> str:
     _ = fmt
-    try:
-        acf = build_acf(anchor_expr)
-    except Exception:
-        acf = (anchor_expr or "").strip()
+    acf = build_acf(anchor_expr)
     return cache_key(
         acf,
         anchor_mode or "",

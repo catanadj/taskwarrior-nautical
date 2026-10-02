@@ -77,6 +77,8 @@ def describe_carry(
             return f"1 calendar day later at {clock}"
         return f"{day_gap} calendar days later at {clock}"
     except Exception:
+        # This summary is optional presentation; it must not replace carry
+        # validation or make an otherwise valid transition fail.
         return None
 
 
@@ -166,11 +168,15 @@ def carry(
     except NativeUntilCarryError:
         raise
     except Exception as exc:
+        # Conversion adapters are an explicit boundary: fail closed with a
+        # stable carry error while retaining the original exception as cause.
         raise NativeUntilCarryError(CARRY_FAILED, "native until carry could not be calculated") from exc
 
     try:
         invalid_order = compare_datetimes(child_until, child_target) <= 0
     except Exception as exc:
+        # The postcondition is part of the same typed carry boundary; callers
+        # must never accept an unchecked timestamp.
         raise NativeUntilCarryError(CARRY_FAILED, "native until carry produced incomparable timestamps") from exc
     if invalid_order:
         raise NativeUntilCarryError(CARRY_CONFLICT, "native until must be later than the child recurrence target")

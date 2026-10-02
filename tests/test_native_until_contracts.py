@@ -9,6 +9,59 @@ import nautical_core.native_until as native_until
 
 
 class NativeUntilContracts(unittest.TestCase):
+    def test_carry_description_omits_only_the_optional_summary_on_adapter_failure(self) -> None:
+        def fail_timezone(_value):
+            raise RuntimeError("timezone formatter failed")
+
+        description = native_until.describe_carry(
+            datetime(2026, 8, 3, 18, tzinfo=timezone.utc),
+            datetime(2026, 8, 3, 9, tzinfo=timezone.utc),
+            to_local=fail_timezone,
+        )
+
+        self.assertIsNone(description)
+
+    def test_carry_wraps_conversion_failure_as_typed_failure_with_cause(self) -> None:
+        timestamp = datetime(2026, 8, 3, 9)
+
+        def fail_timezone(_value):
+            raise RuntimeError("timezone conversion failed")
+
+        with self.assertRaises(native_until.NativeUntilCarryError) as raised:
+            native_until.carry(
+                timestamp,
+                timestamp.replace(hour=18),
+                timestamp.replace(day=4),
+                "anchor",
+                utc_to_local_naive=fail_timezone,
+                local_naive_to_utc=lambda value: value,
+            )
+
+        self.assertEqual(raised.exception.code, native_until.CARRY_FAILED)
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
+    def test_carry_wraps_postcondition_comparison_failure_with_cause(self) -> None:
+        class BrokenTimezone(tzinfo):
+            def utcoffset(self, _value):
+                raise RuntimeError("comparison timezone failed")
+
+        parent_target = datetime(2026, 8, 3, 9)
+        parent_until = parent_target.replace(hour=18)
+        child_target = parent_target.replace(day=4)
+
+        with self.assertRaises(native_until.NativeUntilCarryError) as raised:
+            native_until.carry(
+                parent_target,
+                parent_until,
+                child_target,
+                "anchor",
+                utc_to_local_naive=lambda value: value,
+                local_naive_to_utc=lambda value: value.replace(tzinfo=BrokenTimezone()),
+            )
+
+        self.assertEqual(raised.exception.code, native_until.CARRY_FAILED)
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
     def test_until_validation_does_not_hide_timezone_adapter_failures(self) -> None:
         class BrokenTimezone(tzinfo):
             def utcoffset(self, _value):

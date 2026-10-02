@@ -47,6 +47,15 @@ class PrecomputeContractTests(unittest.TestCase):
         builder.build.assert_not_called()
         validate.assert_called_once_with("w:mon")
 
+    def test_cached_hint_validation_defects_propagate_without_retry(self) -> None:
+        cached = {"dnf": [[{"typ": "w", "spec": "mon"}]]}
+        validate = Mock(side_effect=RuntimeError("validator defect"))
+
+        with self.assertRaisesRegex(RuntimeError, "validator defect"):
+            self._build(cached=cached, validate=validate, builder=self._builder())
+
+        validate.assert_called_once_with("w:mon")
+
     def test_cached_hint_payload_is_isolated_from_caller_mutation(self) -> None:
         first = core.build_and_cache_hints("w:mon@t=09:00", "skip")
         second = core.build_and_cache_hints("w:mon@t=09:00", "skip")

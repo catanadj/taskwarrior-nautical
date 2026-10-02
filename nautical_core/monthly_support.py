@@ -103,7 +103,7 @@ def intersect_monthly_atoms_allowed(
 def month_doms_safe(spec: str, y: int, m: int, *, expand_monthly_cached: Any) -> list[int]:
     try:
         return sorted(expand_monthly_cached(spec, y, m))
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return []
 
 

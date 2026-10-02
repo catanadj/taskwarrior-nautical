@@ -4,6 +4,7 @@ import tempfile
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from nautical_core.operator_health_service import OperatorHealthService
@@ -102,6 +103,16 @@ class OperatorHealthServiceTests(unittest.TestCase):
             OperatorHealthService.deep_resource_findings(
                 "Europe/Bucharest", {}, timezone_factory=broken_timezone
             )
+
+    def test_deep_resource_findings_do_not_hide_path_invariant_faults(self) -> None:
+        with patch.object(
+            Path, "resolve", side_effect=AssertionError("path resolver invariant failed")
+        ):
+            with self.assertRaisesRegex(AssertionError, "path resolver invariant failed"):
+                OperatorHealthService.deep_resource_findings(
+                    "UTC", {"calendar": "/tmp/calendar.json"},
+                    timezone_factory=lambda _name: object(),
+                )
 
     def test_deep_local_state_checks_are_injectable_and_select_newest(self) -> None:
         with tempfile.TemporaryDirectory() as td:

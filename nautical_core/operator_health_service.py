@@ -259,7 +259,7 @@ class OperatorHealthService:
                     f"Configured resource is readable: {label}.",
                     observed={"path": str(resolved), "kind": "directory" if resolved.is_dir() else "file"},
                 ))
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 findings.append(OperatorFinding(
                     f"resource.{label}", "configuration", FindingSeverity.ERROR,
                     FindingActionability.BLOCKING,

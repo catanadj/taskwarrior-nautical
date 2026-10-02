@@ -66,7 +66,7 @@ class GoldenRunnerContractTests(unittest.TestCase):
         self.assertEqual(first_names, second_names)
         self.assertEqual(
             ordered_names,
-            ["test_safe_lock_fcntl_contention", "test_random_time_window_is_stable_across_processes"],
+            ["test_random_time_window_is_stable_across_processes", "test_safe_lock_fcntl_contention"],
         )
         self.assertIn("Total tests run: 2", first.stdout)
         self.assertIn("Passed: 2", first.stdout)

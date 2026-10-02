@@ -192,38 +192,6 @@ def test_local_datetime_non_hour_dst_gap_is_shared_by_modify():
     )
 
 
-def test_modify_completion_advances_past_second_dst_fold():
-    """A second-fold completion cannot select an earlier first-fold slot."""
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_modify_second_fold_completion_test")
-    zone = ZoneInfo("Europe/Bucharest")
-    old_name, old_tz = mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone
-    try:
-        mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
-        mod.timezone_facade._local_timezone = zone
-        due = datetime(2026, 10, 25, 3, 0, tzinfo=zone, fold=0)
-        completed = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-        child_due, _meta, _dnf = compute_anchor_child_due(
-            mod,
-            {
-                "anchor": "w:sun@t=03:20",
-                "anchor_mode": "skip",
-                "chainID": "dst-second-fold",
-                "link": 1,
-                "due": mod.core.fmt_isoz(due),
-                "end": mod.core.fmt_isoz(completed),
-            },
-        )
-    finally:
-        mod.core.LOCAL_TZ_NAME, mod.timezone_facade._local_timezone = old_name, old_tz
-    child_local = child_due.astimezone(zone)
-    expect(
-        child_local.date() == date(2026, 11, 1)
-        and (child_local.hour, child_local.minute) == (3, 20),
-        f"second-fold completion selected a backward occurrence: {child_local}",
-    )
-
-
 def test_anchor_preview_explains_nonexistent_wall_time_adjustment():
     """The add panel identifies a fixed anchor time shifted by DST."""
     hook = find_hook_file("on-add.nautical")
@@ -852,7 +820,6 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
 TESTS = (
     test_year_ordinals_hooks_modes_calendar_and_timeline,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
-    test_modify_completion_advances_past_second_dst_fold,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
     test_random_anchor_and_omit_presets_keep_chain_scope,
     test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,

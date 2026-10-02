@@ -504,6 +504,38 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
         self.assertEqual(selected.basis, metadata.get("basis"))
         self.assertEqual(selected.source, metadata.get("source"))
 
+    def test_chain_generation_completion_advances_past_second_dst_fold(self) -> None:
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        from nautical_core.task_models import NauticalTask
+
+        zone = ZoneInfo("Europe/Bucharest")
+        due = datetime(2026, 10, 25, 3, 0, tzinfo=zone, fold=0)
+        completed = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000740",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "dst-second-fold",
+            "link": 1,
+            "anchor": "w:sun@t=03:20",
+            "anchor_mode": "skip",
+            "due": due.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+            "end": completed.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        }
+        parent = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(task, source_query="second-fold completion")
+        )
+
+        with patch.object(timezone_facade, "_local_timezone", zone):
+            child_due, _metadata, _dnf = ChainGenerationService.from_core(
+                core
+            ).compute_anchor_child_due(parent)
+            child_local = child_due.astimezone(zone)
+
+        self.assertEqual(child_local.date(), date(2026, 11, 1))
+        self.assertEqual((child_local.hour, child_local.minute), (3, 20))
+
     def test_chain_generation_matches_evaluator_with_business_calendar(self) -> None:
         from unittest.mock import patch
 

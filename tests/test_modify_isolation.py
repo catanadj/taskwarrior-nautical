@@ -44,6 +44,9 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIsNot(capability_annotations["modify_transition_effects"], Any)
         self.assertIsNot(capability_annotations["modify_ordinary"], Any)
         self.assertIsNot(capability_annotations["modify_composition_adapters"], Any)
+        self.assertIsNot(capability_annotations["hook_results"], Any)
+        self.assertIsNot(capability_annotations["hook_context"], Any)
+        self.assertIsNot(capability_annotations["hook_engine"], Any)
 
     def test_composition_does_not_load_unused_datetime_capability_module(self) -> None:
         from nautical_core.modify_composition import ModifyHookCapabilities

@@ -164,6 +164,39 @@ class _ModifyCompositionAdapters(Protocol):
     def render_cp_completion_feedback_for(self, host: Any, *, request: Any) -> None: ...
 
 
+class _TaskHookResponseFactory(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        sanitize: bool = False,
+        prof: Any | None = None,
+    ) -> Any: ...
+
+
+class _HookResults(Protocol):
+    TaskHookResponse: _TaskHookResponseFactory
+
+    def emit_passthrough_json(self, task: TaskPayload) -> None: ...
+
+    def emit_json_result(self, result: Any, *, core: Any = None) -> None: ...
+
+
+class _HookContext(Protocol):
+    def build_on_modify_request(
+        self,
+        *,
+        runtime: Any,
+        old: TaskPayload,
+        new: TaskPayload,
+        old_observation: TaskObservation | None = None,
+        new_observation: TaskObservation | None = None,
+    ) -> Any: ...
+
+
+class _HookEngine(Protocol):
+    def handle_on_modify(self, request: Any, *, services: Any) -> Any: ...
+
+
 class _ModifyDeletionDiagnosticsEffects(_ModifyDiagnosticsEffects, Protocol):
     def end_chain_summary_ports_for(self, host: Any) -> object: ...
 
@@ -400,9 +433,9 @@ class ModifyHookCapabilities:
 
     modify_ordinary: _ModifyOrdinaryEffects
     modify_composition_adapters: _ModifyCompositionAdapters
-    hook_results: Any
-    hook_context: Any
-    hook_engine: Any
+    hook_results: _HookResults
+    hook_context: _HookContext
+    hook_engine: _HookEngine
     modify_lifecycle: _ModifyLifecycle
     modify_transition_effects: _ModifyTransitionEffects
     modify_presentation_effects: _ModifyPresentationEffects

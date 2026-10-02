@@ -14,6 +14,15 @@ from .task_models import NauticalTask, TaskObservation, TaskPayload
 if TYPE_CHECKING:
     from .lifecycle.models import LifecyclePlan
     from .modify_models import CompletionLifecycleResult, TaskView
+    from .modify_validation_effects import (
+        AnchorValidationPorts,
+        ChainLimitPorts,
+        CPValidationPorts as CPValidationPortsContract,
+        NativeUntilPorts,
+        NativeUntilSlotPorts,
+        OmitValidationPorts,
+        SharedValidationPorts as SharedValidationPortsContract,
+    )
 
 
 class ModifyCallback(Protocol):
@@ -87,6 +96,60 @@ class _ModifyTaskFields(Protocol):
     def strip_quotes(self, value: str) -> str: ...
 
 
+class _ModifyValidationEffects(Protocol):
+    SharedValidationPorts: type["SharedValidationPortsContract"]
+    CPValidationPorts: type["CPValidationPortsContract"]
+
+    def omit_validation_ports_for(self, host: Any) -> "OmitValidationPorts": ...
+
+    def chain_limit_ports_for(self, host: Any) -> "ChainLimitPorts": ...
+
+    def anchor_validation_ports_for(self, host: Any) -> "AnchorValidationPorts": ...
+
+    def native_until_ports_for(self, host: Any) -> "NativeUntilPorts": ...
+
+    def native_until_slot_ports_for(self, host: Any) -> "NativeUntilSlotPorts": ...
+
+    def validate_omit(
+        self,
+        ports: "OmitValidationPorts",
+        anchor_expr: str,
+        anchor_file_expr: str,
+        omit_expr: str,
+        omit_file: str,
+    ) -> None: ...
+
+    def validate_chain_limits(self, ports: "ChainLimitPorts", task: TaskPayload) -> None: ...
+
+    def validate_anchor(
+        self,
+        ports: "AnchorValidationPorts",
+        old: TaskPayload,
+        new: TaskPayload,
+        anchor_expr: str,
+    ) -> None: ...
+
+    def validate_shared_anchor(self, ports: "SharedValidationPortsContract", expr: str) -> None: ...
+
+    def validate_cp(
+        self,
+        ports: "CPValidationPortsContract",
+        cp_value: str,
+        chain_max_value: object,
+        chain_until_value: object,
+    ) -> None: ...
+
+    def validate_native_until(self, ports: "NativeUntilPorts", task: TaskPayload) -> None: ...
+
+    def validate_native_until_slots(
+        self,
+        ports: "NativeUntilSlotPorts",
+        task: TaskPayload,
+    ) -> None: ...
+
+    def semantic_diff_value(self, old_text: str, new_text: str) -> str: ...
+
+
 class _HookHost:
     """Attribute view over a dynamically loaded hook module's globals."""
 
@@ -119,7 +182,7 @@ class ModifyHookCapabilities:
     modify_transition_effects: Any
     modify_presentation_effects: _ModifyPresentationEffects
     modify_diagnostics_effects: Any
-    modify_validation_effects: Any
+    modify_validation_effects: _ModifyValidationEffects
     modify_ui_effects: Any
     modify_task_fields: _ModifyTaskFields
     modify_completion_effects: Any
@@ -168,7 +231,7 @@ class NonCompletionRouteCapabilities:
     modify_lifecycle: Any
     modify_presentation_effects: Any
     modify_diagnostics_effects: Any
-    modify_validation_effects: Any
+    modify_validation_effects: _ModifyValidationEffects
     modify_ui_effects: Any
     modify_task_fields: _ModifyTaskFields
 

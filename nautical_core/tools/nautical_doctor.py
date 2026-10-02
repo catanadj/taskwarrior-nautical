@@ -647,7 +647,7 @@ def main() -> int:
                 parsed = tomllib.loads(deep_config_path.read_text(encoding="utf-8"))
                 if isinstance(parsed, dict):
                     deep_data = parsed
-            except Exception:
+            except (OSError, UnicodeError, tomllib.TOMLDecodeError):
                 # The normal configuration check already reports parse errors.
                 deep_data = {}
         deep_resources: dict[str, object] = {}

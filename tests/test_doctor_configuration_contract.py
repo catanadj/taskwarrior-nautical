@@ -2,10 +2,12 @@
 
 import importlib
 import os
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -256,6 +258,34 @@ class DoctorConfigurationContractTests(unittest.TestCase):
                 with patch.object(Path, "read_text", side_effect=RuntimeError("unexpected parser fault")):
                     with self.assertRaisesRegex(RuntimeError, "unexpected parser fault"):
                         doctor._check_config([], Path(td))
+
+    def test_deep_config_read_does_not_hide_internal_parser_faults(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            taskdata = Path(td)
+            config = taskdata / "nautical.toml"
+            config.write_text('tz = "UTC"', encoding="utf-8")
+            unit_of_work = SimpleNamespace(
+                context=SimpleNamespace(taskdata=taskdata, command_prefix=(sys.executable,))
+            )
+            with (
+                patch.object(sys, "argv", ["nautical-doctor", "--taskdata", td, "--deep", "--installation-only"]),
+                patch.object(doctor, "build_operator_uow", return_value=unit_of_work),
+                patch.object(doctor, "_check_runtime", return_value=taskdata),
+                patch.object(doctor, "_check_hooks_and_udas", return_value={}),
+                patch.object(doctor, "_check_managed_runtime"),
+                patch.object(doctor, "_check_config"),
+                patch.object(doctor, "_config_candidates", return_value=[config]),
+                patch.object(doctor.install_runtime, "runtime_status", return_value={}),
+                patch.object(doctor.OperatorHealthService, "storage_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_identity_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_ownership_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_resource_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_local_state_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_clock_findings", return_value=()),
+                patch.object(Path, "read_text", side_effect=RuntimeError("unexpected deep parser fault")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "unexpected deep parser fault"):
+                    doctor.main()
 
 
 if __name__ == "__main__":

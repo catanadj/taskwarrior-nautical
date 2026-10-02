@@ -185,14 +185,14 @@ class LifecycleRecoveryPolicy:
             return ""
         try:
             until_dt, until_err = self.parse_datetime(value("until"))
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return "live recovery child native until could not be parsed"
         if until_err or until_dt is None:
             return f"live recovery child has no reliable native until: {until_err or 'missing until'}"
         target_field = "due" if value("due") else "scheduled"
         try:
             target_dt, target_err = self.parse_datetime(value(target_field))
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return f"live recovery child {target_field} could not be parsed"
         if target_err or target_dt is None:
             return f"live recovery child has no reliable {target_field}: {target_err or f'missing {target_field}'}"
@@ -201,7 +201,7 @@ class LifecycleRecoveryPolicy:
                 return f"live recovery child native until is not later than its {target_field}"
             if self.compare_datetimes(until_dt, recovery_at) <= 0:
                 return "live recovery child native until has already elapsed"
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return "live recovery child timing could not be compared"
         return ""
 
@@ -218,14 +218,14 @@ class LifecycleRecoveryPolicy:
         until_raw = child.get("until")
         try:
             until_dt, until_err = self.parse_datetime(until_raw)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return None, "planned child expiration could not be parsed"
         if until_err or until_dt is None:
             return None, f"planned child has no reliable native until: {until_err or 'missing until'}"
         try:
             if self.compare_datetimes(until_dt, recovery_at) > 0:
                 return None, ""
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return None, "planned child expiration could not be compared with recovery time"
         child["status"] = "deleted"
         child["end"] = until_raw

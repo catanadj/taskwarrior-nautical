@@ -436,7 +436,7 @@ class OperatorHealthService:
                 mode = int(getattr(stat_factory(path), "st_mode"))
                 if mode & required_bits != required_bits:
                     errors.append(f"{label} lacks required permissions")
-            except Exception as exc:
+            except (AttributeError, OSError, OverflowError, TypeError, ValueError) as exc:
                 errors.append(f"{label}: {exc}")
         release_resolved = release.resolve() if release_id else Path("")
         for event, record in (hook_runtimes or {}).items():
@@ -446,7 +446,7 @@ class OperatorHealthService:
                 continue
             try:
                 Path(str(implementation)).resolve(strict=True).relative_to(release_resolved)
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 errors.append(f"{event} implementation is outside the active release")
         if errors:
             findings.append(OperatorFinding(

@@ -282,6 +282,31 @@ class OperatorHealthServiceTests(unittest.TestCase):
             self.assertEqual(findings[0].severity.value, "info")
             broken = OperatorHealthService.deep_ownership_findings(runtime, hooks, records, stat_factory=lambda path: SimpleNamespace(st_mode=0o400))
             self.assertEqual(broken[0].severity.value, "error")
+
+    def test_deep_ownership_does_not_hide_unexpected_stat_faults(self) -> None:
+        def broken_stat(_path: Path) -> object:
+            raise AssertionError("stat adapter invariant failed")
+
+        with self.assertRaisesRegex(AssertionError, "stat adapter invariant failed"):
+            OperatorHealthService.deep_ownership_findings(
+                {"runtime_root": "/tmp/runtime", "active_release": "r-test"},
+                "/tmp/hooks",
+                stat_factory=broken_stat,
+            )
+
+    def test_deep_ownership_does_not_hide_unexpected_implementation_path_fault(self) -> None:
+        class BrokenPathText:
+            def __str__(self) -> str:
+                raise AssertionError("implementation path invariant failed")
+
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaisesRegex(AssertionError, "implementation path invariant failed"):
+                OperatorHealthService.deep_ownership_findings(
+                    {"runtime_root": td, "active_release": "r-test"},
+                    td,
+                    {"on-add": {"implementation": BrokenPathText()}},
+                    stat_factory=lambda _path: SimpleNamespace(st_mode=0o700),
+                )
     def test_astronomy_finding_normalizes_timezone_for_json(self) -> None:
         findings = OperatorHealthService.astronomy_findings(
             {}, effective_timezone=ZoneInfo("Europe/Bucharest"), source_hint="config",

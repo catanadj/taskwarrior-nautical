@@ -9,6 +9,15 @@ import nautical_core.native_until as native_until
 
 
 class NativeUntilContracts(unittest.TestCase):
+    def test_exact_carry_detection_does_not_hide_timestamp_adapter_failures(self) -> None:
+        class BrokenTimestamp:
+            @property
+            def second(self) -> int:
+                raise RuntimeError("timestamp adapter failed")
+
+        with self.assertRaisesRegex(RuntimeError, "timestamp adapter failed"):
+            native_until.uses_exact_carry(BrokenTimestamp())
+
     def test_carry_descriptions_distinguish_calendar_and_exact_policies(self) -> None:
         due = datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc)
         cases = (

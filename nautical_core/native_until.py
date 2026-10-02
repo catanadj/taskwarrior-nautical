@@ -21,7 +21,7 @@ def uses_exact_carry(until_local: Any) -> bool:
     """Return whether the stored +1s expiration marker requests exact carry."""
     try:
         return int(until_local.second) == 1
-    except Exception:
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return False
 
 

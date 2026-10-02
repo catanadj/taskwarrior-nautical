@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "030a9b505ffe37bf7a80986511eaaf6445e7daed4f055a44402e30399ac9160a"
+    "e8189832b71d9a0f598b4c52d4f314724629054d5a1863456b8c18f0f44371b7"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -59,8 +59,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "3f231d13386fde51907b43f62cd02da910cccfd81438f6dda155f3db77cc59d2",
     ),
     "recurrence and hook integration": (
-        76,
-        "3b8239373e7ce2e9b966aa8dcedf90c72057d069d86e3f868d920e7d58e64df4",
+        75,
+        "5b84614239c951daeb965d7d723f41233564c7eed09614408a5992ea6b1c0e10",
     ),
     "storage and filesystem safety": (
         1,
@@ -815,6 +815,7 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_hook_engine_reports_pending_nautical_delete_without_spawning",
         "test_navigator_narrow_terminal_uses_vertical_mode_without_rich_probe",
         "test_navigator_shared_graph_scales_to_large_chain",
+        "test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts",
     }
 )
 
@@ -1442,7 +1443,6 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         expected = (
             "test_on_modify_native_until_rejects_invalid_window_changes",
             "test_on_modify_native_until_follows_recurrence_target_move",
-            "test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts",
             "test_on_modify_native_until_rejects_uncarryable_anchor_target_move",
             "test_on_modify_completion_reschedule_carries_native_until",
         )
@@ -1453,7 +1453,10 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             if name.startswith("test_") and callable(value)
         }
         self.assertTrue(set(expected) <= registered)
-        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[20:25]), expected)
+        self.assertEqual(
+            tuple(test.__name__ for test in modify.TESTS[20:24]),
+            expected,
+        )
         self.assertFalse(set(expected) & top_level)
 
     def test_native_until_validation_cases_are_owned_by_modify_domain(self):
@@ -1472,7 +1475,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             if name.startswith("test_") and callable(value)
         }
         self.assertTrue(set(expected) <= registered)
-        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[25:30]), expected)
+        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[24:29]), expected)
         self.assertFalse(set(expected) & top_level)
 
     def test_modify_timing_and_child_cases_are_owned_by_modify_domain(self):
@@ -1491,7 +1494,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             if name.startswith("test_") and callable(value)
         }
         self.assertTrue(set(expected) <= registered)
-        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[30:35]), expected)
+        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[29:34]), expected)
         self.assertFalse(set(expected) & top_level)
 
     def test_modify_feedback_and_identity_cases_are_owned_by_modify_domain(self):
@@ -1510,7 +1513,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             if name.startswith("test_") and callable(value)
         }
         self.assertTrue(set(expected) <= registered)
-        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[35:40]), expected)
+        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[34:39]), expected)
         self.assertFalse(set(expected) & top_level)
 
     def test_hook_panel_cases_are_owned_by_modify_domain(self):
@@ -1526,7 +1529,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             if name.startswith("test_") and callable(value)
         }
         self.assertTrue(set(expected) <= registered)
-        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[40:42]), expected)
+        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[39:41]), expected)
         self.assertFalse(set(expected) & top_level)
 
     def test_malformed_cp_guidance_case_is_owned_by_modify_domain(self):
@@ -1538,7 +1541,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             for name, value in vars(self.golden).items()
             if name.startswith("test_") and callable(value)
         }
-        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[42:43]), expected)
+        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[41:42]), expected)
         self.assertTrue(set(expected) <= registered)
         self.assertFalse(set(expected) & top_level)
 
@@ -1714,19 +1717,19 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
         self.assertEqual(len(top_level), 0)
-        self.assertEqual(len(registered), 139)
+        self.assertEqual(len(registered), 138)
         self.assertEqual(len(operator.TESTS), 14)
         self.assertEqual(len(configuration.TESTS), 3)
         self.assertEqual(len(installer.TESTS), 9)
         modify = importlib.import_module("dev_tools.golden_tests.modify")
-        self.assertEqual(len(modify.TESTS), 43)
+        self.assertEqual(len(modify.TESTS), 42)
         self.assertEqual(len(lifecycle.TESTS), 31)
         self.assertEqual(len(reconcile.TESTS), 9)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)
         self.assertEqual(len(scheduling.TESTS), 14)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 0)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 725)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 726)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
         storage = importlib.import_module("dev_tools.golden_tests.storage")

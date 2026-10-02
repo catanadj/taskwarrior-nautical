@@ -1199,59 +1199,6 @@ def test_on_modify_native_until_follows_recurrence_target_move():
                     expect("Expiration" in panel and "Carry" in panel, f"expiration carry was not explained: {panel!r}")
 
 
-def test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts():
-    """The shared expiration policy should cover every recurrence kind with typed conflicts."""
-    import nautical_core.native_until as native_until
-
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_native_until_shared_policy_test")
-    parent_target = mod.core.build_local_datetime(date(2026, 8, 1), (9, 0))
-    parent_until = mod.core.build_local_datetime(date(2026, 8, 1), (23, 0))
-    child_target = mod.core.build_local_datetime(date(2026, 8, 2), (9, 0))
-
-    for kind, recurrence in (
-        ("cp", {"cp": "1d"}),
-        ("anchor", {"anchor": "d:*@t=09:00", "anchor_mode": "skip"}),
-        ("anchor_file", {"anchor_file": "calendar.csv", "anchor_mode": "skip"}),
-    ):
-        old = {
-            "uuid": "00000000-0000-4000-8000-000000000135",
-            "description": "shared native until policy",
-            "status": "completed",
-            "chain": "on",
-            "chainID": "policy135",
-            "link": 1,
-            "due": mod.core.fmt_isoz(parent_target),
-            "until": mod.core.fmt_isoz(parent_until),
-            **recurrence,
-        }
-        new = {**old, "due": mod.core.fmt_isoz(child_target)}
-        expect(mod._transition_effects.preserve_native_until_on_target_change(old, new, kind), f"{kind} carry was skipped")
-        carried = mod.core.to_local(mod.core.parse_dt_any(new.get("until")))
-        expect(
-            carried.date() == date(2026, 8, 2)
-            and (carried.hour, carried.minute, carried.second) == (23, 0, 0),
-            f"{kind} carry was wrong: {carried}",
-        )
-
-    late_target = mod.core.build_local_datetime(date(2026, 8, 1), (23, 30))
-    datetime_effects = mod._module("modify_datetime_effects")
-    datetime_ports = datetime_effects.datetime_effect_ports_for(mod)
-    try:
-        native_until.carry(
-            parent_target,
-            parent_until,
-            late_target,
-            "anchor",
-            utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
-            local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
-        )
-    except native_until.NativeUntilCarryError as exc:
-        expect(exc.code == native_until.CARRY_CONFLICT, f"unexpected carry error code: {exc.code!r}")
-    else:
-        raise AssertionError("anchor carry conflict was not reported")
-
-
 def test_on_modify_native_until_rejects_uncarryable_anchor_target_move():
     """An anchor edit must not keep a stale absolute until when calendar carry conflicts."""
     hook = find_hook_file("on-modify.nautical")
@@ -1325,7 +1272,6 @@ def test_on_modify_completion_reschedule_carries_native_until():
 TESTS = TESTS + (
     test_on_modify_native_until_rejects_invalid_window_changes,
     test_on_modify_native_until_follows_recurrence_target_move,
-    test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts,
     test_on_modify_native_until_rejects_uncarryable_anchor_target_move,
     test_on_modify_completion_reschedule_carries_native_until,
 )

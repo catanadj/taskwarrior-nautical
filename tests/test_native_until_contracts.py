@@ -9,6 +9,38 @@ import nautical_core.native_until as native_until
 
 
 class NativeUntilContracts(unittest.TestCase):
+    def test_calendar_carry_is_shared_across_recurrence_kinds_and_conflicts(self) -> None:
+        parent_target = datetime(2026, 8, 1, 9)
+        parent_until = datetime(2026, 8, 1, 23)
+        child_target = datetime(2026, 8, 2, 9)
+        expected = datetime(2026, 8, 2, 23)
+
+        for kind in ("cp", "anchor", "anchor_file"):
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    native_until.carry(
+                        parent_target,
+                        parent_until,
+                        child_target,
+                        kind,
+                        utc_to_local_naive=lambda value: value,
+                        local_naive_to_utc=lambda value: value,
+                    ),
+                    expected,
+                )
+
+        with self.assertRaises(native_until.NativeUntilCarryError) as raised:
+            native_until.carry(
+                parent_target,
+                parent_until,
+                datetime(2026, 8, 1, 23, 30),
+                "anchor",
+                utc_to_local_naive=lambda value: value,
+                local_naive_to_utc=lambda value: value,
+            )
+
+        self.assertEqual(raised.exception.code, native_until.CARRY_CONFLICT)
+
     def test_carry_description_omits_only_the_optional_summary_on_adapter_failure(self) -> None:
         def fail_timezone(_value):
             raise RuntimeError("timezone formatter failed")

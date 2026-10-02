@@ -1087,7 +1087,7 @@ class OperatorHealthService:
                 continue
             try:
                 Path(str(implementation)).resolve().relative_to(current_root.resolve())
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 errors.append(f"{event} implementation is outside the active release")
         evidence = {
             "release_id": release_id,

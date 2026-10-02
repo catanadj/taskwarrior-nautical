@@ -20,6 +20,41 @@ from nautical_core.timeutil import compare_datetimes
 
 
 class ModifyScheduleContractTests(unittest.TestCase):
+    def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding(self) -> None:
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "description": "task-scoped evaluator fixture",
+            "chainID": "session-chain",
+            "status": "pending",
+            "link": 1,
+            "anchor": "w:mon@t=09:00",
+            "anchor_mode": "skip",
+            "due": "20250106T090000Z",
+            "end": "20250106T100000Z",
+        }
+        state = modify_runtime.new_runtime_state()
+        ports = modify_schedule_effects.SchedulerPorts(
+            runtime_module=modify_runtime,
+            state=state,
+            core=core,
+        )
+        with (
+            patch.object(timezone_facade, "_local_timezone", timezone.utc),
+            patch.object(
+                core,
+                "business_calendar_for_task",
+                return_value=core.DEFAULT_BUSINESS_CALENDAR,
+            ),
+        ):
+            evaluator_for_task, _service_for_task = modify_schedule_effects.scheduler_callbacks(ports)
+            first = evaluator_for_task(task)
+            second = evaluator_for_task(dict(task))
+            binding_a = first._get_cached("scheduler_binding", first._build_scheduler_binding)
+            binding_b = first._get_cached("scheduler_binding", first._build_scheduler_binding)
+
+        self.assertIs(first, second)
+        self.assertIs(binding_a, binding_b)
+
     def test_overnight_window_advances_past_second_dst_fold(self) -> None:
         zone = ZoneInfo("Europe/Bucharest")
         dnf = core.validate_anchor_expr_strict("w:sat@t=22:20..03:20/6")

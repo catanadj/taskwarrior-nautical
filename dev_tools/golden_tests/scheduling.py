@@ -282,34 +282,6 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
         mod = load_core_module(str(core_path), "_nautical_core_random_preset_test", str(cfg))
         verify(mod)
 
-def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
-    """One completion task should build its evaluator and scheduler binding once."""
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_on_modify_evaluator_session_test")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000111",
-        "chainID": "session-chain",
-        "status": "pending",
-        "link": 1,
-        "anchor": "w:mon@t=09:00",
-        "anchor_mode": "skip",
-        "due": "20250106T090000Z",
-        "end": "20250106T100000Z",
-    }
-    mod._reset_modify_runtime_state()
-    try:
-        schedule = mod._module("modify_schedule_effects")
-        evaluator, _service = schedule.scheduler_callbacks(schedule.scheduler_ports_for(mod))
-        first = evaluator(task)
-        second = evaluator(dict(task))
-        expect(first is second, "equivalent task copies rebuilt the evaluator within one hook session")
-        binding_a = first._get_cached("scheduler_binding", first._build_scheduler_binding)
-        binding_b = first._get_cached("scheduler_binding", first._build_scheduler_binding)
-        expect(binding_a is binding_b, "scheduler binding was rebuilt within one evaluator session")
-    finally:
-        mod._reset_modify_runtime_state()
-
-
 def test_random_time_window_is_stable_across_processes():
     """The random-time seed must not depend on interpreter-local state."""
     script = (
@@ -822,7 +794,6 @@ TESTS = (
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
     test_random_anchor_and_omit_presets_keep_chain_scope,
-    test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
     test_random_time_window_is_stable_across_processes,
     test_astronomical_season_selection_scheduler_uses_transition_dates,
     test_seasonal_selection_modify_modes_times_and_timeline,

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import contextlib
-import io
 import json
 import os
 import sqlite3
@@ -28,7 +26,6 @@ from dev_tools.golden_tests.support import (
     recovery_child,
     recovery_plan,
     task_observation,
-    test_operator_uow,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -183,36 +180,6 @@ def test_reconcile_subprocess_output_contracts():
     expect(human_run.returncode == 1, f"human startup failure returned {human_run.returncode}")
     expect(human_run.stdout == "", f"human startup failure polluted stdout: {human_run.stdout!r}")
     expect("Taskwarrior executable was not found" in human_run.stderr, f"human diagnostic was not actionable: {human_run.stderr!r}")
-
-
-def test_reconcile_apply_lease_serializes_mutations():
-    """Concurrent reconcile apply attempts must not share the mutation lease."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_apply_lease_test")
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td)
-        with tool._reconcile_apply_lock(taskdata) as first:
-            expect(first, "reconcile apply lease was not acquired")
-            with tool._reconcile_apply_lock(taskdata) as second:
-                expect(not second, "reconcile apply lease allowed concurrent acquisition")
-        with tool._reconcile_apply_lock(taskdata) as released:
-            expect(released, "reconcile apply lease was not released")
-
-
-def test_reconcile_apply_refuses_a_second_full_run():
-    """A held apply lease must reject another reconcile before it loads hooks or exports tasks."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_full_run_lease_test")
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td)
-        output = io.StringIO()
-        with tool._reconcile_apply_lock(taskdata) as held:
-            expect(held, "test could not acquire reconcile lease")
-            with contextlib.redirect_stdout(output):
-                result = tool.main(["--apply", "--json"], _unit_of_work=test_operator_uow(taskdata))
-    summary = json.loads(output.getvalue())
-    expect(result == 1, f"busy reconcile returned {result}")
-    expect(summary.get("stage") == "apply_lock", f"busy reconcile was not reported as a lease conflict: {summary!r}")
 
 
 def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
@@ -1003,6 +970,4 @@ TESTS = (
     test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_subprocess_output_contracts,
-    test_reconcile_apply_lease_serializes_mutations,
-    test_reconcile_apply_refuses_a_second_full_run,
 ) + tuple(globals()[name] for name in _NAMES)

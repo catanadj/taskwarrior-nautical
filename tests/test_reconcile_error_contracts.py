@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 from typing import cast
 import unittest
@@ -26,6 +27,41 @@ from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_apply_lease_is_exclusive_and_released(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            taskdata = Path(directory)
+            with reconcile._reconcile_apply_lock(taskdata) as first:
+                self.assertTrue(first)
+                with reconcile._reconcile_apply_lock(taskdata) as second:
+                    self.assertFalse(second)
+            with reconcile._reconcile_apply_lock(taskdata) as released:
+                self.assertTrue(released)
+
+    def test_apply_lease_conflict_returns_before_session_build(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            taskdata = Path(directory)
+            unit_of_work = SimpleNamespace(
+                context=SimpleNamespace(
+                    taskdata=taskdata,
+                    command_prefix=("task",),
+                )
+            )
+            output = io.StringIO()
+            with reconcile._reconcile_apply_lock(taskdata) as held:
+                self.assertTrue(held)
+                with (
+                    patch.object(reconcile, "_build_reconcile_session") as build_session,
+                    contextlib.redirect_stdout(output),
+                ):
+                    result = reconcile.main(
+                        ["--apply", "--json"], _unit_of_work=unit_of_work
+                    )
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(result, 1)
+            self.assertEqual(payload.get("stage"), "apply_lock")
+            build_session.assert_not_called()
+
     def test_startup_config_failure_is_structured(self) -> None:
         args = SimpleNamespace(json=True, apply=True)
         output = io.StringIO()

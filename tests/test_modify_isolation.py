@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 import unittest
+from typing import Any, get_type_hints
 
 
 class ModifyIsolationTests(unittest.TestCase):
@@ -43,6 +44,64 @@ class ModifyIsolationTests(unittest.TestCase):
             sequence_period_for_link(ports, [{"days": 2}], "cp", 1),
             timedelta(days=2),
         )
+
+    def test_cp_carry_ports_and_result_have_concrete_types(self) -> None:
+        from nautical_core.modify_carry_workflow import TemporalCarryDecision
+        from nautical_core.modify_transition_effects import (
+            CPCarryPorts,
+            preserve_cp_relative_offsets_on_due_change,
+        )
+
+        annotations = get_type_hints(CPCarryPorts)
+        self.assertTrue(all(annotation is not Any for annotation in annotations.values()))
+        self.assertIs(
+            get_type_hints(preserve_cp_relative_offsets_on_due_change)["return"],
+            TemporalCarryDecision,
+        )
+
+    def test_cp_carry_applies_typed_temporal_decision(self) -> None:
+        from datetime import datetime, timezone
+        from nautical_core.chain_generation import CarryFieldError
+        from nautical_core.modify_carry import preserve_cp_relative_offsets_on_due_change
+        import nautical_core.modify_carry_workflow as modify_carry_workflow
+        from nautical_core.modify_carry_workflow import TemporalCarryDecision
+        from nautical_core.modify_transition_effects import (
+            CPCarryPorts,
+            preserve_cp_relative_offsets_on_due_change as preserve_cp_carry,
+        )
+        from nautical_core.task_changes import TaskTransition
+        from nautical_core.task_models import TaskObservation
+
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000001",
+            "cp": "P1D",
+            "due": "2026-01-01T09:00:00+00:00",
+            "scheduled": "2026-01-01T10:00:00+00:00",
+        }
+        new = {
+            **old,
+            "due": "2026-01-02T09:00:00+00:00",
+        }
+        transition = TaskTransition.from_observations(
+            TaskObservation.from_mapping(old, source_query="modify-before"),
+            TaskObservation.from_mapping(new, source_query="modify-after"),
+        )
+        ports = CPCarryPorts(
+            carry=preserve_cp_relative_offsets_on_due_change,
+            field_changed=lambda _old, _new, field: field == "due",
+            parse_datetime=lambda value: datetime.fromisoformat(value) if value else None,
+            utc_to_local_naive=lambda value: value.replace(tzinfo=None),
+            local_naive_to_utc=lambda value: value.replace(tzinfo=timezone.utc),
+            format_datetime=lambda value: value.isoformat(),
+            carry_error=CarryFieldError,
+            workflow=modify_carry_workflow,
+        )
+
+        decision = preserve_cp_carry(ports, old, new, "P1D", transition=transition)
+
+        self.assertIsInstance(decision, TemporalCarryDecision)
+        self.assertEqual(decision.status, "adjusted")
+        self.assertEqual(new["scheduled"], "2026-01-02T10:00:00Z")
 
     def test_completion_validation_uses_explicit_ports_and_transition(self) -> None:
         from nautical_core.modify_validation import CompletionValidationServices

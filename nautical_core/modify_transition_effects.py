@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Protocol
 
+from .modify_carry_workflow import TemporalCarryDecision
 from .modify_validation import CompletionValidationServices
 from .task_changes import TaskTransition
 from .task_models import TaskPayload
@@ -24,14 +25,49 @@ class NativeCarryPorts:
 
 @dataclass(frozen=True, slots=True)
 class CPCarryPorts:
-    carry: Any
-    field_changed: Any
-    parse_datetime: Any
-    utc_to_local_naive: Any
-    local_naive_to_utc: Any
-    format_datetime: Any
-    carry_error: Any
-    workflow: Any
+    carry: "CPCarryOperation"
+    field_changed: Callable[[TaskPayload, TaskPayload, str], bool]
+    parse_datetime: Callable[[object], datetime | None]
+    utc_to_local_naive: Callable[[datetime], datetime]
+    local_naive_to_utc: Callable[[datetime], datetime]
+    format_datetime: Callable[[datetime], str]
+    carry_error: Callable[[str, str], Exception]
+    workflow: "CPCarryWorkflow"
+
+
+class CPCarryOperation(Protocol):
+    def __call__(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        new_cp: str,
+        *,
+        field_changed: Callable[[TaskPayload, TaskPayload, str], bool],
+        parse_datetime: Callable[[object], datetime | None],
+        utc_to_local_naive: Callable[[datetime], datetime],
+        local_naive_to_utc: Callable[[datetime], datetime],
+        format_datetime: Callable[[datetime], str],
+        carry_error: Callable[[str, str], Exception],
+    ) -> tuple[datetime, datetime, list[tuple[str, datetime, datetime, timedelta]]] | None: ...
+
+
+class CPCarryWorkflow(Protocol):
+    def decision_from_cp_adjustments(
+        self,
+        result: tuple[datetime, datetime, list[tuple[str, datetime, datetime, timedelta]]] | None,
+    ) -> TemporalCarryDecision: ...
+
+    def apply_temporal_carry_patch(
+        self,
+        task: TaskPayload,
+        decision: TemporalCarryDecision,
+    ) -> None: ...
+
+    def verify_temporal_carry_task(
+        self,
+        task: TaskPayload,
+        decision: TemporalCarryDecision,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +118,7 @@ def preserve_cp_relative_offsets_on_due_change(
     new_cp: str,
     *,
     transition: TaskTransition | None = None,
-) -> Any:
+) -> TemporalCarryDecision:
     result = ports.carry(
         old,
         new,

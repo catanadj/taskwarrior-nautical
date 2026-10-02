@@ -498,6 +498,60 @@ class CacheApiContractTests(unittest.TestCase):
                     str(lock_path), None, time_mod=_Clock(), os_mod=BrokenProcessAdapter()
                 )
 
+    def test_exclusive_lock_does_not_hide_unexpected_open_errors(self) -> None:
+        class BrokenFilesystem:
+            O_CREAT = 1
+            O_EXCL = 2
+            O_WRONLY = 4
+
+            @staticmethod
+            def open(_path: str, _flags: int, _mode: int) -> int:
+                raise RuntimeError("filesystem adapter invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "filesystem adapter invariant failed"):
+            with cache_locking.safe_lock(
+                "lock",
+                retries=1,
+                mkdir=False,
+                fcntl_mod=None,
+                os_mod=BrokenFilesystem(),
+                time_mod=_Clock(),
+                random_mod=SimpleNamespace(uniform=lambda _start, _end: 0.0),
+            ):
+                self.fail("an unexpected open error must not yield a lock result")
+
+    def test_stale_lock_cleanup_does_not_hide_unexpected_unlink_errors(self) -> None:
+        class BrokenFilesystem:
+            O_CREAT = 1
+            O_EXCL = 2
+            O_WRONLY = 4
+
+            @staticmethod
+            def open(_path: str, _flags: int, _mode: int) -> int:
+                raise FileExistsError("lock already exists")
+
+            @staticmethod
+            def unlink(_path: str) -> None:
+                raise RuntimeError("filesystem cleanup invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "filesystem cleanup invariant failed"):
+            with cache_locking.safe_lock_excl_context(
+                "lock",
+                tries=1,
+                sleep_base=0,
+                jitter=0,
+                mode=0o600,
+                mkdir=False,
+                stale_after=1,
+                safe_lock_ensure_parent=lambda _path, _mkdir: None,
+                safe_lock_stale_pid=lambda _path, _stale_after: True,
+                safe_lock_age=lambda _path: 2,
+                safe_lock_sleep_once=lambda _base, _jitter: None,
+                os_mod=BrokenFilesystem(),
+                time_mod=_Clock(),
+            ):
+                self.fail("an unexpected stale-lock cleanup error must propagate")
+
     def test_cache_directory_and_lock_permissions_are_private(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache_dir = Path(temporary) / "cache"

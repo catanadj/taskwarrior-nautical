@@ -214,11 +214,11 @@ def safe_lock_excl_context(
             if pid_stale and age_stale:
                 try:
                     os_mod.unlink(path_str)
-                except Exception:
+                except OSError:
                     pass
             else:
                 safe_lock_sleep_once(sleep_base, jitter)
-        except Exception:
+        except OSError:
             break
     try:
         yield acquired

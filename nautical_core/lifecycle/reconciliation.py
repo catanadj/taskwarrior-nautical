@@ -30,6 +30,10 @@ _PARENT_LOCK_STALE_SECONDS = 300.0
 _RECONCILE_LOCK_STALE_SECONDS = 300.0
 
 
+class LifecycleChildReadUnavailable(TimeoutError):
+    """Signal that authoritative child-slot evidence could not be read."""
+
+
 class LifecycleSnapshot(Protocol):
     def candidate_rows(self) -> list[TaskObservation]: ...
 
@@ -517,7 +521,9 @@ class LifecycleReconciliationService:
             return cached
         result = self.repository.exact_child_slot(chain_id, next_link, refresh=True)
         if isinstance(result, Unavailable):
-            raise RuntimeError(result.evidence.detail or f"child slot {chain_id}:{next_link} unavailable")
+            raise LifecycleChildReadUnavailable(
+                result.evidence.detail or f"child slot {chain_id}:{next_link} unavailable"
+            )
         if isinstance(result, Absent):
             return ()
         if isinstance(result, Found):

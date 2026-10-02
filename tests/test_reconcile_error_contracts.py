@@ -10,6 +10,10 @@ import unittest
 from unittest.mock import patch
 
 import nautical_core.tools.nautical_reconcile as reconcile
+from nautical_core.lifecycle.reconciliation import (
+    LifecycleChildReadUnavailable,
+    LifecycleReconciliationService,
+)
 from nautical_core.integration_models import (
     CommandFailureKind,
     FailureEvidence,
@@ -20,6 +24,65 @@ from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_reconcile_plan_does_not_relabel_planning_fault_as_read_failure(self) -> None:
+        parent = {"uuid": "00000000-0000-4000-8000-000000000002"}
+        service = LifecycleReconciliationService(
+            snapshot=SimpleNamespace(),
+            repository=SimpleNamespace(),
+            configuration_fingerprint="config",
+            schedule_fingerprint="schedule",
+        )
+
+        with (
+            patch.object(reconcile, "_configuration_state", return_value=("valid", "")),
+            patch.object(
+                LifecycleReconciliationService,
+                "plan",
+                side_effect=RuntimeError("planner invariant failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "planner invariant failed"):
+                reconcile._plan_for_parent(
+                    SimpleNamespace(),
+                    parent,
+                    generation=object(),
+                    reconciliation_service=service,
+                )
+
+    def test_lifecycle_child_unavailability_uses_read_failure_type(self) -> None:
+        evidence = FailureEvidence(
+            command=TaskCommand(("task", "export"), "child slot", 1.0),
+            kind=CommandFailureKind.TIMEOUT,
+            returncode=-1,
+            attempt=1,
+            duration=1.0,
+            retryable=True,
+            detail="child slot query timed out",
+        )
+        service = LifecycleReconciliationService(
+            snapshot=SimpleNamespace(),
+            repository=SimpleNamespace(
+                exact_child_slot=lambda *_args, **_kwargs: Unavailable("query", evidence)
+            ),
+            configuration_fingerprint="config",
+            schedule_fingerprint="schedule",
+        )
+        parent = TaskObservation.from_mapping(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000003",
+                "status": "completed",
+                "chain": "on",
+                "chainID": "typed-read-failure",
+                "link": 1,
+            },
+            source_query="reconcile-child-read-contract",
+        )
+
+        with self.assertRaisesRegex(
+            LifecycleChildReadUnavailable, "child slot query timed out"
+        ):
+            service.existing_children(parent, safe_parse_datetime=lambda _value: (None, None))
+
     def test_recovery_child_lookup_does_not_reclassify_internal_faults(self) -> None:
         parent = TaskObservation.from_mapping(
             {"uuid": "00000000-0000-4000-8000-000000000001"},

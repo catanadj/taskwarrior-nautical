@@ -70,6 +70,7 @@ from nautical_core.operator_presentation import render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle.reconciliation import (  # noqa: E402
     CallbackLifecycleApplyOperations,
+    LifecycleChildReadUnavailable,
     LifecycleReconciliationService,
     LifecycleRecoveryPolicy,
 )
@@ -725,7 +726,7 @@ def _plan_for_parent(
             generation=generation or _chain_generation_for_hook(hook),
             safe_parse_datetime=lambda value: _parse_datetime(hook, value),
         )
-    except Exception as exc:
+    except LifecycleChildReadUnavailable as exc:
         reason = str(exc).strip() or type(exc).__name__
         raise _PlanReadUnavailable(f"reconcile child read unavailable: {reason}") from exc
 

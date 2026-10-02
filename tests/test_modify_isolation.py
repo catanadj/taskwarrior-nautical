@@ -28,6 +28,20 @@ class ModifyIsolationTests(unittest.TestCase):
             Any,
         )
 
+    def test_composition_does_not_load_unused_datetime_capability_module(self) -> None:
+        from nautical_core.modify_composition import ModifyHookCapabilities
+
+        loaded: list[str] = []
+
+        class Host:
+            def _module(self, name: str, *, required: bool = True) -> object:
+                loaded.append(name)
+                return object()
+
+        ModifyHookCapabilities.from_host(Host())
+
+        self.assertNotIn("modify_datetime_effects", loaded)
+
     def test_schedule_period_helper_uses_only_explicit_ports(self) -> None:
         from datetime import datetime, timedelta, timezone
         from nautical_core.modify_schedule_effects import SchedulePorts, cp_add_period

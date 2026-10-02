@@ -80,7 +80,6 @@ class ModifyHookCapabilities:
     task_codec: Any
     task_models: Any
     chain_integrity_lifecycle: Any
-    modify_datetime_effects: Any
     modify_spawn_effects: Any
 
     @classmethod
@@ -107,7 +106,6 @@ class ModifyHookCapabilities:
             task_codec=load("task_codec"),
             task_models=load("task_models"),
             chain_integrity_lifecycle=load("chain_integrity_lifecycle"),
-            modify_datetime_effects=load("modify_datetime_effects"),
             modify_spawn_effects=load("modify_spawn_effects"),
         )
 

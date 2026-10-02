@@ -201,7 +201,7 @@ def deleted_chain_disposition(
     try:
         until_dt, until_err = safe_parse_datetime(until_raw)
         end_dt, end_err = safe_parse_datetime(end_raw)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return DeletionEvidence(
             DeletionDisposition.AMBIGUOUS,
             "deleted task has no reliable native-until expiration evidence",
@@ -215,7 +215,7 @@ def deleted_chain_disposition(
         if compare_datetimes(until_dt, end_dt) <= 0:
             return DeletionEvidence(DeletionDisposition.EXPIRATION, "native until elapsed")
         return DeletionEvidence(DeletionDisposition.MANUAL, "deleted before native until")
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return DeletionEvidence(
             DeletionDisposition.AMBIGUOUS,
             "deleted task has no reliable native-until expiration evidence",

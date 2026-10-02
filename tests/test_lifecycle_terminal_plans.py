@@ -92,6 +92,33 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "integer adapter defect"):
             int_or_default(BrokenFloat(4.0), 1)
 
+    def test_deleted_chain_classification_propagates_unexpected_parser_errors(self) -> None:
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+
+        observation = DEFAULT_TASK_CODEC.decode_row(
+            {
+                "uuid": "11111111-0000-0000-0000-000000000071",
+                "status": "deleted",
+                "description": "expired occurrence",
+                "cp": "P7D",
+                "chain": "on",
+                "chainID": "11111111",
+                "link": 2,
+                "due": "20260720T060000Z",
+                "until": "20260726T205959Z",
+                "end": "20260726T205959Z",
+            },
+            source_query="deleted-chain-parser-failure",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "datetime parser defect"):
+            deleted_chain_disposition(
+                observation,
+                safe_parse_datetime=lambda _value: (_ for _ in ()).throw(
+                    RuntimeError("datetime parser defect")
+                ),
+            )
+
     def test_planner_preserves_successor_limit_error_context(self) -> None:
         from nautical_core.lifecycle.planner import LifecyclePlanningError
 

@@ -26,6 +26,15 @@ class DoctorConfigurationContractTests(unittest.TestCase):
                 {"live_panel_duration_ms": BrokenString()}, lambda _name: None
             )
 
+    def test_panel_configuration_does_not_hide_unexpected_dependency_probe_fault(self) -> None:
+        def broken_probe(_name: str) -> object:
+            raise RuntimeError("Rich dependency probe invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "Rich dependency probe invariant failed"):
+            doctor.OperatorHealthService.panel_findings(
+                {"panel_mode": "live"}, broken_probe
+            )
+
     def test_color_probe_failure_falls_back_to_plain_output(self) -> None:
         class BrokenTerminalProbe:
             def isatty(self) -> bool:

@@ -781,7 +781,7 @@ class OperatorHealthService:
             return tuple(result)
         try:
             rich_available = rich_factory("rich") is not None
-        except Exception:
+        except (ImportError, ValueError):
             rich_available = False
         motion = "disabled" if effective == 0 else f"{effective} ms"
         state = "available" if rich_available else "unavailable"

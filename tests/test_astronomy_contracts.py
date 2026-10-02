@@ -395,16 +395,26 @@ class AstronomyContractTests(unittest.TestCase):
                 "home",
             )
 
-    def test_timezone_validator_propagates_unexpected_zoneinfo_failure(self) -> None:
+    def test_timezone_validation_paths_propagate_unexpected_zoneinfo_failures(self) -> None:
         config = {
             "default_location": "home",
             "locations": {
                 "home": {"latitude": 40.0, "longitude": -74.0, "timezone": "UTC"}
             },
         }
+        validations = (
+            lambda: astronomy.validate_configuration(config),
+            lambda: astronomy._timezone_for_profile(config),
+            lambda: astronomy._observer(config),
+            lambda: astronomy._resolve_event_cached(
+                "sunrise", date(2026, 1, 1), "home", 40.0, -74.0, 0.0, "UTC"
+            ),
+        )
         with patch("zoneinfo.ZoneInfo", side_effect=RuntimeError("tz database failed")):
-            with self.assertRaisesRegex(RuntimeError, "tz database failed"):
-                astronomy.validate_configuration(config)
+            for validate in validations:
+                with self.subTest(validate=validate):
+                    with self.assertRaisesRegex(RuntimeError, "tz database failed"):
+                        validate()
 
     def test_phase_distance_wraps_at_new_moon(self) -> None:
         self.assertAlmostEqual(astronomy._phase_distance(27.8, 0.0), 0.2, places=9)

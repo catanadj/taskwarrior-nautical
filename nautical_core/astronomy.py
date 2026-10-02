@@ -145,10 +145,12 @@ def _timezone_for_profile(config: dict[str, Any] | None, name: str | None = None
     if not timezone:
         raise AstronomyConfigurationError(f"astronomy location '{selected}' requires an explicit timezone")
     try:
-        from zoneinfo import ZoneInfo
-
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    except ImportError as exc:
+        raise AstronomyUnavailableError("timezone support is unavailable") from exc
+    try:
         ZoneInfo(timezone)
-    except Exception as exc:
+    except (ValueError, ZoneInfoNotFoundError) as exc:
         raise AstronomyConfigurationError(
             f"astronomy location '{selected}' has invalid timezone '{timezone}'"
         ) from exc
@@ -256,10 +258,12 @@ def _observer(config: dict[str, Any] | None, location_name: str | None = None) -
     if not timezone:
         raise AstronomyConfigurationError(f"astronomy location '{selected}' requires an explicit timezone")
     try:
-        from zoneinfo import ZoneInfo
-
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    except ImportError as exc:
+        raise AstronomyUnavailableError("timezone support is unavailable") from exc
+    try:
         tzinfo = ZoneInfo(timezone)
-    except Exception as exc:
+    except (ValueError, ZoneInfoNotFoundError) as exc:
         raise AstronomyConfigurationError(
             f"astronomy location '{selected}' has invalid timezone '{timezone}'"
         ) from exc
@@ -337,7 +341,7 @@ def _resolve_event_cached(
 ) -> datetime:
     """Resolve repeated hook/reconcile lookups without retaining mutable config."""
     try:
-        from zoneinfo import ZoneInfo
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
         tzinfo = ZoneInfo(timezone)
         from astral import Observer
         observer = Observer(latitude=latitude, longitude=longitude, elevation=elevation)
@@ -345,7 +349,7 @@ def _resolve_event_cached(
         raise AstronomyUnavailableError(
             "astronomical anchor times require the 'astral' package"
         ) from exc
-    except Exception as exc:
+    except (ValueError, ZoneInfoNotFoundError) as exc:
         raise AstronomyConfigurationError(
             f"astronomy location '{selected}' has invalid timezone '{timezone}'"
         ) from exc

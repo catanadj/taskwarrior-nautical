@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from contextlib import nullcontext
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
 from .callback_ports import CallbackPort
 from .task_datetime import datetime_value, parser_for_core
 from .task_models import NauticalTask, TaskObservation, TaskPayload
@@ -86,6 +86,27 @@ class _ModifyPresentationEffects(Protocol):
         result: "CompletionLifecycleResult",
         task: "TaskView",
     ) -> None: ...
+
+
+class _ModifyDiagnosticsEffects(Protocol):
+    def analytics_ports_for(self, host: Any) -> object: ...
+
+    def chain_health_advice(
+        self,
+        ports: object,
+        chain: Sequence[TaskPayload],
+        kind: str,
+        task: TaskPayload,
+        tol_secs: int,
+        style: str,
+    ) -> Any: ...
+
+    def chain_integrity_warnings(
+        self,
+        ports: object,
+        chain: Sequence[TaskPayload],
+        expected_chain_id: str | None = None,
+    ) -> list[str]: ...
 
 
 class _ModifyTaskFields(Protocol):
@@ -181,7 +202,7 @@ class ModifyHookCapabilities:
     modify_lifecycle: Any
     modify_transition_effects: Any
     modify_presentation_effects: _ModifyPresentationEffects
-    modify_diagnostics_effects: Any
+    modify_diagnostics_effects: _ModifyDiagnosticsEffects
     modify_validation_effects: _ModifyValidationEffects
     modify_ui_effects: Any
     modify_task_fields: _ModifyTaskFields

@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +26,58 @@ from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_startup_config_failure_is_structured(self) -> None:
+        args = SimpleNamespace(json=True, apply=True)
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = reconcile._startup_failure(
+                args, "taskdata_config", RuntimeError("invalid timezone")
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 1)
+        self.assertEqual(payload.get("configuration_status"), "unavailable")
+        self.assertEqual(payload.get("configuration_drift"), "invalid timezone")
+
+    def test_native_until_manual_review_is_not_a_hard_error(self) -> None:
+        import nautical_core as core
+
+        row = TaskObservation.from_mapping(
+            {
+                "uuid": "00000000-0000-4000-8000-000000003248",
+                "status": "pending",
+                "chain": "on",
+                "chainID": "manual-until",
+                "link": 1,
+                "due": "20260723T230000Z",
+                "until": "20260723T220000Z",
+            },
+            source_query="reconcile manual-until contract",
+        )
+
+        class ControlPlane:
+            def audit_native_until(self, _rows: object, **_kwargs: object) -> object:
+                return SimpleNamespace(
+                    native_until=SimpleNamespace(
+                        repairs=[{"action": "manual_review", "task": "00000000"}],
+                        errors=[],
+                    ),
+                    candidates=[],
+                )
+
+        with patch.object(reconcile, "_reconcile_runtime_state", return_value=None):
+            repairs, errors = reconcile._native_until_repairs(
+                "task",
+                SimpleNamespace(core=core),
+                apply=False,
+                snapshot=SimpleNamespace(active_rows=lambda: [row]),
+                control_plane=ControlPlane(),
+            )
+
+        self.assertEqual(repairs, [{"action": "manual_review", "task": "00000000"}])
+        self.assertEqual(errors, [])
+
     def test_parent_identity_errors_are_actionable(self) -> None:
         base = {
             "uuid": "11111111-0000-0000-0000-000000000001",

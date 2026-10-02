@@ -327,21 +327,6 @@ def test_reconcile_configuration_verification_fails_closed():
     expect(status == "unavailable" and reason == check.reason, f"state adapter changed failure: {status!r}, {reason!r}")
 
 
-def test_reconcile_startup_config_failure_is_structured():
-    """Taskdata configuration startup failures expose unavailable status in JSON."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = load_hook_module(str(path), "_nautical_reconcile_configuration_startup_test")
-    args = SimpleNamespace(json=True, apply=True)
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
-        result = mod._startup_failure(args, "taskdata_config", RuntimeError("invalid timezone"))
-    payload = json.loads(output.getvalue())
-    expect(result == 1, f"configuration startup failure returned {result}")
-    expect(payload.get("configuration_status") == "unavailable", f"missing unavailable status: {payload!r}")
-    expect(payload.get("configuration_drift") == "invalid timezone", f"configuration detail was lost: {payload!r}")
-
-
 def test_reconcile_subprocess_output_contracts():
     """Operator subprocess modes keep JSON on stdout and diagnostics on stderr."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -414,55 +399,6 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     expect(recovery_action(failed) == "error" and "scheduled" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
     failed_wait = recovery_plan(reconcile, dict(parent, wait="not-a-date"), existing_children=[], hook=mod)
     expect(recovery_action(failed_wait) == "error" and "wait" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
-
-
-def test_reconcile_native_until_manual_review_is_not_a_hard_error():
-    """An unrecoverable native-until window is reported without claiming failure."""
-    hook_path = find_hook_file("on-modify.nautical")
-    hook = load_hook_module(hook_path, "_nautical_reconcile_manual_until_hook_test")
-    if hasattr(hook, "_load_core"):
-        hook._load_core()
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = load_hook_module(
-        str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-        "_nautical_reconcile_manual_until_tool_test",
-    )
-
-    def stamp(day, hhmm):
-        return hook.core.fmt_isoz(hook.core.build_local_datetime(day, hhmm))
-
-    row = fixture_observation(
-        {
-            "uuid": "00000000-0000-4000-8000-000000003248",
-            "chain": "on",
-            "chainID": "manual-until",
-            "link": 1,
-            "status": "pending",
-            "due": stamp(date(2026, 7, 23), (23, 0)),
-            "until": stamp(date(2026, 7, 23), (22, 0)),
-        }
-    )
-
-    class _ControlPlane:
-        def audit_native_until(self, rows, **_kwargs):
-            del rows
-            return SimpleNamespace(
-                native_until=SimpleNamespace(
-                    repairs=[{"action": "manual_review", "task": "00000000"}],
-                    errors=[],
-                ),
-                candidates=[],
-            )
-
-    snapshot = SimpleNamespace(active_rows=lambda: [row])
-    repairs, errors = tool._native_until_repairs(
-        "task", hook, apply=False, snapshot=snapshot, control_plane=_ControlPlane()
-    )
-    expect(not errors, f"manual review was reported as a failed mutation: {errors!r}")
-    expect(
-        repairs and repairs[0].get("action") == "manual_review",
-        f"manual review was not preserved: {repairs!r}",
-    )
 
 
 def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
@@ -1260,10 +1196,8 @@ TESTS = (
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_configuration_verification_fails_closed,
-    test_reconcile_startup_config_failure_is_structured,
     test_reconcile_subprocess_output_contracts,
     test_reconcile_apply_lease_serializes_mutations,
     test_reconcile_apply_refuses_a_second_full_run,
     test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
-    test_reconcile_native_until_manual_review_is_not_a_hard_error,
 ) + tuple(globals()[name] for name in _NAMES)

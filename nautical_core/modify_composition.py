@@ -109,6 +109,21 @@ class _ModifyDiagnosticsEffects(Protocol):
     ) -> list[str]: ...
 
 
+class _ModifyOrdinaryEffects(Protocol):
+    OrdinaryModifyServices: _ServiceFactory
+    RecurrenceActivationError: type[Exception]
+
+    def handle_non_completion_modify(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        *,
+        services: Any,
+        lifecycle: Any,
+        transition: Any = None,
+    ) -> None: ...
+
+
 class _ModifyDeletionDiagnosticsEffects(_ModifyDiagnosticsEffects, Protocol):
     def end_chain_summary_ports_for(self, host: Any) -> object: ...
 
@@ -343,7 +358,7 @@ class ModifyHookCapabilities:
     that constructs the set, preserving import-by-file compatibility.
     """
 
-    modify_ordinary: Any
+    modify_ordinary: _ModifyOrdinaryEffects
     modify_composition_adapters: Any
     hook_results: Any
     hook_context: Any
@@ -397,7 +412,7 @@ class ModifyHookCapabilities:
 class NonCompletionRouteCapabilities:
     """Dependencies used only by the ordinary/recurring-edit route."""
 
-    modify_ordinary: Any
+    modify_ordinary: _ModifyOrdinaryEffects
     modify_lifecycle: _ModifyLifecycle
     modify_validation_effects: _ModifyValidationEffects
     modify_ui_effects: _ModifyUIEffects

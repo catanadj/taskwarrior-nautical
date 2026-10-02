@@ -500,7 +500,7 @@ def cache_gc(
         try:
             stat_result = os_mod.stat(path)
             age = max(0.0, now - float(stat_result.st_mtime))
-        except Exception:
+        except OSError:
             continue
         if name.startswith(".") and name.endswith(".tmp"):
             if age >= max(0.0, float(stale_tmp_age)):

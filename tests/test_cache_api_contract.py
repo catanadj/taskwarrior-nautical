@@ -315,6 +315,23 @@ class CacheApiContractTests(unittest.TestCase):
             self.assertFalse(stale_tmp.exists())
             self.assertTrue(unrelated.exists())
 
+    def test_cache_gc_does_not_hide_unexpected_stat_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            candidate = root / "candidate.jsonz"
+            candidate.write_bytes(b"cache")
+            binding = self._binding(root)
+            real_stat = os.stat
+
+            def fail_candidate_stat(path, *args, **kwargs):
+                if os.fspath(path) == str(candidate):
+                    raise RuntimeError("filesystem stat invariant failed")
+                return real_stat(path, *args, **kwargs)
+
+            with patch.object(os, "stat", side_effect=fail_candidate_stat):
+                with self.assertRaisesRegex(RuntimeError, "filesystem stat invariant failed"):
+                    binding.cache_gc()
+
     def test_cache_metrics_are_emitted_only_when_enabled(self) -> None:
         from functools import lru_cache
 

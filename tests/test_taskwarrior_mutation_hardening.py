@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from nautical_core.integration_models import (
     Absent,
@@ -25,6 +26,50 @@ from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
 
 class MutationHardeningTests(unittest.TestCase):
+    def test_parent_guard_does_not_hide_internal_fingerprint_failures(self) -> None:
+        parent: dict[str, str | int] = {
+            "uuid": "00000000-0000-4000-8000-000000000924",
+            "status": "completed", "chain": "on", "chainID": "chain-guard",
+            "link": 7, "modified": "20260813T100000Z", "anchor": "w:mon", "cp": "1d",
+        }
+        guard = MutationGuard(
+            task_uuid=str(parent["uuid"]), status=str(parent["status"]),
+            chain_id=str(parent["chainID"]), link=int(parent["link"]),
+            recurrence_identity=recurrence_fingerprint(parent),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, str(parent["modified"])),),
+            expected_mutation_epoch=0, chain="on",
+        )
+        row = TaskObservation.from_mapping(parent, source_query="mutation-guard-test")
+
+        with patch(
+            "nautical_core.taskwarrior_mutations.recurrence_fingerprint",
+            side_effect=RuntimeError("fingerprint invariant failed"),
+        ), self.assertRaisesRegex(RuntimeError, "fingerprint invariant failed"):
+            TaskwarriorMutationService._guard_mismatch(guard, row)
+
+    def test_parent_guard_classifies_malformed_fingerprint_input(self) -> None:
+        parent: dict[str, str | int] = {
+            "uuid": "00000000-0000-4000-8000-000000000925",
+            "status": "completed", "chain": "on", "chainID": "chain-guard",
+            "link": 7, "modified": "20260813T100000Z", "anchor": "w:mon", "cp": "1d",
+        }
+        guard = MutationGuard(
+            task_uuid=str(parent["uuid"]), status=str(parent["status"]),
+            chain_id=str(parent["chainID"]), link=int(parent["link"]),
+            recurrence_identity="not-the-current-fingerprint",
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, str(parent["modified"])),),
+            expected_mutation_epoch=0, chain="on",
+        )
+        row = TaskObservation.from_mapping(parent, source_query="mutation-guard-test")
+
+        with patch(
+            "nautical_core.taskwarrior_mutations.recurrence_fingerprint",
+            side_effect=ValueError("malformed recurrence value"),
+        ):
+            reason = TaskwarriorMutationService._guard_mismatch(guard, row)
+
+        self.assertIn("guard recurrence identity unavailable", reason)
+
     def test_parent_guard_changes_never_dispatch_a_link_mutation(self) -> None:
         parent = {
             "uuid": "00000000-0000-4000-8000-000000000924",

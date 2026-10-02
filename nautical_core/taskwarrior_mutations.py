@@ -436,7 +436,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 return f"guard {field} changed (expected {expected}, found {actual or '-'})"
         try:
             actual_identity = recurrence_fingerprint(row.to_mapping())
-        except Exception as exc:
+        except (TypeError, ValueError, OverflowError, RecursionError) as exc:
             return f"guard recurrence identity unavailable: {exc}"
         if actual_identity != guard.recurrence_identity:
             return "guard recurrence identity changed"

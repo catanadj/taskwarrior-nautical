@@ -1,5 +1,6 @@
 import unittest
 import json
+import sqlite3
 import tempfile
 import sys
 from pathlib import Path
@@ -142,6 +143,34 @@ class OperatorHealthServiceTests(unittest.TestCase):
             self.assertEqual([item.severity.value for item in findings], ["info", "info"])
             self.assertEqual(checked, [newest])
             self.assertEqual(findings[1].to_dict()["observed"]["age_seconds"], 10.0)
+
+    def test_deep_local_state_does_not_hide_unexpected_quick_check_fault(self) -> None:
+        def broken_check(_path: Path) -> str:
+            raise RuntimeError("quick-check adapter invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "quick-check adapter invariant failed"):
+            OperatorHealthService.deep_local_state_findings(
+                "/tmp/outbox.db", quick_check=broken_check
+            )
+
+    def test_deep_local_state_reports_sqlite_quick_check_failure(self) -> None:
+        def failed_check(_path: Path) -> str:
+            raise sqlite3.DatabaseError("outbox page is corrupt")
+
+        findings = OperatorHealthService.deep_local_state_findings(
+            "/tmp/outbox.db", quick_check=failed_check
+        )
+        self.assertEqual(findings[0].severity.value, "error")
+        self.assertIn("outbox page is corrupt", findings[0].observed["error"])
+
+    def test_deep_local_state_reports_non_ok_quick_check_result(self) -> None:
+        findings = OperatorHealthService.deep_local_state_findings(
+            "/tmp/outbox.db", quick_check=lambda _path: "database disk image is malformed"
+        )
+        self.assertEqual(findings[0].severity.value, "error")
+        self.assertEqual(
+            findings[0].observed["error"], "database disk image is malformed"
+        )
 
     def test_deep_local_state_rejects_missing_backup_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -281,24 +281,30 @@ class OperatorHealthService:
         """Check outbox integrity and the newest optional backup generation."""
         findings: list[OperatorFinding] = []
         path = Path(str(outbox_path)).expanduser()
+        quick_check_error = ""
         try:
             checker = quick_check or OperatorHealthService._quick_check_sqlite
             result = checker(path)
+            if not isinstance(result, str):
+                raise TypeError("outbox quick check returned a non-text result")
             if result.lower() != "ok":
-                raise RuntimeError(result)
+                quick_check_error = result
+        except (OSError, sqlite3.Error) as exc:
+            quick_check_error = str(exc).strip() or type(exc).__name__
+        if quick_check_error:
+            findings.append(OperatorFinding(
+                "outbox.quick_check.deep", "lifecycle", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Lifecycle outbox integrity could not be verified.",
+                observed={"path": str(path), "error": quick_check_error},
+                guidance="Stop Nautical processes and restore or repair the outbox from a verified local backup.",
+            ))
+        else:
             findings.append(OperatorFinding(
                 "outbox.quick_check.deep", "lifecycle", FindingSeverity.INFO,
                 FindingActionability.INFORMATIONAL,
                 "Lifecycle outbox integrity is verified.",
                 observed={"path": str(path), "quick_check": result},
-            ))
-        except Exception as exc:
-            findings.append(OperatorFinding(
-                "outbox.quick_check.deep", "lifecycle", FindingSeverity.ERROR,
-                FindingActionability.BLOCKING,
-                "Lifecycle outbox integrity could not be verified.",
-                observed={"path": str(path), "error": str(exc)},
-                guidance="Stop Nautical processes and restore or repair the outbox from a verified local backup.",
             ))
         if backup_root is None:
             return tuple(findings)

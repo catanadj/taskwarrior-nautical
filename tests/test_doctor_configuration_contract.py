@@ -51,6 +51,15 @@ class DoctorConfigurationContractTests(unittest.TestCase):
         self.assertEqual(invalid.get("id"), "config.timezone.invalid")
         self.assertIn("pip install tzdata", invalid.get("fix", ""))
 
+    def test_timezone_findings_do_not_hide_unexpected_resolver_faults(self) -> None:
+        def broken_resolver(_name: str) -> object:
+            raise RuntimeError("timezone resolver invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "timezone resolver invariant failed"):
+            doctor.OperatorHealthService.timezone_findings(
+                {"tz": "Europe/Bucharest"}, broken_resolver
+            )
+
     def test_astronomy_findings_distinguish_unconfigured_and_healthy(self) -> None:
         service = doctor.OperatorHealthService
         unconfigured = service.astronomy_findings(

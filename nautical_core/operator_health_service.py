@@ -730,7 +730,7 @@ class OperatorHealthService:
             ),)
         try:
             zoneinfo_factory(tz_name)
-        except Exception as exc:
+        except (KeyError, OSError, TypeError, ValueError) as exc:
             return (OperatorFinding(
                 "config.timezone.invalid", "configuration", FindingSeverity.WARNING,
                 FindingActionability.ACTIONABLE,

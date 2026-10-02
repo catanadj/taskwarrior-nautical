@@ -232,7 +232,7 @@ class GoldenFixtureIsolationTests(unittest.TestCase):
                     "--only",
                     "navigator_uses_anchor_and_anchor_file_sources",
                     "--only",
-                    "reconcile_expiration_candidate_requires_expiry_evidence",
+                    "reconcile_tool_computes_year_ordinal_anchor",
                 ],
                 check=False,
                 capture_output=True,

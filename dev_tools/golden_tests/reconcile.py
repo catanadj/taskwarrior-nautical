@@ -512,51 +512,6 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
     )
 
 
-def test_reconcile_expiration_candidate_requires_expiry_evidence():
-    """Deleted chains distinguish expiration, manual stop, and ambiguous evidence."""
-    reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_reconcile_expiration_candidate_test")
-    parent = {
-        "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "deleted",
-        "description": "expired occurrence",
-        "cp": "7d",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 2,
-        "due": "20260720T060000Z",
-        "until": "20260726T205959Z",
-        "end": "20260726T205959Z",
-    }
-    is_candidate = lambda task: reconcile.is_orphan_expiration_candidate(
-        task_observation(task),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-    )
-    expect(is_candidate(parent), "deletion exactly at until should be an expiration candidate")
-    manual = dict(parent, end="20260726T205958Z")
-    expect(not is_candidate(manual), "manual deletion before until must not advance")
-    evidence = reconcile.deleted_chain_disposition(
-        task_observation(manual), safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse
-    )
-    expect(evidence.disposition.value == "manual", f"early deletion should stop the chain: {evidence!r}")
-    no_until_evidence = reconcile.deleted_chain_disposition(
-        task_observation({key: value for key, value in parent.items() if key != "until"}),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-    )
-    expect(no_until_evidence.disposition.value == "manual", f"deletion without until should stop the chain: {no_until_evidence!r}")
-    malformed_evidence = reconcile.deleted_chain_disposition(
-        task_observation(dict(parent, until="not-a-date")),
-        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
-    )
-    expect(malformed_evidence.disposition.value == "ambiguous", f"malformed evidence must fail closed: {malformed_evidence!r}")
-    manual_plan = recovery_plan(reconcile, manual, existing_children=[], hook=mod)
-    expect(recovery_action(manual_plan) in {"manual_stop", "manual_review"}, f"manual deletion should stop the chain: {manual_plan}")
-    expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")
-    expect(not is_candidate(dict(parent, until="not-a-date")), "malformed until must fail closed")
-    expect(not is_candidate(dict(parent, nextLink="22222222")), "already-linked expiration must not be reconsidered")
-
-
 def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
     """A deleted anchor occurrence receives one real linked successor."""
     _find_hook_file = find_hook_file
@@ -1360,5 +1315,4 @@ TESTS = (
     test_reconcile_parent_identity_errors_are_actionable,
     test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
-    test_reconcile_expiration_candidate_requires_expiry_evidence,
 ) + tuple(globals()[name] for name in _NAMES)

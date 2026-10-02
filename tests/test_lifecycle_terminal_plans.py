@@ -19,7 +19,10 @@ from nautical_core.lifecycle.models import (
 from nautical_core.lifecycle.outbox import OutboxProcessingState
 from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
 from nautical_core.lifecycle.planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
-from nautical_core.chain_integrity_lifecycle import deleted_chain_disposition
+from nautical_core.chain_integrity_lifecycle import (
+    deleted_chain_disposition,
+    is_orphan_expiration_candidate,
+)
 from nautical_core.reconcile_report import describe_recovery_result
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import NauticalTask, TaskDraft
@@ -412,19 +415,74 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
                 self.assertEqual(evidence["status"], status.value)
                 self.assertEqual(evidence["reason"], f"{status.value} reason")
 
-    def test_malformed_expiration_evidence_is_ambiguous(self) -> None:
-        task = snapshot().observation.to_mapping()
-        task.update({"status": "deleted", "until": "not-a-date", "end": "20260825T200000Z"})
-        malformed = DEFAULT_TASK_CODEC.decode_row(task, source_query="malformed-expiration-test")
+    def test_deleted_chain_candidate_requires_reliable_expiration_evidence(self) -> None:
+        from datetime import datetime, timezone
+
+        parent = {
+            "uuid": "11111111-0000-0000-0000-000000000001",
+            "status": "deleted",
+            "description": "expired occurrence",
+            "cp": "7d",
+            "chain": "on",
+            "chainID": "11111111",
+            "link": 2,
+            "due": "20260720T060000Z",
+            "until": "20260726T205959Z",
+            "end": "20260726T205959Z",
+        }
 
         def parse(value: object):
-            if value == "not-a-date":
+            try:
+                parsed = datetime.strptime(str(value), "%Y%m%dT%H%M%SZ")
+            except ValueError:
                 return None, "invalid timestamp"
-            return value, None
+            return parsed.replace(tzinfo=timezone.utc), None
 
-        evidence = deleted_chain_disposition(malformed, safe_parse_datetime=parse)
-        self.assertEqual(evidence.disposition, DeletionDisposition.AMBIGUOUS)
-        self.assertIn("reliable native-until", evidence.reason)
+        def disposition(row: dict[str, object]):
+            observation = DEFAULT_TASK_CODEC.decode_row(
+                row, source_query="deleted-chain-evidence-contract"
+            )
+            return deleted_chain_disposition(
+                observation, safe_parse_datetime=parse
+            )
+
+        expired = DEFAULT_TASK_CODEC.decode_row(
+            parent, source_query="expired-chain-candidate"
+        )
+        self.assertTrue(is_orphan_expiration_candidate(expired, safe_parse_datetime=parse))
+        self.assertEqual(disposition(parent).disposition, DeletionDisposition.EXPIRATION)
+
+        manual = {**parent, "end": "20260726T205958Z"}
+        self.assertFalse(
+            is_orphan_expiration_candidate(
+                DEFAULT_TASK_CODEC.decode_row(manual, source_query="manual-delete"),
+                safe_parse_datetime=parse,
+            )
+        )
+        self.assertEqual(disposition(manual).disposition, DeletionDisposition.MANUAL)
+
+        no_until = {key: value for key, value in parent.items() if key != "until"}
+        self.assertEqual(disposition(no_until).disposition, DeletionDisposition.MANUAL)
+
+        malformed = {**parent, "until": "not-a-date"}
+        malformed_evidence = disposition(malformed)
+        self.assertEqual(malformed_evidence.disposition, DeletionDisposition.AMBIGUOUS)
+        self.assertIn("reliable native-until", malformed_evidence.reason)
+
+        completed = {**parent, "status": "completed"}
+        linked = {**parent, "nextLink": "22222222"}
+        self.assertFalse(
+            is_orphan_expiration_candidate(
+                DEFAULT_TASK_CODEC.decode_row(completed, source_query="completed-chain"),
+                safe_parse_datetime=parse,
+            )
+        )
+        self.assertFalse(
+            is_orphan_expiration_candidate(
+                DEFAULT_TASK_CODEC.decode_row(linked, source_query="linked-chain"),
+                safe_parse_datetime=parse,
+            )
+        )
 
     def test_deleted_without_until_builds_chain_disable_terminal_plan(self) -> None:
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision

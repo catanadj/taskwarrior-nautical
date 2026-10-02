@@ -79,6 +79,14 @@ class _ModifyPresentationEffects(Protocol):
     ) -> None: ...
 
 
+class _ModifyTaskFields(Protocol):
+    def field_changed(self, old: TaskPayload, new: TaskPayload, key: str) -> bool: ...
+
+    def recurrence_anchor_field(self, payload: TaskPayload) -> str: ...
+
+    def strip_quotes(self, value: str) -> str: ...
+
+
 class _HookHost:
     """Attribute view over a dynamically loaded hook module's globals."""
 
@@ -113,7 +121,7 @@ class ModifyHookCapabilities:
     modify_diagnostics_effects: Any
     modify_validation_effects: Any
     modify_ui_effects: Any
-    modify_task_fields: Any
+    modify_task_fields: _ModifyTaskFields
     modify_completion_effects: Any
     modify_read_effects: Any
     modify_queries: Any
@@ -162,7 +170,7 @@ class NonCompletionRouteCapabilities:
     modify_diagnostics_effects: Any
     modify_validation_effects: Any
     modify_ui_effects: Any
-    modify_task_fields: Any
+    modify_task_fields: _ModifyTaskFields
 
 
 @dataclass(frozen=True)

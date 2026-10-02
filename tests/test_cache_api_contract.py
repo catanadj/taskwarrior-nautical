@@ -46,6 +46,17 @@ class _Clock:
 class CacheApiContractTests(unittest.TestCase):
     _namespaces: list[dict] = []
 
+    def test_cache_lock_parent_setup_does_not_hide_unexpected_errors(self) -> None:
+        class BrokenPath:
+            @staticmethod
+            def dirname(_path: str) -> str:
+                raise RuntimeError("path adapter invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "path adapter invariant failed"):
+            cache_locking.safe_lock_ensure_parent(
+                "cache/lock", True, os_mod=SimpleNamespace(path=BrokenPath())
+            )
+
     def test_runtime_context_uses_explicit_filesystem_clock_and_lock(self) -> None:
         fake_filesystem = SimpleNamespace()
         fake_clock = _Clock()

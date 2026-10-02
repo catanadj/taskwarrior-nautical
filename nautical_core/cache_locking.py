@@ -66,7 +66,7 @@ def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: Any) -> None:
         parent = os_mod.path.dirname(path_str)
         if parent:
             os_mod.makedirs(parent, exist_ok=True)
-    except Exception:
+    except OSError:
         pass
 
 

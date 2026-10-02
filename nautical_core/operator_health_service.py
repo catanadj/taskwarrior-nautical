@@ -309,35 +309,47 @@ class OperatorHealthService:
         if backup_root is None:
             return tuple(findings)
         root = Path(str(backup_root)).expanduser()
+        backup_error = ""
         try:
             generations = [item for item in root.iterdir() if item.is_dir() and not item.is_symlink()]
             if not generations:
-                raise FileNotFoundError("no backup generations found")
-            newest = max(generations, key=lambda item: (item.stat().st_mtime_ns, item.name))
-            backup_checker_fn: Callable[[Path], bool] = backup_checker or OperatorHealthService._verify_backup_generation
-            if not backup_checker_fn(newest):
-                raise RuntimeError("manifest or artifact verification failed")
-            manifest = json.loads((newest / "manifest.json").read_text(encoding="utf-8"))
-            metadata = manifest.get("metadata") if isinstance(manifest, Mapping) else None
-            if not isinstance(metadata, Mapping) or metadata.get("restore_tool_schema") != 1:
-                raise RuntimeError("backup restore-tool schema is missing or unsupported")
-            created_at = metadata.get("created_at")
-            if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
-                raise RuntimeError("backup creation timestamp is missing or invalid")
-            age_seconds = max(0.0, float(clock()) - float(created_at))
+                backup_error = "no backup generations found"
+            else:
+                newest = max(generations, key=lambda item: (item.stat().st_mtime_ns, item.name))
+                backup_checker_fn: Callable[[Path], bool] = backup_checker or OperatorHealthService._verify_backup_generation
+                if not backup_checker_fn(newest):
+                    backup_error = "manifest or artifact verification failed"
+                else:
+                    manifest = json.loads((newest / "manifest.json").read_text(encoding="utf-8"))
+                    metadata = manifest.get("metadata") if isinstance(manifest, Mapping) else None
+                    if not isinstance(metadata, Mapping) or metadata.get("restore_tool_schema") != 1:
+                        backup_error = "backup restore-tool schema is missing or unsupported"
+                    else:
+                        created_at = metadata.get("created_at")
+                        if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
+                            backup_error = "backup creation timestamp is missing or invalid"
+                        else:
+                            try:
+                                created_at_seconds = float(created_at)
+                            except (OverflowError, ValueError):
+                                backup_error = "backup creation timestamp is outside the supported range"
+        except (OSError, UnicodeError, ValueError) as exc:
+            backup_error = str(exc).strip() or type(exc).__name__
+        if backup_error:
+            findings.append(OperatorFinding(
+                "backup.newest.deep", "backup", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Newest configured backup generation could not be verified.",
+                observed={"root": str(root), "error": backup_error},
+                guidance="Create or select a verified local backup generation before relying on offline recovery.",
+            ))
+        else:
+            age_seconds = max(0.0, float(clock()) - created_at_seconds)
             findings.append(OperatorFinding(
                 "backup.newest.deep", "backup", FindingSeverity.INFO,
                 FindingActionability.INFORMATIONAL,
                 "Newest configured backup generation is verified.",
                 observed={"root": str(root), "generation": newest.name, "age_seconds": age_seconds, "restore_tool_schema": 1},
-            ))
-        except Exception as exc:
-            findings.append(OperatorFinding(
-                "backup.newest.deep", "backup", FindingSeverity.ERROR,
-                FindingActionability.BLOCKING,
-                "Newest configured backup generation could not be verified.",
-                observed={"root": str(root), "error": str(exc)},
-                guidance="Create or select a verified local backup generation before relying on offline recovery.",
             ))
         return tuple(findings)
 

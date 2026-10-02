@@ -184,6 +184,26 @@ class OperatorHealthServiceTests(unittest.TestCase):
             self.assertEqual(findings[1].severity.value, "error")
             self.assertIn("restore-tool schema", findings[1].observed["error"])
 
+    def test_deep_local_state_does_not_hide_backup_checker_faults(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "backups"
+            generation = root / "generation"
+            generation.mkdir(parents=True)
+            (generation / "manifest.json").write_text(
+                json.dumps({"metadata": {"restore_tool_schema": 1, "created_at": 90.0}}),
+                encoding="utf-8",
+            )
+
+            def broken_checker(_path: Path) -> bool:
+                raise RuntimeError("backup checker invariant failed")
+
+            with self.assertRaisesRegex(RuntimeError, "backup checker invariant failed"):
+                OperatorHealthService.deep_local_state_findings(
+                    Path(td) / "outbox.db", root,
+                    quick_check=lambda _path: "ok", backup_checker=broken_checker,
+                    clock=lambda: 100.0,
+                )
+
     def test_deep_local_state_rejects_corrupt_outbox_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "outbox.db"

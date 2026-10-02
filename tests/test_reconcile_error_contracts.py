@@ -127,6 +127,50 @@ class ReconcileErrorContracts(unittest.TestCase):
             ):
                 reconcile._next_recovery_child(parent, "child-uuid")
 
+    def test_recovery_lookup_unavailability_stays_partial_not_error(self) -> None:
+        service = LifecycleReconciliationService(
+            snapshot=SimpleNamespace(),
+            repository=SimpleNamespace(),
+            configuration_fingerprint="config",
+            schedule_fingerprint="schedule",
+        )
+        parent = {
+            "uuid": "00000000-0000-4000-8000-000000000004",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "recovery-read-classification",
+            "link": 1,
+        }
+        partial_result = object()
+        error_result = object()
+        recovery_policy = SimpleNamespace(
+            virtual_expired_child=lambda *_args, **_kwargs: (None, ""),
+            terminal_error=lambda *_args: "",
+        )
+
+        with (
+            patch.object(reconcile, "_recovery_policy", return_value=recovery_policy),
+            patch.object(
+                reconcile,
+                "_apply_parent_atomic",
+                side_effect=reconcile._RecoveryLookupUnavailable("child query timed out"),
+            ),
+            patch.object(reconcile, "_recovery_partial", return_value=partial_result),
+            patch.object(reconcile, "_recovery_error", return_value=error_result),
+        ):
+            result = reconcile._reconcile_candidate(
+                "task",
+                SimpleNamespace(),
+                parent,
+                taskdata=Path("/tmp/reconcile-recovery-error-contract"),
+                apply=True,
+                max_expiration_hops=1,
+                recovery_at=None,
+                reconciliation_service=service,
+            )
+
+        self.assertIs(result[0][0], partial_result)
+
     def test_configuration_verification_fails_closed_on_unexpected_fault(self) -> None:
         def broken_verifier() -> dict[str, bool]:
             raise RuntimeError("configuration snapshot unavailable")

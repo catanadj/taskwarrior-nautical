@@ -1145,7 +1145,15 @@ def _reconcile_candidate(
 ) -> list[tuple[RecoveryResult, str]]:
     def recovery_from_exception(candidate: dict[str, Any], exc: Exception) -> Any:
         reason = str(exc).strip() or type(exc).__name__
-        if isinstance(exc, (_ConfigurationDrift, _LifecycleRetryable, _PlanReadUnavailable)):
+        if isinstance(
+            exc,
+            (
+                _ConfigurationDrift,
+                _LifecycleRetryable,
+                _PlanReadUnavailable,
+                _RecoveryLookupUnavailable,
+            ),
+        ):
             return _recovery_partial(candidate, reason)
         if isinstance(exc, _LifecycleManualReview):
             return _recovery_manual_review(candidate, reason)

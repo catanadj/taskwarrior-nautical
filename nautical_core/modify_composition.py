@@ -13,7 +13,7 @@ from .task_models import NauticalTask, TaskObservation, TaskPayload
 
 if TYPE_CHECKING:
     from .lifecycle.models import LifecyclePlan
-    from .modify_models import CompletionLifecycleResult, TaskView
+    from .modify_models import CompletionComputeResult, CompletionLifecycleResult, TaskView
     from .modify_workflow import RecurrenceTransitionDecision
     from .modify_validation_effects import (
         AnchorValidationPorts,
@@ -170,6 +170,50 @@ class _ChainHealthAdviceCallback(Protocol):
         tol_secs: int = 60,
         style: str,
     ) -> Any: ...
+
+
+class _PrepareRecurrenceCallback(Protocol):
+    def __call__(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        *,
+        transition: Any = None,
+    ) -> tuple[str, str, str]: ...
+
+
+class _PreserveCPCarryCallback(Protocol):
+    def __call__(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        cp: str,
+        *,
+        transition: Any = None,
+    ) -> Any: ...
+
+
+class _PreserveNativeUntilCallback(Protocol):
+    def __call__(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        kind: str,
+        *,
+        transition: Any = None,
+    ) -> Any: ...
+
+
+class _ComputeNextAndLimitsCallback(Protocol):
+    def __call__(
+        self,
+        new: TaskPayload,
+        kind: str,
+        next_no: int,
+        now_utc: datetime,
+        *,
+        preflight: Any = None,
+    ) -> "CompletionComputeResult | CompletionLifecycleResult | None": ...
 
 
 class _TaskHookResponseFactory(Protocol):
@@ -659,13 +703,13 @@ class ModifyRuntimeServices:
     render_cp_completion_feedback: Callable[..., None]
     render_lifecycle_result: Callable[..., None]
     print_task: Callable[[TaskPayload], None]
-    prepare_recurrence: Callable[[TaskPayload, TaskPayload], tuple[str, str, str]]
-    preserve_cp_relative_offsets: Callable[..., Any]
-    preserve_native_until: Callable[[TaskPayload, TaskPayload, str], Any]
+    prepare_recurrence: _PrepareRecurrenceCallback
+    preserve_cp_relative_offsets: _PreserveCPCarryCallback
+    preserve_native_until: _PreserveNativeUntilCallback
     validate_native_until: Callable[[TaskPayload], None]
     validate_native_until_slots: Callable[[TaskPayload], None]
     now_utc: Callable[[], datetime]
-    compute_next_and_limits: Callable[..., Any]
+    compute_next_and_limits: _ComputeNextAndLimitsCallback
 
     @classmethod
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None) -> "ModifyRuntimeServices":

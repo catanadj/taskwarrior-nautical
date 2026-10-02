@@ -173,16 +173,26 @@ class ModifyIsolationTests(unittest.TestCase):
             "render_cp_completion_feedback",
             "render_lifecycle_result",
             "print_task",
-            "prepare_recurrence",
-            "preserve_cp_relative_offsets",
-            "preserve_native_until",
             "validate_native_until",
             "validate_native_until_slots",
-            "compute_next_and_limits",
         }
         callback_fields.remove("chain_health_advice")
         self.assertTrue(all(get_origin(annotations[name]) is CallableOrigin for name in callback_fields))
         self.assertEqual(annotations["chain_health_advice"].__name__, "_ChainHealthAdviceCallback")
+
+    def test_modify_runtime_services_recurrence_callbacks_have_named_contracts(self) -> None:
+        from nautical_core.modify_composition import ModifyRuntimeServices
+
+        annotations = get_type_hints(ModifyRuntimeServices)
+        expected = {
+            "prepare_recurrence": "_PrepareRecurrenceCallback",
+            "preserve_cp_relative_offsets": "_PreserveCPCarryCallback",
+            "preserve_native_until": "_PreserveNativeUntilCallback",
+            "compute_next_and_limits": "_ComputeNextAndLimitsCallback",
+        }
+        for field, protocol_name in expected.items():
+            with self.subTest(field=field):
+                self.assertEqual(annotations[field].__name__, protocol_name)
 
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone

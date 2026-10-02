@@ -146,7 +146,7 @@ class OperatorHealthService:
                         "total_inodes": total_inodes,
                     },
                 ))
-            except Exception as exc:
+            except (AttributeError, OSError, OverflowError, TypeError, ValueError) as exc:
                 findings.append(OperatorFinding(
                     f"storage.{label}", "installation", FindingSeverity.ERROR,
                     FindingActionability.BLOCKING,

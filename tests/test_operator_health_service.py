@@ -31,6 +31,15 @@ class OperatorHealthServiceTests(unittest.TestCase):
         self.assertEqual(payload["severity"], "error")
         self.assertIn("denied", payload["observed"]["error"])
 
+    def test_storage_findings_do_not_hide_unexpected_probe_faults(self) -> None:
+        def broken_probe(_path: str) -> object:
+            raise RuntimeError("capacity probe invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "capacity probe invariant failed"):
+            OperatorHealthService.storage_findings(
+                {"taskdata": "/tmp/taskdata"}, statvfs_factory=broken_probe
+            )
+
     def test_deep_identity_findings_are_injectable_and_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             runtime_root = Path(td) / "runtime"

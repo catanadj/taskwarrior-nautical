@@ -9,6 +9,37 @@ import unittest
 
 
 class ModifyPresentationPortTests(unittest.TestCase):
+    def test_panel_forwards_configured_live_duration_and_semantic_themes(self) -> None:
+        from nautical_core.modify_ui_effects import UIEffectsPorts, panel
+
+        rendered: list[tuple[str, list[tuple[str, str]], dict[str, object]]] = []
+        themes = {"info": {"border": "cyan", "title": "white"}}
+        ui = SimpleNamespace(panel_themes=lambda: dict(themes))
+        core = SimpleNamespace(
+            _import_sibling=lambda _name: ui,
+            PANEL_MODE="live",
+            LIVE_PANEL_DURATION_MS=415,
+            LIVE_PANEL_FOOTER="NAUTICAL",
+            FAST_COLOR=True,
+            render_panel=lambda title, rows, **kwargs: rendered.append((title, rows, kwargs)),
+        )
+        ports = UIEffectsPorts(
+            core=lambda: core,
+            load_core=lambda: None,
+            override=lambda _name: None,
+            emit_passthrough_json=lambda _task: self.fail("unexpected passthrough"),
+            emit_task_json=lambda *_args, **_kwargs: self.fail("unexpected task output"),
+            stderr_write=lambda _message: None,
+        )
+
+        panel(ports, "Live duration", [("Key", "Value")], kind="info")
+
+        title, rows, options = rendered[0]
+        self.assertEqual(title, "Live duration")
+        self.assertEqual(rows, [("Key", "Value")])
+        self.assertEqual(options["live_duration_ms"], 415)
+        self.assertEqual(options["themes"], themes)
+
     def test_presentation_operations_do_not_accept_hook_host(self) -> None:
         import nautical_core.modify_presentation_effects as presentation
 

@@ -72,6 +72,16 @@ class ModifyIsolationTests(unittest.TestCase):
 
         self.assertIsNot(get_type_hints(DeletionRouteCapabilities)["modify_queries"], Any)
 
+    def test_route_bundles_do_not_repeat_root_presentation_capability(self) -> None:
+        from nautical_core.modify_composition import (
+            DeletionRouteCapabilities,
+            NonCompletionRouteCapabilities,
+        )
+
+        for route in (NonCompletionRouteCapabilities, DeletionRouteCapabilities):
+            with self.subTest(route=route.__name__):
+                self.assertNotIn("modify_presentation_effects", route.__dataclass_fields__)
+
     def test_schedule_period_helper_uses_only_explicit_ports(self) -> None:
         from datetime import datetime, timedelta, timezone
         from nautical_core.modify_schedule_effects import SchedulePorts, cp_add_period

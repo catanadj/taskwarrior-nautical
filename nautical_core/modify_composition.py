@@ -322,7 +322,6 @@ class NonCompletionRouteCapabilities:
 
     modify_ordinary: Any
     modify_lifecycle: _ModifyLifecycle
-    modify_presentation_effects: Any
     modify_diagnostics_effects: Any
     modify_validation_effects: _ModifyValidationEffects
     modify_ui_effects: _ModifyUIEffects
@@ -340,7 +339,6 @@ class CompletionRouteCapabilities:
 class DeletionRouteCapabilities:
     """Dependencies used only by deletion and expiration routes."""
 
-    modify_presentation_effects: Any
     modify_diagnostics_effects: Any
     modify_ui_effects: _ModifyUIEffects
     modify_expiration: Any
@@ -480,7 +478,6 @@ class ModifyRuntimeServices:
             non_completion=NonCompletionRouteCapabilities(
                 modify_ordinary=capabilities.modify_ordinary,
                 modify_lifecycle=capabilities.modify_lifecycle,
-                modify_presentation_effects=capabilities.modify_presentation_effects,
                 modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
                 modify_validation_effects=capabilities.modify_validation_effects,
                 modify_ui_effects=capabilities.modify_ui_effects,
@@ -490,7 +487,6 @@ class ModifyRuntimeServices:
                 modify_completion_effects=capabilities.modify_completion_effects,
             ),
             deletion=DeletionRouteCapabilities(
-                modify_presentation_effects=capabilities.modify_presentation_effects,
                 modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
                 modify_ui_effects=capabilities.modify_ui_effects,
                 modify_expiration=capabilities.modify_expiration,

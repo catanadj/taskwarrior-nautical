@@ -19,7 +19,7 @@ from .core_context import CacheDependencies, CacheState, CoreContext
 fcntl: Any
 try:
     import fcntl
-except Exception:
+except ImportError:
     fcntl = None
 
 

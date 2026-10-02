@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+import builtins
 import fcntl
 import importlib
 import io
@@ -106,6 +107,21 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertIs(runtime.clock, fake_clock)
         self.assertIs(runtime.random, fake_random)
         self.assertIs(runtime.fcntl, fake_lock)
+
+    def test_fcntl_loader_does_not_hide_unexpected_import_errors(self) -> None:
+        real_import = builtins.__import__
+
+        def fail_fcntl_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "fcntl":
+                raise RuntimeError("fcntl loader invariant failed")
+            return real_import(name, globals, locals, fromlist, level)
+
+        try:
+            with patch("builtins.__import__", side_effect=fail_fcntl_import):
+                with self.assertRaisesRegex(RuntimeError, "fcntl loader invariant failed"):
+                    importlib.reload(cache_api)
+        finally:
+            importlib.reload(cache_api)
 
     def _binding(
         self,

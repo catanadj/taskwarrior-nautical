@@ -157,6 +157,16 @@ class _ModifyQueries(Protocol):
     ) -> str: ...
 
 
+class _SeedLookupPortsFactory(Protocol):
+    def __call__(self, *, service: Any, decode_row: Any, cache_set: Any) -> object: ...
+
+
+class _ModifyReadEffects(Protocol):
+    SeedLookupPorts: _SeedLookupPortsFactory
+
+    def seed_runtime_lookup_tasks(self, ports: object, *tasks: TaskPayload | None) -> None: ...
+
+
 class _ModifyTaskFields(Protocol):
     def field_changed(self, old: TaskPayload, new: TaskPayload, key: str) -> bool: ...
 
@@ -255,7 +265,7 @@ class ModifyHookCapabilities:
     modify_ui_effects: _ModifyUIEffects
     modify_task_fields: _ModifyTaskFields
     modify_completion_effects: _ModifyCompletionEffects
-    modify_read_effects: Any
+    modify_read_effects: _ModifyReadEffects
     modify_queries: _ModifyQueries
     modify_expiration: Any
     modify_generation_effects: _ModifyGenerationEffects

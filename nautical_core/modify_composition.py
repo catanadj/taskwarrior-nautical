@@ -5,15 +5,36 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from contextlib import nullcontext
+from datetime import datetime
 from typing import Any, Callable, Protocol
 from .callback_ports import CallbackPort
 from .task_datetime import datetime_value, parser_for_core
+from .task_models import NauticalTask, TaskPayload
 
 
 class ModifyCallback(Protocol):
     """Callable service port used by modify-route composition services."""
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class _NativeUntilGenerationService(Protocol):
+    def carry_native_until(
+        self,
+        parent: NauticalTask,
+        child: TaskPayload,
+        child_due_utc: datetime,
+        kind: str,
+        *,
+        parent_anchor_field: str,
+        child_anchor_field: str,
+    ) -> None: ...
+
+
+class _ModifyGenerationEffects(Protocol):
+    def generation_ports_for(self, host: Any) -> object: ...
+
+    def chain_generation_service(self, ports: object) -> _NativeUntilGenerationService: ...
 
 
 class _HookHost:
@@ -55,7 +76,7 @@ class ModifyHookCapabilities:
     modify_read_effects: Any
     modify_queries: Any
     modify_expiration: Any
-    modify_generation_effects: Any
+    modify_generation_effects: _ModifyGenerationEffects
     task_codec: Any
     task_models: Any
     chain_integrity_lifecycle: Any

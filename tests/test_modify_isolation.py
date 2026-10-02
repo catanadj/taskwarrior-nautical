@@ -23,6 +23,10 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertTrue(ModifyHookCapabilities.__dataclass_params__.frozen)
         runtime_fields = getattr(ModifyRuntimeServices, "__dataclass_fields__", {})
         self.assertNotIn("capabilities", runtime_fields)
+        self.assertIsNot(
+            get_type_hints(ModifyHookCapabilities)["modify_generation_effects"],
+            Any,
+        )
 
     def test_schedule_period_helper_uses_only_explicit_ports(self) -> None:
         from datetime import datetime, timedelta, timezone

@@ -30,6 +30,29 @@ class NativeUntilContracts(unittest.TestCase):
         self.assertFalse(valid)
         self.assertEqual(reason, "until and scheduled could not be compared")
 
+    def test_calendar_slot_validation_propagates_unexpected_timezone_failures(self) -> None:
+        def fail_timezone(_value):
+            raise RuntimeError("timezone resolver failed")
+
+        with self.assertRaisesRegex(RuntimeError, "timezone resolver failed"):
+            native_until.validate_calendar_slots(
+                datetime(2026, 8, 3, 18, tzinfo=timezone.utc),
+                datetime(2026, 8, 3, 9, tzinfo=timezone.utc),
+                ((9, 0),),
+                to_local=fail_timezone,
+            )
+
+    def test_calendar_slot_validation_classifies_malformed_slots(self) -> None:
+        valid, reason = native_until.validate_calendar_slots(
+            datetime(2026, 8, 3, 18, tzinfo=timezone.utc),
+            datetime(2026, 8, 3, 9, tzinfo=timezone.utc),
+            (("not-an-hour", 0),),
+            to_local=lambda value: value,
+        )
+
+        self.assertFalse(valid)
+        self.assertEqual(reason, "could not compare calendar expiration with anchor times")
+
     def test_exact_carry_detection_does_not_hide_timestamp_adapter_failures(self) -> None:
         class BrokenTimestamp:
             @property

@@ -119,7 +119,7 @@ def validate_calendar_slots(
             for hh, mm in slots or ()
             if (int(hh), int(mm), 0) >= expiration
         )
-    except Exception:
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return (False, "could not compare calendar expiration with anchor times")
     if not blocked:
         return (True, None)

@@ -13,6 +13,7 @@ from .task_models import NauticalTask, TaskObservation, TaskPayload
 
 if TYPE_CHECKING:
     from .lifecycle.models import LifecyclePlan
+    from .modify_models import CompletionLifecycleResult, TaskView
 
 
 class ModifyCallback(Protocol):
@@ -67,6 +68,17 @@ class _ModifySpawnEffects(Protocol):
     ) -> tuple[bool, str]: ...
 
 
+class _ModifyPresentationEffects(Protocol):
+    def lifecycle_result_port_for(self, host: Any) -> object: ...
+
+    def render_lifecycle_result(
+        self,
+        ports: object,
+        result: "CompletionLifecycleResult",
+        task: "TaskView",
+    ) -> None: ...
+
+
 class _HookHost:
     """Attribute view over a dynamically loaded hook module's globals."""
 
@@ -97,7 +109,7 @@ class ModifyHookCapabilities:
     hook_engine: Any
     modify_lifecycle: Any
     modify_transition_effects: Any
-    modify_presentation_effects: Any
+    modify_presentation_effects: _ModifyPresentationEffects
     modify_diagnostics_effects: Any
     modify_validation_effects: Any
     modify_ui_effects: Any

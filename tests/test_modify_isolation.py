@@ -31,6 +31,7 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIsNot(capability_annotations["task_codec"], Any)
         self.assertIsNot(capability_annotations["task_models"], Any)
         self.assertIsNot(capability_annotations["modify_spawn_effects"], Any)
+        self.assertIsNot(capability_annotations["modify_presentation_effects"], Any)
 
     def test_composition_does_not_load_unused_datetime_capability_module(self) -> None:
         from nautical_core.modify_composition import ModifyHookCapabilities

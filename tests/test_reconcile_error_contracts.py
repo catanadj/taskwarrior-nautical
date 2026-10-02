@@ -10,10 +10,60 @@ import unittest
 from unittest.mock import patch
 
 import nautical_core.tools.nautical_reconcile as reconcile
+from nautical_core.integration_models import (
+    CommandFailureKind,
+    FailureEvidence,
+    TaskCommand,
+    Unavailable,
+)
 from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_recovery_child_lookup_does_not_reclassify_internal_faults(self) -> None:
+        parent = TaskObservation.from_mapping(
+            {"uuid": "00000000-0000-4000-8000-000000000001"},
+            source_query="recovery-child-error-contract",
+        )
+
+        def broken_lookup(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("repository invariant failed")
+
+        with patch.object(
+            reconcile,
+            "_repository",
+            return_value=SimpleNamespace(by_uuid=broken_lookup),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "repository invariant failed"):
+                reconcile._next_recovery_child(parent, "child-uuid")
+
+    def test_recovery_child_typed_unavailability_remains_retryable(self) -> None:
+        parent = TaskObservation.from_mapping(
+            {"uuid": "00000000-0000-4000-8000-000000000001"},
+            source_query="recovery-child-error-contract",
+        )
+        evidence = FailureEvidence(
+            command=TaskCommand(("task", "export"), "recovery child", 1.0),
+            kind=CommandFailureKind.TIMEOUT,
+            returncode=-1,
+            attempt=1,
+            duration=1.0,
+            retryable=True,
+            detail="query timed out",
+        )
+
+        with patch.object(
+            reconcile,
+            "_repository",
+            return_value=SimpleNamespace(
+                by_uuid=lambda *_args, **_kwargs: Unavailable("query", evidence)
+            ),
+        ):
+            with self.assertRaisesRegex(
+                reconcile._RecoveryLookupUnavailable, "query timed out"
+            ):
+                reconcile._next_recovery_child(parent, "child-uuid")
+
     def test_configuration_verification_fails_closed_on_unexpected_fault(self) -> None:
         def broken_verifier() -> dict[str, bool]:
             raise RuntimeError("configuration snapshot unavailable")

@@ -1096,7 +1096,7 @@ def _next_recovery_child(
             _repository().by_uuid(wanted, refresh=True),
             f"recovery child {wanted}",
         )
-    except Exception as exc:
+    except _PlanReadUnavailable as exc:
         reason = str(exc).strip() or type(exc).__name__
         raise _RecoveryLookupUnavailable(
             f"recovery child {wanted} lookup unavailable: {reason}"

@@ -185,6 +185,35 @@ class _ModifyLifecycle(Protocol):
     ) -> object: ...
 
 
+class _ServiceFactory(Protocol):
+    def __call__(self, **kwargs: Any) -> Any: ...
+
+
+class _ModifyExpirationEffects(Protocol):
+    ExpirationServices: _ServiceFactory
+    DeletedModifyServices: _ServiceFactory
+
+    def render_recovery_warning(
+        self,
+        task: TaskPayload,
+        reason: str,
+        *,
+        services: Any,
+    ) -> None: ...
+
+    def handle_expired_deleted_modify(self, task: TaskPayload, *, services: Any) -> bool: ...
+
+    def handle_deleted_modify(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        *,
+        services: Any,
+        transition: Any = None,
+        terminal_decision: Any = None,
+    ) -> None: ...
+
+
 class _SeedLookupPortsFactory(Protocol):
     def __call__(self, *, service: Any, decode_row: Any, cache_set: Any) -> object: ...
 
@@ -295,7 +324,7 @@ class ModifyHookCapabilities:
     modify_completion_effects: _ModifyCompletionEffects
     modify_read_effects: _ModifyReadEffects
     modify_queries: _ModifyQueries
-    modify_expiration: Any
+    modify_expiration: _ModifyExpirationEffects | None
     modify_generation_effects: _ModifyGenerationEffects
     task_codec: _TaskCodecModule
     task_models: _TaskModelsModule
@@ -354,7 +383,7 @@ class DeletionRouteCapabilities:
 
     modify_diagnostics_effects: _ModifyDeletionDiagnosticsEffects
     modify_ui_effects: _ModifyUIEffects
-    modify_expiration: Any
+    modify_expiration: _ModifyExpirationEffects | None
     modify_queries: _ModifyQueries
 
 

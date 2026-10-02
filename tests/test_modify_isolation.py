@@ -40,6 +40,7 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIsNot(capability_annotations["modify_queries"], Any)
         self.assertIsNot(capability_annotations["modify_read_effects"], Any)
         self.assertIsNot(capability_annotations["modify_lifecycle"], Any)
+        self.assertIsNot(capability_annotations["modify_expiration"], Any)
 
     def test_composition_does_not_load_unused_datetime_capability_module(self) -> None:
         from nautical_core.modify_composition import ModifyHookCapabilities
@@ -75,6 +76,7 @@ class ModifyIsolationTests(unittest.TestCase):
             get_type_hints(DeletionRouteCapabilities)["modify_diagnostics_effects"],
             Any,
         )
+        self.assertIsNot(get_type_hints(DeletionRouteCapabilities)["modify_expiration"], Any)
 
     def test_route_bundles_do_not_repeat_root_presentation_capability(self) -> None:
         from nautical_core.modify_composition import (

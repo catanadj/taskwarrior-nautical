@@ -115,6 +115,7 @@ class CacheApiContractTests(unittest.TestCase):
         build_acf=None,
         atomic_replace=None,
         semantic_fingerprint=None,
+        import_sibling: Any = None,
         ttl: int = 0,
         time_mod=None,
     ):
@@ -145,7 +146,7 @@ class CacheApiContractTests(unittest.TestCase):
             namespace["_cache_atomic_replace"] = atomic_replace
         if semantic_fingerprint is not None:
             namespace["_cache_semantic_fingerprint"] = semantic_fingerprint
-        namespace["_import_sibling"] = _import_core_sibling
+        namespace["_import_sibling"] = import_sibling or _import_core_sibling
         binding = cache_api.for_core(namespace=namespace, module=core)
         namespace["_cache_lock"] = binding._cache_lock
         self._namespaces.append(namespace)
@@ -1118,6 +1119,18 @@ class CacheApiContractTests(unittest.TestCase):
                 after = self._binding(Path(td))._dnf_cache_fingerprint()
 
             self.assertNotEqual(before, after)
+
+    def test_dnf_fingerprint_does_not_hide_unexpected_import_errors(self) -> None:
+        def broken_sibling(name: str):
+            if name == "parsing.parser_atoms":
+                raise RuntimeError("parser import invariant failed")
+            return _import_core_sibling(name)
+
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding(Path(td), import_sibling=broken_sibling)
+
+            with self.assertRaisesRegex(RuntimeError, "parser import invariant failed"):
+                binding._dnf_cache_fingerprint()
 
 
 if __name__ == "__main__":

@@ -444,7 +444,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             try:
                 sibling = import_sibling(module_name)
                 parser_parts.append(f"{module_name}:{_source_signature(getattr(sibling, '__file__', ''))}")
-            except Exception:
+            except ImportError:
                 parser_parts.append(f"{module_name}:unavailable")
         release = _source_signature(binding.source_file)
         schema = getattr(cache_payload, "CACHE_SCHEMA_VERSION", "unknown")

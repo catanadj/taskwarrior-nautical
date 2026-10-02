@@ -16,6 +16,16 @@ doctor = importlib.import_module("nautical_core.tools.nautical_doctor")
 
 
 class DoctorConfigurationContractTests(unittest.TestCase):
+    def test_panel_configuration_does_not_hide_unexpected_conversion_fault(self) -> None:
+        class BrokenString:
+            def __str__(self) -> str:
+                raise RuntimeError("duration conversion invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "duration conversion invariant failed"):
+            doctor.OperatorHealthService.panel_findings(
+                {"live_panel_duration_ms": BrokenString()}, lambda _name: None
+            )
+
     def test_color_probe_failure_falls_back_to_plain_output(self) -> None:
         class BrokenTerminalProbe:
             def isatty(self) -> bool:

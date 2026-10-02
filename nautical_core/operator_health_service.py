@@ -757,7 +757,7 @@ class OperatorHealthService:
         valid = True
         try:
             configured = int(str(raw).strip())
-        except Exception:
+        except (TypeError, ValueError):
             configured, valid = default, False
         effective = max(minimum, min(maximum, configured))
         result: list[OperatorFinding] = []

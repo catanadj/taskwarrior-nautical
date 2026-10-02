@@ -520,7 +520,7 @@ def _recovery_existing_children(parent: TaskPayload) -> tuple[TaskObservation, .
 def _expiration_hop_limit(value: str) -> int:
     try:
         parsed = int(value)
-    except Exception as exc:
+    except ValueError as exc:
         raise argparse.ArgumentTypeError("expiration hop limit must be an integer") from exc
     if parsed < 1 or parsed > _MAX_EXPIRATION_HOPS:
         raise argparse.ArgumentTypeError(

@@ -5,6 +5,7 @@ import io
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +14,16 @@ from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_expiration_hop_limit_wraps_invalid_input_not_internal_faults(self) -> None:
+        class BrokenIntegerConversion:
+            def __int__(self) -> int:
+                raise RuntimeError("integer conversion fault")
+
+        with self.assertRaises(reconcile.argparse.ArgumentTypeError):
+            reconcile._expiration_hop_limit("not-an-integer")
+        with self.assertRaisesRegex(RuntimeError, "integer conversion fault"):
+            reconcile._expiration_hop_limit(cast(str, BrokenIntegerConversion()))
+
     def test_failed_wave_preplan_is_diagnosed_and_candidate_retried_directly(self) -> None:
         taskdata = Path("/tmp/reconcile-error-contract")
         candidates = tuple(

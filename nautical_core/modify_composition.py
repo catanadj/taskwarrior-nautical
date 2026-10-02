@@ -302,6 +302,30 @@ class _ModifyExpirationEffects(Protocol):
     ) -> None: ...
 
 
+class _ChainIntegrityLifecycle(Protocol):
+    def deleted_chain_disposition(
+        self,
+        task: TaskObservation,
+        *,
+        safe_parse_datetime: Callable[[Any], Any],
+    ) -> object: ...
+
+    def is_orphan_expiration_candidate(
+        self,
+        task: TaskObservation,
+        *,
+        safe_parse_datetime: Callable[[Any], Any],
+    ) -> bool: ...
+
+    def plan_recovery_decision(
+        self,
+        parent: TaskObservation,
+        *,
+        existing_children: Sequence[TaskObservation],
+        hook: Any,
+    ) -> object: ...
+
+
 class _ModifyTransitionEffects(Protocol):
     CPCarryPorts: _ServiceFactory
     NativePreservePorts: _ServiceFactory
@@ -450,7 +474,7 @@ class ModifyHookCapabilities:
     modify_generation_effects: _ModifyGenerationEffects
     task_codec: _TaskCodecModule
     task_models: _TaskModelsModule
-    chain_integrity_lifecycle: Any
+    chain_integrity_lifecycle: _ChainIntegrityLifecycle
     modify_spawn_effects: _ModifySpawnEffects
 
     @classmethod

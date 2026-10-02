@@ -44,6 +44,7 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIsNot(capability_annotations["modify_transition_effects"], Any)
         self.assertIsNot(capability_annotations["modify_ordinary"], Any)
         self.assertIsNot(capability_annotations["modify_composition_adapters"], Any)
+        self.assertIsNot(capability_annotations["chain_integrity_lifecycle"], Any)
         self.assertIsNot(capability_annotations["hook_results"], Any)
         self.assertIsNot(capability_annotations["hook_context"], Any)
         self.assertIsNot(capability_annotations["hook_engine"], Any)

@@ -150,6 +150,12 @@ class ModifyIsolationTests(unittest.TestCase):
         annotations = get_type_hints(NativePreservePorts)
         self.assertTrue(all(annotation is not Any for annotation in annotations.values()))
 
+    def test_completion_transition_port_discards_unused_transition_decision(self) -> None:
+        from nautical_core.modify_transition_effects import CompletionValidationPorts
+
+        apply_transition = get_type_hints(CompletionValidationPorts)["apply_transition"]
+        self.assertIs(apply_transition.__args__[-1], type(None))
+
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone
         from nautical_core.chain_generation import CarryFieldError

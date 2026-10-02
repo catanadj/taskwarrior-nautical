@@ -14,6 +14,7 @@ from .task_models import NauticalTask, TaskObservation, TaskPayload
 if TYPE_CHECKING:
     from .lifecycle.models import LifecyclePlan
     from .modify_models import CompletionLifecycleResult, TaskView
+    from .modify_workflow import RecurrenceTransitionDecision
     from .modify_validation_effects import (
         AnchorValidationPorts,
         ChainLimitPorts,
@@ -270,7 +271,7 @@ class _ModifyLifecycle(Protocol):
         new: TaskPayload | None,
         *,
         short_uuid: Callable[[Any], str],
-    ) -> object: ...
+    ) -> "RecurrenceTransitionDecision": ...
 
 
 class _ServiceFactory(Protocol):
@@ -598,6 +599,14 @@ def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities
         add_validation.parse_chain_max,
         lambda value: datetime_value(host._TASK_DATETIME_PARSER, value),
     )
+
+    def apply_transition(old_task: TaskPayload, new_task: TaskPayload) -> None:
+        capabilities.modify_lifecycle.apply_nautical_transition(
+            old_task,
+            new_task,
+            short_uuid=host.core.short_uuid,
+        )
+
     return transition_effects.CompletionValidationPorts(
         validate=modify_validation.validate_completion_cp_and_anchor,
         strip_quotes=capabilities.modify_task_fields.strip_quotes,
@@ -615,11 +624,7 @@ def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities
         validate_cp=lambda cp, chain_max, chain_until: validation_effects.validate_cp(
             cp_ports, cp, chain_max, chain_until
         ),
-        apply_transition=lambda old_task, new_task: capabilities.modify_lifecycle.apply_nautical_transition(
-            old_task,
-            new_task,
-            short_uuid=host.core.short_uuid,
-        ),
+        apply_transition=apply_transition,
         fail=host._fail_and_exit,
         diagnostic=host._diag,
     )

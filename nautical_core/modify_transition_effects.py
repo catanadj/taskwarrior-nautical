@@ -163,7 +163,7 @@ class CompletionValidationPorts:
     field_changed: Callable[[TaskPayload, TaskPayload, str], bool]
     validate_anchor: Callable[[str], None]
     validate_cp: Callable[[str, object, object], None]
-    apply_transition: Callable[[TaskPayload, TaskPayload], object]
+    apply_transition: Callable[[TaskPayload, TaskPayload], None]
     fail: Callable[[str, str], object]
     diagnostic: Callable[[str], None]
 

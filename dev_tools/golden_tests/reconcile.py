@@ -288,37 +288,6 @@ def test_reconcile_tool_print_plan_includes_evidence():
     expect("result: partial" in out and "spawn:" not in out, f"compact output leaked per-hop lines: {out!r}")
 
 
-def test_reconcile_evidence_prefers_due_over_carried_scheduled():
-    """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
-    reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    reconcile_report = importlib.import_module("nautical_core.reconcile_report")
-    parent = {"uuid": "11111111-0000-4000-8000-000000000001", "status": "completed", "description": "remote completion", "anchor": "w:mon@t=09:00,17:00", "anchor_mode": "skip", "chain": "on", "chainID": "11111111", "link": 1, "due": "20260706T060000Z", "scheduled": "20260706T050000Z", "end": "20260706T070000Z"}
-    class FakeCore:
-        @staticmethod
-        def coerce_int(value, default=0):
-            try:
-                return int(value)
-            except Exception:
-                return default
-    from nautical_core.chain_generation import ChainGenerationService
-    class FakeGeneration(ChainGenerationService):
-        def __init__(self):
-            super().__init__(FakeCore())
-        def safe_parse_datetime(self, _value):
-            return None, None
-        def compute_anchor_child_due(self, _parent):
-            return "20260706T140000Z", {"target_field": "due"}, []
-        def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
-            from nautical_core.task_codec import DEFAULT_TASK_CODEC
-            from nautical_core.task_models import NauticalTask, TaskDraft
-            values = {"uuid": "22222222-0000-4000-8000-000000000002", "description": "remote completion", "status": "pending", "chain": "on", "chainID": parent.observation.to_mapping().get("chainID"), "link": next_link, "prevLink": parent_short, "anchor": "w:mon@t=09:00,17:00", "anchor_mode": "skip", "due": child_due, "scheduled": "20260706T130000Z"}
-            return TaskDraft.from_task(NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(values, source_query="evidence fake child")))
-    plan = reconcile.plan_recovery_decision(fixture_observation(parent), existing_children=[], hook=None, generation=FakeGeneration())
-    evidence = reconcile_report.describe_recovery_result(plan)
-    expect(evidence.get("child_field") == "due", f"expected due target evidence, got: {evidence!r}")
-    expect(evidence.get("child_target") == "2026-07-06T14:00:00Z", f"expected due target, got: {evidence!r}")
-
-
 def test_reconcile_tool_defaults_core_path_to_install_base():
     """The reconciler must seed hook bootstrap with the base containing nautical_core."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1451,7 +1420,6 @@ TESTS = (
     test_outbox_drain_limit_config_and_env_override,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_tool_print_plan_includes_evidence,
-    test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_health_check_critical_outbox_bytes,
     test_health_check_critical_outbox_rows,
     test_queue_status_does_not_initialize_missing_outbox,

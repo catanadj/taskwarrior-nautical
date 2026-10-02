@@ -24,6 +24,87 @@ from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_reconcile_evidence_prefers_due_over_carried_scheduled(self) -> None:
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
+        from nautical_core.reconcile_report import describe_recovery_result
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        from nautical_core.task_models import NauticalTask, TaskDraft
+
+        parent = TaskObservation.from_mapping(
+            {
+                "uuid": "11111111-0000-4000-8000-000000000001",
+                "status": "completed",
+                "description": "remote completion",
+                "anchor": "w:mon@t=09:00,17:00",
+                "anchor_mode": "skip",
+                "chain": "on",
+                "chainID": "11111111",
+                "link": 1,
+                "due": "20260706T060000Z",
+                "scheduled": "20260706T050000Z",
+                "end": "20260706T070000Z",
+            },
+            source_query="reconcile evidence contract",
+        )
+
+        class FakeCore:
+            @staticmethod
+            def coerce_int(value: object, default: int = 0) -> int:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+        class FakeGeneration(ChainGenerationService):
+            def __init__(self) -> None:
+                super().__init__(FakeCore())
+
+            def safe_parse_datetime(self, _value: object) -> tuple[None, None]:
+                return None, None
+
+            def compute_anchor_child_due(self, _parent: object) -> tuple[str, dict[str, str], list[object]]:
+                return "20260706T140000Z", {"target_field": "due"}, []
+
+            def build_child_draft(
+                self,
+                task: NauticalTask,
+                child_due: str,
+                _child_field: str,
+                next_link: int,
+                parent_short: str,
+                _kind: str,
+                _cpmax: int,
+                _until_dt: object,
+            ) -> TaskDraft:
+                values = {
+                    "uuid": "22222222-0000-4000-8000-000000000002",
+                    "description": "remote completion",
+                    "status": "pending",
+                    "chain": "on",
+                    "chainID": task.observation.to_mapping()["chainID"],
+                    "link": next_link,
+                    "prevLink": parent_short,
+                    "anchor": "w:mon@t=09:00,17:00",
+                    "anchor_mode": "skip",
+                    "due": child_due,
+                    "scheduled": "20260706T130000Z",
+                }
+                child = NauticalTask.from_observation(
+                    DEFAULT_TASK_CODEC.decode_row(
+                        values, source_query="reconcile evidence child"
+                    )
+                )
+                return TaskDraft.from_task(child)
+
+        plan = plan_recovery_decision(
+            parent, existing_children=[], hook=None, generation=FakeGeneration()
+        )
+        evidence = describe_recovery_result(plan)
+
+        self.assertEqual(evidence.get("child_field"), "due")
+        self.assertEqual(evidence.get("child_target"), "2026-07-06T14:00:00Z")
+
     def test_reconcile_plan_does_not_relabel_planning_fault_as_read_failure(self) -> None:
         parent = {"uuid": "00000000-0000-4000-8000-000000000002"}
         service = LifecycleReconciliationService(

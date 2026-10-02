@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -389,6 +390,81 @@ class CacheApiContractTests(unittest.TestCase):
             binding = self._binding(Path(td), atomic_replace=fail_replace)
             self.assertFalse(binding.cache_save("replace-failure", {"natural": "Mondays"}))
             self.assertFalse(Path(binding._cache_path("replace-failure")).exists())
+
+    def test_cache_save_does_not_hide_unexpected_temporary_cleanup_errors(self) -> None:
+        def fail_replace(_source: str, _target: str) -> None:
+            raise OSError("simulated replace failure")
+
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding(Path(td), atomic_replace=fail_replace)
+            real_unlink = os.unlink
+
+            def fail_temporary_unlink(path, *args, **kwargs):
+                if str(path).endswith(".tmp"):
+                    raise RuntimeError("temporary cleanup invariant failed")
+                return real_unlink(path, *args, **kwargs)
+
+            with patch.object(os, "unlink", side_effect=fail_temporary_unlink):
+                with self.assertRaisesRegex(RuntimeError, "temporary cleanup invariant failed"):
+                    binding.cache_save("cleanup-failure", {"natural": "Mondays"})
+
+    def test_cache_save_surfaces_unexpected_chmod_error_and_cleans_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cache_path = root / "anchor.jsonz"
+
+            class BrokenFilesystem:
+                environ = os.environ
+                path = os.path
+
+                def __init__(self) -> None:
+                    self.file_descriptor: int | None = None
+
+                @staticmethod
+                def listdir(path: str) -> list[str]:
+                    return os.listdir(path)
+
+                def fchmod(self, file_descriptor: int, _mode: int) -> None:
+                    self.file_descriptor = file_descriptor
+                    raise RuntimeError("cache chmod invariant failed")
+
+                @staticmethod
+                def write(file_descriptor: int, data: bytes) -> int:
+                    return os.write(file_descriptor, data)
+
+                @staticmethod
+                def close(file_descriptor: int) -> None:
+                    os.close(file_descriptor)
+
+                @staticmethod
+                def unlink(path: str) -> None:
+                    os.unlink(path)
+
+            filesystem = BrokenFilesystem()
+            with self.assertRaisesRegex(RuntimeError, "cache chmod invariant failed"):
+                cache_payload.cache_save(
+                    "chmod-failure",
+                    {"natural": "Mondays"},
+                    enable_anchor_cache=True,
+                    json_mod=json,
+                    zlib_mod=__import__("zlib"),
+                    base64_mod=__import__("base64"),
+                    cache_path=lambda _key: str(cache_path),
+                    cache_dir=lambda: td,
+                    cache_lock=lambda _key: nullcontext(True),
+                    diag=lambda _message: None,
+                    os_mod=filesystem,
+                    tempfile_mod=tempfile,
+                    cache_atomic_replace=lambda source, target: os.replace(source, target),
+                    cache_load_mem=OrderedDict(),
+                )
+
+            self.assertIsNotNone(filesystem.file_descriptor)
+            assert filesystem.file_descriptor is not None
+            with self.assertRaises(OSError):
+                os.fstat(filesystem.file_descriptor)
+            self.assertEqual(list(root.glob(".*.tmp")), [])
+            self.assertFalse(cache_path.exists())
 
     def test_lock_refusal_is_retry_safe_and_release_allows_save(self) -> None:
         with tempfile.TemporaryDirectory() as td:

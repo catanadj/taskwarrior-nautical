@@ -401,16 +401,16 @@ def cache_save(
                     if name.startswith(f".{key}.") and name.endswith(".tmp"):
                         try:
                             os_mod.unlink(os_mod.path.join(base, name))
-                        except Exception:
+                        except OSError:
                             pass
-            except Exception:
+            except OSError:
                 pass
             fd, tmpf = tempfile_mod.mkstemp(dir=base, prefix=f".{key}.", suffix=".tmp")
             try:
-                os_mod.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            try:
+                try:
+                    os_mod.fchmod(fd, 0o600)
+                except OSError:
+                    pass
                 written = 0
                 while written < len(blob):
                     n = os_mod.write(fd, blob[written:])
@@ -423,7 +423,7 @@ def cache_save(
             finally:
                 try:
                     os_mod.close(fd)
-                except Exception:
+                except OSError:
                     pass
             cache_atomic_replace(tmpf, path)
             ok_saved = True
@@ -435,7 +435,7 @@ def cache_save(
         if tmpf and os_mod.path.exists(tmpf):
             try:
                 os_mod.unlink(tmpf)
-            except Exception:
+            except OSError:
                 pass
     return ok_saved
 

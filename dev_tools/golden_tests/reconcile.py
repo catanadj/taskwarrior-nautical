@@ -443,16 +443,6 @@ def test_reconcile_parent_identity_errors_are_actionable():
             raise AssertionError(f"invalid parent identity was accepted: {parent!r}")
 
 
-def test_reconcile_expired_pending_child_is_resumable_partial():
-    """A pending child past native until should wait for Taskwarrior expiration."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_pending_until_test")
-    parent = {"uuid": "11111111-0000-0000-0000-000000000001", "link": 1}
-    plan = tool._recovery_terminal(parent, "live recovery child native until has already elapsed")
-    expect(recovery_action(plan) == "partial", f"expired pending child was not resumable: {plan}")
-    expect("rerun reconcile" in plan.reason, f"partial recovery guidance missing: {plan.reason}")
-
-
 def test_reconcile_expiration_anchor_advances_from_recurrence_target():
     """Expired anchor links should select the first slot after the prior recurrence target."""
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
@@ -1417,7 +1407,6 @@ TESTS = (
     test_reconcile_apply_lease_serializes_mutations,
     test_reconcile_apply_refuses_a_second_full_run,
     test_reconcile_parent_identity_errors_are_actionable,
-    test_reconcile_expired_pending_child_is_resumable_partial,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,

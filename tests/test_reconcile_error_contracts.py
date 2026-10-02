@@ -20,10 +20,22 @@ from nautical_core.integration_models import (
     TaskCommand,
     Unavailable,
 )
+from nautical_core.lifecycle.recovery_models import RecoveryStatus
 from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_reconcile_expired_pending_child_is_resumable_partial(self) -> None:
+        parent = {"uuid": "11111111-0000-0000-0000-000000000001", "link": 1}
+
+        result = reconcile._recovery_terminal(
+            parent, "live recovery child native until has already elapsed"
+        )
+
+        self.assertEqual(result.status, RecoveryStatus.PARTIAL)
+        self.assertIn("wait for Taskwarrior to mark the child deleted", result.reason)
+        self.assertIn("rerun reconcile", result.reason)
+
     def test_reconcile_evidence_prefers_due_over_carried_scheduled(self) -> None:
         from nautical_core.chain_generation import ChainGenerationService
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision

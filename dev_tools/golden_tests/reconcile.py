@@ -396,21 +396,6 @@ def test_reconcile_apply_refuses_a_second_full_run():
     expect(summary.get("stage") == "apply_lock", f"busy reconcile was not reported as a lease conflict: {summary!r}")
 
 
-def test_reconcile_parent_identity_errors_are_actionable():
-    """Parent guard failures should identify the exact broken identity field."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    tool = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_identity_diagnostics_test")
-    base = {"uuid": "11111111-0000-0000-0000-000000000001", "status": "completed", "chain": "on", "chainID": "chain001", "link": 2, "nextLink": ""}
-    cases = ((dict(base, chainID=""), "parent chainID is missing"), (dict(base, link=""), "parent link is missing"), (dict(base, chainID="11111111-0000-0000-0000-000000000001", link="", prevLink=""), "parent link is missing"), (dict(base, link="not-a-number"), "parent link is invalid"), (dict(base, link=0), "parent link must be positive"))
-    for parent, expected in cases:
-        try:
-            tool._parent_guard_filters(parent)
-        except RuntimeError as exc:
-            expect(expected in str(exc), f"unclear identity diagnostic: {exc}")
-        else:
-            raise AssertionError(f"invalid parent identity was accepted: {parent!r}")
-
-
 def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     """Hookless recovery should preserve and verify scheduled/wait offsets."""
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
@@ -1279,7 +1264,6 @@ TESTS = (
     test_reconcile_subprocess_output_contracts,
     test_reconcile_apply_lease_serializes_mutations,
     test_reconcile_apply_refuses_a_second_full_run,
-    test_reconcile_parent_identity_errors_are_actionable,
     test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
 ) + tuple(globals()[name] for name in _NAMES)

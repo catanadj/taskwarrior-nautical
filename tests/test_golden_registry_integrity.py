@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "dc2f2c27f2b07c1da2e0de10667d83104cf8da72863374ef7002d5cf2eba770b"
+    "1eac35aea8059c786491646a456878201f46bc745bd3f082fb5e5341d6738b1c"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -55,8 +55,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     ),
     "reconcile and recovery": (
-        18,
-        "1900f2de73bd9dec384b3367b29a5432b391683ccedc69b11fa9109f6deb3425",
+        17,
+        "6bf411562be1d3a389181fb76583d37a77db1e72c9cd58ffbd7676bf00017cd0",
     ),
     "recurrence and hook integration": (
         76,
@@ -531,6 +531,8 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_reconcile_expiration_cp_advances_from_recurrence_target",
         "test_reconcile_expiration_candidate_requires_expiry_evidence",
         "test_reconcile_tool_computes_year_ordinal_anchor",
+        "test_reconcile_parent_identity_errors_are_actionable",
+        "test_reconcile_parent_identity_errors_are_actionable",
         "test_position_selection_candidate_capacity_bounds",
         "test_position_selection_candidate_capacity_bounds_are_sound",
         "test_position_selection_rejects_only_fully_impossible_candidates",
@@ -943,6 +945,22 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)
         }
         self.assertNotIn("test_reconcile_tool_computes_year_ordinal_anchor", registered)
+
+    def test_parent_identity_diagnostics_are_owned_by_reconcile_suite(self):
+        direct = importlib.import_module("tests.test_reconcile_error_contracts")
+        self.assertTrue(
+            callable(
+                getattr(
+                    direct.ReconcileErrorContracts,
+                    "test_parent_identity_errors_are_actionable",
+                    None,
+                )
+            )
+        )
+        registered = {
+            fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)
+        }
+        self.assertNotIn("test_reconcile_parent_identity_errors_are_actionable", registered)
 
     def test_unit_tests_do_not_import_the_golden_runner_directly(self):
         tests_dir = Path(__file__).resolve().parent
@@ -1447,19 +1465,19 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
         self.assertEqual(len(top_level), 0)
-        self.assertEqual(len(registered), 155)
+        self.assertEqual(len(registered), 154)
         self.assertEqual(len(operator.TESTS), 14)
         self.assertEqual(len(configuration.TESTS), 3)
         self.assertEqual(len(installer.TESTS), 9)
         modify = importlib.import_module("dev_tools.golden_tests.modify")
         self.assertEqual(len(modify.TESTS), 43)
         self.assertEqual(len(lifecycle.TESTS), 31)
-        self.assertEqual(len(reconcile.TESTS), 25)
+        self.assertEqual(len(reconcile.TESTS), 24)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)
         self.assertEqual(len(scheduling.TESTS), 14)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 0)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 709)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 710)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
         storage = importlib.import_module("dev_tools.golden_tests.storage")

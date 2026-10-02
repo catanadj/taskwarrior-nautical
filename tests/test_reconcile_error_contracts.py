@@ -25,6 +25,37 @@ from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_parent_identity_errors_are_actionable(self) -> None:
+        base = {
+            "uuid": "11111111-0000-0000-0000-000000000001",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "chain001",
+            "link": 2,
+            "nextLink": "",
+        }
+        cases = (
+            (dict(base, chainID=""), "parent chainID is missing"),
+            (dict(base, link=""), "parent link is missing"),
+            (
+                dict(
+                    base,
+                    chainID="11111111-0000-0000-0000-000000000001",
+                    link="",
+                    prevLink="",
+                ),
+                "parent link is missing",
+            ),
+            (dict(base, link="not-a-number"), "parent link is invalid"),
+            (dict(base, link=0), "parent link must be positive"),
+        )
+
+        for parent, expected in cases:
+            with self.subTest(parent=parent), self.assertRaisesRegex(
+                RuntimeError, expected
+            ):
+                reconcile._parent_guard_filters(parent)
+
     def test_reconcile_expired_pending_child_is_resumable_partial(self) -> None:
         parent = {"uuid": "11111111-0000-0000-0000-000000000001", "link": 1}
 

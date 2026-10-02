@@ -41,10 +41,7 @@ def task_has_nautical_recurrence_fields(task: TaskPayload | None) -> bool:
         val = task.get(key)
         if val is None:
             continue
-        try:
-            s = str(val).strip()
-        except Exception:
-            s = ""
+        s = str(val).strip()
         if s:
             return True
     return False
@@ -58,10 +55,7 @@ def task_has_nautical_chain_fields(task: TaskPayload | None) -> bool:
         val = task.get(key)
         if val is None:
             continue
-        try:
-            s = str(val).strip()
-        except Exception:
-            s = ""
+        s = str(val).strip()
         if s:
             return True
     return False
@@ -72,10 +66,7 @@ def task_has_nautical_fields(task: TaskPayload | None) -> bool:
 
 
 def _norm_field(value: Any) -> str:
-    try:
-        return str(value or "").strip()
-    except Exception:
-        return ""
+    return str(value or "").strip()
 
 
 def ensure_terminal_chain_off(task: TaskPayload) -> bool:

@@ -109,6 +109,35 @@ class _ModifyDiagnosticsEffects(Protocol):
     ) -> list[str]: ...
 
 
+class _ModifyCompletionEffects(Protocol):
+    def completion_preflight_context_ports_for(self, host: Any) -> object: ...
+
+    def completion_compute_ports_for(self, host: Any) -> object: ...
+
+    def completion_spawn_ports_for(self, host: Any) -> object: ...
+
+    def preflight_context(
+        self,
+        ports: object,
+        new: TaskPayload,
+        now_utc: datetime,
+        repository: Any,
+    ) -> Any: ...
+
+    def compute_next_and_limits(
+        self,
+        ports: object,
+        new: TaskPayload,
+        kind: str,
+        next_no: int,
+        now_utc: datetime,
+        *,
+        preflight: Any = None,
+    ) -> Any: ...
+
+    def build_and_spawn_child(self, ports: object, new: TaskPayload, **kwargs: Any) -> Any: ...
+
+
 class _ModifyTaskFields(Protocol):
     def field_changed(self, old: TaskPayload, new: TaskPayload, key: str) -> bool: ...
 
@@ -206,7 +235,7 @@ class ModifyHookCapabilities:
     modify_validation_effects: _ModifyValidationEffects
     modify_ui_effects: Any
     modify_task_fields: _ModifyTaskFields
-    modify_completion_effects: Any
+    modify_completion_effects: _ModifyCompletionEffects
     modify_read_effects: Any
     modify_queries: Any
     modify_expiration: Any
@@ -261,7 +290,7 @@ class NonCompletionRouteCapabilities:
 class CompletionRouteCapabilities:
     """Dependencies used only by the completion route."""
 
-    modify_completion_effects: Any
+    modify_completion_effects: _ModifyCompletionEffects
 
 
 @dataclass(frozen=True)

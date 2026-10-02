@@ -417,6 +417,30 @@ class CacheApiContractTests(unittest.TestCase):
                     self.assertIsNone(binding.cache_load(key))
                     self.assertEqual(len(list(root.glob(f"{key}.jsonz.bad.*"))), 1)
 
+    def test_quarantine_does_not_hide_unexpected_replace_errors(self) -> None:
+        import base64
+        import zlib
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            binding = self._binding(root)
+            key = "quarantine-runtime-error"
+            cache_path = Path(binding._cache_path(key))
+            encoded = json.dumps(
+                {"_nautical_cache_version": 99, "dnf": []}, separators=(",", ":")
+            ).encode("utf-8")
+            cache_path.write_bytes(base64.b85encode(zlib.compress(encoded)))
+            real_replace = os.replace
+
+            def fail_quarantine_replace(source, target, *args, **kwargs):
+                if ".bad." in os.fspath(target):
+                    raise RuntimeError("quarantine adapter invariant failed")
+                return real_replace(source, target, *args, **kwargs)
+
+            with patch.object(os, "replace", side_effect=fail_quarantine_replace):
+                with self.assertRaisesRegex(RuntimeError, "quarantine adapter invariant failed"):
+                    binding.cache_load(key)
+
     def test_atomic_replace_failure_returns_false_without_publishing(self) -> None:
         def fail_replace(_source: str, _target: str) -> None:
             raise OSError("simulated replace failure")

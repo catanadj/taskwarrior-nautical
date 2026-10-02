@@ -326,7 +326,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                 runtime.filesystem.replace(path, target)
                 cache_state.memory.pop(key, None)
                 return True
-        except Exception:
+        except OSError:
             return False
 
     def cache_load_impl(key: str) -> dict | None:

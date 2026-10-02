@@ -8,6 +8,13 @@ from contextlib import nullcontext
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
 from .callback_ports import CallbackPort
+from .modify_models import (
+    AnchorCompletionRenderCallback,
+    ChainIntegrityCallback,
+    CpCompletionRenderCallback,
+    LifecycleResultRenderCallback,
+    SeedLookupCallback,
+)
 from .task_datetime import datetime_value, parser_for_core
 from .task_models import NauticalTask, TaskObservation, TaskPayload
 
@@ -695,13 +702,13 @@ class ModifyRuntimeServices:
     show_analytics: bool
     check_integrity: bool
     analytics_style: str
-    seed_runtime_lookup_tasks: Callable[..., None]
+    seed_runtime_lookup_tasks: SeedLookupCallback
     lifecycle_read_service: Callable[[], Any]
     chain_health_advice: _ChainHealthAdviceCallback
-    chain_integrity_warnings: Callable[..., list[str]]
-    render_anchor_completion_feedback: Callable[..., None]
-    render_cp_completion_feedback: Callable[..., None]
-    render_lifecycle_result: Callable[..., None]
+    chain_integrity_warnings: ChainIntegrityCallback
+    render_anchor_completion_feedback: AnchorCompletionRenderCallback
+    render_cp_completion_feedback: CpCompletionRenderCallback
+    render_lifecycle_result: LifecycleResultRenderCallback
     print_task: Callable[[TaskPayload], None]
     prepare_recurrence: _PrepareRecurrenceCallback
     preserve_cp_relative_offsets: _PreserveCPCarryCallback

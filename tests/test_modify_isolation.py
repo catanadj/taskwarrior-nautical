@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 import unittest
-from typing import Any, get_origin, get_type_hints
+from typing import Any, get_args, get_origin, get_type_hints
 
 
 class ModifyIsolationTests(unittest.TestCase):
@@ -166,12 +166,7 @@ class ModifyIsolationTests(unittest.TestCase):
             "import_module",
             "diag_summary",
             "diagnostic",
-            "seed_runtime_lookup_tasks",
             "chain_health_advice",
-            "chain_integrity_warnings",
-            "render_anchor_completion_feedback",
-            "render_cp_completion_feedback",
-            "render_lifecycle_result",
             "print_task",
             "validate_native_until",
             "validate_native_until_slots",
@@ -179,6 +174,27 @@ class ModifyIsolationTests(unittest.TestCase):
         callback_fields.remove("chain_health_advice")
         self.assertTrue(all(get_origin(annotations[name]) is CallableOrigin for name in callback_fields))
         self.assertEqual(annotations["chain_health_advice"].__name__, "_ChainHealthAdviceCallback")
+
+    def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
+        from collections.abc import Callable as CallableOrigin
+        from nautical_core.modify_composition import ModifyRuntimeServices
+
+        annotations = get_type_hints(ModifyRuntimeServices)
+        expected = {
+            "chain_integrity_warnings": "ChainIntegrityCallback",
+            "render_anchor_completion_feedback": "AnchorCompletionRenderCallback",
+            "render_cp_completion_feedback": "CpCompletionRenderCallback",
+            "render_lifecycle_result": "LifecycleResultRenderCallback",
+        }
+        for field, protocol_name in expected.items():
+            with self.subTest(field=field):
+                self.assertEqual(annotations[field].__name__, protocol_name)
+
+        seed_callback = annotations["seed_runtime_lookup_tasks"]
+        self.assertIs(get_origin(seed_callback), CallableOrigin)
+        seed_arguments, _return_type = get_args(seed_callback)
+        self.assertIsNot(seed_arguments, Ellipsis)
+        self.assertEqual(len(seed_arguments), 2)
 
     def test_modify_runtime_services_recurrence_callbacks_have_named_contracts(self) -> None:
         from nautical_core.modify_composition import ModifyRuntimeServices

@@ -485,12 +485,9 @@ def _native_until_matches(fresh: TaskObservation, expected: str, hook: Any) -> b
     actual = _observation_text(fresh, "until")
     if actual == str(expected or "").strip():
         return True
-    try:
-        actual_dt, actual_err = _parse_datetime(hook, actual)
-        expected_dt, expected_err = _parse_datetime(hook, expected)
-        return not actual_err and not expected_err and actual_dt is not None and actual_dt == expected_dt
-    except Exception:
-        return False
+    actual_dt, actual_err = _parse_datetime(hook, actual)
+    expected_dt, expected_err = _parse_datetime(hook, expected)
+    return not actual_err and not expected_err and actual_dt is not None and actual_dt == expected_dt
 
 
 def _recovery_existing_children(parent: TaskPayload) -> tuple[TaskObservation, ...]:

@@ -208,6 +208,24 @@ class HookHostIsolationTests(unittest.TestCase):
         self.assertIn("[nautical] test feedback", redirected.getvalue())
         self.assertIn("[nautical] test feedback", stderr.getvalue())
 
+    def test_exit_feedback_propagates_unexpected_stream_failures(self) -> None:
+        from nautical_core.hooks import exit_impl
+
+        class BrokenStream:
+            def write(self, _value):
+                raise RuntimeError("stream implementation failed")
+
+            def flush(self):
+                return None
+
+        with (
+            patch.object(exit_impl.sys, "stdout", BrokenStream()),
+            patch.object(exit_impl.sys, "__stdout__", None),
+            patch.object(exit_impl.sys, "stderr", None),
+            self.assertRaisesRegex(RuntimeError, "stream implementation failed"),
+        ):
+            exit_impl._emit_exit_feedback("[nautical] test feedback")
+
     def test_hosts_keep_composition_namespaces_separate(self) -> None:
         first_values = {"value": "first"}
         second_values = {"value": "second"}

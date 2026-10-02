@@ -462,7 +462,7 @@ def _emit_exit_feedback(msg: str) -> None:
         try:
             stream.write(msg + "\n")
             stream.flush()
-        except Exception:
+        except (OSError, ValueError):
             pass
 
 

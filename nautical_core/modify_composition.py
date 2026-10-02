@@ -6,10 +6,10 @@ import re
 from dataclasses import dataclass
 from contextlib import nullcontext
 from datetime import datetime
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 from .callback_ports import CallbackPort
 from .task_datetime import datetime_value, parser_for_core
-from .task_models import NauticalTask, TaskPayload
+from .task_models import NauticalTask, TaskObservation, TaskPayload
 
 
 class ModifyCallback(Protocol):
@@ -35,6 +35,23 @@ class _ModifyGenerationEffects(Protocol):
     def generation_ports_for(self, host: Any) -> object: ...
 
     def chain_generation_service(self, ports: object) -> _NativeUntilGenerationService: ...
+
+
+class _DefaultTaskCodec(Protocol):
+    def decode_row(
+        self,
+        row: Mapping[str, Any],
+        *,
+        source_query: str,
+    ) -> TaskObservation: ...
+
+
+class _TaskCodecModule(Protocol):
+    DEFAULT_TASK_CODEC: _DefaultTaskCodec
+
+
+class _TaskModelsModule(Protocol):
+    NauticalTask: type[NauticalTask]
 
 
 class _HookHost:
@@ -77,8 +94,8 @@ class ModifyHookCapabilities:
     modify_queries: Any
     modify_expiration: Any
     modify_generation_effects: _ModifyGenerationEffects
-    task_codec: Any
-    task_models: Any
+    task_codec: _TaskCodecModule
+    task_models: _TaskModelsModule
     chain_integrity_lifecycle: Any
     modify_spawn_effects: Any
 

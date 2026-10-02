@@ -82,6 +82,46 @@ class OperatorHealthServiceTests(unittest.TestCase):
             self.assertEqual(findings[0].severity.value, "error")
             self.assertIn("digest mismatch", findings[0].observed["error"])
 
+    def test_deep_identity_does_not_hide_unexpected_digest_fault(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            runtime_root = Path(td) / "runtime"
+            (runtime_root / "releases" / "r-test").mkdir(parents=True)
+            runtime = {
+                "runtime_root": str(runtime_root),
+                "active_release": "r-test",
+                "manifest": {"content_sha256": "expected"},
+            }
+
+            def broken_digest(_path: Path) -> str:
+                raise RuntimeError("release digest invariant failed")
+
+            with self.assertRaisesRegex(RuntimeError, "release digest invariant failed"):
+                OperatorHealthService.deep_identity_findings(
+                    runtime, sys.executable, sys.executable,
+                    digest_factory=broken_digest,
+                    version_probe=lambda _path: (True, "version"),
+                )
+
+    def test_deep_identity_does_not_hide_unexpected_version_probe_fault(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            release = Path(td) / "runtime" / "releases" / "r-test"
+            release.mkdir(parents=True)
+            runtime = {
+                "runtime_root": str(release.parents[1]),
+                "active_release": "r-test",
+                "manifest": {"content_sha256": "expected"},
+            }
+
+            def broken_probe(_path: str) -> tuple[bool, str]:
+                raise RuntimeError("executable probe invariant failed")
+
+            with self.assertRaisesRegex(RuntimeError, "executable probe invariant failed"):
+                OperatorHealthService.deep_identity_findings(
+                    runtime, sys.executable, sys.executable,
+                    digest_factory=lambda _path: "expected",
+                    version_probe=broken_probe,
+                )
+
     def test_deep_resource_findings_validate_timezone_and_paths(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             resource = Path(td) / "calendar.json"

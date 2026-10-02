@@ -25,6 +25,7 @@ from .operator_models import OperatorStatus
 from .config_schema import CONFIG_SPECS, validate_config
 from .description_aliases import ALIAS_TO_FIELD
 from .support_policy import policy_document
+from .install_filesystem import InstallError
 
 
 def _json_safe(value: object) -> object:
@@ -173,50 +174,63 @@ class OperatorHealthService:
         manifest: Mapping[str, Any] = manifest_value if isinstance(manifest_value, Mapping) else {}
         expected_digest = str(manifest.get("content_sha256") or "")
         release_path = runtime_root / "releases" / release_id if release_id else Path("")
+        digest_error = ""
         try:
             if digest_factory is None:
                 from .install_runtime import source_digest
                 digest_factory = source_digest
             if not release_id or not expected_digest or not release_path.is_dir():
-                raise ValueError("active release or manifest digest is unavailable")
-            actual_digest = digest_factory(release_path)
-            if actual_digest != expected_digest:
-                raise ValueError(f"digest mismatch (expected {expected_digest}, got {actual_digest})")
+                digest_error = "active release or manifest digest is unavailable"
+            else:
+                actual_digest = digest_factory(release_path)
+                if actual_digest != expected_digest:
+                    digest_error = f"digest mismatch (expected {expected_digest}, got {actual_digest})"
+        except (ImportError, InstallError, OSError, ValueError) as exc:
+            digest_error = str(exc).strip() or type(exc).__name__
+        if digest_error:
+            findings.append(OperatorFinding(
+                "install.release_digest", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Active managed release content could not be verified.",
+                observed={"release_id": release_id, "path": str(release_path), "error": digest_error},
+                guidance="Reinstall from a verified local kit or roll back to a retained release.",
+            ))
+        else:
             findings.append(OperatorFinding(
                 "install.release_digest", "installation", FindingSeverity.INFO,
                 FindingActionability.INFORMATIONAL,
                 f"Active managed release content is verified: {release_id}.",
                 observed={"release_id": release_id, "content_sha256": actual_digest, "path": str(release_path)},
             ))
-        except Exception as exc:
-            findings.append(OperatorFinding(
-                "install.release_digest", "installation", FindingSeverity.ERROR,
-                FindingActionability.BLOCKING,
-                "Active managed release content could not be verified.",
-                observed={"release_id": release_id, "path": str(release_path), "error": str(exc)},
-                guidance="Reinstall from a verified local kit or roll back to a retained release.",
-            ))
 
         probe = version_probe or OperatorHealthService._probe_executable
         for label, executable, code in (("Taskwarrior", task_binary, "taskwarrior.identity"), ("Python", python_executable, "python.identity")):
+            probe_error = ""
             try:
                 path = str(Path(executable).expanduser().resolve(strict=True))
-                ok, version = probe(path)
-                if not ok:
-                    raise RuntimeError(version or "version probe failed")
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                probe_error = str(exc).strip() or type(exc).__name__
+            if not probe_error:
+                try:
+                    ok, version = probe(path)
+                    if not ok:
+                        probe_error = version or "version probe failed"
+                except (OSError, subprocess.SubprocessError) as exc:
+                    probe_error = str(exc).strip() or type(exc).__name__
+            if probe_error:
+                findings.append(OperatorFinding(
+                    code, "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"{label} executable identity could not be verified.",
+                    observed={"path": str(executable), "error": probe_error},
+                    guidance=f"Verify the offline-kit {label} executable and retry deep Doctor.",
+                ))
+            else:
                 findings.append(OperatorFinding(
                     code, "installation", FindingSeverity.INFO,
                     FindingActionability.INFORMATIONAL,
                     f"{label} executable is usable: {path}.",
                     observed={"path": path, "version": version},
-                ))
-            except Exception as exc:
-                findings.append(OperatorFinding(
-                    code, "installation", FindingSeverity.ERROR,
-                    FindingActionability.BLOCKING,
-                    f"{label} executable identity could not be verified.",
-                    observed={"path": str(executable), "error": str(exc)},
-                    guidance=f"Verify the offline-kit {label} executable and retry deep Doctor.",
                 ))
         return tuple(findings)
 

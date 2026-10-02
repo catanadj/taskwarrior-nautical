@@ -684,7 +684,29 @@ class CacheApiContractTests(unittest.TestCase):
                 with binding._cache_lock("permissions") as acquired:
                     self.assertTrue(acquired)
                     lock_mode = stat.S_IMODE(lock_path.stat().st_mode)
-                    self.assertEqual(lock_mode & 0o077, 0)
+                self.assertEqual(lock_mode & 0o077, 0)
+
+    def test_cache_directory_setup_does_not_hide_unexpected_filesystem_errors(self) -> None:
+        with patch.object(
+            cache_support.os,
+            "makedirs",
+            side_effect=RuntimeError("filesystem adapter invariant failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "filesystem adapter invariant failed"):
+                cache_support.ensure_cache_dir("/cache")
+
+    def test_cache_directory_permission_fallback_does_not_hide_unexpected_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with (
+                patch.object(cache_support.os, "fchmod", side_effect=OSError("chmod unavailable")),
+                patch.object(
+                    cache_support.os,
+                    "chmod",
+                    side_effect=RuntimeError("permission adapter invariant failed"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "permission adapter invariant failed"):
+                    cache_support.ensure_cache_dir(td)
 
     def test_cache_directory_selection_rejects_symlink_override(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

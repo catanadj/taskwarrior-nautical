@@ -39,15 +39,15 @@ def ensure_cache_dir(path: str) -> bool:
                 return False
             try:
                 os.fchmod(fd, 0o700)
-            except Exception:
+            except OSError:
                 try:
                     os.chmod(path, 0o700)
-                except Exception:
+                except OSError:
                     pass
         finally:
             os.close(fd)
         return os.access(path, os.W_OK)
-    except Exception:
+    except OSError:
         return False
 
 
@@ -98,13 +98,13 @@ def select_cache_dir(
         try:
             if ensure_cache_dir(p):
                 return p
-        except Exception:
+        except OSError:
             continue
 
     if os.environ.get("NAUTICAL_DIAG") == "1":
         try:
             print("[nautical] Anchor cache disabled: no writable cache dir found.", file=sys.stderr)
-        except Exception:
+        except OSError:
             pass
     return ""
 

@@ -269,6 +269,8 @@ def _configuration_verification(hook: Any) -> _ConfigurationVerification:
     try:
         drift = checker()
     except Exception as exc:
+        # Verification guards every mutation; any verifier fault must fail
+        # closed, while preserving its detail for the operator.
         reason = str(exc).strip() or type(exc).__name__
         return _ConfigurationVerification(
             "unavailable",

@@ -14,6 +14,18 @@ from nautical_core.task_models import TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_configuration_verification_fails_closed_on_unexpected_fault(self) -> None:
+        def broken_verifier() -> dict[str, bool]:
+            raise RuntimeError("configuration snapshot unavailable")
+
+        hook = SimpleNamespace(
+            core=SimpleNamespace(configuration_drift=broken_verifier)
+        )
+        result = reconcile.configuration_verification(hook)
+
+        self.assertEqual(result.status, "unavailable")
+        self.assertIn("configuration snapshot unavailable", result.reason)
+
     def test_expiration_hop_limit_wraps_invalid_input_not_internal_faults(self) -> None:
         class BrokenIntegerConversion:
             def __int__(self) -> int:

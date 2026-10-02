@@ -57,6 +57,17 @@ class CacheApiContractTests(unittest.TestCase):
                 "cache/lock", True, os_mod=SimpleNamespace(path=BrokenPath())
             )
 
+    def test_cache_lock_delay_does_not_hide_unexpected_jitter_errors(self) -> None:
+        class BrokenRandom:
+            @staticmethod
+            def uniform(_start: float, _end: float) -> float:
+                raise RuntimeError("random adapter invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "random adapter invariant failed"):
+            cache_locking.safe_lock_sleep_once(
+                0.1, 0.1, time_mod=_Clock(), random_mod=BrokenRandom()
+            )
+
     def test_runtime_context_uses_explicit_filesystem_clock_and_lock(self) -> None:
         fake_filesystem = SimpleNamespace()
         fake_clock = _Clock()

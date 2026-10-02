@@ -48,12 +48,12 @@ def safe_lock_sleep_once(
 ) -> None:
     try:
         delay = float(sleep_base or 0.0)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         delay = 0.0
     if jitter:
         try:
             delay += random_mod.uniform(0.0, float(jitter))
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             pass
     if delay > 0:
         time_mod.sleep(delay)

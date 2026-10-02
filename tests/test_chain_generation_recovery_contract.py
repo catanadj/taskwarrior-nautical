@@ -291,6 +291,25 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual(metadata["basis"], "after_end")
         self.assertEqual(dnf[0][0]["scope"], "year")
 
+    def test_year_ordinal_anchor_reconcile_calculation(self):
+        parent = _task(
+            anchor="y:d60@t=09:00",
+            anchor_mode="skip",
+            cp=None,
+            due="2024-02-29T09:00:00Z",
+            end="2024-02-29T10:00:00Z",
+        )
+
+        test_core = _Core()
+        test_core.YearTokenFormatError = core.YearTokenFormatError
+        service = ChainGenerationService.from_core(test_core)
+        child_due, metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        child_local = test_core.to_local(child_due)
+        self.assertEqual(child_local.date(), date(2025, 3, 1))
+        self.assertEqual((child_local.hour, child_local.minute), (9, 0))
+        self.assertEqual(metadata.get("basis"), "after_end")
+
     def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due(self):
         due = core.build_local_datetime(date(2025, 1, 6), (9, 0))
         scheduled = core.build_local_datetime(date(2025, 1, 8), (12, 0))

@@ -45,38 +45,6 @@ _NAMES = (
 )
 
 
-def test_reconcile_tool_computes_year_ordinal_anchor():
-    """The reconciler's installed hook path should schedule ordinal anchor children."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    load_hook_module(str(path), "_nautical_reconcile_year_ordinal_test")
-    hook = SimpleNamespace(core=importlib.import_module("nautical_core"))
-    due = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (9, 0)))
-    end = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (10, 0)))
-    from nautical_core.chain_generation import ChainGenerationService
-
-    generation = ChainGenerationService.from_core(hook.core)
-    child_due, meta, _dnf = generation.compute_anchor_child_due(
-        fixture_task(
-            {
-                "uuid": "c3f2c233-0000-4000-8000-000000000002",
-                "status": "completed",
-                "description": "ordinal reconcile integration",
-                "anchor": "y:d60@t=09:00",
-                "anchor_mode": "skip",
-                "chain": "on",
-                "chainID": "d07ff247",
-                "link": 2,
-                "due": due,
-                "end": end,
-            }
-        )
-    )
-    child_local = hook.core.to_local(child_due)
-    expect(child_local.date() == date(2025, 3, 1), f"reconciler computed the wrong d60 child: {child_local}")
-    expect((child_local.hour, child_local.minute) == (9, 0), f"reconciler lost ordinal anchor time: {child_local}")
-    expect(meta.get("basis") == "after_end", f"unexpected reconcile scheduling metadata: {meta}")
-
 def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
 
     """Integrity work uses the shared table but remains invisible to lifecycle claims."""
@@ -1294,7 +1262,6 @@ TESTS = (
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_expiration_real_taskwarrior_round_trip,
     test_seasonal_selection_reconcile_spawn_recovery_and_dedup,
-    test_reconcile_tool_computes_year_ordinal_anchor,
     test_shared_outbox_persists_integrity_work_without_lifecycle_claiming,
     test_non_hour_dst_carry_and_reconcile_share_core_policy,
     test_carry_field_failure_defers_completion_and_reconcile_mutation,

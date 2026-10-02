@@ -109,6 +109,20 @@ class _ModifyDiagnosticsEffects(Protocol):
     ) -> list[str]: ...
 
 
+class _ModifyDeletionDiagnosticsEffects(_ModifyDiagnosticsEffects, Protocol):
+    def end_chain_summary_ports_for(self, host: Any) -> object: ...
+
+    def end_chain_summary(
+        self,
+        ports: object,
+        task: Any,
+        reason: str,
+        now_utc: datetime,
+        *,
+        current_task: Any = None,
+    ) -> Any: ...
+
+
 class _ModifyCompletionEffects(Protocol):
     def completion_preflight_context_ports_for(self, host: Any) -> object: ...
 
@@ -274,7 +288,7 @@ class ModifyHookCapabilities:
     modify_lifecycle: _ModifyLifecycle
     modify_transition_effects: Any
     modify_presentation_effects: _ModifyPresentationEffects
-    modify_diagnostics_effects: _ModifyDiagnosticsEffects
+    modify_diagnostics_effects: _ModifyDeletionDiagnosticsEffects
     modify_validation_effects: _ModifyValidationEffects
     modify_ui_effects: _ModifyUIEffects
     modify_task_fields: _ModifyTaskFields
@@ -322,7 +336,6 @@ class NonCompletionRouteCapabilities:
 
     modify_ordinary: Any
     modify_lifecycle: _ModifyLifecycle
-    modify_diagnostics_effects: Any
     modify_validation_effects: _ModifyValidationEffects
     modify_ui_effects: _ModifyUIEffects
     modify_task_fields: _ModifyTaskFields
@@ -339,7 +352,7 @@ class CompletionRouteCapabilities:
 class DeletionRouteCapabilities:
     """Dependencies used only by deletion and expiration routes."""
 
-    modify_diagnostics_effects: Any
+    modify_diagnostics_effects: _ModifyDeletionDiagnosticsEffects
     modify_ui_effects: _ModifyUIEffects
     modify_expiration: Any
     modify_queries: _ModifyQueries
@@ -478,7 +491,6 @@ class ModifyRuntimeServices:
             non_completion=NonCompletionRouteCapabilities(
                 modify_ordinary=capabilities.modify_ordinary,
                 modify_lifecycle=capabilities.modify_lifecycle,
-                modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
                 modify_validation_effects=capabilities.modify_validation_effects,
                 modify_ui_effects=capabilities.modify_ui_effects,
                 modify_task_fields=capabilities.modify_task_fields,

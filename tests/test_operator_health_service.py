@@ -351,6 +351,17 @@ class OperatorHealthServiceTests(unittest.TestCase):
                 {"on-add": {"implementation": BrokenPathText()}},
             )
 
+    def test_runtime_diagnosis_turns_loader_failure_into_actionable_finding(self) -> None:
+        def unavailable_runtime() -> dict[str, object]:
+            raise RuntimeError("runtime manifest is unreadable")
+
+        report = OperatorHealthService.diagnose_runtime(
+            unavailable_runtime, "/tmp/runtime"
+        )
+        finding = next(item for item in report.findings if item.code == "install.runtime")
+        self.assertEqual(finding.severity.value, "error")
+        self.assertIn("runtime manifest is unreadable", finding.observed["errors"][0])
+
     def test_astronomy_finding_normalizes_timezone_for_json(self) -> None:
         findings = OperatorHealthService.astronomy_findings(
             {}, effective_timezone=ZoneInfo("Europe/Bucharest"), source_hint="config",

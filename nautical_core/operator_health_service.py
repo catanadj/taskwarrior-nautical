@@ -1117,6 +1117,8 @@ class OperatorHealthService:
         try:
             status = runtime_loader()
         except Exception as exc:
+            # This is the diagnostic containment boundary: preserve arbitrary
+            # runtime-loader failures as actionable Doctor evidence.
             status = {"managed": True, "errors": [str(exc)]}
         return OperatorHealthService.report(
             OperatorHealthService.runtime_findings(status, runtime_root, hook_runtimes)

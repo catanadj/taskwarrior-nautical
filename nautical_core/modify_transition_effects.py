@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, NoReturn, Protocol
+from typing import Callable, ClassVar, NoReturn, Protocol
 
 from .modify_carry_workflow import TemporalCarryDecision
+from .modify_carry_workflow import NativeUntilDecision
+from .native_until import NativeUntilCarryError
 from .modify_validation import CompletionValidationServices
 from .task_changes import TaskTransition
-from .task_models import TaskPayload
+from .task_models import NauticalTask, TaskPayload, TaskTimestamp
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,16 +94,61 @@ class CPCarryWorkflow(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class NativePreservePorts:
-    carry: Any
-    field_changed: Any
-    anchor_field: Any
-    parse_datetime: Any
-    native_until: Any
-    generation_service: Any
-    reject_carry: Any
-    diagnostic: Any
-    workflow: Any
-    timestamp: Any
+    carry: "NativeUntilCarryOperation"
+    field_changed: Callable[[TaskPayload, TaskPayload, str], bool]
+    anchor_field: Callable[[TaskPayload], str]
+    parse_datetime: Callable[[object], datetime | None]
+    native_until: "NativeUntilPolicy"
+    generation_service: Callable[[], "NativeUntilGenerationService"]
+    reject_carry: Callable[
+        [TaskPayload, TaskPayload, datetime | None, str, NativeUntilCarryError], None
+    ]
+    diagnostic: Callable[[str], None]
+    workflow: "NativeUntilWorkflow"
+
+
+class NativeUntilPolicy(Protocol):
+    CARRY_INVALID: ClassVar[str]
+    CARRY_FAILED: ClassVar[str]
+    NativeUntilCarryError: ClassVar[type[NativeUntilCarryError]]
+
+
+class NativeUntilGenerationService(Protocol):
+    def carry_native_until(
+        self,
+        parent: NauticalTask,
+        child: TaskPayload,
+        child_due_utc: datetime,
+        kind: str,
+        *,
+        parent_anchor_field: str,
+        child_anchor_field: str,
+    ) -> None: ...
+
+
+class NativeUntilCarryOperation(Protocol):
+    def __call__(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        kind: str,
+        *,
+        field_changed: Callable[[TaskPayload, TaskPayload, str], bool],
+        recurrence_anchor_field: Callable[[TaskPayload], str],
+        parse_datetime: Callable[[object], datetime | None],
+        native_until: NativeUntilPolicy,
+        generation_service: Callable[[], NativeUntilGenerationService],
+        reject_carry: Callable[
+            [TaskPayload, TaskPayload, datetime | None, str, NativeUntilCarryError], None
+        ],
+        diagnostic: Callable[[str], None],
+    ) -> bool: ...
+
+
+class NativeUntilWorkflow(Protocol):
+    def apply_native_until_patch(self, task: TaskPayload, decision: NativeUntilDecision) -> None: ...
+
+    def verify_native_until_task(self, task: TaskPayload, decision: NativeUntilDecision) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,7 +244,7 @@ def preserve_native_until_on_target_change(
     kind: str,
     *,
     transition: TaskTransition | None = None,
-) -> Any:
+) -> NativeUntilDecision:
     carried = ports.carry(
         old,
         new,
@@ -215,15 +262,13 @@ def preserve_native_until_on_target_change(
         diagnostic=ports.diagnostic,
     )
     if not carried:
-        return ports.workflow.NativeUntilDecision("unchanged")
+        return NativeUntilDecision("unchanged")
     value = ports.parse_datetime(new.get("until"))
     if value is None:
-        return ports.workflow.NativeUntilDecision(
+        return NativeUntilDecision(
             "rejected", reason="native-until carry produced no parseable value"
         )
-    decision = ports.workflow.NativeUntilDecision(
-        "carried", value=ports.timestamp(value)
-    )
+    decision = NativeUntilDecision("carried", value=TaskTimestamp(value))
     ports.workflow.apply_native_until_patch(new, decision)
     ports.workflow.verify_native_until_task(new, decision)
     return decision

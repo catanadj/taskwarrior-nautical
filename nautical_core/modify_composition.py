@@ -168,7 +168,6 @@ def _native_preserve_ports(host: Any, capabilities: ModifyHookCapabilities) -> A
         ),
         diagnostic=host._diag,
         workflow=host._module("modify_carry_workflow"),
-        timestamp=capabilities.task_models.TaskTimestamp,
     )
 
 

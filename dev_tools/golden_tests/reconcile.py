@@ -45,35 +45,6 @@ _NAMES = (
 )
 
 
-def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
-
-    """Integrity work uses the shared table but remains invisible to lifecycle claims."""
-    from nautical_core.chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety
-    from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
-    from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
-    from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository, OutboxResultKind
-    with tempfile.TemporaryDirectory() as td:
-        repo = _LifecycleOutboxRepository(Path(td))
-        expect(repo.open().ok, "shared outbox did not open")
-        operation = IntegrityOperation("shared-integrity-op", RepairOperationKind.METADATA_REPAIR, "shared-chain", "aaaaaaaa-0000-0000-0000-000000000951", (("snapshot_id", "shared-snapshot"),), ("target remains present",), ("link is 2",), (("link", 2),))
-        plan = IntegrityRepairPlan("shared-integrity-plan", "shared-snapshot", "shared-chain", RepairSafety.SAFE, "missing_link", "shared outbox test", (operation,), "cfg-shared")
-        envelope = IntegrityOutboxEnvelope(plan, "cfg-shared", "schedule-shared")
-        expect(repo.enqueue_integrity(envelope).kind is OutboxResultKind.APPLIED, "integrity work was not persisted")
-        expect(repo.enqueue_integrity(envelope).kind is OutboxResultKind.ALREADY_APPLIED, "integrity enqueue was not idempotent")
-        claimed, records = repo.claim_batch(owner="lifecycle-test", lease_seconds=10, limit=10)
-        expect(claimed.ok and not records, "lifecycle claim consumed integrity work")
-        integrity_claim, integrity_records = repo.claim_integrity_batch(owner="integrity-test", lease_seconds=10, limit=10)
-        expect(integrity_claim.ok and len(integrity_records) == 1, "integrity claim did not claim shared work")
-        expect(repo.acknowledge_integrity(intent_id=envelope.intent_id, owner="integrity-test").ok, "integrity work was not acknowledged")
-        expect(repo.acknowledge_integrity(intent_id=envelope.intent_id, owner="integrity-test").kind is OutboxResultKind.ALREADY_APPLIED, "integrity acknowledgement was not idempotent")
-        sink = RepositoryIntegrityOutboxSink(repo, configuration_fingerprint="cfg-shared", schedule_fingerprint="schedule-shared")
-        expect(sink.persist(plan).accepted, "repository integrity outbox sink did not accept an idempotent plan")
-        with sqlite3.connect(str(repo.path)) as conn:
-            row = conn.execute("SELECT work_kind FROM lifecycle_outbox WHERE intent_id=?", (envelope.intent_id,)).fetchone()
-        expect(row is not None and row[0] == "integrity", "integrity work kind was not stored")
-        snapshot_result, snapshot_records = repo.snapshot_records()
-        expect(snapshot_result.ok and len(snapshot_records) == 1 and snapshot_records[0].intent_id == envelope.intent_id, "shared outbox snapshot lost integrity evidence")
-
 def test_non_hour_dst_carry_and_reconcile_share_core_policy():
 
     """Wait, until, and reconcile repair must share 30-minute gap handling."""
@@ -221,55 +192,6 @@ def test_outbox_drain_limit_config_and_env_override():
         expect(json.loads(overridden.stdout) == [7, 3], f"environment outbox drain override did not win: {overridden.stdout!r}")
 
 
-def test_reconcile_tool_print_plan_includes_evidence():
-    """Reconcile dry-run output should explain why each action is safe."""
-    reconcile_report = importlib.import_module("nautical_core.reconcile_report")
-    importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    mod = load_hook_module(str(Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"), "_nautical_reconcile_tool_print_test")
-    parent = {"uuid": "11111111-0000-4000-8000-000000000001", "status": "completed", "description": "remote completion", "cp": "1d", "chain": "on", "chainID": "11111111", "link": 2, "due": "20260703T090000Z"}
-    from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, recurrence_fingerprint
-    from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
-    observation = fixture_observation(parent)
-    guard = ParentGuard(status="completed", chain="on", chain_id="11111111", link=2, recurrence_fingerprint=recurrence_fingerprint(parent), modified="")
-    identity = LifecycleIdentity(chain_id="11111111", parent_uuid=parent["uuid"], source_link=2, target_link=3, event=LifecycleEvent.ACTIVATE)
-    plan = RecoveryPlanResult(observation, LifecyclePlan(identity=identity, action=LifecycleAction.UPDATE_PARENT, parent_guard=guard), reason="next link already exists", child_short="22222222")
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        mod._print_plan(plan)
-    out = buf.getvalue()
-    expect("backfill nextLink:" in out, f"missing backfill headline: {out!r}")
-    expect("reason: next link already exists" in out, f"missing reason evidence: {out!r}")
-    expect("existing child: 22222222" in out, f"missing child evidence: {out!r}")
-    second_parent = {**parent, "uuid": "22222222-0000-4000-8000-000000000002", "link": 3}
-    second = mod._recovery_terminal(second_parent, "expiration recovery hop limit reached at 2; native until has already elapsed")
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        mod._print_recovery_group([(plan, reconcile_report.describe_recovery_result(plan), "22222222"), (second, reconcile_report.describe_recovery_result(second), "")])
-    out = buf.getvalue()
-    expect("recover:" in out and "advanced 1 occurrence" in out, f"missing compact recovery summary: {out!r}")
-    expect("result: partial" in out and "spawn:" not in out, f"compact output leaked per-hop lines: {out!r}")
-
-
-def test_reconcile_tool_defaults_core_path_to_install_base():
-    """The reconciler must seed hook bootstrap with the base containing nautical_core."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    prev_core_path = os.environ.get("NAUTICAL_CORE_PATH")
-    try:
-        os.environ.pop("NAUTICAL_CORE_PATH", None)
-        mod = load_hook_module(str(path), "_nautical_reconcile_tool_core_path_test")
-        expect(
-            os.environ.get("NAUTICAL_CORE_PATH") == str(mod.BASE_DIR),
-            f"expected NAUTICAL_CORE_PATH={mod.BASE_DIR}, got {os.environ.get('NAUTICAL_CORE_PATH')!r}",
-        )
-    finally:
-        if prev_core_path is None:
-            os.environ.pop("NAUTICAL_CORE_PATH", None)
-        else:
-            os.environ["NAUTICAL_CORE_PATH"] = prev_core_path
-
-
 def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
     """Actual reconcile tool loading should compute @t slots as configured-local time."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -308,23 +230,6 @@ def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
             os.environ.pop("NAUTICAL_CORE_PATH", None)
         else:
             os.environ["NAUTICAL_CORE_PATH"] = prev_core_path
-
-
-def test_reconcile_configuration_verification_fails_closed():
-    """Configuration exceptions must become unavailable, never a clean reconcile state."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = Path(root) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = load_hook_module(str(path), "_nautical_reconcile_configuration_state_test")
-    import types
-
-    core_module = types.ModuleType("nautical_core_test_module")
-    core_module.configuration_drift = lambda: (_ for _ in ()).throw(RuntimeError("malformed TOML"))
-    hook = SimpleNamespace(core=core_module)
-    check = mod._configuration_verification(hook)
-    expect(check.status == "unavailable", f"configuration exception was not unavailable: {check.status!r}")
-    expect("malformed TOML" in check.reason, f"configuration failure detail was lost: {check.reason!r}")
-    status, reason = mod._configuration_state(hook)
-    expect(status == "unavailable" and reason == check.reason, f"state adapter changed failure: {status!r}, {reason!r}")
 
 
 def test_reconcile_subprocess_output_contracts():
@@ -1183,19 +1088,15 @@ TESTS = (
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_expiration_real_taskwarrior_round_trip,
     test_seasonal_selection_reconcile_spawn_recovery_and_dedup,
-    test_shared_outbox_persists_integrity_work_without_lifecycle_claiming,
     test_non_hour_dst_carry_and_reconcile_share_core_policy,
     test_carry_field_failure_defers_completion_and_reconcile_mutation,
     test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review,
     test_outbox_drain_limit_config_and_env_override,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
-    test_reconcile_tool_print_plan_includes_evidence,
     test_health_check_critical_outbox_bytes,
     test_health_check_critical_outbox_rows,
     test_queue_status_does_not_initialize_missing_outbox,
-    test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
-    test_reconcile_configuration_verification_fails_closed,
     test_reconcile_subprocess_output_contracts,
     test_reconcile_apply_lease_serializes_mutations,
     test_reconcile_apply_refuses_a_second_full_run,

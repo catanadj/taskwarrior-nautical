@@ -34,6 +34,86 @@ from nautical_core.lifecycle.outbox import (
 
 
 class LifecycleOutboxContractTests(unittest.TestCase):
+    def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
+        from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
+        from nautical_core.chain_integrity_models import (
+            IntegrityOperation,
+            IntegrityRepairPlan,
+            RepairOperationKind,
+            RepairSafety,
+        )
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            operation = IntegrityOperation(
+                "shared-integrity-op",
+                RepairOperationKind.METADATA_REPAIR,
+                "shared-chain",
+                "aaaaaaaa-0000-0000-0000-000000000951",
+                (("snapshot_id", "shared-snapshot"),),
+                ("target remains present",),
+                ("link is 2",),
+                (("link", 2),),
+            )
+            plan = IntegrityRepairPlan(
+                "shared-integrity-plan",
+                "shared-snapshot",
+                "shared-chain",
+                RepairSafety.SAFE,
+                "missing_link",
+                "shared outbox test",
+                (operation,),
+                "cfg-shared",
+            )
+            envelope = IntegrityOutboxEnvelope(plan, "cfg-shared", "schedule-shared")
+
+            self.assertEqual(
+                repository.enqueue_integrity(envelope).kind, OutboxResultKind.APPLIED
+            )
+            self.assertEqual(
+                repository.enqueue_integrity(envelope).kind,
+                OutboxResultKind.ALREADY_APPLIED,
+            )
+            lifecycle_claim, lifecycle_records = repository.claim_batch(
+                owner="lifecycle-test", lease_seconds=10, limit=10
+            )
+            self.assertTrue(lifecycle_claim.ok)
+            self.assertEqual(lifecycle_records, ())
+            integrity_claim, integrity_records = repository.claim_integrity_batch(
+                owner="integrity-test", lease_seconds=10, limit=10
+            )
+            self.assertTrue(integrity_claim.ok)
+            self.assertEqual(len(integrity_records), 1)
+            self.assertTrue(
+                repository.acknowledge_integrity(
+                    intent_id=envelope.intent_id, owner="integrity-test"
+                ).ok
+            )
+            self.assertEqual(
+                repository.acknowledge_integrity(
+                    intent_id=envelope.intent_id, owner="integrity-test"
+                ).kind,
+                OutboxResultKind.ALREADY_APPLIED,
+            )
+            sink = RepositoryIntegrityOutboxSink(
+                repository,
+                configuration_fingerprint="cfg-shared",
+                schedule_fingerprint="schedule-shared",
+            )
+            self.assertTrue(sink.persist(plan).accepted)
+            with sqlite3.connect(repository.path) as connection:
+                work_kind = connection.execute(
+                    "SELECT work_kind FROM lifecycle_outbox WHERE intent_id=?",
+                    (envelope.intent_id,),
+                ).fetchone()
+            self.assertEqual(work_kind, ("integrity",))
+            snapshot_result, snapshot_records = repository.snapshot_records()
+            self.assertTrue(snapshot_result.ok)
+            self.assertEqual(len(snapshot_records), 1)
+            self.assertEqual(snapshot_records[0].intent_id, envelope.intent_id)
+
     def test_outbox_state_file_uses_dedicated_state_directory(self) -> None:
         path = lifecycle_outbox_path(Path("/tmp/taskdata"))
 

@@ -40,6 +40,87 @@ class ReconcileErrorContracts(unittest.TestCase):
         self.assertEqual(payload.get("configuration_status"), "unavailable")
         self.assertEqual(payload.get("configuration_drift"), "invalid timezone")
 
+    def test_reconcile_plan_output_includes_safety_evidence(self) -> None:
+        import nautical_core.reconcile_report as report
+        from nautical_core.lifecycle.models import (
+            LifecycleAction,
+            LifecycleEvent,
+            LifecycleIdentity,
+            LifecyclePlan,
+            ParentGuard,
+            recurrence_fingerprint,
+        )
+        from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
+
+        parent = {
+            "uuid": "11111111-0000-4000-8000-000000000001",
+            "status": "completed",
+            "description": "remote completion",
+            "cp": "1d",
+            "chain": "on",
+            "chainID": "11111111",
+            "link": 2,
+            "due": "20260703T090000Z",
+        }
+        observation = TaskObservation.from_mapping(
+            parent, source_query="reconcile output contract"
+        )
+        guard = ParentGuard(
+            status="completed",
+            chain="on",
+            chain_id="11111111",
+            link=2,
+            recurrence_fingerprint=recurrence_fingerprint(parent),
+            modified="",
+        )
+        identity = LifecycleIdentity(
+            chain_id="11111111",
+            parent_uuid=parent["uuid"],
+            source_link=2,
+            target_link=3,
+            event=LifecycleEvent.ACTIVATE,
+        )
+        plan = RecoveryPlanResult(
+            observation,
+            LifecyclePlan(
+                identity=identity,
+                action=LifecycleAction.UPDATE_PARENT,
+                parent_guard=guard,
+            ),
+            reason="next link already exists",
+            child_short="22222222",
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            reconcile._print_plan(plan)
+        rendered = output.getvalue()
+        self.assertIn("backfill nextLink:", rendered)
+        self.assertIn("reason: next link already exists", rendered)
+        self.assertIn("existing child: 22222222", rendered)
+
+        second_parent = {
+            **parent,
+            "uuid": "22222222-0000-0000-0000-000000000002",
+            "link": 3,
+        }
+        partial = reconcile._recovery_terminal(
+            second_parent,
+            "expiration recovery hop limit reached at 2; native until has already elapsed",
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            reconcile._print_recovery_group(
+                [
+                    (plan, report.describe_recovery_result(plan), "22222222"),
+                    (partial, report.describe_recovery_result(partial), ""),
+                ]
+            )
+        rendered = output.getvalue()
+        self.assertIn("recover:", rendered)
+        self.assertIn("advanced 1 occurrence", rendered)
+        self.assertIn("result: partial", rendered)
+        self.assertNotIn("spawn:", rendered)
+
     def test_native_until_manual_review_is_not_a_hard_error(self) -> None:
         import nautical_core as core
 
@@ -350,7 +431,7 @@ class ReconcileErrorContracts(unittest.TestCase):
 
     def test_configuration_verification_fails_closed_on_unexpected_fault(self) -> None:
         def broken_verifier() -> dict[str, bool]:
-            raise RuntimeError("configuration snapshot unavailable")
+            raise RuntimeError("malformed TOML")
 
         hook = SimpleNamespace(
             core=SimpleNamespace(configuration_drift=broken_verifier)
@@ -358,7 +439,10 @@ class ReconcileErrorContracts(unittest.TestCase):
         result = reconcile.configuration_verification(hook)
 
         self.assertEqual(result.status, "unavailable")
-        self.assertIn("configuration snapshot unavailable", result.reason)
+        self.assertIn("malformed TOML", result.reason)
+        self.assertEqual(
+            reconcile._configuration_state(hook), ("unavailable", result.reason)
+        )
 
     def test_expiration_hop_limit_wraps_invalid_input_not_internal_faults(self) -> None:
         class BrokenIntegerConversion:

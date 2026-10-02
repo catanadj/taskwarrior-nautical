@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -21,6 +22,35 @@ ROOT = Path(__file__).parents[1]
 
 
 class DeploymentSanityContractTests(unittest.TestCase):
+    def test_reconcile_tool_defaults_core_path_to_install_base(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("NAUTICAL_CORE_PATH", None)
+        existing_pythonpath = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(ROOT), existing_pythonpath) if part
+        )
+        process = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import json, os, sys; "
+                "import nautical_core.tools.nautical_reconcile as reconcile; "
+                "print(json.dumps({'base': str(reconcile.BASE_DIR), "
+                "'configured': os.environ.get('NAUTICAL_CORE_PATH'), "
+                "'on_path': str(reconcile.BASE_DIR) in sys.path}))",
+            ],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=10.0,
+        )
+
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["configured"], result["base"])
+        self.assertTrue(result["on_path"])
+
     def test_ops_templates_present_and_health_runner_executable(self) -> None:
         ops = ROOT / "dev_tools" / "ops"
         files = (

@@ -172,6 +172,17 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             recurrence_fingerprint(changed, parse_datetime=parse_datetime),
         )
 
+    def test_recurrence_fingerprint_does_not_hide_unexpected_datetime_parser_errors(self) -> None:
+        from nautical_core.lifecycle.models import recurrence_fingerprint
+
+        def broken_parser(_value: object):
+            raise RuntimeError("datetime parser invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "datetime parser invariant failed"):
+            recurrence_fingerprint(
+                {"due": "20260813T090000Z"}, parse_datetime=broken_parser
+            )
+
     def test_lifecycle_planner_is_pure_and_deterministic(self) -> None:
         from nautical_core.lifecycle.planner import (
             LifecyclePlanningError,

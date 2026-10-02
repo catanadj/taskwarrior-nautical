@@ -189,7 +189,7 @@ def _canonical_datetime_text(value: Any, parse_datetime: Callable[[Any], Any] | 
     if parse_datetime is not None:
         try:
             parsed = parse_datetime(value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             parsed = None
         if isinstance(parsed, datetime):
             if parsed.tzinfo is None:

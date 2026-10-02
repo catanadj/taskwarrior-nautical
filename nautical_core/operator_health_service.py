@@ -1160,19 +1160,24 @@ class OperatorHealthService:
                 observed={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
             ),)
         event_year = date.today().year if year is None else year
-        try:
-            if zoneinfo_factory is None:
-                raise RuntimeError("zoneinfo support is unavailable")
-            events = events_provider(event_year)
-            local_events = {
-                name: event.astimezone(zoneinfo_factory(timezone_name)).date().isoformat()
-                for name, event in events.items()
-            }
-        except Exception as exc:
+        local_events: dict[str, str] = {}
+        calculation_error = ""
+        if zoneinfo_factory is None:
+            calculation_error = "zoneinfo support is unavailable"
+        else:
+            try:
+                events = events_provider(event_year)
+                local_events = {
+                    name: event.astimezone(zoneinfo_factory(timezone_name)).date().isoformat()
+                    for name, event in events.items()
+                }
+            except (KeyError, OSError, OverflowError, TypeError, ValueError) as exc:
+                calculation_error = str(exc).strip() or type(exc).__name__
+        if calculation_error:
             return (OperatorFinding(
                 "config.season_mode.astronomical_invalid", "configuration", FindingSeverity.ERROR,
                 FindingActionability.BLOCKING,
-                f"Astronomical seasonal boundaries are unavailable for {event_year}: {exc}",
+                f"Astronomical seasonal boundaries are unavailable for {event_year}: {calculation_error}",
                 observed={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
                 guidance="Verify timezone data and use a supported season year/backend, then rerun doctor.",
             ),)

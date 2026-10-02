@@ -122,6 +122,33 @@ class OperatorHealthServiceTests(unittest.TestCase):
                     version_probe=broken_probe,
                 )
 
+    def test_season_findings_does_not_hide_unexpected_event_provider_fault(self) -> None:
+        def broken_events(_year: int) -> dict[str, object]:
+            raise RuntimeError("season event provider invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "season event provider invariant failed"):
+            OperatorHealthService.season_findings(
+                {"season_mode": "astronomical", "tz": "UTC"},
+                {},
+                ZoneInfo,
+                broken_events,
+                year=2026,
+            )
+
+    def test_season_findings_reports_expected_event_calculation_failure(self) -> None:
+        def unavailable_events(_year: int) -> dict[str, object]:
+            raise ValueError("astronomical boundary could not be calculated")
+
+        findings = OperatorHealthService.season_findings(
+            {"season_mode": "astronomical", "tz": "UTC"},
+            {},
+            ZoneInfo,
+            unavailable_events,
+            year=2026,
+        )
+        self.assertEqual(findings[0].code, "config.season_mode.astronomical_invalid")
+        self.assertIn("could not be calculated", findings[0].message)
+
     def test_deep_resource_findings_validate_timezone_and_paths(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             resource = Path(td) / "calendar.json"

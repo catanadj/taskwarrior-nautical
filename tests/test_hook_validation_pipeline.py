@@ -12,8 +12,12 @@ from nautical_core.hook_validation_pipeline import (
     build_default_validation_pipeline,
     validate_task_transition,
     normalize_description_uda_aliases,
+    validate_anchor_expression,
+    validate_omit_expression,
+    validate_recurrence_files,
 )
 from nautical_core.hook_workflow_models import WorkflowRoute
+from nautical_core.parsing.parser_models import ParseError
 from nautical_core.task_models import TaskObservation
 
 
@@ -32,6 +36,51 @@ def _observation() -> TaskObservation:
 
 
 class ValidationPipelineTests(unittest.TestCase):
+    def test_recurrence_file_validation_wraps_expected_file_errors_only(self) -> None:
+        missing = validate_recurrence_files(
+            "",
+            "missing.txt",
+            "",
+            "",
+            load_anchor_file=lambda _value: (_ for _ in ()).throw(FileNotFoundError("missing file")),
+            load_omit_file=lambda _value: None,
+        )
+        self.assertEqual(len(missing), 1)
+        self.assertEqual(missing[0].code, "anchor_file_invalid")
+        self.assertEqual(missing[0].reason, "missing file")
+
+        with self.assertRaisesRegex(RuntimeError, "loader invariant failed"):
+            validate_recurrence_files(
+                "",
+                "dates.txt",
+                "",
+                "",
+                load_anchor_file=lambda _value: (_ for _ in ()).throw(RuntimeError("loader invariant failed")),
+                load_omit_file=lambda _value: None,
+            )
+
+    def test_anchor_expression_wraps_only_expected_parse_errors(self) -> None:
+        with self.assertRaisesRegex(ValueError, "anchor syntax error: invalid token"):
+            validate_anchor_expression(
+                "invalid",
+                parse_anchor_expr=lambda _expr: (_ for _ in ()).throw(ParseError("invalid token")),
+                validate_anchor_expr=lambda _expr: None,
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "parser invariant failed"):
+            validate_anchor_expression(
+                "w:mon",
+                parse_anchor_expr=lambda _expr: (_ for _ in ()).throw(RuntimeError("parser invariant failed")),
+                validate_anchor_expr=lambda _expr: None,
+            )
+
+    def test_omit_expression_propagates_unexpected_validator_failures(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "validator invariant failed"):
+            validate_omit_expression(
+                "w:sun",
+                validate_omit_expr=lambda _expr: (_ for _ in ()).throw(RuntimeError("validator invariant failed")),
+            )
+
     def test_default_domain_pipeline_rejects_mixed_recurrence_sources(self) -> None:
         task = _observation().to_mapping()
         task["anchor"] = "w:mon"

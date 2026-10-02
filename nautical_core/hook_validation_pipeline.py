@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Mapping, MutableMapping, Protocol, cast, Any, Callable
 
 from .hook_workflow_models import WorkflowRoute
+from .parsing.parser_models import ParseError
 from .task_changes import TaskTransition
 from .task_models import ChainID, TaskLink, TaskObservation, TaskTimestamp
 
@@ -199,7 +200,7 @@ def validate_anchor_expression(
     try:
         parse_anchor_expr(str(expr))
         validate_anchor_expr(expr)
-    except Exception as exc:
+    except (ParseError, ValueError) as exc:
         raise ValueError(f"anchor syntax error: {exc}") from exc
 
 
@@ -213,7 +214,7 @@ def validate_omit_expression(
         return
     try:
         validate_omit_expr(expr)
-    except Exception as exc:
+    except (ParseError, ValueError) as exc:
         raise ValueError(f"omit validation failed: {exc}") from exc
 
 
@@ -250,7 +251,7 @@ def validate_recurrence_files(
             continue
         try:
             loader(value)
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             findings.append(_finding(
                 f"{field}_invalid", field, str(exc) or f"invalid {field}",
                 f"Check the configured {field} path and file contents.",

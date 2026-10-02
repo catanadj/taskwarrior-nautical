@@ -443,27 +443,6 @@ def test_reconcile_parent_identity_errors_are_actionable():
             raise AssertionError(f"invalid parent identity was accepted: {parent!r}")
 
 
-def test_reconcile_expiration_anchor_advances_from_recurrence_target():
-    """Expired anchor links should select the first slot after the prior recurrence target."""
-    reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_reconcile_expiration_anchor_due_test")
-    parent = {
-        "uuid": "00000000-0000-4000-8000-0000000050aa",
-        "status": "deleted",
-        "anchor": "w:mon@t=09:00",
-        "anchor_mode": "skip",
-        "chainID": "11111111",
-        "link": 1,
-        "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 6), (9, 0))),
-        "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 15), (18, 0))),
-    }
-    child_due, meta = reconcile.compute_expiration_child_due(parent, hook=mod)
-    child_local = mod.core.to_local(child_due)
-    expect(child_local.date() == date(2026, 7, 13) and (child_local.hour, child_local.minute) == (9, 0), f"expired anchor should advance from prior due: {child_local}")
-    expect(meta.get("basis") == "due recurrence target (expired)", f"unexpected expiry basis: {meta!r}")
-
-
 def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     """Hookless recovery should preserve and verify scheduled/wait offsets."""
     reconcile = importlib.import_module("nautical_core.chain_integrity_lifecycle")
@@ -1407,7 +1386,6 @@ TESTS = (
     test_reconcile_apply_lease_serializes_mutations,
     test_reconcile_apply_refuses_a_second_full_run,
     test_reconcile_parent_identity_errors_are_actionable,
-    test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
     test_reconcile_expiration_candidate_requires_expiry_evidence,

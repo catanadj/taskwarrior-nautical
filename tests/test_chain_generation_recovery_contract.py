@@ -119,6 +119,28 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.addCleanup(timezone_override.stop)
         self.service = ChainGenerationService.from_core(_Core())
 
+    def test_reconcile_expiration_anchor_advances_from_recurrence_target(self):
+        from nautical_core.chain_integrity_lifecycle import compute_expiration_child_due
+
+        parent = {
+            "uuid": UUID,
+            "status": "deleted",
+            "anchor": "w:mon@t=09:00",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "chain-a",
+            "link": 1,
+            "due": "20260706T090000Z",
+            "end": "20260715T180000Z",
+        }
+
+        child_due, metadata = compute_expiration_child_due(
+            parent, generation=self.service
+        )
+
+        self.assertEqual(child_due, datetime(2026, 7, 13, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata.get("basis"), "due recurrence target (expired)")
+
     def test_cp_generation_uses_link_sequence_and_durable_metadata(self):
         parent = _task(link=1)
         due, metadata = self.service.compute_cp_child_due(parent)

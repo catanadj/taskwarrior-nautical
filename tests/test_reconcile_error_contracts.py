@@ -1,7 +1,7 @@
 """Error contracts for the reconcile operator boundary."""
 
 import contextlib
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import io
 import json
 import os
@@ -28,10 +28,61 @@ from nautical_core.integration_models import (
     Unavailable,
 )
 from nautical_core.lifecycle.recovery_models import RecoveryStatus
-from nautical_core.task_models import TaskObservation
+from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_day_end_fallback_propagates_unexpected_timezone_adapter_errors(self) -> None:
+        from nautical_core.chain_integrity_lifecycle import fallback_native_until_at_day_end
+
+        observation = TaskObservation.from_mapping(
+            {
+                "uuid": "00000000-0000-4000-8000-000000003242",
+                "status": "pending", "chain": "on", "chainID": "until-test",
+                "link": 1, "due": "20260723T090000Z",
+            },
+            source_query="reconcile fallback adapter failure",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "timezone adapter defect"):
+            fallback_native_until_at_day_end(
+                observation,
+                safe_parse_datetime=lambda _value: (
+                    datetime(2026, 7, 23, 9, tzinfo=timezone.utc), None
+                ),
+                fmt_isoz=lambda _value: "unused",
+                utc_to_local_naive=lambda _value: (_ for _ in ()).throw(
+                    RuntimeError("timezone adapter defect")
+                ),
+                local_naive_to_utc=lambda _value: _value,
+            )
+
+    def test_relative_carry_verification_propagates_unexpected_datetime_errors(self) -> None:
+        from nautical_core.chain_integrity_lifecycle import invalid_relative_carry_reason
+
+        row = {
+            "uuid": "00000000-0000-4000-8000-000000003243",
+            "status": "pending", "chain": "on", "chainID": "until-test",
+            "link": 1, "description": "carry fixture", "cp": "P7D",
+            "due": "20260723T090000Z", "wait": "20260723T100000Z",
+        }
+        parent = TaskObservation.from_mapping(row, source_query="relative-carry-parent")
+        child = TaskDraft.from_task(NauticalTask.from_observation(parent))
+        parsed = datetime(2026, 7, 23, 9, tzinfo=timezone.utc)
+        generation = SimpleNamespace(
+            core=SimpleNamespace(
+                utc_to_local_naive=lambda _value: (_ for _ in ()).throw(
+                    RuntimeError("datetime adapter defect")
+                )
+            ),
+            parse_datetime=lambda _value: (parsed, None),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "datetime adapter defect"):
+            invalid_relative_carry_reason(
+                parent, child, child_field="due", generation=generation
+            )
+
     def test_native_until_carry_fallback_and_verification_contract(self) -> None:
         from nautical_core.chain_integrity_lifecycle import (
             fallback_native_until_at_day_end,

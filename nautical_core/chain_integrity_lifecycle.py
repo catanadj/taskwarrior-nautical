@@ -291,7 +291,7 @@ def invalid_relative_carry_reason(
                 return f"{field} carry contains an unparseable timestamp"
             parent_delta = utc_to_local_naive(parent_value) - utc_to_local_naive(parent_target)
             child_delta = utc_to_local_naive(child_value) - utc_to_local_naive(child_target)
-        except Exception as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             return f"{field} carry could not be verified: {exc}"
         if child_delta != parent_delta:
             return f"{field} carry changed its recurrence-target offset"
@@ -371,7 +371,7 @@ def fallback_native_until_at_day_end(
         if fallback_local <= target_local:
             return None, f"cannot infer native until: {target_field} is at or after local 23:00"
         return fmt_isoz(local_naive_to_utc(fallback_local)), None
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None, "cannot infer native until at local 23:00"
 
 

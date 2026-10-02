@@ -214,6 +214,40 @@ class _ModifyExpirationEffects(Protocol):
     ) -> None: ...
 
 
+class _ModifyTransitionEffects(Protocol):
+    CPCarryPorts: _ServiceFactory
+    NativePreservePorts: _ServiceFactory
+    NativeCarryPorts: _ServiceFactory
+    CompletionValidationPorts: _ServiceFactory
+
+    def preserve_cp_relative_offsets_on_due_change(
+        self,
+        ports: object,
+        old: TaskPayload,
+        new: TaskPayload,
+        cp: str,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def reject_native_until_carry(self, ports: object, *args: Any, **kwargs: Any) -> Any: ...
+
+    def preserve_native_until_on_target_change(
+        self,
+        ports: object,
+        old: TaskPayload,
+        new: TaskPayload,
+        kind: str,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def validate_completion_cp_and_anchor(
+        self,
+        ports: object,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any: ...
+
+
 class _SeedLookupPortsFactory(Protocol):
     def __call__(self, *, service: Any, decode_row: Any, cache_set: Any) -> object: ...
 
@@ -315,7 +349,7 @@ class ModifyHookCapabilities:
     hook_context: Any
     hook_engine: Any
     modify_lifecycle: _ModifyLifecycle
-    modify_transition_effects: Any
+    modify_transition_effects: _ModifyTransitionEffects
     modify_presentation_effects: _ModifyPresentationEffects
     modify_diagnostics_effects: _ModifyDeletionDiagnosticsEffects
     modify_validation_effects: _ModifyValidationEffects

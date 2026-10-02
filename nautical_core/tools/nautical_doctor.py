@@ -311,7 +311,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         return
     try:
         data = tomllib.loads(config.read_text(encoding="utf-8"))
-    except Exception as exc:
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         _finding(
             findings,
             "config.invalid",

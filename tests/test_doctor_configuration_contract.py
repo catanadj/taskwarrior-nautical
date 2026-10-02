@@ -242,6 +242,21 @@ class DoctorConfigurationContractTests(unittest.TestCase):
         observed = (defaulted.get("details") or {}).get("observed") or {}
         self.assertIs(observed.get("enabled"), False)
 
+    def test_config_read_contains_expected_errors_but_propagates_internal_faults(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = Path(td) / "nautical.toml"
+            config.write_text("invalid = [", encoding="utf-8")
+            findings: list[dict[str, object]] = []
+            with patch.dict(os.environ, {"NAUTICAL_CONFIG": str(config)}):
+                doctor._check_config(findings, Path(td))
+            invalid = next(item for item in findings if item.get("id") == "config.invalid")
+            self.assertIn("TOML syntax", invalid.get("fix", ""))
+
+            with patch.dict(os.environ, {"NAUTICAL_CONFIG": str(config)}):
+                with patch.object(Path, "read_text", side_effect=RuntimeError("unexpected parser fault")):
+                    with self.assertRaisesRegex(RuntimeError, "unexpected parser fault"):
+                        doctor._check_config([], Path(td))
+
 
 if __name__ == "__main__":
     unittest.main()

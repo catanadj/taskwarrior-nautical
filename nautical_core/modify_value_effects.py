@@ -16,10 +16,7 @@ def compare_datetimes(ports: DatetimePorts, left: datetime, right: datetime) -> 
 
 
 def format_delta(delta: timedelta) -> str:
-    try:
-        total = int(delta.total_seconds())
-    except Exception:
-        return str(delta)
+    total = int(delta.total_seconds())
     sign = "-" if total < 0 else "+"
     total = abs(total)
     total_minutes = total // 60

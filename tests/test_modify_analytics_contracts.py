@@ -30,6 +30,14 @@ class ModifyAnalyticsContractTests(unittest.TestCase):
                 parse_datetime=parse_utc,
             )
 
+    def test_format_delta_propagates_unexpected_timedelta_failure(self) -> None:
+        class BrokenTimedelta(timedelta):
+            def total_seconds(self) -> float:
+                raise RuntimeError("delta calculation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "delta calculation failed"):
+            format_delta(BrokenTimedelta(seconds=1))
+
     def test_chain_integrity_warnings_report_gaps_and_missing_identity(self) -> None:
         chain = [
             {

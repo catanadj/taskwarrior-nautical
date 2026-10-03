@@ -152,6 +152,18 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                     repository.acknowledge_integrity(intent_id="integrity:missing", owner="worker")
             self.assertIs(type(raised.exception), RuntimeError)
 
+    def test_snapshot_does_not_misclassify_internal_decode_errors_as_poison(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            plan = self._plan("snapshot-decode-defect")
+            self.assertTrue(repository.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            with patch.object(repository, "_from_row", side_effect=RuntimeError("injected snapshot decoder defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.snapshot_records()
+            self.assertIs(type(raised.exception), RuntimeError)
+
     def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
         from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
         from nautical_core.chain_integrity_models import (

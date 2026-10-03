@@ -1692,7 +1692,7 @@ class _LifecycleOutboxRepository:
             def decode_lifecycle_row(row: sqlite3.Row) -> LifecycleOutboxRecord:
                 try:
                     return self._from_row(row)
-                except Exception as exc:
+                except (LifecycleOutboxError, ValueError, TypeError, KeyError, IndexError) as exc:
                     detail = str(exc) if isinstance(exc, LifecycleOutboxError) else f"{type(exc).__name__}: {exc}"
                     raise LifecycleOutboxError(f"poison outbox row: {detail}") from exc
 
@@ -1710,7 +1710,7 @@ class _LifecycleOutboxRepository:
                         float(row["lease_expires_at"] or 0.0),
                         int(row["attempts"] or 0),
                     )
-                except Exception as exc:
+                except (LifecycleOutboxError, ValueError, TypeError, KeyError, IndexError) as exc:
                     detail = str(exc) if isinstance(exc, LifecycleOutboxError) else f"{type(exc).__name__}: {exc}"
                     raise LifecycleOutboxError(f"poison outbox row: {detail}") from exc
 
@@ -1723,7 +1723,7 @@ class _LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()
         except LifecycleOutboxError as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), ()
-        except Exception as exc:
+        except (sqlite3.Error, OSError, ValueError) as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), ()
         finally:
             if conn is not None:

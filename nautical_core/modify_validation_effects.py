@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Any, Protocol
 from .callback_ports import CallbackPort
+from .hook_validation_pipeline import ValidationFinding
+from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
 
@@ -52,6 +54,33 @@ class CPValidationOperation(Protocol):
     ) -> None: ...
 
 
+class RecurrenceLimitsPipeline(Protocol):
+    def validate_recurrence_limits(
+        self,
+        cp_value: object,
+        chain_max_value: object,
+        chain_until_value: object,
+        *,
+        parse_cp_sequence: Callable[[str], list[timedelta] | None],
+        cp_sequence_parse_error: Callable[[str], str | None],
+        parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+        parse_datetime: Callable[[object], datetime | None],
+    ) -> tuple[int | None, datetime | None, tuple[ValidationFinding, ...]]: ...
+
+
+class ChainLimitsValidationOperation(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+        parse_datetime: Callable[[object], datetime | None],
+        validate_until_not_past: Callable[[datetime, datetime], tuple[bool, str | None]],
+        now_utc: Callable[[], datetime],
+        fail: Callable[[str, str], object],
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CPValidationPorts:
     validate: CPValidationOperation
@@ -63,15 +92,15 @@ class CPValidationPorts:
 
 @dataclass(frozen=True, slots=True)
 class ChainLimitPorts:
-    pipeline: Any
-    validate_limits: Any
-    parse_cp_sequence: Any
-    cp_sequence_error: Any
-    parse_chain_max: Any
-    parse_datetime: Any
-    validate_until_not_past: Any
-    now_utc: Any
-    fail: Any
+    pipeline: RecurrenceLimitsPipeline
+    validate_limits: ChainLimitsValidationOperation
+    parse_cp_sequence: Callable[[str], list[timedelta] | None]
+    cp_sequence_error: Callable[[str], str | None]
+    parse_chain_max: Callable[[object], tuple[int | None, str | None]]
+    parse_datetime: Callable[[object], datetime | None]
+    validate_until_not_past: Callable[[datetime, datetime], tuple[bool, str | None]]
+    now_utc: Callable[[], datetime]
+    fail: Callable[[str, str], object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,7 +270,7 @@ def validate_cp(ports: CPValidationPorts, cp_value: str, chain_max_value: Any, c
     )
 
 
-def validate_chain_limits(ports: ChainLimitPorts, task: dict) -> None:
+def validate_chain_limits(ports: ChainLimitPorts, task: TaskPayload) -> None:
     cpmax, _until_dt, findings = ports.pipeline.validate_recurrence_limits(
         task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
         parse_cp_sequence=ports.parse_cp_sequence,

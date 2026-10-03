@@ -27,6 +27,28 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 self.assertIsNot(annotation, Any)
 
+    def test_chain_limit_ports_have_specific_pipeline_and_callback_contracts(self) -> None:
+        from nautical_core.modify_validation_effects import ChainLimitPorts
+
+        annotations = get_type_hints(ChainLimitPorts)
+        self.assertEqual(
+            set(annotations),
+            {
+                "pipeline",
+                "validate_limits",
+                "parse_cp_sequence",
+                "cp_sequence_error",
+                "parse_chain_max",
+                "parse_datetime",
+                "validate_until_not_past",
+                "now_utc",
+                "fail",
+            },
+        )
+        for field_name, annotation in annotations.items():
+            with self.subTest(field=field_name):
+                self.assertIsNot(annotation, Any)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
+    from .integration_context import IntegrationContext
+    from .lifecycle.application import LifecycleApplicationService
     from .lifecycle.models import LifecycleIdentity
+    from .lifecycle.outbox import LifecycleOutboxRepository
 
 
 @dataclass(frozen=True, slots=True)
 class SpawnIntentPorts:
-    context: Any
-    outbox_factory: Any
-    application_service: Any
+    context: IntegrationContext | None
+    outbox_factory: Callable[[str], LifecycleOutboxRepository]
+    application_service: type[LifecycleApplicationService]
     data_dir: str
 
 

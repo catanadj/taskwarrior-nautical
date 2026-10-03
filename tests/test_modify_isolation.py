@@ -1388,10 +1388,26 @@ class ModifyIsolationTests(unittest.TestCase):
         )
         self.assertIs(annotations["parse_datetime"], DatetimeParserCallback)
 
+        from nautical_core.integration_context import IntegrationContext
+        from nautical_core.lifecycle.application import LifecycleApplicationService
+        from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
         from nautical_core.modify_spawn_effects import SpawnChildPorts, SpawnIntentPorts
 
         self.assertNotIn("lifecycle_models", get_type_hints(SpawnChildPorts))
-        self.assertNotIn("models", get_type_hints(SpawnIntentPorts))
+        intent_annotations = get_type_hints(
+            SpawnIntentPorts,
+            localns={
+                "IntegrationContext": IntegrationContext,
+                "LifecycleOutboxRepository": LifecycleOutboxRepository,
+                "LifecycleApplicationService": LifecycleApplicationService,
+            },
+        )
+        self.assertEqual(intent_annotations["context"], IntegrationContext | None)
+        self.assertIsNot(intent_annotations["outbox_factory"], Any)
+        self.assertEqual(
+            intent_annotations["application_service"],
+            type[LifecycleApplicationService],
+        )
 
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone

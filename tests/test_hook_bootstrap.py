@@ -232,6 +232,37 @@ class HookBootstrapTrustTests(unittest.TestCase):
             self.assertNotIn(override / "nautical_core" / "hook_bootstrap.py", candidates)
             self.assertIn(tw_dir / "nautical_core" / "hook_bootstrap.py", candidates)
 
+    def test_candidate_resolution_failure_uses_only_builtin_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hook_dir = root / "hooks"
+            tw_dir = root / "taskwarrior"
+            candidate = root / "override"
+            with patch.object(type(candidate), "resolve", side_effect=OSError("resolve failed")):
+                paths = hook_bootstrap.bootstrap_candidates(
+                    hook_dir,
+                    tw_dir,
+                    env={"NAUTICAL_CORE_PATH": str(candidate)},
+                )
+
+        self.assertEqual(
+            paths,
+            (
+                hook_dir / "nautical_core" / "hook_bootstrap.py",
+                tw_dir / "nautical_core" / "hook_bootstrap.py",
+            ),
+        )
+
+    def test_candidate_resolution_does_not_hide_internal_failure(self) -> None:
+        candidate = Path("/override")
+        with patch.object(type(candidate), "resolve", side_effect=KeyError("resolve defect")):
+            with self.assertRaisesRegex(KeyError, "resolve defect"):
+                hook_bootstrap.bootstrap_candidates(
+                    Path("/hooks"),
+                    Path("/taskwarrior"),
+                    env={"NAUTICAL_CORE_PATH": "/override"},
+                )
+
     def test_explicitly_trusted_override_is_available(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

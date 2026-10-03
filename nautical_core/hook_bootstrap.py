@@ -115,7 +115,7 @@ def bootstrap_candidates(
         if trusted.resolve() != requested:
             return tuple(candidates)
         candidates.extend((requested / "hook_bootstrap.py", requested / "nautical_core" / "hook_bootstrap.py"))
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return tuple(candidates)
     return tuple(candidates)
 

@@ -9,7 +9,6 @@ from typing import Any, cast
 from .task_models import TaskPayload
 from .task_models import TaskObservation
 
-from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle.models import DeletionEvidence, LifecycleAction
 from nautical_core.lifecycle.outbox import LifecycleOutboxError
 from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
@@ -41,21 +40,6 @@ class DeletedModifyServices:
     panel: Any
     diag: Any
     recovery_warning: Any
-
-
-def has_expiration_evidence(task: TaskPayload, *, safe_parse_datetime: Any) -> bool:
-    try:
-        until_dt, until_err = safe_parse_datetime(task.get("until"))
-        end_dt, end_err = safe_parse_datetime(task.get("end"))
-        return bool(
-            not until_err
-            and not end_err
-            and until_dt is not None
-            and end_dt is not None
-            and compare_datetimes(until_dt, end_dt) <= 0
-        )
-    except Exception:
-        return False
 
 
 def classify_deleted_task(
@@ -287,6 +271,5 @@ __all__ = (
     "classify_deleted_task",
     "handle_deleted_modify",
     "handle_expired_deleted_modify",
-    "has_expiration_evidence",
     "render_recovery_warning",
 )

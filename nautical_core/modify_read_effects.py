@@ -55,9 +55,9 @@ class SeedLookupPorts:
 
 @dataclass(frozen=True, slots=True)
 class PreviousChainPorts:
-    service: Any
-    panel_chain_by_link: Any
-    panel_chain_snapshot_loaded: Any
+    service: LifecycleReadService
+    panel_chain_by_link: dict[int, list[TaskObservation]]
+    panel_chain_snapshot_loaded: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +127,11 @@ def seed_runtime_lookup_tasks(
         seed_runtime_lookup_task(ports, task)
 
 
-def collect_prev_two(ports: PreviousChainPorts, current_task: dict[str, Any], chain_by_link: Any = None) -> Any:
+def collect_prev_two(
+    ports: PreviousChainPorts,
+    current_task: TaskObservation,
+    chain_by_link: dict[int, list[TaskObservation]] | None = None,
+) -> list[TaskObservation]:
     from .integration_models import Absent, Found, Unavailable
 
     read = ports.service.collect_prev_two(

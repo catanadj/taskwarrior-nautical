@@ -142,6 +142,19 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertIsNot(annotations["decode_row"], Any)
         self.assertEqual(annotations["cache_set"], abc.Callable[[str, Any, Any], None])
 
+    def test_previous_chain_ports_use_typed_read_context(self) -> None:
+        from nautical_core.lifecycle.read_service import LifecycleReadService
+        from nautical_core.modify_read_effects import PreviousChainPorts
+        from nautical_core.task_models import TaskObservation
+
+        annotations = get_type_hints(PreviousChainPorts)
+        self.assertIs(annotations["service"], LifecycleReadService)
+        self.assertEqual(
+            annotations["panel_chain_by_link"],
+            dict[int, list[TaskObservation]],
+        )
+        self.assertIs(annotations["panel_chain_snapshot_loaded"], bool)
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 
@@ -225,6 +238,7 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
         from nautical_core.lifecycle.read_service import LifecycleReadService
         from nautical_core.modify_read_effects import PreviousChainPorts, collect_prev_two
+        from nautical_core.task_models import TaskObservation
 
         command = TaskCommand(("task", "export"), "test predecessor read", 1.0)
         evidence = FailureEvidence(
@@ -255,7 +269,13 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         ports = PreviousChainPorts(service, {}, False)
 
         with self.assertRaisesRegex(RuntimeError, "malformed JSON"):
-            collect_prev_two(ports, {"chainID": "cid", "link": 3})
+            collect_prev_two(
+                ports,
+                TaskObservation.from_mapping(
+                    {"chainID": "cid", "link": 3},
+                    source_query="test predecessor read",
+                ),
+            )
 
     def test_tw_get_cached_uses_explicit_ports(self) -> None:
         from nautical_core.modify_read_effects import TwGetPorts, tw_get_cached

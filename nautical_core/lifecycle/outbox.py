@@ -427,7 +427,7 @@ class _LifecycleOutboxRepository:
                 self._secure_state_files()
             except LifecycleOutboxError:
                 raise
-            except Exception as exc:
+            except (sqlite3.Error, OSError) as exc:
                 raise LifecycleOutboxError(
                     f"outbox session initialization failed: {str(exc).strip() or type(exc).__name__}"
                 ) from exc

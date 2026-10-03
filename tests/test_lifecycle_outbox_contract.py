@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from nautical_core.lifecycle.models import ExecutionStage
 from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
@@ -49,6 +50,15 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(RuntimeError, "injected repository defect"):
                         repository._with_connection(fail)
+
+    def test_session_startup_does_not_mask_unexpected_initialization_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch.object(repository, "_initialize", side_effect=RuntimeError("injected schema defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    with repository.session():
+                        self.fail("session must not yield after initialization failure")
+            self.assertIs(type(raised.exception), RuntimeError)
 
     def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
         from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink

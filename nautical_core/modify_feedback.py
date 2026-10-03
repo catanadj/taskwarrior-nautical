@@ -617,20 +617,14 @@ def _anchor_summary(task: TaskPayload) -> tuple[str, str]:
 
 
 def _anchor_pattern_row(core: Any, expr: str) -> tuple[str, str]:
-    try:
-        preset_display = core.anchor_preset_display(expr)
-    except Exception:
-        preset_display = None
+    preset_display = core.anchor_preset_display(expr)
     if preset_display:
         return preset_display
     return "Pattern", expr
 
 
 def _omit_pattern_row(core: Any, expr: str) -> tuple[str, str]:
-    try:
-        preset_display = core.omit_preset_display(expr)
-    except Exception:
-        preset_display = None
+    preset_display = core.omit_preset_display(expr)
     if preset_display:
         return preset_display
     return "Omit", expr

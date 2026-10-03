@@ -106,6 +106,33 @@ def _render_cp_completion_feedback(
 
 
 class ModifyFeedbackContractTests(unittest.TestCase):
+    def test_pattern_rows_do_not_hide_unexpected_preset_lookup_failures(self) -> None:
+        def broken_lookup(_expression):
+            raise RuntimeError("preset lookup implementation failed")
+
+        cases = (
+            (modify_feedback._anchor_pattern_row, "anchor_preset_display"),
+            (modify_feedback._omit_pattern_row, "omit_preset_display"),
+        )
+        for row_builder, lookup_name in cases:
+            with self.subTest(lookup=lookup_name):
+                core = SimpleNamespace(**{lookup_name: broken_lookup})
+                with self.assertRaisesRegex(RuntimeError, "preset lookup implementation failed"):
+                    row_builder(core, "invalid-pattern")
+
+    def test_pattern_rows_fall_back_to_raw_text_for_invalid_preset_values(self) -> None:
+        def invalid_lookup(_expression):
+            return None
+
+        cases = (
+            (modify_feedback._anchor_pattern_row, "anchor_preset_display", "Pattern"),
+            (modify_feedback._omit_pattern_row, "omit_preset_display", "Omit"),
+        )
+        for row_builder, lookup_name, label in cases:
+            with self.subTest(lookup=lookup_name):
+                core = SimpleNamespace(**{lookup_name: invalid_lookup})
+                self.assertEqual(row_builder(core, "invalid-pattern"), (label, "invalid-pattern"))
+
     def test_anchor_file_feedback_renders_without_an_anchor_dnf(self) -> None:
         now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
         panels = []

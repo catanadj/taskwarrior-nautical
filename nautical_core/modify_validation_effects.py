@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from .callback_ports import CallbackPort
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
@@ -37,13 +38,27 @@ class SharedValidationPorts:
     validate_omit: Any
 
 
+class CPValidationOperation(Protocol):
+    def __call__(
+        self,
+        cp_value: str,
+        chain_max_value: object,
+        chain_until_value: object,
+        *,
+        parse_cp_sequence: Callable[[str], list[timedelta] | None],
+        cp_sequence_parse_error: Callable[[str], str | None],
+        parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+        parse_datetime: Callable[[object], datetime | None],
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CPValidationPorts:
-    validate: Any
-    parse_cp_sequence: Any
-    cp_sequence_error: Any
-    parse_chain_max: Any
-    parse_datetime: Any
+    validate: CPValidationOperation
+    parse_cp_sequence: Callable[[str], list[timedelta] | None]
+    cp_sequence_error: Callable[[str], str | None]
+    parse_chain_max: Callable[[object], tuple[int | None, str | None]]
+    parse_datetime: Callable[[object], datetime | None]
 
 
 @dataclass(frozen=True, slots=True)

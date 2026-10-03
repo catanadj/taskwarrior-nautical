@@ -9,6 +9,24 @@ from typing import Any, get_args, get_origin, get_type_hints
 
 
 class ModifyIsolationTests(unittest.TestCase):
+    def test_cp_validation_ports_have_specific_callable_contracts(self) -> None:
+        from nautical_core.modify_validation_effects import CPValidationPorts
+
+        annotations = get_type_hints(CPValidationPorts)
+        self.assertEqual(
+            set(annotations),
+            {
+                "validate",
+                "parse_cp_sequence",
+                "cp_sequence_error",
+                "parse_chain_max",
+                "parse_datetime",
+            },
+        )
+        for field_name, annotation in annotations.items():
+            with self.subTest(field=field_name):
+                self.assertIsNot(annotation, Any)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

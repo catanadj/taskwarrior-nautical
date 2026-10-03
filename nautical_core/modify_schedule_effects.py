@@ -252,12 +252,16 @@ def anchor_included_occurrences(
     inclusive: bool,
     limit: int,
     **_kwargs: Any,
-) -> Any:
+) -> list[datetime]:
     service = scheduler_callbacks(ports.scheduler)[1](parent)
     return service.included_occurrences_after(after_local_dt, inclusive=inclusive, limit=limit)
 
 
-def estimate_cp_final_by_max(ports: CPCompletionPorts, task: TaskPayload, next_due_utc: Any) -> Any:
+def estimate_cp_final_by_max(
+    ports: CPCompletionPorts,
+    task: TaskPayload,
+    next_due_utc: Any,
+) -> datetime | None:
     return ports.compute.estimate_cp_final_by_max(
         task,
         next_due_utc,
@@ -270,7 +274,12 @@ def estimate_cp_final_by_max(ports: CPCompletionPorts, task: TaskPayload, next_d
     )
 
 
-def estimate_anchor_final_by_max(ports: AnchorCompletionPorts, task: TaskPayload, next_due_utc: Any, dnf: Any) -> Any:
+def estimate_anchor_final_by_max(
+    ports: AnchorCompletionPorts,
+    task: TaskPayload,
+    next_due_utc: Any,
+    dnf: Any,
+) -> datetime | None:
     evaluator_callback, _service_callback = scheduler_callbacks(ports.scheduler)
     return ports.compute.estimate_anchor_final_by_max(
         task,
@@ -292,7 +301,11 @@ def estimate_anchor_final_by_max(ports: AnchorCompletionPorts, task: TaskPayload
     )
 
 
-def cap_from_until_cp(ports: CPCompletionPorts, task: TaskPayload, next_due_utc: Any) -> Any:
+def cap_from_until_cp(
+    ports: CPCompletionPorts,
+    task: TaskPayload,
+    next_due_utc: Any,
+) -> tuple[int | None, datetime | None]:
     return ports.compute.cap_from_until_cp(
         task,
         next_due_utc,
@@ -305,7 +318,12 @@ def cap_from_until_cp(ports: CPCompletionPorts, task: TaskPayload, next_due_utc:
     )
 
 
-def cap_from_until_anchor(ports: AnchorCompletionPorts, task: TaskPayload, next_due_utc: Any, dnf: Any) -> Any:
+def cap_from_until_anchor(
+    ports: AnchorCompletionPorts,
+    task: TaskPayload,
+    next_due_utc: Any,
+    dnf: Any,
+) -> tuple[int | None, datetime | None]:
     evaluator_callback, _service_callback = scheduler_callbacks(ports.scheduler)
     return ports.compute.cap_from_until_anchor(
         task,

@@ -45,6 +45,22 @@ class ModifyScheduleContractTests(unittest.TestCase):
             modify_schedule_effects.SchedulerServiceForTask,
         )
 
+    def test_schedule_projection_helpers_have_domain_result_types(self) -> None:
+        self.assertEqual(
+            get_type_hints(modify_schedule_effects.anchor_included_occurrences)[
+                "return"
+            ],
+            list[datetime],
+        )
+        self.assertEqual(
+            get_type_hints(modify_schedule_effects.estimate_cp_final_by_max)["return"],
+            datetime | None,
+        )
+        self.assertEqual(
+            get_type_hints(modify_schedule_effects.cap_from_until_cp)["return"],
+            tuple[int | None, datetime | None],
+        )
+
     def test_sequence_interval_port_uses_named_protocol(self) -> None:
         self.assertIs(
             get_type_hints(modify_schedule_effects.SequencePorts)["sequence_interval"],

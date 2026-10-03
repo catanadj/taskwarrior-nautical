@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .callback_ports import CallbackPort
+from .parsing.parser_models import ParseError
 from .task_models import TaskPayload
 from .modify_models import CompletionLifecycleResult, TaskView
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
@@ -660,20 +661,14 @@ def _anchor_omit_summary(core: Any, task: TaskPayload) -> tuple[str | None, str 
     omit_file = str(task.get("omit_file") or "").strip() or None
     if not omit_raw:
         return None, None, [], omit_file
+    anchor_omit = core._import_sibling("anchor_omit")
     try:
-        anchor_omit = core._import_sibling("anchor_omit")
         omit_expr = core._parser_api.resolve_omit_presets(omit_raw)
-        omit_norm = anchor_omit.normalize_omit_expr(omit_expr)
-    except Exception:
-        omit_norm = omit_raw
-    try:
-        natural = core.describe_anchor_expr(omit_norm)
-    except Exception:
-        natural = None
-    try:
-        _fatal, warns = core.lint_anchor_expr(omit_norm)
-    except Exception:
-        warns = []
+    except ParseError:
+        omit_expr = omit_raw
+    omit_norm = anchor_omit.normalize_omit_expr(omit_expr)
+    natural = core.describe_anchor_expr(omit_norm)
+    _fatal, warns = core.lint_anchor_expr(omit_norm)
     return omit_raw, natural, list(warns or []), omit_file
 
 

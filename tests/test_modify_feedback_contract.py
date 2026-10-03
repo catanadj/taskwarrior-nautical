@@ -13,6 +13,7 @@ from nautical_core.modify_models import (
     CompletionLifecycleResult,
     TaskView,
 )
+from nautical_core.parsing.parser_models import ParseError
 
 
 def _render_cp_completion_feedback(
@@ -105,7 +106,68 @@ def _render_cp_completion_feedback(
     return title, rows, text_lines[0] if text_lines else None
 
 
+def _omit_summary_core(
+    *, resolve, describe, lint
+) -> SimpleNamespace:
+    anchor_omit = SimpleNamespace(normalize_omit_expr=lambda expression: expression)
+    return SimpleNamespace(
+        _import_sibling=lambda _name: anchor_omit,
+        _parser_api=SimpleNamespace(resolve_omit_presets=resolve),
+        describe_anchor_expr=describe,
+        lint_anchor_expr=lint,
+    )
+
+
 class ModifyFeedbackContractTests(unittest.TestCase):
+    def test_omit_summary_falls_back_to_raw_expression_on_parse_error(self) -> None:
+        def invalid_preset(_expression):
+            raise ParseError("unknown omit preset")
+
+        core = _omit_summary_core(
+            resolve=invalid_preset,
+            describe=lambda expression: f"description for {expression}",
+            lint=lambda _expression: (None, ["lint warning"]),
+        )
+
+        self.assertEqual(
+            modify_feedback._anchor_omit_summary(core, {"omit": "@unknown"}),
+            ("@unknown", "description for @unknown", ["lint warning"], None),
+        )
+
+    def test_omit_summary_does_not_hide_unexpected_helper_failures(self) -> None:
+        def resolver_failure(_expression):
+            raise RuntimeError("preset resolver implementation failed")
+
+        core = _omit_summary_core(
+            resolve=resolver_failure,
+            describe=lambda _expression: "description",
+            lint=lambda _expression: (None, []),
+        )
+        with self.assertRaisesRegex(RuntimeError, "preset resolver implementation failed"):
+            modify_feedback._anchor_omit_summary(core, {"omit": "@preset"})
+
+        def describe_failure(_expression):
+            raise RuntimeError("description implementation failed")
+
+        core = _omit_summary_core(
+            resolve=lambda expression: expression,
+            describe=describe_failure,
+            lint=lambda _expression: (None, []),
+        )
+        with self.assertRaisesRegex(RuntimeError, "description implementation failed"):
+            modify_feedback._anchor_omit_summary(core, {"omit": "w:mon"})
+
+        def lint_failure(_expression):
+            raise RuntimeError("lint implementation failed")
+
+        core = _omit_summary_core(
+            resolve=lambda expression: expression,
+            describe=lambda _expression: "description",
+            lint=lint_failure,
+        )
+        with self.assertRaisesRegex(RuntimeError, "lint implementation failed"):
+            modify_feedback._anchor_omit_summary(core, {"omit": "w:mon"})
+
     def test_pattern_rows_do_not_hide_unexpected_preset_lookup_failures(self) -> None:
         def broken_lookup(_expression):
             raise RuntimeError("preset lookup implementation failed")

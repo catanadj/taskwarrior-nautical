@@ -82,6 +82,50 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "claim implementation defect"):
                 service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
 
+    def test_budget_retry_does_not_hide_unexpected_outbox_release_defect(self) -> None:
+        with TemporaryDirectory() as directory:
+            outbox = _LifecycleOutboxRepository(Path(directory))
+            plan = self._bulk_plan(
+                "unexpected-release",
+                "00000000-0000-4000-8000-000000000111",
+                "00000000-0000-4000-8000-000000000112",
+                1,
+            )
+            record = outbox.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).record
+            self.assertIsNotNone(record)
+            assert record is not None
+            outbox.release_retry = lambda **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("retry release defect")
+            )
+            service = LifecycleApplicationService(outbox=outbox, owner="failure-test")
+
+            with self.assertRaisesRegex(RuntimeError, "retry release defect"):
+                service._budget_retry(record, "budget exhausted", ())
+
+    def test_manual_review_does_not_hide_unexpected_persistence_defect(self) -> None:
+        with TemporaryDirectory() as directory:
+            outbox = _LifecycleOutboxRepository(Path(directory))
+            plan = self._bulk_plan(
+                "unexpected-review",
+                "00000000-0000-4000-8000-000000000121",
+                "00000000-0000-4000-8000-000000000122",
+                1,
+            )
+            record = outbox.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).record
+            self.assertIsNotNone(record)
+            assert record is not None
+            outbox.manual_review = lambda **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("manual review persistence defect")
+            )
+            service = LifecycleApplicationService(outbox=outbox, owner="failure-test")
+
+            with self.assertRaisesRegex(RuntimeError, "manual review persistence defect"):
+                service._manual_review(record, "invalid intent")
+
     def test_outbox_session_reuses_one_connection_and_closes_at_boundary(self) -> None:
         with TemporaryDirectory() as directory:
             repo = _LifecycleOutboxRepository(Path(directory))

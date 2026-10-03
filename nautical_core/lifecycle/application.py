@@ -1483,7 +1483,7 @@ class LifecycleApplicationService:
             )
             if not released.ok:
                 reason = f"{reason}; retry persistence failed: {released.reason or released.kind.value}"
-        except Exception as exc:
+        except (LifecycleOutboxError, OSError, sqlite3.Error) as exc:
             reason = f"{reason}; retry persistence failed: {str(exc).strip() or type(exc).__name__}"
         return LifecycleApplicationOutcome(
             LifecycleApplicationOutcomeKind.RETRYABLE, record.plan.identity,
@@ -1503,7 +1503,7 @@ class LifecycleApplicationService:
                 owner=self._owner,
                 failure=failure or OutboxFailure("invalid_intent", reason),
             )
-        except Exception as exc:
+        except (LifecycleOutboxError, OSError, sqlite3.Error) as exc:
             return LifecycleApplicationOutcome(
                 LifecycleApplicationOutcomeKind.RETRYABLE,
                 record.plan.identity,

@@ -5,9 +5,64 @@ from __future__ import annotations
 from types import SimpleNamespace
 import inspect
 import unittest
+from unittest.mock import patch
 
 
 class ModifyDiagnosticReadPortTests(unittest.TestCase):
+    def test_summary_export_does_not_mask_analytics_sorting_defects(self) -> None:
+        import nautical_core.modify_diagnostics_effects as diagnostics
+        from nautical_core.task_models import TaskObservation
+
+        core = SimpleNamespace(
+            coerce_int=lambda value, default: int(value) if value is not None else default,
+            humanize_delta=lambda *_args, **_kwargs: "0s",
+            anchor_preset_display=lambda *_args: None,
+            describe_anchor_dnf=lambda *_args: None,
+            fmt_dt_local=str,
+            short_uuid=lambda value: str(value)[:8],
+        )
+        summary = SimpleNamespace(
+            ChainSummaryRenderServices=lambda **kwargs: SimpleNamespace(**kwargs),
+        )
+        modules = {
+            "modify_chain_summary": summary,
+            "modify_value_effects": SimpleNamespace(format_delta=lambda *_args: "0s"),
+            "modify_format_effects": SimpleNamespace(
+                HumanDeltaPort=lambda *_args: object(),
+                human_delta=lambda *_args, **_kwargs: "0s",
+                on_time_delta=lambda *_args, **_kwargs: "on time",
+            ),
+            "modify_read_effects": SimpleNamespace(
+                ChainExportPort=lambda *_args: object(),
+                export_chain_required=lambda *_args: [{"uuid": "other-task", "link": 1}],
+            ),
+            "modify_composition": SimpleNamespace(lifecycle_read_service_for=lambda _host: object()),
+            "task_models": SimpleNamespace(TaskObservation=TaskObservation),
+            "modify_task_fields": SimpleNamespace(root_uuid=lambda task: task.get("uuid")),
+            "modify_queries": SimpleNamespace(
+                query_ports_for=lambda _host: object(),
+                cached_format_root_and_age=lambda *_args: "root",
+            ),
+            "modify_feedback": SimpleNamespace(format_chain_summary_rows=lambda rows: rows),
+            "modify_ui_effects": SimpleNamespace(ui_ports_for=lambda _host: object(), panel=lambda *_args, **_kwargs: None),
+        }
+        host = SimpleNamespace(
+            core=core,
+            _module=lambda name: modules[name],
+            _TASK_DATETIME_PARSER=SimpleNamespace(parse=lambda _value: (None, None)),
+            _fmtlocal=str,
+            _MAX_CHAIN_WALK=10,
+            _validate_anchor_expr_cached=lambda *_args: None,
+            _diag=lambda _message: None,
+        )
+        ports = diagnostics.end_chain_summary_ports_for(host)
+
+        with (
+            patch.object(diagnostics, "sort_chain_for_analytics", side_effect=RuntimeError("analytics sort defect")),
+            self.assertRaisesRegex(RuntimeError, "analytics sort defect"),
+        ):
+            ports.services.export_sorted_chain("chain-1", {"uuid": "current-task"})
+
     def test_parse_extra_tokens_rejects_shell_like_and_option_tokens(self) -> None:
         from nautical_core.hook_support import parse_extra_tokens as parse_task_filters
         from nautical_core.modify_read_effects import ExtraTokenPort, parse_extra_tokens

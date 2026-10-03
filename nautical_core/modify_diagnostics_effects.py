@@ -241,10 +241,7 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
                         actual_current, source_query=f"chain:{chain_id}:current"
                     )
                     break
-        try:
-            return sort_chain_for_analytics(analytics_ports, chain)
-        except Exception:
-            return chain
+        return sort_chain_for_analytics(analytics_ports, chain)
 
     def render_span_fields(chain_id: str, chain: list[dict[str, Any]], *, stop_at: Any = None, stopped_by_delete: bool = False) -> Any:
         return span_fields(

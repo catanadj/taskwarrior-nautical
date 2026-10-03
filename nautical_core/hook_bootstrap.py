@@ -206,6 +206,8 @@ def load_core_helper_module(
         spec.loader.exec_module(module)
         return module, helper_path, None
     except Exception as exc:
+        # Helper initialization can execute arbitrary import-time code; retain
+        # its failure detail for the same optional/required loader policy.
         return None, helper_path, exc
 
 

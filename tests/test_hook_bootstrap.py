@@ -55,6 +55,26 @@ class HookBootstrapTrustTests(unittest.TestCase):
         self.assertEqual(target, package / "__init__.py")
         self.assertIs(error, failure)
 
+    def test_helper_module_import_failure_is_returned_with_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            helper = root / "helper.py"
+            helper.write_text(
+                "raise RuntimeError('helper import defect')\n",
+                encoding="utf-8",
+            )
+
+            module, helper_path, error = hook_bootstrap.load_core_helper_module(
+                root,
+                "helper.py",
+                "nautical_test_helper_import_failure",
+            )
+
+        self.assertIsNone(module)
+        self.assertEqual(helper_path, helper)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertEqual(str(error), "helper import defect")
+
     def test_core_override_resolution_contains_expected_path_failures(self) -> None:
         default_base = Path("/default-core")
         candidate = Path("/configured-core")

@@ -86,6 +86,31 @@ class RuntimeConfigContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "configuration path defect"):
                 core_config.effective_config_snapshot()
 
+    def test_snapshot_contains_expected_source_stat_failure(self) -> None:
+        configured = "/tmp/nautical-config-snapshot.toml"
+        with (
+            patch.dict(os.environ, {"NAUTICAL_CONFIG": configured}),
+            patch.object(core_config, "ensure_loaded"),
+            patch.object(core_config.os, "stat", side_effect=OSError("stat unavailable")),
+        ):
+            snapshot = core_config.effective_config_snapshot()
+
+        self.assertEqual(snapshot["source"], configured)
+        self.assertTrue(snapshot["fingerprint"])
+
+    def test_snapshot_does_not_hide_internal_source_stat_failure(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_CONFIG": "/tmp/nautical-config-snapshot.toml"}),
+            patch.object(core_config, "ensure_loaded"),
+            patch.object(
+                core_config.os,
+                "stat",
+                side_effect=RuntimeError("stat adapter defect"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stat adapter defect"):
+                core_config.effective_config_snapshot()
+
     def test_outbox_drain_limit_config_and_env_override(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:

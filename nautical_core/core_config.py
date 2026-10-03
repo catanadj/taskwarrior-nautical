@@ -264,7 +264,7 @@ def effective_config_snapshot() -> dict:
                 int(getattr(stat_result, "st_mtime_ns", int(stat_result.st_mtime * 1_000_000_000))),
                 int(stat_result.st_size),
             )
-        except Exception:
+        except OSError:
             source_stat = None
     fingerprint_payload = {"values": values, "source": source, "source_stat": source_stat}
     fingerprint = hashlib.sha256(

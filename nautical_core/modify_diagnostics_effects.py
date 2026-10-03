@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from dataclasses import dataclass
 from .task_models import TaskObservation, TaskPayload
@@ -49,7 +49,7 @@ class SpanFieldsPorts:
 
 @dataclass(frozen=True, slots=True)
 class SecondsDeltaPort:
-    humanize: Any
+    humanize: Callable[[datetime, datetime, bool], str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,7 +197,7 @@ def format_seconds_delta(port: SecondsDeltaPort, secs: float | None) -> str:
     base = datetime(2000, 1, 1, tzinfo=timezone.utc)
     target = base + timedelta(seconds=secs)
     value = (
-        port.humanize(base, target, use_months_days=False)
+        port.humanize(base, target, False)
         .replace("in ", "")
         .replace("overdue by ", "")
     )

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import inspect
 import unittest
 from datetime import datetime
-from typing import get_type_hints
+from typing import Callable, get_type_hints
 from unittest.mock import patch
 
 
@@ -23,6 +23,14 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
         self.assertEqual(
             get_type_hints(_parse_datetime_value)["return"], datetime | None
+        )
+
+    def test_seconds_delta_port_has_concrete_humanizer_contract(self) -> None:
+        from nautical_core.modify_diagnostics_effects import SecondsDeltaPort
+
+        self.assertEqual(
+            get_type_hints(SecondsDeltaPort)["humanize"],
+            Callable[[datetime, datetime, bool], str],
         )
 
     def test_summary_export_does_not_mask_analytics_sorting_defects(self) -> None:

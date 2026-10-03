@@ -82,7 +82,7 @@ def trusted_core_base(default_base: Path, *, env: Mapping[str, str] | None = Non
         if (st.st_mode & 0o002) != 0:
             raise PermissionError("path is world-writable")
         return cand
-    except Exception as exc:
+    except OSError as exc:
         if diag_enabled:
             try:
                 sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CORE_PATH '{raw}': {exc}\n")

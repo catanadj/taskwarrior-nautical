@@ -31,6 +31,36 @@ class HookBootstrapTrustTests(unittest.TestCase):
                     env={"NAUTICAL_CORE_PATH": "/configured-core"},
                 )
 
+    def test_core_override_security_probe_contains_oserror(self) -> None:
+        default_base = Path("/default-core")
+        candidate = Path("/configured-core")
+        with (
+            patch.object(type(candidate), "resolve", return_value=candidate),
+            patch.object(hook_bootstrap.os, "stat", side_effect=OSError("stat failed")),
+        ):
+            selected = hook_bootstrap.trusted_core_base(
+                default_base,
+                env={"NAUTICAL_CORE_PATH": "/configured-core"},
+            )
+
+        self.assertEqual(selected, default_base)
+
+    def test_core_override_security_probe_does_not_hide_internal_failure(self) -> None:
+        candidate = Path("/configured-core")
+        with patch.object(
+            type(candidate), "resolve", return_value=candidate
+        ):
+            with patch.object(
+                hook_bootstrap.os,
+                "stat",
+                side_effect=RuntimeError("stat adapter defect"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "stat adapter defect"):
+                    hook_bootstrap.trusted_core_base(
+                        Path("/default-core"),
+                        env={"NAUTICAL_CORE_PATH": "/configured-core"},
+                    )
+
     def test_core_target_probe_contains_expected_oserror(self) -> None:
         base = Path("/unavailable-hook-base")
         with patch.object(type(base), "is_file", side_effect=OSError("unavailable")):

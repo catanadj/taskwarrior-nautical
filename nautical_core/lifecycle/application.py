@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import sqlite3
 import time
 from typing import Any, Callable, Protocol, Sequence, cast
 
@@ -587,7 +588,7 @@ class LifecycleApplicationService:
                 configuration_fingerprint=str(configuration_fingerprint or "").strip(),
                 schedule_fingerprint=str(schedule_fingerprint or "").strip(),
             )
-        except Exception as exc:
+        except (LifecycleOutboxError, OSError, sqlite3.Error) as exc:
             return LifecycleApplicationOutcome(
                 LifecycleApplicationOutcomeKind.RETRYABLE,
                 plan.identity,

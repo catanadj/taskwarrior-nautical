@@ -46,6 +46,23 @@ from tests.support.lifecycle_execution import LifecycleExecutionFixture
 
 
 class LifecycleFailureInjectionTests(unittest.TestCase):
+    def test_stage_does_not_relabel_unexpected_outbox_defects_as_retryable(self) -> None:
+        plan = self._bulk_plan(
+            "unexpected-outbox",
+            "00000000-0000-4000-8000-000000000101",
+            "00000000-0000-4000-8000-000000000102",
+            1,
+        )
+
+        class BrokenOutbox:
+            def enqueue(self, *_args, **_kwargs):
+                raise RuntimeError("outbox implementation defect")
+
+        service = LifecycleApplicationService(outbox=BrokenOutbox(), owner="failure-test")
+
+        with self.assertRaisesRegex(RuntimeError, "outbox implementation defect"):
+            service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+
     def test_outbox_session_reuses_one_connection_and_closes_at_boundary(self) -> None:
         with TemporaryDirectory() as directory:
             repo = _LifecycleOutboxRepository(Path(directory))

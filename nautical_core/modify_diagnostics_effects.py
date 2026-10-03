@@ -107,7 +107,7 @@ class SpanSummaryService(Protocol):
 class EndChainSummaryRenderer(Protocol):
     def render_chain_summary(
         self,
-        current: dict[str, Any],
+        current: TaskPayload,
         reason: str,
         now_utc: datetime,
         current_task: TaskPayload | None = None,
@@ -177,7 +177,11 @@ def chain_health_advice(
     )
 
 
-def chain_integrity_warnings(ports: AnalyticsPorts, chain: Any, expected_chain_id: str | None = None) -> list[str]:
+def chain_integrity_warnings(
+    ports: AnalyticsPorts,
+    chain: list[TaskObservation],
+    expected_chain_id: str | None = None,
+) -> list[str]:
     return ports.service.chain_integrity_warnings(
         chain,
         expected_chain_id=expected_chain_id,
@@ -197,13 +201,17 @@ def analytics_ports_for(host: Any) -> AnalyticsPorts:
     )
 
 
-def lateness_stats(ports: AnalyticsPorts, chain: Any, tol_secs: int = 60) -> dict[str, Any]:
+def lateness_stats(
+    ports: AnalyticsPorts, chain: list[TaskObservation], tol_secs: int = 60
+) -> dict[str, Any]:
     return ports.service.lateness_stats(
         chain, parse_datetime=ports.parse_datetime, tol_secs=tol_secs
     )
 
 
-def sort_chain_for_analytics(ports: AnalyticsPorts, chain: Any) -> Any:
+def sort_chain_for_analytics(
+    ports: AnalyticsPorts, chain: list[TaskObservation]
+) -> list[TaskObservation]:
     return ports.service.sort_chain_for_analytics(
         chain, coerce_int=ports.coerce_int, parse_datetime=ports.parse_datetime
     )
@@ -255,7 +263,9 @@ def timeline_summary_ports_for(host: Any) -> TimelineSummaryPorts:
     )
 
 
-def last_n_timeline(ports: TimelineSummaryPorts, chain: Any, n: int = 6) -> list[str]:
+def last_n_timeline(
+    ports: TimelineSummaryPorts, chain: list[TaskObservation], n: int = 6
+) -> list[str]:
     return ports.summary.last_n_timeline(
         chain,
         n,
@@ -281,7 +291,14 @@ def span_fields_ports_for(host: Any) -> SpanFieldsPorts:
     )
 
 
-def span_fields(ports: SpanFieldsPorts, chain_id: str, chain: Any, *, stop_at: Any = None, stopped_by_delete: bool = False) -> Any:
+def span_fields(
+    ports: SpanFieldsPorts,
+    chain_id: str,
+    chain: list[TaskObservation],
+    *,
+    stop_at: datetime | None = None,
+    stopped_by_delete: bool = False,
+) -> tuple[datetime | None, datetime | None, str]:
     return ports.summary.span_fields(
         chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete,
         export_endpoint=ports.export_endpoint,
@@ -336,7 +353,9 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
     max_chain_walk = host._MAX_CHAIN_WALK
     diagnostic = host._diag
 
-    def export_sorted_chain(chain_id: str, actual_current: dict[str, Any]) -> list[Any]:
+    def export_sorted_chain(
+        chain_id: str, actual_current: TaskPayload
+    ) -> list[TaskObservation]:
         chain = read_effects.export_chain_required(chain_export_port, actual_current)
         if actual_current and chain:
             for index, task in enumerate(chain):
@@ -347,12 +366,18 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
                     break
         return sort_chain_for_analytics(analytics_ports, chain)
 
-    def render_span_fields(chain_id: str, chain: list[dict[str, Any]], *, stop_at: Any = None, stopped_by_delete: bool = False) -> Any:
+    def render_span_fields(
+        chain_id: str,
+        chain: list[TaskObservation],
+        *,
+        stop_at: datetime | None = None,
+        stopped_by_delete: bool = False,
+    ) -> tuple[datetime | None, datetime | None, str]:
         return span_fields(
             span_ports, chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete
         )
 
-    def kind_rows(rows: list[Any], kind: str, task: Any) -> None:
+    def kind_rows(rows: list[tuple[str, str]], kind: str, task: TaskPayload) -> None:
         summary.kind_rows(
             rows,
             kind,
@@ -362,7 +387,9 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
             describe_anchor=describe_anchor,
         )
 
-    def stats_rows(rows: list[Any], chain: Any, clock: Any) -> None:
+    def stats_rows(
+        rows: list[tuple[str, str]], chain: list[TaskObservation], clock: datetime
+    ) -> None:
         summary.stats_rows(
             rows,
             chain,
@@ -371,7 +398,7 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
             format_seconds_delta=lambda _now, value: format_seconds_delta(seconds_port, value),
         )
 
-    def limits_row(rows: list[Any], task: Any) -> None:
+    def limits_row(rows: list[tuple[str, str]], task: TaskPayload) -> None:
         summary.limits_row(
             rows,
             task,
@@ -402,7 +429,13 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
     return EndChainSummaryPorts(summary=summary, services=render_services)
 
 
-def end_chain_summary(ports: EndChainSummaryPorts, current: dict[str, Any], reason: str, now_utc: Any, current_task: dict[str, Any] | None = None) -> None:
+def end_chain_summary(
+    ports: EndChainSummaryPorts,
+    current: TaskPayload,
+    reason: str,
+    now_utc: datetime,
+    current_task: TaskPayload | None = None,
+) -> None:
     ports.summary.render_chain_summary(
         current,
         reason,

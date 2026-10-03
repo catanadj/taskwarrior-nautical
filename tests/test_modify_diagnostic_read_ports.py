@@ -90,6 +90,33 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertIsNot(annotations["summary"], Any)
         self.assertIs(annotations["services"], ChainSummaryRenderServices)
 
+    def test_diagnostic_chain_adapters_use_observation_and_datetime_types(self) -> None:
+        import nautical_core.modify_diagnostics_effects as diagnostics
+        from nautical_core.task_models import TaskObservation, TaskPayload
+
+        self.assertEqual(
+            get_type_hints(diagnostics.chain_integrity_warnings)["chain"],
+            list[TaskObservation],
+        )
+        self.assertEqual(
+            get_type_hints(diagnostics.lateness_stats)["chain"],
+            list[TaskObservation],
+        )
+        self.assertEqual(
+            get_type_hints(diagnostics.sort_chain_for_analytics),
+            {
+                "ports": diagnostics.AnalyticsPorts,
+                "chain": list[TaskObservation],
+                "return": list[TaskObservation],
+            },
+        )
+        self.assertEqual(
+            get_type_hints(diagnostics.span_fields)["return"],
+            tuple[datetime | None, datetime | None, str],
+        )
+        self.assertEqual(get_type_hints(diagnostics.end_chain_summary)["now_utc"], datetime)
+        self.assertEqual(get_type_hints(diagnostics.end_chain_summary)["current"], TaskPayload)
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

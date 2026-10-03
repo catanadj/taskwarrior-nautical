@@ -45,6 +45,11 @@ from dev_tools.golden_tests.lifecycle import (
 from tests.support.lifecycle_execution import LifecycleExecutionFixture
 
 
+class _PreflightFailureExecution(LifecycleExecutionFixture):
+    def preflight_lifecycle_batch(self, *_args, **_kwargs) -> None:
+        raise OSError("prefetch unavailable")
+
+
 class LifecycleFailureInjectionTests(unittest.TestCase):
     def test_stage_does_not_relabel_unexpected_outbox_defects_as_retryable(self) -> None:
         plan = self._bulk_plan(
@@ -621,7 +626,7 @@ print(json.dumps(payload, sort_keys=True))
                     raise AssertionError("the overridden wave drain must not mutate")
 
             gateway = MutationGateway()
-            gateway_adapter = LifecycleExecutionFixture(gateway)
+            gateway_adapter = _PreflightFailureExecution(gateway)
             service = WaveService(
                 unit_of_work=type("UnitOfWork", (), {"mutation_epoch": 0})(),
                 mutations=gateway_adapter,
@@ -634,6 +639,48 @@ print(json.dumps(payload, sort_keys=True))
             claimed_ids: set[str] = {record.intent_id for record in service.claimed_records}
             self.assertEqual(claimed_ids, {plan.identity.idempotency_key for plan in plans})
             self.assertEqual(len(transaction_metrics), 2)
+
+    def test_drain_continues_to_batch_path_when_prefetch_is_unavailable(self) -> None:
+        from nautical_core.lifecycle.application import DrainResult
+
+        with TemporaryDirectory() as directory:
+            outbox = _LifecycleOutboxRepository(Path(directory))
+            plans = tuple(
+                self._bulk_plan(
+                    f"prefetch-{index}",
+                    f"00000000-0000-4000-8000-0000000006{index:02d}",
+                    f"00000000-0000-4000-8000-0000000007{index:02d}",
+                    1,
+                )
+                for index in (1, 2)
+            )
+            for plan in plans:
+                staged = outbox.enqueue(
+                    plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+                )
+                self.assertTrue(staged.ok)
+
+            class BatchService(LifecycleApplicationService):
+                def _drain_batched(self, claim, records, **_kwargs):
+                    self.drained_records = tuple(records)
+                    return DrainResult(claim=claim, outcomes=())
+
+            execution = _PreflightFailureExecution(object())
+            service = BatchService(
+                unit_of_work=type("UnitOfWork", (), {"mutation_epoch": 0})(),
+                mutations=execution,
+                execution=execution,
+                outbox=outbox,
+                owner="prefetch-test",
+            )
+
+            result = service.drain(
+                limit=2, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            )
+
+            self.assertEqual(result.claim.kind.value, "applied")
+            claimed_ids = {record.intent_id for record in service.drained_records}
+            self.assertEqual(claimed_ids, {plan.identity.idempotency_key for plan in plans})
 
     def test_outbox_failures_are_retryable(self) -> None:
         test_lifecycle_application_outbox_faults_are_retryable()

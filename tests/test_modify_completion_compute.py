@@ -44,6 +44,50 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         self.assertEqual(panels[0][0], "⛔ Chain error")
         self.assertIn(reason, str(panels[0][1]))
 
+    def test_date_limit_still_disables_chain_when_rich_summary_fails(self) -> None:
+        from nautical_core.modify_completion_effects import ChildDuePorts, compute_child_due
+
+        error = OccurrenceSearchExhausted(
+            "daily recurrence", reference=date.max, limit=2,
+        )
+        events: list[str] = []
+        panels: list[tuple[str, list[tuple[str, object]], dict[str, object]]] = []
+        diagnostics: list[str] = []
+        task = {"chain": "on", "uuid": "terminal-task"}
+
+        def compute_anchor(_task: object) -> object:
+            raise error
+
+        ports = ChildDuePorts(
+            compute=SimpleNamespace(completion_compute_child_due=completion_compute_child_due),
+            generation=SimpleNamespace(compute_anchor_child_due=compute_anchor),
+            decode_task=lambda _task, **_kwargs: object(),
+            task_type=SimpleNamespace(from_observation=lambda observation: observation),
+            exhaustion_message=str,
+            ensure_terminal=lambda current, _event: (
+                events.append("chain-off"), current.update({"chain": "off"}), True
+            )[2],
+            end_summary=lambda *_args, **_kwargs: (
+                events.append("rich-summary"),
+                (_ for _ in ()).throw(RuntimeError("summary render defect")),
+            )[1],
+            now_utc=lambda: datetime(2026, 10, 3, tzinfo=timezone.utc),
+            panel=lambda title, rows, **kwargs: (
+                events.append("fallback-panel"), panels.append((title, list(rows), kwargs))
+            ),
+            print_task=lambda _current: events.append("task-output"),
+            diag=diagnostics.append,
+        )
+
+        with self.assertRaises(OccurrenceSearchExhausted):
+            compute_child_due(ports, task, "anchor")
+
+        self.assertEqual(task["chain"], "off")
+        self.assertEqual(events, ["chain-off", "rich-summary", "fallback-panel", "task-output"])
+        self.assertEqual(panels[0][0], "⛔ Nautical chain stopped")
+        self.assertTrue(any(label == "Reason" for label, _value in panels[0][1]))
+        self.assertEqual(diagnostics, ["terminal chain summary failed: summary render defect"])
+
     def test_child_due_compute_does_not_hide_unexpected_failures(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "scheduler defect"):
             completion_compute_child_due(

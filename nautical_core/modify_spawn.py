@@ -52,8 +52,8 @@ class _LifecycleModels(Protocol):
 class SpawnServices:
     prepare_spawn_child_payload: _PrepareSpawnChildPayload
     child_uuid_for_spawn: _ChildUUIDForSpawn
-    fmt_isoz: Callable[[Any], str]
-    now_utc: Callable[[], Any]
+    fmt_isoz: Callable[[datetime], str]
+    now_utc: Callable[[], datetime]
     lifecycle_models: _LifecycleModels
     lifecycle_spawn_identity: Callable[[TaskPayload, TaskPayload], LifecycleIdentity]
     enqueue_spawn_intent: Callable[[LifecyclePlan], tuple[bool, str]]

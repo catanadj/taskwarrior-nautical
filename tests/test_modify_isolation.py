@@ -1376,6 +1376,8 @@ class ModifyIsolationTests(unittest.TestCase):
             LifecyclePlan | None,
         )
         self.assertEqual(annotations["lifecycle_models"].__name__, "_LifecycleModels")
+        self.assertEqual(annotations["fmt_isoz"], Callable[[datetime], str])
+        self.assertEqual(annotations["now_utc"], Callable[[], datetime])
         self.assertEqual(
             annotations["lifecycle_spawn_identity"],
             Callable[[TaskPayload, TaskPayload], LifecycleIdentity],

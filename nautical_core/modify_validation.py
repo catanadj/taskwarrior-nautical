@@ -4,11 +4,77 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
-from datetime import datetime, timedelta
-from typing import Any, NoReturn
+from datetime import date, datetime, timedelta
+from typing import Any, NoReturn, Protocol
 
 from .modify_models import PanelCallback
+from .recurrence_context import RecurrenceContext
 from .task_models import TaskPayload
+
+
+class NormalizeTimeSlots(Protocol):
+    def __call__(
+        self,
+        value: object,
+        target_date: date | None = None,
+    ) -> list[tuple[int, int]]: ...
+
+
+class CollectAnchorTimeSlots(Protocol):
+    def __call__(
+        self,
+        dnf: object,
+        anchor_file_value: object,
+        fallback_hhmm: tuple[int, int],
+        *,
+        normalize_time_slots: NormalizeTimeSlots,
+        anchor_file_dir: str,
+        target_date: date,
+        resolve_time_slots: Callable[[object, date], list[tuple[int, int]]],
+        recurrence_context: RecurrenceContext,
+    ) -> tuple[tuple[int, int], ...]: ...
+
+
+class ValidateCalendarSlots(Protocol):
+    def __call__(
+        self,
+        until_dt: datetime | None,
+        target_dt: datetime | None,
+        slots: tuple[tuple[int, int], ...],
+        *,
+        to_local: Callable[[datetime], datetime],
+    ) -> tuple[bool, str | None]: ...
+
+
+class ValidationPanel(Protocol):
+    def __call__(
+        self,
+        title: str,
+        rows: list[tuple[str, str]],
+        *,
+        kind: str,
+    ) -> object: ...
+
+
+class NativeUntilSlotsValidationOperation(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        validate_anchor: Callable[[str], object],
+        collect_time_slots: CollectAnchorTimeSlots,
+        validate_time_slots: ValidateCalendarSlots,
+        normalize_time_slots: NormalizeTimeSlots,
+        anchor_file_dir: str,
+        recurrence_context: Callable[[TaskPayload], RecurrenceContext],
+        to_local: Callable[[datetime], datetime],
+        format_local: Callable[[datetime], str],
+        astronomy_is_error: Callable[[BaseException], bool],
+        astronomy_error_message: Callable[[BaseException], str],
+        panel: ValidationPanel,
+        abort: Callable[[int], NoReturn],
+    ) -> None: ...
 
 
 @dataclass(slots=True)
@@ -240,19 +306,19 @@ def validate_native_until_after_target_or_fail(
 def validate_native_until_anchor_slots_or_fail(
     task: TaskPayload,
     *,
-    safe_parse_datetime: Any,
-    validate_anchor: Any,
-    collect_time_slots: Any,
-    validate_time_slots: Any,
-    normalize_time_slots: Any,
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+    validate_anchor: Callable[[str], object],
+    collect_time_slots: CollectAnchorTimeSlots,
+    validate_time_slots: ValidateCalendarSlots,
+    normalize_time_slots: NormalizeTimeSlots,
     anchor_file_dir: str,
-    recurrence_context: Any,
-    to_local: Any,
-    format_local: Any,
-    astronomy_is_error: Any,
-    astronomy_error_message: Any,
-    panel: Any,
-    abort: Any,
+    recurrence_context: Callable[[TaskPayload], RecurrenceContext],
+    to_local: Callable[[datetime], datetime],
+    format_local: Callable[[datetime], str],
+    astronomy_is_error: Callable[[BaseException], bool],
+    astronomy_error_message: Callable[[BaseException], str],
+    panel: ValidationPanel,
+    abort: Callable[[int], NoReturn],
 ) -> None:
     """Reject native expiration windows before every timed anchor slot."""
     until_raw = task.get("until")

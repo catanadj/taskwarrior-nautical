@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Any, NoReturn, Protocol
 from .hook_validation_pipeline import ValidationFinding
+from .modify_validation import (
+    CollectAnchorTimeSlots,
+    NativeUntilSlotsValidationOperation,
+    NormalizeTimeSlots,
+    ValidationPanel,
+    ValidateCalendarSlots,
+)
 from .recurrence_context import RecurrenceContext
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
@@ -134,16 +141,6 @@ class ChainLimitsValidationOperation(Protocol):
     ) -> None: ...
 
 
-class ValidationPanel(Protocol):
-    def __call__(
-        self,
-        title: str,
-        rows: list[tuple[str, str]],
-        *,
-        kind: str,
-    ) -> object: ...
-
-
 class NativeUntilValidationOperation(Protocol):
     def __call__(
         self,
@@ -155,61 +152,6 @@ class NativeUntilValidationOperation(Protocol):
         format_local: Callable[[datetime], str],
         panel: ValidationPanel,
         fail: Callable[[str, str], NoReturn],
-        abort: Callable[[int], NoReturn],
-    ) -> None: ...
-
-
-class NormalizeTimeSlots(Protocol):
-    def __call__(
-        self,
-        value: object,
-        target_date: date | None = None,
-    ) -> list[tuple[int, int]]: ...
-
-
-class CollectAnchorTimeSlots(Protocol):
-    def __call__(
-        self,
-        dnf: object,
-        anchor_file_value: object,
-        fallback_hhmm: tuple[int, int],
-        *,
-        normalize_time_slots: NormalizeTimeSlots,
-        anchor_file_dir: str,
-        target_date: date,
-        resolve_time_slots: Callable[[object, date], list[tuple[int, int]]],
-        recurrence_context: RecurrenceContext,
-    ) -> tuple[tuple[int, int], ...]: ...
-
-
-class ValidateCalendarSlots(Protocol):
-    def __call__(
-        self,
-        until_dt: datetime | None,
-        target_dt: datetime | None,
-        slots: tuple[tuple[int, int], ...],
-        *,
-        to_local: Callable[[datetime], datetime],
-    ) -> tuple[bool, str | None]: ...
-
-
-class NativeUntilSlotsValidationOperation(Protocol):
-    def __call__(
-        self,
-        task: TaskPayload,
-        *,
-        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
-        validate_anchor: Callable[[str], object],
-        collect_time_slots: CollectAnchorTimeSlots,
-        validate_time_slots: ValidateCalendarSlots,
-        normalize_time_slots: NormalizeTimeSlots,
-        anchor_file_dir: str,
-        recurrence_context: Callable[[TaskPayload], RecurrenceContext],
-        to_local: Callable[[datetime], datetime],
-        format_local: Callable[[datetime], str],
-        astronomy_is_error: Callable[[BaseException], bool],
-        astronomy_error_message: Callable[[BaseException], str],
-        panel: ValidationPanel,
         abort: Callable[[int], NoReturn],
     ) -> None: ...
 

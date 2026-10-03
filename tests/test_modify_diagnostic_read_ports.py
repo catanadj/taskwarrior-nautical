@@ -350,6 +350,44 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(annotations["now_utc"], abc.Callable[[], datetime])
         self.assertEqual(annotations["fail"], abc.Callable[[str, str], object])
 
+    def test_native_until_slot_validator_uses_owner_contracts(self) -> None:
+        from typing import NoReturn
+        from nautical_core.modify_validation import (
+            CollectAnchorTimeSlots,
+            NormalizeTimeSlots,
+            ValidationPanel,
+            ValidateCalendarSlots,
+            validate_native_until_anchor_slots_or_fail,
+        )
+        from nautical_core.recurrence_context import RecurrenceContext
+        from nautical_core.task_models import TaskPayload
+
+        annotations = get_type_hints(validate_native_until_anchor_slots_or_fail)
+        self.assertEqual(
+            annotations["safe_parse_datetime"],
+            abc.Callable[[object], tuple[datetime | None, str | None]],
+        )
+        self.assertEqual(annotations["validate_anchor"], abc.Callable[[str], object])
+        self.assertIs(annotations["collect_time_slots"], CollectAnchorTimeSlots)
+        self.assertIs(annotations["validate_time_slots"], ValidateCalendarSlots)
+        self.assertIs(annotations["normalize_time_slots"], NormalizeTimeSlots)
+        self.assertEqual(annotations["anchor_file_dir"], str)
+        self.assertEqual(
+            annotations["recurrence_context"],
+            abc.Callable[[TaskPayload], RecurrenceContext],
+        )
+        self.assertEqual(annotations["to_local"], abc.Callable[[datetime], datetime])
+        self.assertEqual(annotations["format_local"], abc.Callable[[datetime], str])
+        self.assertEqual(
+            annotations["astronomy_is_error"], abc.Callable[[BaseException], bool]
+        )
+        self.assertEqual(
+            annotations["astronomy_error_message"],
+            abc.Callable[[BaseException], str],
+        )
+        self.assertIs(annotations["panel"], ValidationPanel)
+        self.assertEqual(annotations["abort"], abc.Callable[[int], NoReturn])
+
     def test_omit_ports_use_date_and_canonical_omit_state_contracts(self) -> None:
         import nautical_core.anchor_omit as anchor_omit
         import nautical_core.modify_anchor_effects as effects

@@ -170,6 +170,35 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(annotations["command_prefix"], abc.Callable[[], list[str]])
         self.assertEqual(annotations["environment"], abc.Callable[[], dict[str, str]])
 
+    def test_lifecycle_read_capabilities_reuse_owner_types(self) -> None:
+        from nautical_core.lifecycle.read_service import (
+            ChainCacheStore,
+            ChainSnapshotRepository,
+            CoerceInt,
+            Counter,
+            Diagnostic,
+            ReadQuery,
+            TokenMatcher,
+            TokenParser,
+        )
+        from nautical_core.modify_read_effects import LifecycleReadCapabilities
+
+        self.assertEqual(
+            get_type_hints(LifecycleReadCapabilities),
+            {
+                "coerce_int": CoerceInt,
+                "parse_extra_tokens": TokenParser,
+                "token_matcher": TokenMatcher,
+                "read_query_get": ReadQuery,
+                "read_query_missing": object,
+                "max_chain_walk": int,
+                "diag": Diagnostic,
+                "record_stat": Counter,
+                "cache_store": ChainCacheStore,
+                "repository": ChainSnapshotRepository | None,
+            },
+        )
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

@@ -6,7 +6,17 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .lifecycle.read_service import LifecycleReadService
+from .lifecycle.read_service import (
+    ChainCacheStore,
+    ChainSnapshotRepository,
+    CoerceInt,
+    Counter,
+    Diagnostic,
+    LifecycleReadService,
+    ReadQuery,
+    TokenMatcher,
+    TokenParser,
+)
 from .integration_models import TaskCommandResult
 from .task_models import TaskObservation
 
@@ -25,16 +35,16 @@ class TaskRowDecoder(Protocol):
 class LifecycleReadCapabilities:
     """Explicit collaborators required to construct lifecycle read services."""
 
-    coerce_int: Any
-    parse_extra_tokens: Any
-    token_matcher: Any
-    read_query_get: Any
-    read_query_missing: Any
+    coerce_int: CoerceInt
+    parse_extra_tokens: TokenParser
+    token_matcher: TokenMatcher
+    read_query_get: ReadQuery
+    read_query_missing: object
     max_chain_walk: int
-    diag: Any
-    record_stat: Any
-    cache_store: Any
-    repository: Any
+    diag: Diagnostic
+    record_stat: Counter
+    cache_store: ChainCacheStore
+    repository: ChainSnapshotRepository | None
 
 
 @dataclass(frozen=True, slots=True)

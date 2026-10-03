@@ -44,10 +44,7 @@ class ConfigReadResult:
 
 def env_flag_true(name: str, env_map: Mapping[str, Any] | None = None) -> bool:
     src = env_map if env_map is not None else os.environ
-    try:
-        raw = src.get(name, "") if hasattr(src, "get") else ""
-    except Exception:
-        raw = ""
+    raw = src.get(name, "")
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 

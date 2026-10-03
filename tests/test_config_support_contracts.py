@@ -19,6 +19,14 @@ import nautical_core.core_config as core_config
 
 
 class ConfigSupportContractTests(unittest.TestCase):
+    def test_environment_flag_lookup_does_not_hide_mapping_defects(self) -> None:
+        class BrokenEnvironment:
+            def get(self, _name: str, _default: str) -> str:
+                raise RuntimeError("environment mapping defect")
+
+        with self.assertRaisesRegex(RuntimeError, "environment mapping defect"):
+            config_support.env_flag_true("NAUTICAL_DIAG", BrokenEnvironment())
+
     def test_toml_loader_uses_tomli_when_tomllib_is_unavailable(self) -> None:
         parser = object()
         with (

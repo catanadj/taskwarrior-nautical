@@ -78,6 +78,27 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(counts, ["tw_get_cache_misses"])
         self.assertEqual(commands[0][-2:], ["_get", "abc.status"])
 
+    def test_tw_get_cached_does_not_hide_read_service_defects(self) -> None:
+        from nautical_core.modify_read_effects import TwGetPorts, tw_get_cached
+
+        class BrokenReadService:
+            def lookup_short(self, _short: str) -> tuple[None, str]:
+                raise RuntimeError("lookup service defect")
+
+        ports = TwGetPorts(
+            service=BrokenReadService(),
+            cache_get=lambda _scope, _ref: None,
+            cache_set=lambda *_args: None,
+            count=lambda _name: None,
+            diagnostic=lambda _message: None,
+            run_task=lambda *_args, **_kwargs: None,
+            command_prefix=lambda: ["task"],
+            environment=lambda: {},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "lookup service defect"):
+            tw_get_cached(ports, "abc.entry")
+
     def test_diagnostic_operations_have_host_free_signatures(self) -> None:
         import nautical_core.modify_diagnostics_effects as diagnostics
 

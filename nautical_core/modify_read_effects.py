@@ -157,32 +157,29 @@ def tw_get_ports_for(host: Any) -> TwGetPorts:
 
 def tw_get_cached(ports: TwGetPorts, ref: str) -> str:
     """Return one cached Taskwarrior ``_get`` value for the current hook."""
-    try:
-        if ref.endswith(".entry"):
-            short = ref[:-6].strip()
-            cached, cache_chain_id = ports.service.lookup_short(short) if short else (None, "")
-            if short and isinstance(cached, Mapping):
-                ports.count("tw_get_cache_hits")
-                return (str(cached.get("entry") or "")).strip()
-            if short and cache_chain_id:
-                ports.count("unexpected_cache_misses")
-                ports.diagnostic(f"cache miss: _get {ref} (chainID={cache_chain_id})")
-        cached = ports.cache_get("tw_get", ref)
-        if isinstance(cached, str):
+    if ref.endswith(".entry"):
+        short = ref[:-6].strip()
+        cached, cache_chain_id = ports.service.lookup_short(short) if short else (None, "")
+        if short and isinstance(cached, Mapping):
             ports.count("tw_get_cache_hits")
-            return cached
-        ports.count("tw_get_cache_misses")
-        result = ports.run_task(
-            ports.command_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],
-            env=ports.environment(),
-            timeout=3.0,
-            retries=2,
-        )
-        out = (result.stdout or "").strip() if result.ok else ""
-        ports.cache_set("tw_get", ref, out or "")
-        return out
-    except Exception:
-        return ""
+            return (str(cached.get("entry") or "")).strip()
+        if short and cache_chain_id:
+            ports.count("unexpected_cache_misses")
+            ports.diagnostic(f"cache miss: _get {ref} (chainID={cache_chain_id})")
+    cached = ports.cache_get("tw_get", ref)
+    if isinstance(cached, str):
+        ports.count("tw_get_cache_hits")
+        return cached
+    ports.count("tw_get_cache_misses")
+    result = ports.run_task(
+        ports.command_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],
+        env=ports.environment(),
+        timeout=3.0,
+        retries=2,
+    )
+    out = (result.stdout or "").strip() if result.ok else ""
+    ports.cache_set("tw_get", ref, out or "")
+    return out
 
 
 __all__ = ("parse_extra_tokens", "SeedLookupPorts", "PreviousChainPorts", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "ChainExportPort", "export_chain_required", "TwGetPorts", "tw_get_ports_for", "tw_get_cached")

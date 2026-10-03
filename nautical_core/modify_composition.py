@@ -22,6 +22,7 @@ from .task_models import NauticalTask, TaskObservation, TaskPayload
 if TYPE_CHECKING:
     from .lifecycle.models import LifecyclePlan
     from .lifecycle.read_service import LifecycleReadService
+    from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
     from .modify_models import (
         AnchorCompletionFeedbackModel,
         CompletionLifecycleResult,
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
         OmitValidationPorts,
         SharedValidationPorts as SharedValidationPortsContract,
     )
+    from .task_changes import TaskTransition
 
 
 class _NativeUntilGenerationService(Protocol):
@@ -197,7 +199,7 @@ class _PrepareRecurrenceCallback(Protocol):
         old: TaskPayload,
         new: TaskPayload,
         *,
-        transition: Any = None,
+        transition: TaskTransition | None = None,
     ) -> tuple[str, str, str]: ...
 
 
@@ -208,8 +210,8 @@ class _PreserveCPCarryCallback(Protocol):
         new: TaskPayload,
         cp: str,
         *,
-        transition: Any = None,
-    ) -> Any: ...
+        transition: TaskTransition | None = None,
+    ) -> TemporalCarryDecision: ...
 
 
 class _PreserveNativeUntilCallback(Protocol):
@@ -219,8 +221,8 @@ class _PreserveNativeUntilCallback(Protocol):
         new: TaskPayload,
         kind: str,
         *,
-        transition: Any = None,
-    ) -> Any: ...
+        transition: TaskTransition | None = None,
+    ) -> NativeUntilDecision: ...
 
 
 class _TaskHookResponseFactory(Protocol):

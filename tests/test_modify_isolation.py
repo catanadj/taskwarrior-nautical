@@ -942,6 +942,41 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIs(anchor_request, AnchorCompletionFeedbackModel)
         self.assertIs(cp_request, CpCompletionFeedbackModel)
 
+    def test_completion_recurrence_callbacks_use_transition_and_carry_owners(self) -> None:
+        from nautical_core.modify_carry_workflow import (
+            NativeUntilDecision,
+            TemporalCarryDecision,
+        )
+        from nautical_core.modify_composition import (
+            _PrepareRecurrenceCallback,
+            _PreserveCPCarryCallback,
+            _PreserveNativeUntilCallback,
+        )
+        from nautical_core.task_changes import TaskTransition
+
+        localns = {
+            "TaskTransition": TaskTransition,
+            "TemporalCarryDecision": TemporalCarryDecision,
+            "NativeUntilDecision": NativeUntilDecision,
+        }
+        callbacks = (
+            _PrepareRecurrenceCallback,
+            _PreserveCPCarryCallback,
+            _PreserveNativeUntilCallback,
+        )
+        for callback in callbacks:
+            with self.subTest(callback=callback.__name__):
+                annotations = get_type_hints(callback.__call__, localns=localns)
+                self.assertEqual(annotations["transition"], TaskTransition | None)
+        self.assertIs(
+            get_type_hints(_PreserveCPCarryCallback.__call__, localns=localns)["return"],
+            TemporalCarryDecision,
+        )
+        self.assertIs(
+            get_type_hints(_PreserveNativeUntilCallback.__call__, localns=localns)["return"],
+            NativeUntilDecision,
+        )
+
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin
         from nautical_core.lifecycle.read_service import LifecycleReadService

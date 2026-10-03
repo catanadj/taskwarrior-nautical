@@ -7,6 +7,7 @@ from typing import Any, Callable, Protocol, Sequence
 from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from dataclasses import dataclass
 from .modify_chain_summary import ChainSummaryRenderServices
+from .modify_read_effects import ChainExportReader
 from .task_models import TaskObservation, TaskPayload
 
 
@@ -70,10 +71,6 @@ class AnalyticsPorts:
     format_delta: Callable[[timedelta], str]
     coerce_int: Callable[[Any, Any], int | None]
     short_uuid: Callable[[Any], str]
-
-
-class ChainExportReader(Protocol):
-    def get_chain_export(self, chain_id: str) -> list[TaskObservation] | None: ...
 
 
 class TimelineSummaryService(Protocol):

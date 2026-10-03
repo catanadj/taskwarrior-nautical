@@ -125,6 +125,14 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             abc.Callable[[str | None], list[str] | None],
         )
 
+    def test_chain_export_ports_share_the_read_effect_owner_contract(self) -> None:
+        from nautical_core.modify_diagnostics_effects import ChainExportPorts
+        from nautical_core.modify_read_effects import ChainExportPort
+
+        shared_reader = get_type_hints(ChainExportPorts)["service"]
+        self.assertIsNot(shared_reader, Any)
+        self.assertIs(get_type_hints(ChainExportPort)["service"], shared_reader)
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

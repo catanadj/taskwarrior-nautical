@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
+
+from .task_models import TaskObservation
+
+
+class ChainExportReader(Protocol):
+    def get_chain_export(self, chain_id: str) -> list[TaskObservation] | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +36,7 @@ class ExtraTokenPort:
 
 @dataclass(frozen=True, slots=True)
 class ChainExportPort:
-    service: Any
+    service: ChainExportReader
 
 
 @dataclass(frozen=True, slots=True)

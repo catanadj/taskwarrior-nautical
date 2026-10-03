@@ -13,6 +13,7 @@ from nautical_core.lifecycle.outbox import (
     LifecycleOutboxError,
     _LifecycleOutboxRepository,
     OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE,
+    OutboxResult,
     OutboxResultKind,
 )
 from nautical_core.panel_diagnostics import file_source_warnings
@@ -234,6 +235,19 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
 
             self.assertEqual(result.kind, OutboxResultKind.REJECTED)
             self.assertTrue(result.reason.startswith(f"{OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE}:"))
+            connection.close.assert_called_once_with()
+
+    def test_bulk_outbox_cleanup_failure_preserves_result_and_closes_connection(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            connection = Mock()
+            operation_result = {"intent-1": OutboxResult(OutboxResultKind.APPLIED)}
+            with patch.object(repository, "_connect", return_value=connection), \
+                    patch.object(repository, "_initialize"), \
+                    patch.object(repository, "_secure_state_files", side_effect=RuntimeError("cleanup defect")):
+                result = repository._with_bulk_connection(lambda _connection: operation_result)
+
+            self.assertEqual(result, (OutboxResult(OutboxResultKind.APPLIED), operation_result))
             connection.close.assert_called_once_with()
 
     def test_prune_does_not_convert_unexpected_maintenance_errors(self) -> None:

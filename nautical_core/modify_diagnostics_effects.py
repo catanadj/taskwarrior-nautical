@@ -10,6 +10,53 @@ from .modify_chain_summary import ChainSummaryRenderServices
 from .task_models import TaskObservation, TaskPayload
 
 
+class CPSequenceIntervalProvider(Protocol):
+    def cp_sequence_interval_for_link(
+        self, cp: str, link_no: int | None, chain_id: str | None = None
+    ) -> timedelta | None: ...
+
+
+class AnalyticsService(Protocol):
+    def chain_health_advice(
+        self,
+        chain: Sequence[TaskObservation],
+        kind: str,
+        task: TaskPayload,
+        *,
+        core: CPSequenceIntervalProvider,
+        parse_datetime: Callable[[Any], datetime | None],
+        format_delta: Callable[[timedelta], str],
+        coerce_int: Callable[[Any, Any], int | None],
+        tol_secs: int,
+        style: str,
+    ) -> str | None: ...
+
+    def chain_integrity_warnings(
+        self,
+        chain: list[TaskObservation],
+        *,
+        expected_chain_id: str | None = None,
+        coerce_int: Callable[[Any, Any], int | None],
+        short: Callable[[Any], str],
+    ) -> list[str]: ...
+
+    def lateness_stats(
+        self,
+        chain: list[TaskObservation],
+        *,
+        parse_datetime: Callable[[Any], datetime | None],
+        tol_secs: int = 60,
+    ) -> dict[str, Any]: ...
+
+    def sort_chain_for_analytics(
+        self,
+        chain: list[TaskObservation],
+        *,
+        coerce_int: Callable[[Any, Any], int | None],
+        parse_datetime: Callable[[Any], datetime | None],
+    ) -> list[TaskObservation]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class DatetimeValuePort:
     parser: TaskDatetimeParser
@@ -17,7 +64,8 @@ class DatetimeValuePort:
 
 @dataclass(frozen=True, slots=True)
 class AnalyticsPorts:
-    core: Any
+    core: CPSequenceIntervalProvider
+    service: AnalyticsService
     parse_datetime: Callable[[object], datetime | None]
     format_delta: Callable[[timedelta], str]
     coerce_int: Callable[[Any, Any], int | None]
@@ -116,7 +164,7 @@ def chain_health_advice(
     tol_secs: int = 60,
     style: str,
 ) -> str | None:
-    return ports.core._import_sibling("modify_analytics").chain_health_advice(
+    return ports.service.chain_health_advice(
         chain,
         kind,
         task,
@@ -130,7 +178,7 @@ def chain_health_advice(
 
 
 def chain_integrity_warnings(ports: AnalyticsPorts, chain: Any, expected_chain_id: str | None = None) -> list[str]:
-    return ports.core._import_sibling("modify_analytics").chain_integrity_warnings(
+    return ports.service.chain_integrity_warnings(
         chain,
         expected_chain_id=expected_chain_id,
         coerce_int=ports.coerce_int,
@@ -141,6 +189,7 @@ def chain_integrity_warnings(ports: AnalyticsPorts, chain: Any, expected_chain_i
 def analytics_ports_for(host: Any) -> AnalyticsPorts:
     return AnalyticsPorts(
         core=host.core,
+        service=host._module("modify_analytics"),
         parse_datetime=lambda value: _parse_datetime_value(DatetimeValuePort(parser_for_host(host)), value),
         format_delta=host._module("modify_value_effects").format_delta,
         coerce_int=host.core.coerce_int,
@@ -149,13 +198,13 @@ def analytics_ports_for(host: Any) -> AnalyticsPorts:
 
 
 def lateness_stats(ports: AnalyticsPorts, chain: Any, tol_secs: int = 60) -> dict[str, Any]:
-    return ports.core._import_sibling("modify_analytics").lateness_stats(
+    return ports.service.lateness_stats(
         chain, parse_datetime=ports.parse_datetime, tol_secs=tol_secs
     )
 
 
 def sort_chain_for_analytics(ports: AnalyticsPorts, chain: Any) -> Any:
-    return ports.core._import_sibling("modify_analytics").sort_chain_for_analytics(
+    return ports.service.sort_chain_for_analytics(
         chain, coerce_int=ports.coerce_int, parse_datetime=ports.parse_datetime
     )
 

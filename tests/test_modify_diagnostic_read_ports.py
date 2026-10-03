@@ -38,15 +38,18 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         from nautical_core.modify_diagnostics_effects import AnalyticsPorts
 
         self.assertEqual(
-            get_type_hints(AnalyticsPorts),
+            {name: annotation for name, annotation in get_type_hints(AnalyticsPorts).items()
+             if name not in {"core", "service"}},
             {
-                "core": Any,
                 "parse_datetime": Callable[[object], datetime | None],
                 "format_delta": Callable[[timedelta], str],
                 "coerce_int": Callable[[Any, Any], int | None],
                 "short_uuid": Callable[[Any], str],
             },
         )
+        annotations = get_type_hints(AnalyticsPorts)
+        self.assertIsNot(annotations["core"], Any)
+        self.assertIsNot(annotations["service"], Any)
 
     def test_timeline_summary_ports_match_owner_callback_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import TimelineSummaryPorts
@@ -97,6 +100,7 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
 
     def test_summary_export_does_not_mask_analytics_sorting_defects(self) -> None:
+        import nautical_core.modify_analytics as analytics
         import nautical_core.modify_diagnostics_effects as diagnostics
         from nautical_core.task_models import TaskObservation
 
@@ -112,6 +116,7 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             ChainSummaryRenderServices=lambda **kwargs: SimpleNamespace(**kwargs),
         )
         modules = {
+            "modify_analytics": analytics,
             "modify_chain_summary": summary,
             "modify_value_effects": SimpleNamespace(format_delta=lambda *_args: "0s"),
             "modify_format_effects": SimpleNamespace(
@@ -262,13 +267,17 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         calls: list[dict[str, object]] = []
 
         class Core:
-            def _import_sibling(self, _name: str) -> SimpleNamespace:
-                return SimpleNamespace(
-                    chain_health_advice=lambda *_args, **kwargs: calls.append(kwargs) or "advice"
-                )
+            def cp_sequence_interval_for_link(self, *_args: object) -> timedelta | None:
+                return None
+
+        class Service:
+            def chain_health_advice(self, *_args, **kwargs) -> str:
+                calls.append(kwargs)
+                return "advice"
 
         ports = AnalyticsPorts(
             core=Core(),
+            service=Service(),
             parse_datetime=lambda _value: None,
             format_delta=str,
             coerce_int=lambda _value, default: default,

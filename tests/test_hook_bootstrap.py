@@ -61,6 +61,26 @@ class HookBootstrapTrustTests(unittest.TestCase):
                         env={"NAUTICAL_CORE_PATH": "/configured-core"},
                     )
 
+    def test_unsafe_override_fallback_survives_diagnostic_failure(self) -> None:
+        default_base = Path("/default-core")
+        candidate = Path("/configured-core")
+        with (
+            patch.object(type(candidate), "resolve", return_value=candidate),
+            patch.object(hook_bootstrap.os, "stat", side_effect=OSError("unsafe path")),
+            patch.object(
+                hook_bootstrap.sys.stderr,
+                "write",
+                side_effect=RuntimeError("diagnostic stream failed"),
+            ),
+        ):
+            selected = hook_bootstrap.trusted_core_base(
+                default_base,
+                env={"NAUTICAL_CORE_PATH": "/configured-core"},
+                diag_enabled=True,
+            )
+
+        self.assertEqual(selected, default_base)
+
     def test_core_target_probe_contains_expected_oserror(self) -> None:
         base = Path("/unavailable-hook-base")
         with patch.object(type(base), "is_file", side_effect=OSError("unavailable")):

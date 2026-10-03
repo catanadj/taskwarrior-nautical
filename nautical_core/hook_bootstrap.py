@@ -87,6 +87,8 @@ def trusted_core_base(default_base: Path, *, env: Mapping[str, str] | None = Non
             try:
                 sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CORE_PATH '{raw}': {exc}\n")
             except Exception:
+                # Diagnostic output is optional; retain the safe default even
+                # when an injected or broken stderr writer fails unexpectedly.
                 pass
         return default_base
 

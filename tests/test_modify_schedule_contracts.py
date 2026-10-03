@@ -27,6 +27,12 @@ class ModifyScheduleContractTests(unittest.TestCase):
             modify_schedule_effects.SequenceIntervalForToken,
         )
 
+    def test_occurrence_port_uses_named_protocol(self) -> None:
+        self.assertIs(
+            get_type_hints(modify_schedule_effects.OccurrencePorts)["next_occurrence"],
+            modify_schedule_effects.NextOccurrenceAfterLocalDateTime,
+        )
+
     def test_schedule_ports_have_concrete_callback_signatures(self) -> None:
         annotations = get_type_hints(modify_schedule_effects.SchedulePorts)
         self.assertEqual(annotations["to_local"], Callable[[datetime], datetime])

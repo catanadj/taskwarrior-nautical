@@ -40,9 +40,25 @@ class SequencePorts:
     sequence_interval: SequenceIntervalForToken
 
 
+class NextOccurrenceAfterLocalDateTime(Protocol):
+    """Resolve the next anchor occurrence using an explicit date context."""
+
+    def __call__(
+        self,
+        dnf: Any,
+        after_local_dt: datetime,
+        *,
+        fallback_hhmm: tuple[int, int],
+        interval_seed: date | None,
+        seed_base: str,
+        omit_dnf: Any,
+        default_seed_date: date | None,
+    ) -> datetime | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class OccurrencePorts:
-    next_occurrence: Any
+    next_occurrence: NextOccurrenceAfterLocalDateTime
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,11 +185,11 @@ def next_occurrence_after_local_dt(
     ports: OccurrencePorts,
     dnf: Any,
     after_local_dt: datetime,
-    default_seed_date: Any,
+    default_seed_date: date | None,
     seed_base: str,
     omit_dnf: Any = None,
     fallback_hhmm: tuple[int, int] | None = None,
-) -> Any:
+) -> datetime | None:
     if not dnf:
         return None
     return ports.next_occurrence(

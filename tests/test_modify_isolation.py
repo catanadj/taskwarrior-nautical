@@ -181,7 +181,11 @@ class ModifyIsolationTests(unittest.TestCase):
         )
 
     def test_time_slot_effect_port_has_concrete_normalization_contract(self) -> None:
-        from nautical_core.modify_time_effects import TimeSlotPorts, normalize_hhmm_list
+        from nautical_core.modify_time_effects import (
+            TimeSlotPorts,
+            normalize_hhmm_list,
+            time_slot_ports_for,
+        )
 
         self.assertEqual(
             get_type_hints(TimeSlotPorts)["resolve_time_slots"],
@@ -196,6 +200,7 @@ class ModifyIsolationTests(unittest.TestCase):
                 "return": list[tuple[int, int]],
             },
         )
+        self.assertIsNot(get_type_hints(time_slot_ports_for)["host"], Any)
 
     def test_modify_ui_ports_use_typed_process_boundary_contracts(self) -> None:
         from nautical_core.callback_ports import CallbackPort

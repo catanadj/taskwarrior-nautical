@@ -62,6 +62,7 @@ def chain_generation_service(ports: GenerationPorts) -> ChainGenerationServicePo
 
 def generation_ports_for(host: Any) -> GenerationPorts:
     state = host._modify_runtime_state()
+    module = host._module("chain_generation")
 
     def create_service(
         core: object,
@@ -70,7 +71,6 @@ def generation_ports_for(host: Any) -> GenerationPorts:
         debug_wait_sched: bool,
         wait_sched_debug: MutableMapping[str, dict[str, Any]] | None,
     ) -> ChainGenerationServicePort:
-        module = host._module("chain_generation")
         return module.ChainGenerationService.from_core(
             core,
             recurrence_update_udas=recurrence_update_udas,

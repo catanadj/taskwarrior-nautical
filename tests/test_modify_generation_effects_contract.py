@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import importlib
 from typing import get_type_hints
 import unittest
 
-from nautical_core import modify_generation_effects
+modify_generation_effects = importlib.import_module(
+    "nautical_core.modify_generation_effects"
+)
 
 
 class ModifyGenerationEffectsContractTests(unittest.TestCase):
@@ -66,7 +69,7 @@ class ModifyGenerationEffectsContractTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[-1][1:], (("rappel", "next_review"), False, None))
 
-    def test_generation_service_module_remains_lazy_until_cache_miss(self) -> None:
+    def test_generation_factory_resolves_owner_module_at_composition(self) -> None:
         state = SimpleNamespace(chain_generation_service=None)
         core = object()
         module_loads: list[str] = []
@@ -96,7 +99,7 @@ class ModifyGenerationEffectsContractTests(unittest.TestCase):
         )
 
         ports = modify_generation_effects.generation_ports_for(host)
-        self.assertEqual(module_loads, [])
+        self.assertEqual(module_loads, ["chain_generation"])
         service = modify_generation_effects.chain_generation_service(ports)
 
         self.assertEqual(module_loads, ["chain_generation"])

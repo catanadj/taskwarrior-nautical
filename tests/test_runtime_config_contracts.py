@@ -63,6 +63,29 @@ class RuntimeConfigContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "configuration path defect"):
                 core_config.configuration_error()
 
+    def test_snapshot_contains_expected_config_path_failure(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_CONFIG": ""}),
+            patch.object(core_config, "ensure_loaded"),
+            patch.object(core_config, "_config_paths", side_effect=OSError("path unavailable")),
+        ):
+            snapshot = core_config.effective_config_snapshot()
+
+        self.assertEqual(snapshot["source"], "auto")
+
+    def test_snapshot_does_not_hide_internal_config_path_failure(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_CONFIG": ""}),
+            patch.object(core_config, "ensure_loaded"),
+            patch.object(
+                core_config,
+                "_config_paths",
+                side_effect=RuntimeError("configuration path defect"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "configuration path defect"):
+                core_config.effective_config_snapshot()
+
     def test_outbox_drain_limit_config_and_env_override(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:

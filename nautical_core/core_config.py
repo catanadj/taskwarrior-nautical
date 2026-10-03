@@ -254,7 +254,7 @@ def effective_config_snapshot() -> dict:
                 if os.path.isfile(path):
                     source = os.path.abspath(path)
                     break
-    except Exception:
+    except (OSError, TypeError, ValueError):
         source = "auto"
     source_stat = None
     if source not in {"defaults", "auto"}:

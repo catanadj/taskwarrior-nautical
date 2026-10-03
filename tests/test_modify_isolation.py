@@ -542,6 +542,39 @@ class ModifyIsolationTests(unittest.TestCase):
                     (parameter.kind for parameter in inspect.signature(method).parameters.values()),
                 )
 
+    def test_completion_spawn_service_has_explicit_arguments(self) -> None:
+        import inspect
+
+        from nautical_core.lifecycle.models import LifecyclePlan
+        from nautical_core.modify_completion_effects import CompletionSpawnService
+        from nautical_core.modify_models import (
+            CompletionSpawnResult,
+            CompletionSpawnServices,
+        )
+        from nautical_core.task_models import TaskPayload
+
+        method = CompletionSpawnService.completion_build_and_spawn_child
+        self.assertEqual(
+            get_type_hints(method),
+            {
+                "task": TaskPayload,
+                "child_due": datetime | None,
+                "child_field": str,
+                "next_no": int,
+                "parent_short": str,
+                "kind": str,
+                "cpmax": int,
+                "until_dt": datetime | None,
+                "lifecycle_plan": LifecyclePlan | None,
+                "services": CompletionSpawnServices,
+                "return": CompletionSpawnResult | None,
+            },
+        )
+        self.assertNotIn(
+            inspect.Parameter.VAR_KEYWORD,
+            (parameter.kind for parameter in inspect.signature(method).parameters.values()),
+        )
+
     def test_completion_feedback_and_validation_ports_reuse_callback_contracts(self) -> None:
         from nautical_core.modify_completion_effects import (
             CompletionFeedbackPorts,

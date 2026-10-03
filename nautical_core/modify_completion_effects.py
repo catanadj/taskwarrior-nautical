@@ -13,6 +13,7 @@ from .task_models import NauticalTask, TaskObservation, TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
 from .lifecycle.read_service import ChainSnapshotRepository
+from .lifecycle.models import LifecyclePlan
 from .task_read_repository import AuthoritativeTaskSnapshot
 from .modify_models import (
     DiagnosticCallback,
@@ -29,6 +30,7 @@ from .modify_models import (
     CompletionPreflightServices,
     CompletionPreflightContext,
     CompletionSpawnServices,
+    CompletionSpawnResult,
     CoerceIntCallback,
     BuildChildDraftCallback,
     ComputeAnchorChildDueCallback,
@@ -209,7 +211,20 @@ class CompletionComputeService(Protocol):
 class CompletionSpawnService(Protocol):
     """Validated child-spawn service used by completion effects."""
 
-    def completion_build_and_spawn_child(self, task: TaskPayload, *, services: Any, **kwargs: Any) -> Any: ...
+    def completion_build_and_spawn_child(
+        self,
+        task: TaskPayload,
+        *,
+        child_due: datetime | None,
+        child_field: str,
+        next_no: int,
+        parent_short: str,
+        kind: str,
+        cpmax: int,
+        until_dt: datetime | None,
+        lifecycle_plan: LifecyclePlan | None = None,
+        services: CompletionSpawnServices,
+    ) -> CompletionSpawnResult | None: ...
 
 
 class TaskRowDecoder(Protocol):

@@ -20,6 +20,8 @@ from .modify_models import (
     ExistingNextLookupCallback,
     PanelCallback,
     PrintTaskCallback,
+    ValidateChainDurationCallback,
+    ValidateUntilCallback,
 )
 
 
@@ -76,18 +78,18 @@ class CompletionPreflightPorts:
 @dataclass(frozen=True, slots=True)
 class CompletionFeedbackPorts:
     compute: CompletionComputeService
-    panel: Any
-    print_task: Any
-    end_chain_summary: Any
+    panel: PanelCallback
+    print_task: PrintTaskCallback
+    end_chain_summary: EndChainSummaryCallback
 
 
 @dataclass(frozen=True, slots=True)
 class UntilCompletionPorts:
     compute: CompletionComputeService
-    parse_datetime: Any
-    validate_until_not_past: Any
-    panel: Any
-    print_task: Any
+    parse_datetime: DatetimeParserCallback
+    validate_until_not_past: ValidateUntilCallback
+    panel: PanelCallback
+    print_task: PrintTaskCallback
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,8 +121,8 @@ class ChildDuePorts:
 @dataclass(frozen=True, slots=True)
 class DurationWarningPorts:
     compute: CompletionComputeService
-    validate_duration: Any
-    panel: Any
+    validate_duration: ValidateChainDurationCallback
+    panel: PanelCallback
 
 
 @dataclass(frozen=True, slots=True)

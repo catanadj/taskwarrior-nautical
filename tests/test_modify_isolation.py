@@ -257,6 +257,44 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertIs(annotations[name], contract)
 
+    def test_completion_feedback_and_validation_ports_reuse_callback_contracts(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            CompletionFeedbackPorts,
+            DurationWarningPorts,
+            UntilCompletionPorts,
+        )
+        from nautical_core.modify_models import (
+            DatetimeParserCallback,
+            EndChainSummaryCallback,
+            PanelCallback,
+            PrintTaskCallback,
+            ValidateChainDurationCallback,
+            ValidateUntilCallback,
+        )
+
+        expectations = (
+            (CompletionFeedbackPorts, {
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "end_chain_summary": EndChainSummaryCallback,
+            }),
+            (UntilCompletionPorts, {
+                "parse_datetime": DatetimeParserCallback,
+                "validate_until_not_past": ValidateUntilCallback,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+            }),
+            (DurationWarningPorts, {
+                "validate_duration": ValidateChainDurationCallback,
+                "panel": PanelCallback,
+            }),
+        )
+        for ports_type, fields in expectations:
+            annotations = get_type_hints(ports_type)
+            for name, contract in fields.items():
+                with self.subTest(ports=ports_type.__name__, field=name):
+                    self.assertIs(annotations[name], contract)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

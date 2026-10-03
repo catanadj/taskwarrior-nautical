@@ -40,6 +40,12 @@ if TYPE_CHECKING:
         OmitValidationPorts,
         SharedValidationPorts as SharedValidationPortsContract,
     )
+    from .modify_transition_effects import (
+        CPCarryPorts as CPCarryPortsContract,
+        CompletionValidationPorts as CompletionValidationPortsContract,
+        NativeCarryPorts as NativeCarryPortsContract,
+        NativePreservePorts as NativePreservePortsContract,
+    )
     from .task_changes import TaskTransition
 
 
@@ -388,37 +394,49 @@ class _ChainIntegrityLifecycle(Protocol):
 
 
 class _ModifyTransitionEffects(Protocol):
-    CPCarryPorts: _ServiceFactory
-    NativePreservePorts: _ServiceFactory
-    NativeCarryPorts: _ServiceFactory
-    CompletionValidationPorts: _ServiceFactory
+    CPCarryPorts: type[CPCarryPortsContract]
+    NativePreservePorts: type[NativePreservePortsContract]
+    NativeCarryPorts: type[NativeCarryPortsContract]
+    CompletionValidationPorts: type[CompletionValidationPortsContract]
 
     def preserve_cp_relative_offsets_on_due_change(
         self,
-        ports: object,
+        ports: CPCarryPortsContract,
         old: TaskPayload,
         new: TaskPayload,
         cp: str,
-        **kwargs: Any,
-    ) -> Any: ...
+        *,
+        transition: TaskTransition | None = None,
+    ) -> TemporalCarryDecision: ...
 
-    def reject_native_until_carry(self, ports: object, *args: Any, **kwargs: Any) -> Any: ...
+    def reject_native_until_carry(
+        self,
+        ports: NativeCarryPortsContract,
+        old: TaskPayload,
+        new: TaskPayload,
+        new_target: datetime | None,
+        old_target_field: str,
+        exc: Exception,
+    ) -> None: ...
 
     def preserve_native_until_on_target_change(
         self,
-        ports: object,
+        ports: NativePreservePortsContract,
         old: TaskPayload,
         new: TaskPayload,
         kind: str,
-        **kwargs: Any,
-    ) -> Any: ...
+        *,
+        transition: TaskTransition | None = None,
+    ) -> NativeUntilDecision: ...
 
     def validate_completion_cp_and_anchor(
         self,
-        ports: object,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any: ...
+        ports: CompletionValidationPortsContract,
+        old: TaskPayload,
+        new: TaskPayload,
+        *,
+        transition: TaskTransition | None = None,
+    ) -> tuple[str, str, str]: ...
 
 
 class _SeedLookupPortsFactory(Protocol):

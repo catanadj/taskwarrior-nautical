@@ -977,6 +977,49 @@ class ModifyIsolationTests(unittest.TestCase):
             NativeUntilDecision,
         )
 
+    def test_transition_effect_adapter_ports_have_explicit_owner_contracts(self) -> None:
+        from inspect import Parameter, signature
+        from nautical_core.modify_carry_workflow import (
+            NativeUntilDecision,
+            TemporalCarryDecision,
+        )
+        from nautical_core.modify_composition import _ModifyTransitionEffects
+        from nautical_core.modify_transition_effects import (
+            CPCarryPorts,
+            CompletionValidationPorts,
+            NativeCarryPorts,
+            NativePreservePorts,
+        )
+        from nautical_core.task_changes import TaskTransition
+
+        localns = {
+            "CPCarryPortsContract": CPCarryPorts,
+            "CompletionValidationPortsContract": CompletionValidationPorts,
+            "NativeCarryPortsContract": NativeCarryPorts,
+            "NativePreservePortsContract": NativePreservePorts,
+            "NativeUntilDecision": NativeUntilDecision,
+            "TaskTransition": TaskTransition,
+            "TemporalCarryDecision": TemporalCarryDecision,
+        }
+        expected = {
+            "preserve_cp_relative_offsets_on_due_change": (CPCarryPorts, TemporalCarryDecision),
+            "reject_native_until_carry": (NativeCarryPorts, type(None)),
+            "preserve_native_until_on_target_change": (NativePreservePorts, NativeUntilDecision),
+            "validate_completion_cp_and_anchor": (CompletionValidationPorts, tuple[str, str, str]),
+        }
+        for name, (ports_type, return_type) in expected.items():
+            with self.subTest(method=name):
+                method = getattr(_ModifyTransitionEffects, name)
+                annotations = get_type_hints(method, localns=localns)
+                self.assertIs(annotations["ports"], ports_type)
+                self.assertEqual(annotations["return"], return_type)
+                self.assertFalse(
+                    any(
+                        parameter.kind in {Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD}
+                        for parameter in signature(method).parameters.values()
+                    )
+                )
+
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin
         from nautical_core.lifecycle.read_service import LifecycleReadService

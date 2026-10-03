@@ -14,9 +14,41 @@ except ImportError:  # pragma: no cover - supported Python 3.10 fallback
     import tomli as tomllib
 
 import nautical_core.config_support as config_support
+import nautical_core.core_config as core_config
 
 
 class ConfigSupportContractTests(unittest.TestCase):
+    def test_toml_loader_uses_tomli_when_tomllib_is_unavailable(self) -> None:
+        parser = object()
+        with (
+            patch.object(core_config, "tomllib", None),
+            patch.object(
+                core_config.importlib,
+                "import_module",
+                side_effect=[ModuleNotFoundError("tomllib"), parser],
+            ) as import_module,
+        ):
+            self.assertIs(core_config._load_tomllib(), parser)
+
+        self.assertEqual(
+            [call.args[0] for call in import_module.call_args_list],
+            ["tomllib", "tomli"],
+        )
+
+    def test_toml_loader_does_not_hide_parser_initialization_failure(self) -> None:
+        with (
+            patch.object(core_config, "tomllib", None),
+            patch.object(
+                core_config.importlib,
+                "import_module",
+                side_effect=RuntimeError("parser initialization defect"),
+            ) as import_module,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "parser initialization defect"):
+                core_config._load_tomllib()
+
+        import_module.assert_called_once_with("tomllib")
+
     def _read_result(self, path: str, *, error_sink=None):
         return config_support.read_toml_result(
             path,

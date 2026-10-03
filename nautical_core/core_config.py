@@ -29,10 +29,10 @@ def _load_tomllib() -> Any:
         return tomllib
     try:
         tomllib = importlib.import_module("tomllib")  # Python 3.11+
-    except Exception:
+    except ImportError:
         try:
             tomllib = importlib.import_module("tomli")
-        except Exception:
+        except ImportError:
             tomllib = None
     return tomllib
 

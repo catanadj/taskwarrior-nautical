@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import nautical_core as core
 import nautical_core.business_calendar_config as business_calendar_config
 import nautical_core.timeutil as timeutil
+from nautical_core.parsing.parser_models import ParseError
 
 
 class BusinessCalendarConfigContractTests(unittest.TestCase):
@@ -147,7 +148,14 @@ class BusinessCalendarConfigContractTests(unittest.TestCase):
             load_anchor_file_dates=lambda *_args: frozenset(),
             load_omit_file_dates=lambda *_args: frozenset(),
         )
-        with self.assertRaisesRegex(business_calendar_config.BusinessCalendarConfigError, "Invalid business_calendar.work.anchor"):
+        with self.assertRaisesRegex(RuntimeError, "bad expression"):
+            business_calendar_config.resolve_business_calendars(base, **kwargs)
+
+        kwargs["validate_anchor_expr"] = lambda _value: (_ for _ in ()).throw(ParseError("bad syntax"))
+        with self.assertRaisesRegex(
+            business_calendar_config.BusinessCalendarConfigError,
+            "Invalid business_calendar.work.anchor: bad syntax",
+        ):
             business_calendar_config.resolve_business_calendars(base, **kwargs)
 
         file_config = {"work": {"anchor_file": "missing.txt"}}

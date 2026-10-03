@@ -11,6 +11,26 @@ from nautical_core.hook_runtime import HookModuleAccess
 
 
 class HookBootstrapTrustTests(unittest.TestCase):
+    def test_core_override_resolution_contains_expected_path_failures(self) -> None:
+        default_base = Path("/default-core")
+        candidate = Path("/configured-core")
+        with patch.object(type(candidate), "resolve", side_effect=RuntimeError("symlink loop")):
+            selected = hook_bootstrap.trusted_core_base(
+                default_base,
+                env={"NAUTICAL_CORE_PATH": "/configured-core"},
+            )
+
+        self.assertEqual(selected, default_base)
+
+    def test_core_override_resolution_does_not_hide_internal_failure(self) -> None:
+        candidate = Path("/configured-core")
+        with patch.object(type(candidate), "resolve", side_effect=KeyError("resolver defect")):
+            with self.assertRaisesRegex(KeyError, "resolver defect"):
+                hook_bootstrap.trusted_core_base(
+                    Path("/default-core"),
+                    env={"NAUTICAL_CORE_PATH": "/configured-core"},
+                )
+
     def test_core_target_probe_contains_expected_oserror(self) -> None:
         base = Path("/unavailable-hook-base")
         with patch.object(type(base), "is_file", side_effect=OSError("unavailable")):

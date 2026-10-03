@@ -70,7 +70,7 @@ def trusted_core_base(default_base: Path, *, env: Mapping[str, str] | None = Non
 
     try:
         cand = Path(raw).expanduser().resolve()
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return default_base
     if (env_map.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on"):
         return cand

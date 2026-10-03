@@ -1,45 +1,104 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 import os
 import sqlite3
-from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Protocol
 
-from .task_models import TaskPayload
-from .task_models import TaskObservation
+from .chain_generation import AnchorChildDueResult, CpChildDueResult
+from .modify_models import BuildChildDraftCallback, DiagnosticCallback, PanelCallback, ShortUuidCallback
+from .modify_workflow import TerminalRouteDecision
+from .task_changes import TaskTransition
+from .task_models import TaskObservation, TaskPayload
 
-from nautical_core.lifecycle.models import DeletionEvidence, LifecycleAction
+from nautical_core.lifecycle.models import DeletionEvidence, LifecycleAction, LifecyclePlan
 from nautical_core.lifecycle.outbox import LifecycleOutboxError
 from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
 from nautical_core.task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 
 
+class _ExpirationCore(Protocol):
+    def coerce_int(self, value: object, default: int) -> int: ...
+
+    def fmt_dt_local(self, value: datetime) -> str: ...
+
+    def _import_sibling(self, name: str) -> Any: ...
+
+    def to_local(self, value: datetime) -> datetime: ...
+
+
+class _ExpirationReconcile(Protocol):
+    def deleted_chain_disposition(
+        self,
+        task: TaskObservation,
+        *,
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+    ) -> DeletionEvidence: ...
+
+    def is_orphan_expiration_candidate(
+        self,
+        task: TaskObservation,
+        *,
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+    ) -> bool: ...
+
+    def plan_recovery_decision(
+        self,
+        parent: TaskObservation,
+        *,
+        existing_children: Sequence[TaskObservation],
+        hook: _ExpirationPlannerHost,
+    ) -> RecoveryResult: ...
+
+
+class _ExpirationPlannerHost(Protocol):
+    @property
+    def core(self) -> _ExpirationCore: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _ExpirationPlannerHostValue:
+    core: _ExpirationCore
+
+
+class _EndChainSummary(Protocol):
+    def __call__(
+        self,
+        current: TaskPayload,
+        reason: str,
+        now_utc: datetime,
+        *,
+        current_task: TaskPayload | None = None,
+    ) -> None: ...
+
+
 @dataclass(slots=True)
 class ExpirationServices:
-    core: Any
-    reconcile: Any
-    safe_parse_datetime: Any
-    compute_anchor_child_due: Any
-    compute_cp_child_due: Any
-    build_child_draft: Any
-    stage_recovery_plan: Any
-    panel: Any
-    short: Any
-    diag: Any
+    core: _ExpirationCore
+    reconcile: _ExpirationReconcile
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]]
+    compute_anchor_child_due: Callable[[TaskPayload], AnchorChildDueResult]
+    compute_cp_child_due: Callable[[TaskPayload], CpChildDueResult]
+    build_child_draft: BuildChildDraftCallback
+    stage_recovery_plan: Callable[[LifecyclePlan], tuple[bool, str]]
+    panel: PanelCallback
+    short: ShortUuidCallback
+    diag: DiagnosticCallback
 
 
 @dataclass(slots=True)
 class DeletedModifyServices:
     expiration: ExpirationServices
-    terminal_chain_off: Any
-    now_utc: Any
-    end_chain_summary: Any
-    format_root_and_age: Any
-    short: Any
-    panel: Any
-    diag: Any
-    recovery_warning: Any
+    terminal_chain_off: Callable[[TaskPayload, str | None], bool]
+    now_utc: Callable[[], datetime]
+    end_chain_summary: _EndChainSummary
+    format_root_and_age: Callable[[TaskPayload, datetime], str]
+    short: ShortUuidCallback
+    panel: PanelCallback
+    diag: DiagnosticCallback
+    recovery_warning: Callable[[TaskPayload, str], None]
 
 
 def classify_deleted_task(
@@ -75,7 +134,7 @@ def render_recovery_warning(task: TaskPayload, reason: str, *, services: Expirat
 
 def _render_recovery_panel(
     task: TaskPayload,
-    plan: Any,
+    plan: RecoveryPlanResult,
     *,
     services: ExpirationServices,
     result: str = "",
@@ -107,7 +166,7 @@ def _render_recovery_panel(
             if carry:
                 rows.append(("Expiration", carry))
         rows.append(("Next expires", services.core.fmt_dt_local(child_until_dt)))
-    rows.append(("Link", f"#{plan.next_link}"))
+    rows.append(("Link", f"#{plan.plan.identity.target_link}"))
     if child_short:
         rows.append(("Child", child_short))
     if plan.plan.action is LifecycleAction.FINALIZE_CHAIN:
@@ -133,15 +192,11 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
     ):
         return False
 
-    plan_hook = SimpleNamespace(
-        core=services.core,
-        _compute_anchor_child_due=services.compute_anchor_child_due,
-        _compute_cp_child_due=services.compute_cp_child_due,
-        _build_child_draft=services.build_child_draft,
-    )
-    plan = cast(
-        RecoveryResult,
-        reconcile.plan_recovery_decision(observation, existing_children=[], hook=plan_hook),
+    plan_hook = _ExpirationPlannerHostValue(services.core)
+    plan = reconcile.plan_recovery_decision(
+        observation,
+        existing_children=[],
+        hook=plan_hook,
     )
 
     if isinstance(plan, RecoveryRefusal):
@@ -194,8 +249,8 @@ def handle_deleted_modify(
     new: TaskPayload,
     *,
     services: DeletedModifyServices,
-    transition: Any = None,
-    terminal_decision: Any = None,
+    transition: TaskTransition | None = None,
+    terminal_decision: TerminalRouteDecision | None = None,
 ) -> None:
     """Classify one deleted pending task and converge its chain state."""
     old_status = (

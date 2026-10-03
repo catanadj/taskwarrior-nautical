@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +21,19 @@ from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
 
 
 class ModifyExpirationContractTests(unittest.TestCase):
+    def test_expiration_service_dependencies_have_explicit_types(self) -> None:
+        for service_type in (
+            modify_expiration.ExpirationServices,
+            modify_expiration.DeletedModifyServices,
+        ):
+            with self.subTest(service=service_type.__name__):
+                dynamic_fields = [
+                    name
+                    for name, annotation in get_type_hints(service_type).items()
+                    if annotation is Any
+                ]
+                self.assertEqual(dynamic_fields, [])
+
     def _deleted_services(self, expiration: object, *, warnings: list[tuple[dict, str]]) -> modify_expiration.DeletedModifyServices:
         return modify_expiration.DeletedModifyServices(
             expiration=expiration,
@@ -120,9 +134,9 @@ class ModifyExpirationContractTests(unittest.TestCase):
             plan=SimpleNamespace(
                 action=LifecycleAction.SPAWN_CHILD,
                 child_dict=lambda: {"until": child_until.isoformat()},
+                identity=SimpleNamespace(target_link=2),
             ),
             child_due=child_due,
-            next_link=2,
             reason="expired link missing next link",
         )
         services = SimpleNamespace(

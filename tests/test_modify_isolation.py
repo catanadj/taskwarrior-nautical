@@ -287,6 +287,30 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertEqual(annotations[name], contract)
 
+    def test_completion_spawn_ports_reuse_model_callback_contracts(self) -> None:
+        from nautical_core.modify_completion_effects import CompletionSpawnPorts
+        from nautical_core.modify_models import (
+            BuildChildDraftCallback,
+            CompletionSpawnServices,
+            DiagnosticCallback,
+            PanelCallback,
+            PrintTaskCallback,
+            SpawnChildCallback,
+        )
+
+        annotations = get_type_hints(CompletionSpawnPorts)
+        expected = {
+            "services_type": type[CompletionSpawnServices],
+            "build_child_draft": BuildChildDraftCallback,
+            "spawn_child_atomic": SpawnChildCallback,
+            "panel": PanelCallback,
+            "print_task": PrintTaskCallback,
+            "diagnostic": DiagnosticCallback,
+        }
+        for name, contract in expected.items():
+            with self.subTest(field=name):
+                self.assertEqual(annotations[name], contract)
+
     def test_completion_feedback_and_validation_ports_reuse_callback_contracts(self) -> None:
         from nautical_core.modify_completion_effects import (
             CompletionFeedbackPorts,

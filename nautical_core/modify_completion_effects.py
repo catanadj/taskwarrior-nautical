@@ -20,7 +20,10 @@ from .modify_models import (
     CompletionChildRequiredCallback,
     CompletionComputeServices,
     CompletionDurationWarningCallback,
+    CompletionSpawnServices,
     CoerceIntCallback,
+    BuildChildDraftCallback,
+    DiagnosticCallback,
     CompletionLifecycleResult,
     CompletionUntilCallback,
     CompletionUntilGuardCallback,
@@ -33,6 +36,7 @@ from .modify_models import (
     ShortUuidCallback,
     PanelCallback,
     PrintTaskCallback,
+    SpawnChildCallback,
     ValidateChainDurationCallback,
     ValidateUntilCallback,
 )
@@ -187,12 +191,12 @@ class CompletionPreflightContextPorts:
 @dataclass(frozen=True, slots=True)
 class CompletionSpawnPorts:
     spawn: CompletionSpawnService
-    services_type: Any
-    build_child_draft: Any
-    spawn_child_atomic: Any
-    panel: Any
-    print_task: Any
-    diagnostic: Any
+    services_type: type[CompletionSpawnServices]
+    build_child_draft: BuildChildDraftCallback
+    spawn_child_atomic: SpawnChildCallback
+    panel: PanelCallback
+    print_task: PrintTaskCallback
+    diagnostic: DiagnosticCallback
 
 
 def _ui_ports_for(host: Any) -> Any:

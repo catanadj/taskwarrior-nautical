@@ -120,6 +120,49 @@ class ModifyExpirationContractTests(unittest.TestCase):
         self.assertIs(warnings[0][0], new)
         self.assertIn("chain remains active", warnings[0][1])
 
+    def test_malformed_expiration_task_is_reported_as_recovery_warning(self) -> None:
+        warnings: list[tuple[str, list[tuple[str, str]], dict[str, str]]] = []
+        diagnostics: list[str] = []
+        services = SimpleNamespace(
+            reconcile=SimpleNamespace(),
+            safe_parse_datetime=lambda _value: (None, "invalid"),
+            compute_anchor_child_due=lambda _task: None,
+            compute_cp_child_due=lambda _task: None,
+            build_child_draft=lambda *_args: None,
+            stage_recovery_plan=lambda _plan: (False, "unavailable"),
+            panel=lambda title, rows, **kwargs: warnings.append((title, rows, kwargs)),
+            short=lambda value: str(value or ""),
+            diag=diagnostics.append,
+        )
+        task = {"uuid": object(), "status": "deleted", "chain": "on"}
+
+        handled = modify_expiration.handle_expired_deleted_modify(task, services=services)
+
+        self.assertTrue(handled)
+        self.assertTrue(any("could not be validated" in str(rows) for _, rows, _ in warnings))
+        self.assertTrue(any("expiration recovery task decode failed" in item for item in diagnostics))
+
+    def test_expiration_task_decode_does_not_hide_unexpected_runtime_failure(self) -> None:
+        services = SimpleNamespace(
+            reconcile=SimpleNamespace(),
+            diag=lambda _message: None,
+            panel=lambda *_args, **_kwargs: None,
+            short=lambda value: str(value or ""),
+        )
+        task = {"uuid": "valid-shape", "status": "deleted"}
+
+        with patch.object(
+            modify_expiration,
+            "DEFAULT_TASK_CODEC",
+            SimpleNamespace(
+                decode_row=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError("codec defect")
+                )
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "codec defect"):
+                modify_expiration.handle_expired_deleted_modify(task, services=services)
+
 
 if __name__ == "__main__":
     unittest.main()

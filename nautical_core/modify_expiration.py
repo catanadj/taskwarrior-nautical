@@ -11,7 +11,7 @@ from .task_models import TaskObservation
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle.models import DeletionEvidence, LifecycleAction
 from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
-from nautical_core.task_codec import DEFAULT_TASK_CODEC
+from nautical_core.task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 
 
 @dataclass(slots=True)
@@ -136,7 +136,7 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
             task,
             source_query="on-modify expiration recovery",
         )
-    except Exception as exc:
+    except TaskCodecError as exc:
         services.diag(f"expiration recovery task decode failed: {exc}")
         render_recovery_warning(task, "The expired task could not be validated for recovery.", services=services)
         return True

@@ -191,6 +191,46 @@ class QueueReviewTests(HookSubprocessFixture):
                 self.assertEqual(exact["status"], "found")
                 self.assertEqual(exact["intents"][0]["intent_id"], exact_id)
 
+    def test_integrity_query_unavailability_is_not_reported_as_empty_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            integrity = type(
+                "Integrity",
+                (),
+                {"query": lambda _self, _request: ({
+                    "status": "unavailable",
+                    "findings": [],
+                    "failure": {"code": "integrity_unavailable", "message": "snapshot read failed"},
+                }, 3)},
+            )()
+            with patch.object(
+                queue_status_service.LifecycleOutboxRepository,
+                "status",
+                return_value=(type("Result", (), {"ok": True, "reason": ""})(), {"records": []}),
+            ), patch.object(queue_status_service, "IntegrityQueryService", return_value=integrity):
+                payload = QueueStatusService().review_payload(
+                    Path(directory), task_binary="task", runtime=object()
+                )
+            self.assertEqual(payload["status"], "unavailable")
+            self.assertEqual(payload["failure"]["code"], "integrity_unavailable")
+            self.assertEqual(payload["failure"]["message"], "snapshot read failed")
+
+    def test_integrity_query_internal_defect_is_not_hidden_as_empty_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            integrity = type(
+                "Integrity",
+                (),
+                {"query": lambda _self, _request: (_ for _ in ()).throw(RuntimeError("injected query defect"))},
+            )()
+            with patch.object(
+                queue_status_service.LifecycleOutboxRepository,
+                "status",
+                return_value=(type("Result", (), {"ok": True, "reason": ""})(), {"records": []}),
+            ), patch.object(queue_status_service, "IntegrityQueryService", return_value=integrity):
+                with self.assertRaisesRegex(RuntimeError, "injected query defect"):
+                    QueueStatusService().review_payload(
+                        Path(directory), task_binary="task", runtime=object()
+                    )
+
     def test_review_exact_non_reviewable_intent_is_distinguished(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(

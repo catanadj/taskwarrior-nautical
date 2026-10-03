@@ -145,6 +145,37 @@ class ModifyExpirationContractTests(unittest.TestCase):
         self.assertIn(("Expiration", expected_carry), rows)
         self.assertTrue(any(label == "Next expires" for label, _value in rows))
 
+    def test_optional_expiration_panel_does_not_hide_import_defects(self) -> None:
+        child_due = datetime(2026, 7, 27, 9, tzinfo=timezone.utc)
+        child_until = datetime(2026, 7, 28, 9, tzinfo=timezone.utc)
+        core = SimpleNamespace(
+            coerce_int=lambda value, default: int(value or default),
+            fmt_dt_local=lambda value: value.isoformat(),
+            _import_sibling=lambda _name: (_ for _ in ()).throw(
+                RuntimeError("presentation import defect")
+            ),
+            to_local=lambda value: value,
+        )
+        plan = SimpleNamespace(
+            plan=SimpleNamespace(
+                action=LifecycleAction.SPAWN_CHILD,
+                child_dict=lambda: {"until": child_until.isoformat()},
+            ),
+            child_due=child_due,
+            next_link=2,
+            reason="",
+        )
+        services = SimpleNamespace(
+            core=core,
+            safe_parse_datetime=lambda _value: (child_until, None),
+            panel=lambda *_args, **_kwargs: None,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "presentation import defect"):
+            modify_expiration._render_recovery_panel(
+                {"link": 1}, plan, services=services
+            )
+
     def test_expiration_recovery_failure_warns_without_stopping_chain(self) -> None:
         old = {
             "status": "pending",

@@ -117,7 +117,8 @@ def _render_recovery_panel(
                     plan.child_due,
                     to_local=services.core.to_local,
                 )
-            except Exception:
+            except ImportError as exc:
+                services.diag(f"optional expiration carry description unavailable: {exc}")
                 carry = None
             if carry:
                 rows.append(("Expiration", carry))

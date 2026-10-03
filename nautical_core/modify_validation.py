@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
-from typing import Any
+from datetime import datetime
+from typing import Any, NoReturn
 
+from .modify_models import PanelCallback
 from .task_models import TaskPayload
 
 
@@ -170,13 +172,17 @@ def validate_chain_limits_on_modify(
 def validate_native_until_after_target_or_fail(
     task: TaskPayload,
     *,
-    validate_anchor_mode: Any,
-    safe_parse_datetime: Any,
-    validate_after_target: Any,
-    format_local: Any,
-    panel: Any,
-    fail: Any,
-    abort: Any,
+    validate_anchor_mode: Callable[
+        [object, object, object, object], tuple[bool, str | None]
+    ],
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+    validate_after_target: Callable[
+        [datetime | None, datetime | None, str], tuple[bool, str | None]
+    ],
+    format_local: Callable[[datetime], str],
+    panel: PanelCallback,
+    fail: Callable[[str, str], NoReturn],
+    abort: Callable[[int], NoReturn],
 ) -> None:
     """Reject native expiration windows that cannot contain the target."""
     until_raw = task.get("until")

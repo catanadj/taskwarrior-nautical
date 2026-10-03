@@ -266,6 +266,35 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
         self.assertEqual(get_type_hints(formatting.on_time_delta)["return"], str)
 
+    def test_native_until_target_validator_has_typed_effects(self) -> None:
+        from typing import NoReturn
+        from nautical_core.modify_models import PanelCallback
+        from nautical_core.modify_validation import (
+            validate_native_until_after_target_or_fail,
+        )
+
+        annotations = get_type_hints(validate_native_until_after_target_or_fail)
+        self.assertEqual(
+            annotations["validate_anchor_mode"],
+            abc.Callable[
+                [object, object, object, object], tuple[bool, str | None]
+            ],
+        )
+        self.assertEqual(
+            annotations["safe_parse_datetime"],
+            abc.Callable[[object], tuple[datetime | None, str | None]],
+        )
+        self.assertEqual(
+            annotations["validate_after_target"],
+            abc.Callable[
+                [datetime | None, datetime | None, str], tuple[bool, str | None]
+            ],
+        )
+        self.assertEqual(annotations["format_local"], abc.Callable[[datetime], str])
+        self.assertIs(annotations["panel"], PanelCallback)
+        self.assertEqual(annotations["fail"], abc.Callable[[str, str], NoReturn])
+        self.assertEqual(annotations["abort"], abc.Callable[[int], NoReturn])
+
     def test_omit_ports_use_date_and_canonical_omit_state_contracts(self) -> None:
         import nautical_core.anchor_omit as anchor_omit
         import nautical_core.modify_anchor_effects as effects

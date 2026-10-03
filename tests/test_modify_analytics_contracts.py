@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
 
-from nautical_core.modify_analytics import chain_health_advice, chain_integrity_warnings
+from nautical_core.modify_analytics import chain_health_advice, chain_integrity_warnings, sort_chain_for_analytics
 from nautical_core.modify_value_effects import format_delta
 
 
@@ -15,6 +15,21 @@ def parse_utc(value: object) -> datetime | None:
 
 
 class ModifyAnalyticsContractTests(unittest.TestCase):
+    def test_chain_sort_does_not_hide_unexpected_callback_failure(self) -> None:
+        chain = [
+            {"uuid": "a", "due": "20250101T090000Z"},
+            {"uuid": "b", "due": "20250102T090000Z"},
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "sort callback defect"):
+            sort_chain_for_analytics(
+                chain,
+                coerce_int=lambda *_args: (_ for _ in ()).throw(
+                    RuntimeError("sort callback defect")
+                ),
+                parse_datetime=parse_utc,
+            )
+
     def test_chain_integrity_warnings_report_gaps_and_missing_identity(self) -> None:
         chain = [
             {

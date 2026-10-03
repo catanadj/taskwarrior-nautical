@@ -37,10 +37,7 @@ def sort_chain_for_analytics(
         due = parse_datetime(obj.get("due")) or datetime.max.replace(tzinfo=timezone.utc)
         return (1, due)
 
-    try:
-        return sorted(chain, key=link_sort_key)
-    except Exception:
-        return chain[:]
+    return sorted(chain, key=link_sort_key)
 
 
 def lateness_stats(

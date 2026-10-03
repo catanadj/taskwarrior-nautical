@@ -177,12 +177,12 @@ class NativeUntilSlotPorts:
 
 @dataclass(frozen=True, slots=True)
 class AnchorValidationPorts:
-    lint: Any
-    validate_strict: Any
-    panel: Any
-    is_astronomy_error: Any
-    astronomy_error_message: Any
-    fail: Any
+    lint: Callable[[str], tuple[str | None, list[str]]]
+    validate_strict: Callable[[str], object]
+    panel: ValidationPanel
+    is_astronomy_error: Callable[[BaseException], bool]
+    astronomy_error_message: Callable[[BaseException], str]
+    fail: Callable[[str, str], NoReturn]
 
 
 @dataclass(frozen=True, slots=True)

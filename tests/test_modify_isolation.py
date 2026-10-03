@@ -82,6 +82,25 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 self.assertIsNot(annotation, Any)
 
+    def test_anchor_validation_ports_have_specific_callback_contracts(self) -> None:
+        from nautical_core.modify_validation_effects import AnchorValidationPorts
+
+        annotations = get_type_hints(AnchorValidationPorts)
+        self.assertEqual(
+            set(annotations),
+            {
+                "lint",
+                "validate_strict",
+                "panel",
+                "is_astronomy_error",
+                "astronomy_error_message",
+                "fail",
+            },
+        )
+        for field_name, annotation in annotations.items():
+            with self.subTest(field=field_name):
+                self.assertIsNot(annotation, Any)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

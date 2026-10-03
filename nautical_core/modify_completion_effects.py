@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
@@ -16,6 +16,9 @@ from .modify_models import (
     DatetimeParserCallback,
     EstimateAnchorFinalCallback,
     EstimateCpFinalCallback,
+    EndChainSummaryCallback,
+    PanelCallback,
+    PrintTaskCallback,
 )
 
 
@@ -62,10 +65,10 @@ class CompletionPreflightPorts:
     preflight: CompletionPreflightService
     coerce_int: CoerceIntCallback
     max_link_number: int
-    short_uuid: Any
-    panel: Any
-    print_task: Any
-    end_chain_summary: Any
+    short_uuid: Callable[[str | None], str]
+    panel: PanelCallback
+    print_task: PrintTaskCallback
+    end_chain_summary: EndChainSummaryCallback
     existing_next_lookup: Any
 
 

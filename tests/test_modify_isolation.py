@@ -207,12 +207,24 @@ class ModifyIsolationTests(unittest.TestCase):
 
     def test_completion_preflight_coercion_uses_shared_typed_contract(self) -> None:
         from nautical_core.modify_completion_effects import CompletionPreflightPorts
-        from nautical_core.modify_models import CoerceIntCallback
-
-        self.assertIs(
-            get_type_hints(CompletionPreflightPorts)["coerce_int"],
+        from nautical_core.modify_models import (
             CoerceIntCallback,
+            EndChainSummaryCallback,
+            PanelCallback,
+            PrintTaskCallback,
         )
+
+        annotations = get_type_hints(CompletionPreflightPorts)
+        expected = {
+            "coerce_int": CoerceIntCallback,
+            "short_uuid": Callable[[str | None], str],
+            "panel": PanelCallback,
+            "print_task": PrintTaskCallback,
+            "end_chain_summary": EndChainSummaryCallback,
+        }
+        for name, contract in expected.items():
+            with self.subTest(field=name):
+                self.assertIs(annotations[name], contract)
 
     def test_completion_caps_parser_uses_shared_datetime_contract(self) -> None:
         from nautical_core.modify_completion_effects import CompletionCapsPorts

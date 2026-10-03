@@ -1656,7 +1656,7 @@ class _LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), empty
         except sqlite3.OperationalError as exc:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), empty
-        except Exception as exc:
+        except (sqlite3.Error, OSError) as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), empty
         finally:
             if conn is not None:

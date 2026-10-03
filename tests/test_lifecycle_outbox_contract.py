@@ -209,6 +209,15 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                     repository.snapshot_records()
             self.assertIs(type(raised.exception), RuntimeError)
 
+    def test_status_does_not_convert_unexpected_schema_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            with patch.object(repository, "_validate_schema", side_effect=RuntimeError("injected status defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.status()
+            self.assertIs(type(raised.exception), RuntimeError)
+
     def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
         from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
         from nautical_core.chain_integrity_models import (

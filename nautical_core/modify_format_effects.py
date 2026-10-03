@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Callable
 
 from .task_models import TaskPayload
 
 
 @dataclass(frozen=True, slots=True)
 class HumanDeltaPort:
-    humanize: Any
+    humanize: Callable[[datetime, datetime, bool], str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,8 +33,13 @@ def line_preview_ports_for(host: Any) -> LinePreviewPorts:
     )
 
 
-def human_delta(port: HumanDeltaPort, start: Any, end: Any, prefer_months: bool = True) -> Any:
-    return port.humanize(start, end, use_months_days=bool(prefer_months))
+def human_delta(
+    port: HumanDeltaPort,
+    start: datetime,
+    end: datetime,
+    prefer_months: bool = True,
+) -> str:
+    return port.humanize(start, end, bool(prefer_months))
 
 
 def on_time_delta(port: HumanDeltaPort, due_dt: Any, end_dt: Any, tol_secs: int = 60) -> Any:

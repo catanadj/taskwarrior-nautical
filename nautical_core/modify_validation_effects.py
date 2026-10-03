@@ -7,7 +7,6 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from dataclasses import dataclass
 from typing import Any, NoReturn, Protocol
-from .callback_ports import CallbackPort
 from .hook_validation_pipeline import ValidationFinding
 from .recurrence_context import RecurrenceContext
 from .task_models import TaskPayload
@@ -18,19 +17,29 @@ from .timeutil import compare_datetimes
 @dataclass(frozen=True, slots=True)
 class DurationPorts:
     min_future_warn: int
-    format_local: CallbackPort
+    format_local: Callable[[datetime], str]
+
+
+class HumanizeUntilDelta(Protocol):
+    def __call__(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        use_months_days: bool,
+    ) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
 class UntilPorts:
-    minute_delta: CallbackPort
-    compare: CallbackPort
-    humanize: CallbackPort
+    minute_delta: Callable[[datetime], timedelta]
+    compare: Callable[[datetime, datetime], int]
+    humanize: HumanizeUntilDelta
 
 
 @dataclass(frozen=True, slots=True)
 class AnchorModePorts:
-    panel: CallbackPort
+    panel: ValidationPanel
 
 
 class SharedValidationPipeline(Protocol):
@@ -285,7 +294,7 @@ def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     return f"{default_msg} (expected an anchor such as w:mon, m:15, or y:jul)"
 
 
-def anchor_mode(ports: AnchorModePorts, old: Any, new: Any) -> str:
+def anchor_mode(ports: AnchorModePorts, old: TaskPayload, new: TaskPayload) -> str:
     raw = str(new.get("anchor_mode") or old.get("anchor_mode") or "skip").strip()
     mode = raw.lower()
     aliases = {"all": "all", "skip": "skip", "flex": "flex"}
@@ -299,7 +308,7 @@ def anchor_mode(ports: AnchorModePorts, old: Any, new: Any) -> str:
     return normalized.upper()
 
 
-def validate_anchor(ports: AnchorValidationPorts, old: Any, new: Any, anchor_expr: str) -> None:
+def validate_anchor(ports: AnchorValidationPorts, old: TaskPayload, new: TaskPayload, anchor_expr: str) -> None:
     try:
         _, warns = ports.lint(anchor_expr)
         if warns:
@@ -435,7 +444,7 @@ def chain_limit_ports_for(host: Any) -> ChainLimitPorts:
     )
 
 
-def validate_native_until(ports: NativeUntilPorts, task: dict) -> None:
+def validate_native_until(ports: NativeUntilPorts, task: TaskPayload) -> None:
     ports.validate(
         task,
         validate_anchor_mode=ports.validate_anchor_mode,
@@ -464,7 +473,7 @@ def native_until_ports_for(host: Any) -> NativeUntilPorts:
     )
 
 
-def validate_native_until_slots(ports: NativeUntilSlotPorts, task: dict) -> None:
+def validate_native_until_slots(ports: NativeUntilSlotPorts, task: TaskPayload) -> None:
     ports.validate(
         task,
         safe_parse_datetime=ports.parse_datetime,
@@ -510,7 +519,11 @@ def native_until_slot_ports_for(host: Any) -> NativeUntilSlotPorts:
     )
 
 
-def until_not_past(ports: UntilPorts, until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
+def until_not_past(
+    ports: UntilPorts,
+    until_dt: datetime | None,
+    now_utc: datetime,
+) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
     grace = ports.minute_delta(now_utc)
@@ -520,7 +533,12 @@ def until_not_past(ports: UntilPorts, until_dt: Any, now_utc: Any) -> tuple[bool
     return True, None
 
 
-def chain_duration_reasonable(ports: DurationPorts, child_due: Any, until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
+def chain_duration_reasonable(
+    ports: DurationPorts,
+    child_due: datetime | None,
+    until_dt: datetime | None,
+    now_utc: datetime,
+) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
     days = (until_dt - now_utc).days

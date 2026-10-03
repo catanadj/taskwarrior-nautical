@@ -149,6 +149,24 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 self.assertIsNot(annotation, Any)
 
+    def test_helper_ports_do_not_use_generic_callback_protocol(self) -> None:
+        from nautical_core.callback_ports import CallbackPort
+        from nautical_core.modify_validation_effects import (
+            AnchorModePorts,
+            DurationPorts,
+            UntilPorts,
+        )
+
+        for port, fields in (
+            (DurationPorts, ("format_local",)),
+            (UntilPorts, ("minute_delta", "compare", "humanize")),
+            (AnchorModePorts, ("panel",)),
+        ):
+            annotations = get_type_hints(port)
+            for field_name in fields:
+                with self.subTest(port=port.__name__, field=field_name):
+                    self.assertIsNot(annotations[field_name], CallbackPort)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

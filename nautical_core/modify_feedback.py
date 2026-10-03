@@ -1376,7 +1376,6 @@ def orchestrate_anchor_completion_feedback(
     panel: Any,
     calendar_feedback: Any,
     panel_diagnostics: Any,
-    modify_models: Any,
     modify_runtime: Any,
     build_runtime_services: Callable[[], Any],
 ) -> None:
@@ -1403,7 +1402,7 @@ def orchestrate_anchor_completion_feedback(
     integrity_warnings = request.integrity_warnings
     base_no = request.base_no
     if lifecycle_result is None:
-        lifecycle_result = modify_models.CompletionLifecycleResult(
+        lifecycle_result = CompletionLifecycleResult(
             state="queued" if deferred_spawn else "applied",
             child_short=child_short,
             deferred_spawn=deferred_spawn,
@@ -1415,11 +1414,11 @@ def orchestrate_anchor_completion_feedback(
         core=core,
         panel=panel,
     )
-    panel_warnings = panel_diagnostics.panel_warnings(core, modify_models.TaskView.from_mapping(new))
+    panel_warnings = panel_diagnostics.panel_warnings(core, TaskView.from_mapping(new))
     if panel_warnings:
         integrity_warnings = list(integrity_warnings or [])
         integrity_warnings.extend(panel_warnings)
-    feedback = modify_models.AnchorCompletionFeedbackModel(
+    feedback = AnchorCompletionFeedbackModel(
         new=new,
         child=child,
         child_due=child_due,
@@ -1451,7 +1450,6 @@ def orchestrate_cp_completion_feedback(
     request: CpCompletionFeedbackModel,
     core: Any,
     panel_diagnostics: Any,
-    modify_models: Any,
     modify_runtime: Any,
     build_runtime_services: Callable[[], Any],
 ) -> None:
@@ -1476,7 +1474,7 @@ def orchestrate_cp_completion_feedback(
     integrity_warnings = request.integrity_warnings
     base_no = request.base_no
     if lifecycle_result is None:
-        lifecycle_result = modify_models.CompletionLifecycleResult(
+        lifecycle_result = CompletionLifecycleResult(
             state="queued" if deferred_spawn else "applied",
             child_short=child_short,
             deferred_spawn=deferred_spawn,
@@ -1484,13 +1482,13 @@ def orchestrate_cp_completion_feedback(
         )
     panel_warnings = panel_diagnostics.panel_warnings(
         core,
-        modify_models.TaskView.from_mapping(new),
+        TaskView.from_mapping(new),
         include_files=False,
     )
     if panel_warnings:
         integrity_warnings = list(integrity_warnings or [])
         integrity_warnings.extend(panel_warnings)
-    feedback = modify_models.CpCompletionFeedbackModel(
+    feedback = CpCompletionFeedbackModel(
         new=new,
         child=child,
         child_due=child_due,

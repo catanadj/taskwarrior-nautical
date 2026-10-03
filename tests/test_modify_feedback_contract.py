@@ -141,6 +141,47 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             CpCompletionFeedbackModel,
         )
 
+    def test_cp_feedback_orchestration_uses_owner_models_without_module_bag(self) -> None:
+        now = datetime(2026, 10, 4, tzinfo=timezone.utc)
+        request = CpCompletionFeedbackModel(
+            new={"cp": "P1D"},
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
+            child_due=now,
+            child_short="beeswax",
+            next_no=2,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=now,
+            until_dt=None,
+            until_cap_no=None,
+            meta={},
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            lifecycle_result=CompletionLifecycleResult("applied"),
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=1,
+        )
+        services = object()
+        runtime = SimpleNamespace(build_cp_feedback_services=lambda _runtime: services)
+        diagnostics = SimpleNamespace(panel_warnings=lambda *_args, **_kwargs: [])
+
+        with patch.object(modify_feedback, "render_cp_completion_feedback") as render:
+            modify_feedback.orchestrate_cp_completion_feedback(
+                request=request,
+                core=object(),
+                panel_diagnostics=diagnostics,
+                modify_runtime=runtime,
+                build_runtime_services=lambda: object(),
+            )
+
+        rendered = render.call_args.kwargs["feedback"]
+        self.assertIsInstance(rendered, CpCompletionFeedbackModel)
+        self.assertEqual(rendered.new["cp"], "P1D")
+        self.assertIs(render.call_args.kwargs["services"], services)
+
     def test_recurrence_update_panel_does_not_hide_expression_helper_failures(self) -> None:
         def broken_helper(_expression):
             raise RuntimeError("expression feedback implementation failed")

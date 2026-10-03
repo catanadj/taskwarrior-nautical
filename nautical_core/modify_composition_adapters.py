@@ -369,7 +369,6 @@ def render_anchor_completion_feedback_for(
     host: Any, *, request: AnchorCompletionFeedbackModel
 ) -> None:
     feedback = host._module("modify_feedback")
-    models = host._module("modify_models")
     ui = host._module("modify_ui_effects")
     ui_ports = ui.ui_ports_for(host)
     feedback.orchestrate_anchor_completion_feedback(
@@ -378,7 +377,6 @@ def render_anchor_completion_feedback_for(
         panel=lambda title, rows, **options: ui.panel(ui_ports, title, rows, **options),
         calendar_feedback=host.importlib.import_module("nautical_core.calendar_feedback"),
         panel_diagnostics=host._module("panel_diagnostics"),
-        modify_models=models,
         modify_runtime=host._module("modify_runtime"),
         build_runtime_services=lambda: runtime_services_for(host),
     )
@@ -392,7 +390,6 @@ def render_cp_completion_feedback_for(
         request=request,
         core=host.core,
         panel_diagnostics=host._module("panel_diagnostics"),
-        modify_models=host._module("modify_models"),
         modify_runtime=host._module("modify_runtime"),
         build_runtime_services=lambda: runtime_services_for(host),
     )

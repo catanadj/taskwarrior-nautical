@@ -101,6 +101,33 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 self.assertIsNot(annotation, Any)
 
+    def test_native_until_slot_ports_have_specific_callback_contracts(self) -> None:
+        from nautical_core.modify_validation_effects import NativeUntilSlotPorts
+
+        annotations = get_type_hints(NativeUntilSlotPorts)
+        self.assertEqual(
+            set(annotations),
+            {
+                "validate",
+                "parse_datetime",
+                "validate_anchor",
+                "collect_time_slots",
+                "validate_time_slots",
+                "normalize_time_slots",
+                "anchor_file_dir",
+                "recurrence_context",
+                "to_local",
+                "format_local",
+                "astronomy_is_error",
+                "astronomy_error_message",
+                "panel",
+                "abort",
+            },
+        )
+        for field_name, annotation in annotations.items():
+            with self.subTest(field=field_name):
+                self.assertIsNot(annotation, Any)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

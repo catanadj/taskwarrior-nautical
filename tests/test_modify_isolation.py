@@ -5,7 +5,8 @@ from __future__ import annotations
 import importlib
 import sys
 import unittest
-from typing import Any, get_args, get_origin, get_type_hints
+from datetime import datetime
+from typing import Any, Callable, get_args, get_origin, get_type_hints
 
 
 class ModifyIsolationTests(unittest.TestCase):
@@ -166,6 +167,18 @@ class ModifyIsolationTests(unittest.TestCase):
             for field_name in fields:
                 with self.subTest(port=port.__name__, field=field_name):
                     self.assertIsNot(annotations[field_name], CallbackPort)
+
+    def test_datetime_effect_port_has_concrete_comparison_contract(self) -> None:
+        from nautical_core.modify_value_effects import DatetimePorts, compare_datetimes
+
+        self.assertEqual(
+            get_type_hints(DatetimePorts)["compare"],
+            Callable[[datetime, datetime], int],
+        )
+        self.assertEqual(
+            get_type_hints(compare_datetimes),
+            {"ports": DatetimePorts, "left": datetime, "right": datetime, "return": int},
+        )
 
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)

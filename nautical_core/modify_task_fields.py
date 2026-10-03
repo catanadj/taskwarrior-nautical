@@ -38,7 +38,7 @@ def _canonical(value: Any) -> Any:
             return text
     try:
         return json.dumps(value, sort_keys=True, ensure_ascii=False)
-    except Exception:
+    except (TypeError, ValueError, OverflowError, RecursionError):
         return str(value)
 
 

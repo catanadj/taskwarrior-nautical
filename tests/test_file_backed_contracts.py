@@ -26,6 +26,17 @@ class FileBackedRecurrenceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "date parser implementation failed"):
                 file_backed_dates._expand_date_spec("2026-01-01", label="calendar")
 
+    def test_csv_sniffing_does_not_hide_unexpected_reader_failures(self) -> None:
+        import nautical_core.file_backed_dates as file_backed_dates
+
+        with patch.object(
+            file_backed_dates.csv,
+            "reader",
+            side_effect=RuntimeError("CSV reader implementation failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "CSV reader implementation failed"):
+                file_backed_dates._looks_like_csv([(1, "date,description")])
+
     def test_csv_without_date_column_reports_available_columns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "calendar.csv").write_text(

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 from datetime import date
+import io
+import os
 import unittest
+from unittest.mock import patch
 
-from nautical_core.common import coerce_int, short_uuid
+from nautical_core.common import coerce_int, sanitize_text, short_uuid
 from nautical_core.scheduler_api import _weeks_between
 
 
@@ -29,6 +33,23 @@ class CoreUtilityContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "conversion implementation failed"):
             coerce_int(BrokenString(), default=7)
+
+    def test_sanitization_survives_optional_diagnostic_write_failure(self) -> None:
+        class BrokenStderr(io.StringIO):
+            def write(self, _text: str) -> int:
+                raise OSError("stderr is unavailable")
+
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stderr(BrokenStderr()):
+            self.assertEqual(sanitize_text("abcdef", max_len=3), "abc")
+
+    def test_sanitization_does_not_hide_unexpected_diagnostic_failure(self) -> None:
+        class BrokenStderr(io.StringIO):
+            def write(self, _text: str) -> int:
+                raise RuntimeError("diagnostic implementation failed")
+
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stderr(BrokenStderr()):
+            with self.assertRaisesRegex(RuntimeError, "diagnostic implementation failed"):
+                sanitize_text("abcdef", max_len=3)
 
 
 if __name__ == "__main__":

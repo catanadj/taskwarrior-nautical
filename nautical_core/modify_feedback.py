@@ -9,7 +9,14 @@ from .callback_ports import CallbackPort
 from .modify_carry_workflow import TemporalCarryDecision
 from .parsing.parser_models import ParseError
 from .task_models import TaskPayload
-from .modify_models import CompletionLifecycleResult, TaskView
+from .modify_models import (
+    AnchorCompletionFeedbackModel,
+    AnchorFeedbackServices,
+    CompletionLifecycleResult,
+    CpCompletionFeedbackModel,
+    CpFeedbackServices,
+    TaskView,
+)
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
 
@@ -961,7 +968,7 @@ def _build_text_feedback(
     return "\n".join(line for line in lines if line)
 
 
-def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: bool = True) -> list[tuple[str, object]]:
+def _compact_feedback_rows(rows: list[tuple[str | None, Any]], *, include_timeline: bool = True) -> list[tuple[str | None, object]]:
     keep_labels = {
         "pattern",
         "period",
@@ -984,7 +991,7 @@ def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: 
         "intent",
         "result",
     }
-    out: list[tuple[str, object]] = []
+    out: list[tuple[str | None, object]] = []
     for k, v in rows:
         if k is None:
             continue
@@ -998,9 +1005,11 @@ def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: 
 
 def render_anchor_completion_feedback(
     *,
-    feedback: Any,
-    services: Any,
+    feedback: AnchorCompletionFeedbackModel,
+    services: AnchorFeedbackServices,
 ) -> None:
+    new = feedback.new
+    child = feedback.child
     core = services.core
     debug_wait_sched = services.debug_wait_sched
     last_wait_sched_debug = services.last_wait_sched_debug
@@ -1020,19 +1029,19 @@ def render_anchor_completion_feedback(
     chain_colour_for_task = services.chain_colour_for_task
     strip_quotes = services.strip_quotes
     human_delta = services.human_delta
-    anchor_label, anchor_value = _anchor_summary(feedback.new)
-    pattern_label, pattern_value = _anchor_pattern_row(core, str(feedback.new.get("anchor") or "").strip())
+    anchor_label, anchor_value = _anchor_summary(new)
+    pattern_label, pattern_value = _anchor_pattern_row(core, str(new.get("anchor") or "").strip())
     if anchor_label == "Pattern":
         anchor_label, anchor_value = pattern_label, pattern_value
     expr_str = strip_quotes(anchor_value)
-    omit_raw, omit_natural, omit_warns, omit_file = _anchor_omit_summary(core, feedback.new)
-    mode_tag = _anchor_mode_tag(feedback.new)
+    omit_raw, omit_natural, omit_warns, omit_file = _anchor_omit_summary(core, new)
+    mode_tag = _anchor_mode_tag(new)
     title = f"⚓︎ Next anchor  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
     mode = _display_mode_name(core)
     if mode in {"line", "minimal"}:
         line = format_line_preview(
             feedback.base_no,
-            feedback.new,
+            new,
             feedback.child_due,
             feedback.child_short,
             feedback.now_utc,
@@ -1047,13 +1056,13 @@ def render_anchor_completion_feedback(
         result_label = _lifecycle_result_label(feedback.lifecycle_result)
         if result_label:
             line = f"{line} · {result_label}"
-        title_style = chain_colour_for_task(feedback.new, "anchor") if chain_color_per_chain else None
+        title_style = chain_colour_for_task(new, "anchor") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
         return
     if mode == "text":
         line = format_line_preview(
             feedback.base_no,
-            feedback.new,
+            new,
             feedback.child_due,
             feedback.child_short,
             feedback.now_utc,
@@ -1104,14 +1113,14 @@ def render_anchor_completion_feedback(
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
     _append_next_expiration_row(
         fb,
-        feedback.child,
+        child,
         feedback.child_due,
         core=core,
         target_field=feedback.meta.get("target_field") or "due",
     )
     if anchor_label == "Sources":
-        file_expr = str(feedback.new.get("anchor_file") or "").strip()
-        natural_expr = _anchor_feedback_natural(core, feedback.new, feedback.dnf)
+        file_expr = str(new.get("anchor_file") or "").strip()
+        natural_expr = _anchor_feedback_natural(core, new, feedback.dnf)
         fb.append((pattern_label, pattern_value))
         fb.append(("Anchor file", file_expr))
         if natural_expr:
@@ -1119,13 +1128,13 @@ def render_anchor_completion_feedback(
         else:
             fb.append(("Natural", f"Dates from {file_expr.split('@', 1)[0]}"))
     elif feedback.dnf:
-        fb.append(("Natural", _anchor_feedback_natural(core, feedback.new, feedback.dnf)))
+        fb.append(("Natural", _anchor_feedback_natural(core, new, feedback.dnf)))
     elif anchor_label == "Anchor file":
         fb.append(("Natural", f"Dates from {expr_str.split('@', 1)[0]}"))
-    basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, fmt_dt_local=core.fmt_dt_local)
+    basis_text = _pretty_basis_anchor(feedback.meta, new, fmt_dt_local=core.fmt_dt_local)
     if basis_text != "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)":
         fb.append(("Basis", basis_text))
-    fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
+    fb.append(("Root", format_root_and_age(new, feedback.now_utc)))
 
     _append_wait_sched_feedback_rows(fb, debug_wait_sched=debug_wait_sched, last_wait_sched_debug=last_wait_sched_debug)
     _append_sanitised_fields_row(fb, feedback.stripped_attrs)
@@ -1134,12 +1143,12 @@ def render_anchor_completion_feedback(
     _append_integrity_warnings_row(fb, feedback.integrity_warnings)
     append_next_wait_sched_rows(
         fb,
-        feedback.child,
+        child,
         feedback.child_due,
         anchor_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
     )
 
-    _append_chain_boundary_rows(fb, feedback.new, feedback.until_dt, core=core)
+    _append_chain_boundary_rows(fb, new, feedback.until_dt, core=core)
     _append_link_status_rows(
         fb,
         feedback.cap_no,
@@ -1153,7 +1162,7 @@ def render_anchor_completion_feedback(
     if mode not in {"line", "minimal", "text"}:
         tl = timeline_lines(
             "anchor",
-            feedback.new,
+            new,
             feedback.child_due,
             feedback.child_short,
             feedback.dnf,
@@ -1165,29 +1174,31 @@ def render_anchor_completion_feedback(
         if tl:
             fb.append(("Timeline", "\n".join(tl)))
     if feedback.dnf and "rand" in expr_str.lower():
-        fb.append(("Rand", f"[dim]Deterministic picks seeded by root {short(root_uuid_from(feedback.new))}[/]"))
+        fb.append(("Rand", f"[dim]Deterministic picks seeded by root {short(root_uuid_from(new))}[/]"))
 
-    fb = format_next_anchor_rows(fb)
+    formatted_fb = format_next_anchor_rows(fb)
     if mode == "compact":
-        fb = _compact_feedback_rows(fb, include_timeline=True)
+        formatted_fb = _compact_feedback_rows(formatted_fb, include_timeline=True)
     if chain_color_per_chain:
-        chain_colour = chain_colour_for_task(feedback.new, "anchor")
+        chain_colour = chain_colour_for_task(new, "anchor")
         panel(
             title,
-            fb,
+            formatted_fb,
             kind="preview_anchor",
             border_style=chain_colour,
             title_style=chain_colour,
         )
         return
-    panel(title, fb, kind="preview_anchor")
+    panel(title, formatted_fb, kind="preview_anchor")
 
 
 def render_cp_completion_feedback(
     *,
-    feedback: Any,
-    services: Any,
+    feedback: CpCompletionFeedbackModel,
+    services: CpFeedbackServices,
 ) -> None:
+    new = feedback.new
+    child = feedback.child
     core = services.core
     diag_enabled = services.diag_enabled
     format_root_and_age = services.format_root_and_age
@@ -1207,7 +1218,7 @@ def render_cp_completion_feedback(
     if mode in {"line", "minimal"}:
         line = format_line_preview(
             feedback.base_no,
-            feedback.new,
+            new,
             feedback.child_due,
             feedback.child_short,
             feedback.now_utc,
@@ -1222,13 +1233,13 @@ def render_cp_completion_feedback(
         result_label = _lifecycle_result_label(feedback.lifecycle_result)
         if result_label:
             line = f"{line} · {result_label}"
-        title_style = chain_colour_for_task(feedback.new, "cp") if chain_color_per_chain else None
+        title_style = chain_colour_for_task(new, "cp") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
         return
     if mode == "text":
         line = format_line_preview(
             feedback.base_no,
-            feedback.new,
+            new,
             feedback.child_due,
             feedback.child_short,
             feedback.now_utc,
@@ -1247,7 +1258,7 @@ def render_cp_completion_feedback(
                 parent_short=feedback.parent_short,
                 next_no=feedback.next_no,
                 child_short=feedback.child_short,
-                summary=f"Period: {feedback.new.get('cp')}",
+                summary=f"Period: {new.get('cp')}",
                 preview_line=line,
                 cap_no=feedback.cap_no,
                 base_no=feedback.base_no,
@@ -1266,20 +1277,20 @@ def render_cp_completion_feedback(
     fb: list[tuple[str, Any]] = []
     _append_lifecycle_result_row(fb, feedback.lifecycle_result)
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
-    fb.append(("Period", feedback.new.get("cp")))
+    fb.append(("Period", new.get("cp")))
     if feedback.meta.get("cp_sequence_len"):
         step = int(feedback.meta.get("cp_sequence_step") or 1)
-        cp_tokens = [p.strip() for p in str(feedback.new.get("cp") or "").split(",")]
+        cp_tokens = [p.strip() for p in str(new.get("cp") or "").split(",")]
         step_token = cp_tokens[step - 1] if 0 <= step - 1 < len(cp_tokens) else ""
         token_index = max(0, step - 1)
-        tokens = core.parse_cp_sequence_tokens(feedback.new.get("cp") or "")
+        tokens = core.parse_cp_sequence_tokens(new.get("cp") or "")
         if tokens and 0 <= token_index < len(tokens) and tokens[token_index].get("kind") == "rand":
             td = core.cp_sequence_interval_for_token(
                 tokens[token_index],
-                cp=feedback.new.get("cp") or "",
-                link_no=int(feedback.new.get("link") or 1),
+                cp=new.get("cp") or "",
+                link_no=int(new.get("link") or 1),
                 token_index=token_index,
-                chain_id=str(feedback.new.get("chainID") or "").strip(),
+                chain_id=str(new.get("chainID") or "").strip(),
             )
             if td:
                 step_token = _format_td_short(td)
@@ -1288,13 +1299,13 @@ def render_cp_completion_feedback(
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
     _append_next_expiration_row(
         fb,
-        feedback.child,
+        child,
         feedback.child_due,
         core=core,
         target_field=feedback.meta.get("target_field") or "due",
     )
     basis_text = _pretty_basis_cp(
-        feedback.new,
+        new,
         feedback.meta,
         parse_cp_duration=core.parse_cp_duration,
         parse_cp_sequence=getattr(core, "parse_cp_sequence", None),
@@ -1302,18 +1313,18 @@ def render_cp_completion_feedback(
     )
     if basis_text != "Preserve wall clock (period is multiple of 24h)":
         fb.append(("Basis", basis_text))
-    fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
+    fb.append(("Root", format_root_and_age(new, feedback.now_utc)))
     if core.SHOW_ANALYTICS and feedback.analytics_advice:
         fb.append(("Analytics", feedback.analytics_advice))
     _append_integrity_warnings_row(fb, feedback.integrity_warnings)
     append_next_wait_sched_rows(
         fb,
-        feedback.child,
+        child,
         feedback.child_due,
         anchor_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
     )
 
-    _append_chain_boundary_rows(fb, feedback.new, feedback.until_dt, core=core)
+    _append_chain_boundary_rows(fb, new, feedback.until_dt, core=core)
     if feedback.cap_no:
         _append_link_status_rows(
             fb,
@@ -1330,7 +1341,7 @@ def render_cp_completion_feedback(
     if mode not in {"line", "minimal", "text"}:
         tl = timeline_lines(
             "cp",
-            feedback.new,
+            new,
             feedback.child_due,
             feedback.child_short,
             None,
@@ -1342,20 +1353,20 @@ def render_cp_completion_feedback(
         if tl:
             fb.append(("Timeline", "\n".join(tl)))
 
-    fb = format_next_cp_rows(fb)
+    formatted_fb = format_next_cp_rows(fb)
     if mode == "compact":
-        fb = _compact_feedback_rows(fb, include_timeline=True)
+        formatted_fb = _compact_feedback_rows(formatted_fb, include_timeline=True)
     if chain_color_per_chain:
-        chain_colour = chain_colour_for_task(feedback.new, "cp")
+        chain_colour = chain_colour_for_task(new, "cp")
         panel(
             title,
-            fb,
+            formatted_fb,
             kind="preview_cp",
             border_style=chain_colour,
             title_style=chain_colour,
         )
     else:
-        panel(title, fb, kind="preview_cp")
+        panel(title, formatted_fb, kind="preview_cp")
 
 
 def orchestrate_anchor_completion_feedback(

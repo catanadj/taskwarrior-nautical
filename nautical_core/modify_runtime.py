@@ -15,7 +15,7 @@ from nautical_core.modify_models import (
     FeedbackRowsFormatter,
     HumanDeltaCallback,
     PanelLineCallback,
-    PreviewLineFormatter,
+    CompletionPreviewFormatter,
     PrintTaskCallback,
     RootAgeFormatter,
     ShortUuidCallback,
@@ -194,7 +194,7 @@ class ModifyRuntimeServices:
     short: ShortUuidCallback
     format_next_anchor_rows: FeedbackRowsFormatter
     format_next_cp_rows: FeedbackRowsFormatter
-    format_line_preview: PreviewLineFormatter
+    format_line_preview: CompletionPreviewFormatter
     panel_line: PanelLineCallback
     text_line: TextLineCallback
     panel: FeedbackPanelCallback

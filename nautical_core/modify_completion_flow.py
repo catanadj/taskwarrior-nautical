@@ -264,8 +264,9 @@ def finalize_completion_modify(
     state.panel_chain_by_short = chain_by_short
     state.panel_chain_snapshot_loaded = True
 
-    # The lifecycle read cache remains in its operational row form.  Panels
-    # receive immutable views so presentation cannot mutate chain history.
+    # The lifecycle read cache remains in its operational row form. Panels
+    # receive immutable chain history; completion feedback payloads below are
+    # detached mappings for the existing presentation callback contracts.
     presentation_chain_by_short = {
         short: TaskView.from_observation(row)
         for short, row in (chain_by_short or {}).items()
@@ -296,7 +297,7 @@ def finalize_completion_modify(
     if kind in {"anchor", "anchor_file"}:
         services.render_anchor_completion_feedback(
             request=AnchorCompletionFeedbackModel(
-                new=new_view, child=child_view, child_due=computed.child_due,
+                new=dict(new_view), child=dict(child_view), child_due=computed.child_due,
                 child_short=child_short, next_no=next_no, parent_short=parent_short,
                 cap_no=computed.cap_no, finals=computed.finals, now_utc=now_utc,
                 until_dt=computed.until_dt, until_cap_no=computed.until_cap_no,
@@ -310,7 +311,7 @@ def finalize_completion_modify(
     else:
         services.render_cp_completion_feedback(
             request=CpCompletionFeedbackModel(
-                new=new_view, child=child_view, child_due=computed.child_due,
+                new=dict(new_view), child=dict(child_view), child_due=computed.child_due,
                 child_short=child_short, next_no=next_no, parent_short=parent_short,
                 cap_no=computed.cap_no, finals=computed.finals, now_utc=now_utc,
                 until_dt=computed.until_dt, until_cap_no=computed.until_cap_no,

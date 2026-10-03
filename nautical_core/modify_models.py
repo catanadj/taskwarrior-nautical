@@ -225,6 +225,27 @@ class PreviewLineFormatter(Protocol):
         ...
 
 
+class CompletionPreviewFormatter(Protocol):
+    """Render one completion preview with dependencies bound at composition."""
+
+    def __call__(
+        self,
+        link_no: int,
+        task: TaskRow,
+        child_due: Any,
+        child_short: str,
+        now_utc: Any,
+        *,
+        child_field: str = "due",
+        cap_no: int | None = None,
+        until_dt: Any = None,
+        until_no: int | None = None,
+        child_until_dt: Any = None,
+        kind: str = "cp",
+        minimal: bool = False,
+    ) -> str: ...
+
+
 class PanelLineCallback(Protocol):
     def __call__(
         self,
@@ -549,8 +570,8 @@ class CompletionComputeServices:
 
 @dataclass(slots=True)
 class CpCompletionFeedbackModel:
-    new: TaskView
-    child: TaskView
+    new: TaskPayload
+    child: TaskPayload
     child_due: datetime | None
     child_short: str
     next_no: int
@@ -572,8 +593,8 @@ class CpCompletionFeedbackModel:
 
 @dataclass(slots=True)
 class AnchorCompletionFeedbackModel:
-    new: TaskView
-    child: TaskView
+    new: TaskPayload
+    child: TaskPayload
     child_due: datetime | None
     child_short: str
     next_no: int
@@ -750,7 +771,7 @@ class AnchorFeedbackServices:
     root_uuid_from: Callable[[TaskRow], str]
     short: ShortUuidCallback
     format_next_anchor_rows: FeedbackRowsFormatter
-    format_line_preview: PreviewLineFormatter
+    format_line_preview: CompletionPreviewFormatter
     panel_line: PanelLineCallback
     text_line: TextLineCallback
     panel: FeedbackPanelCallback
@@ -769,7 +790,7 @@ class CpFeedbackServices:
     timeline_lines: TimelineLinesCallback
     show_timeline_gaps: bool
     format_next_cp_rows: FeedbackRowsFormatter
-    format_line_preview: PreviewLineFormatter
+    format_line_preview: CompletionPreviewFormatter
     panel_line: PanelLineCallback
     text_line: TextLineCallback
     panel: FeedbackPanelCallback

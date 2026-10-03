@@ -3,17 +3,20 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import importlib
 from types import SimpleNamespace
+from typing import get_type_hints
 import unittest
 from unittest.mock import patch
 
 import nautical_core
 import nautical_core.modify_feedback as modify_feedback
 from nautical_core.modify_models import (
+    AnchorFeedbackServices,
     AnchorCompletionFeedbackModel,
+    CpFeedbackServices,
     CpCompletionFeedbackModel,
     CompletionLifecycleResult,
-    TaskView,
 )
+from nautical_core.task_models import TaskPayload
 from nautical_core.parsing.parser_models import ParseError
 
 
@@ -55,7 +58,7 @@ def _render_cp_completion_feedback(
         cp_sequence_interval_for_link=nautical_core.cp_sequence_interval_for_link,
     )
     text_lines = []
-    services = SimpleNamespace(
+    services = CpFeedbackServices(
         core=core,
         diag_enabled=False,
         format_root_and_age=lambda *_args: "abcd1234",
@@ -81,8 +84,8 @@ def _render_cp_completion_feedback(
     child_task = {"uuid": "00000000-0000-4000-8000-000000000222"}
     child_task.update(child_values or {})
     feedback = CpCompletionFeedbackModel(
-        new=TaskView.from_mapping(new_task),
-        child=TaskView.from_mapping(child_task),
+        new=new_task,
+        child=child_task,
         child_due=due,
         child_short="beeswax",
         next_no=next_no,
@@ -120,6 +123,16 @@ def _omit_summary_core(
 
 
 class ModifyFeedbackContractTests(unittest.TestCase):
+    def test_completion_feedback_renderers_use_owner_models(self) -> None:
+        anchor_annotations = get_type_hints(modify_feedback.render_anchor_completion_feedback)
+        cp_annotations = get_type_hints(modify_feedback.render_cp_completion_feedback)
+        self.assertIs(anchor_annotations["feedback"], AnchorCompletionFeedbackModel)
+        self.assertIs(anchor_annotations["services"], AnchorFeedbackServices)
+        self.assertIs(cp_annotations["feedback"], CpCompletionFeedbackModel)
+        self.assertIs(cp_annotations["services"], CpFeedbackServices)
+        self.assertIs(get_type_hints(AnchorCompletionFeedbackModel)["new"], TaskPayload)
+        self.assertIs(get_type_hints(CpCompletionFeedbackModel)["child"], TaskPayload)
+
     def test_recurrence_update_panel_does_not_hide_expression_helper_failures(self) -> None:
         def broken_helper(_expression):
             raise RuntimeError("expression feedback implementation failed")
@@ -245,7 +258,7 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             fmt_dt_local=lambda value: value.isoformat(),
             coerce_int=lambda value, default: int(value) if value else default,
         )
-        services = SimpleNamespace(
+        services = AnchorFeedbackServices(
             core=core,
             debug_wait_sched=False,
             last_wait_sched_debug=None,
@@ -267,15 +280,13 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             human_delta=lambda *_args, **_kwargs: "in 1 day",
         )
         feedback = AnchorCompletionFeedbackModel(
-            new=TaskView.from_mapping(
-                {
-                    "anchor_file": "calendar.csv@t=12:00",
-                    "anchor_mode": "skip",
-                    "uuid": "00000000-0000-4000-8000-000000000333",
-                    "chainID": "abcd1234",
-                }
-            ),
-            child=TaskView.from_mapping({"uuid": "00000000-0000-4000-8000-000000000444"}),
+            new={
+                "anchor_file": "calendar.csv@t=12:00",
+                "anchor_mode": "skip",
+                "uuid": "00000000-0000-4000-8000-000000000333",
+                "chainID": "abcd1234",
+            },
+            child={"uuid": "00000000-0000-4000-8000-000000000444"},
             child_due=now,
             child_short="beeswax",
             next_no=2,
@@ -460,18 +471,14 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             human_delta=lambda *_args, **_kwargs: "in 7 days",
         )
         feedback = AnchorCompletionFeedbackModel(
-            new=TaskView.from_mapping(
-                {
-                    "anchor": "@payday",
-                    "omit": "@wed",
-                    "anchor_mode": "skip",
-                    "uuid": "00000000-0000-4000-8000-000000000111",
-                    "chainID": "abcd1234",
-                }
-            ),
-            child=TaskView.from_mapping(
-                {"uuid": "00000000-0000-4000-8000-000000000222"}
-            ),
+            new={
+                "anchor": "@payday",
+                "omit": "@wed",
+                "anchor_mode": "skip",
+                "uuid": "00000000-0000-4000-8000-000000000111",
+                "chainID": "abcd1234",
+            },
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=now,
             child_short="beeswax",
             next_no=2,

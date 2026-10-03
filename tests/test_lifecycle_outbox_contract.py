@@ -60,6 +60,21 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                         self.fail("session must not yield after initialization failure")
             self.assertIs(type(raised.exception), RuntimeError)
 
+    def test_cached_schema_probe_does_not_mask_unexpected_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            stat_result = repository.path.stat()
+            repository._schema_identity = (
+                int(stat_result.st_dev),
+                int(stat_result.st_ino),
+                int(stat_result.st_mtime_ns),
+            )
+            with patch.object(repository, "_connect", side_effect=RuntimeError("injected probe defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.open()
+            self.assertIs(type(raised.exception), RuntimeError)
+
     def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
         from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
         from nautical_core.chain_integrity_models import (

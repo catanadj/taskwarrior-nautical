@@ -455,7 +455,7 @@ class _LifecycleOutboxRepository:
                     version = int(probe.execute("PRAGMA user_version").fetchone()[0] or 0)
                     if version == OUTBOX_SCHEMA_VERSION:
                         return OutboxResult(OutboxResultKind.APPLIED)
-            except Exception:
+            except (OSError, sqlite3.Error):
                 self._schema_identity = None
             finally:
                 if probe is not None:

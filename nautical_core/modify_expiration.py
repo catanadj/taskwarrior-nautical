@@ -253,11 +253,8 @@ def handle_deleted_modify(
         )
         return
     if disposition == "expiration":
-        try:
-            if handle_expired_deleted_modify(new, services=expiration):
-                return
-        except Exception as exc:
-            services.diag(f"expiration recovery failed: {exc}")
+        if handle_expired_deleted_modify(new, services=expiration):
+            return
         services.recovery_warning(
             new,
             "Expiration recovery could not be initialized; the chain remains active.",

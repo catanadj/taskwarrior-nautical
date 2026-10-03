@@ -176,7 +176,7 @@ class ModifyExpirationContractTests(unittest.TestCase):
                 {"link": 1}, plan, services=services
             )
 
-    def test_expiration_recovery_failure_warns_without_stopping_chain(self) -> None:
+    def test_unexpected_expiration_recovery_failure_propagates_without_stopping_chain(self) -> None:
         old = {
             "status": "pending",
             "chainID": "expiration-chain",
@@ -195,12 +195,11 @@ class ModifyExpirationContractTests(unittest.TestCase):
                 side_effect=RuntimeError("missing recovery module"),
             ),
         ):
-            modify_expiration.handle_deleted_modify(old, new, services=services)
+            with self.assertRaisesRegex(RuntimeError, "missing recovery module"):
+                modify_expiration.handle_deleted_modify(old, new, services=services)
 
         self.assertEqual(new["chain"], "on")
-        self.assertEqual(len(warnings), 1)
-        self.assertIs(warnings[0][0], new)
-        self.assertIn("chain remains active", warnings[0][1])
+        self.assertEqual(warnings, [])
 
     def test_malformed_expiration_task_is_reported_as_recovery_warning(self) -> None:
         warnings: list[tuple[str, list[tuple[str, str]], dict[str, str]]] = []

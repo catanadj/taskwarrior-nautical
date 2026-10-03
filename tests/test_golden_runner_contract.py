@@ -92,6 +92,27 @@ class GoldenRunnerContractTests(unittest.TestCase):
         self.assertIn("Total tests run: 1", output.getvalue())
         self.assertIn("Failed: 1", output.getvalue())
 
+    def test_process_state_reset_failure_fails_selected_case(self):
+        runner = importlib.import_module("dev_tools.nautical_golden_tests")
+        season = importlib.import_module("nautical_core.season_support")
+
+        def passing_case():
+            return None
+
+        output = io.StringIO()
+        with (
+            patch.object(runner, "TESTS", [passing_case]),
+            patch.object(sys, "argv", ["nautical_golden_tests.py"]),
+            patch.object(season, "configure_mode", side_effect=RuntimeError("reset failed")),
+            contextlib.redirect_stdout(output),
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                runner.main()
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("reset failed", output.getvalue())
+        self.assertIn("Failed: 1", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

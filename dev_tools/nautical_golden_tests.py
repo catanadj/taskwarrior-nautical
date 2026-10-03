@@ -189,14 +189,11 @@ def main():
             # Reset process-wide presentation/season knobs before every case;
             # a shuffled run must not inherit state from tests that exercise
             # alternate seasonal profiles or panel modes.
-            try:
-                season = core._import_sibling("season_support")
-                season.configure_mode("fixed")
-                season.configure_hemisphere("north")
-                season.configure_timezone(core.LOCAL_TZ_NAME)
-                core.PANEL_MODE = "rich"
-            except Exception:
-                pass
+            season = importlib.import_module("nautical_core.season_support")
+            season.configure_mode("fixed")
+            season.configure_hemisphere("north")
+            season.configure_timezone(core.LOCAL_TZ_NAME)
+            core.PANEL_MODE = "rich"
             # Some isolation tests intentionally import a disposable package;
             # restore the canonical facade before the next test so shuffled
             # runs do not inherit that temporary module.

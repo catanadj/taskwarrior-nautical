@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .lifecycle.read_service import LifecycleReadService
+from .integration_models import TaskCommandResult
 from .task_models import TaskObservation
 
 
@@ -62,14 +63,14 @@ class PreviousChainPorts:
 
 @dataclass(frozen=True, slots=True)
 class TwGetPorts:
-    service: Any
-    cache_get: Any
-    cache_set: Any
-    count: Any
-    diagnostic: Any
-    run_task: Any
-    command_prefix: Any
-    environment: Any
+    service: LifecycleReadService
+    cache_get: Callable[[str, str], object]
+    cache_set: Callable[[str, str, object], None]
+    count: Callable[[str], None]
+    diagnostic: Callable[[str], None]
+    run_task: Callable[..., TaskCommandResult]
+    command_prefix: Callable[[], list[str]]
+    environment: Callable[[], dict[str, str]]
 
 
 def _token_match(coerce_int: Any, task: Any, token: str) -> bool:
@@ -190,10 +191,10 @@ def tw_get_cached(ports: TwGetPorts, ref: str) -> str:
         if short and cache_chain_id:
             ports.count("unexpected_cache_misses")
             ports.diagnostic(f"cache miss: _get {ref} (chainID={cache_chain_id})")
-    cached = ports.cache_get("tw_get", ref)
-    if isinstance(cached, str):
+    cached_value = ports.cache_get("tw_get", ref)
+    if isinstance(cached_value, str):
         ports.count("tw_get_cache_hits")
-        return cached
+        return cached_value
     ports.count("tw_get_cache_misses")
     result = ports.run_task(
         ports.command_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],

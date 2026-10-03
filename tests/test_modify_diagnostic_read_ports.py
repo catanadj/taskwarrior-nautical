@@ -155,6 +155,21 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
         self.assertIs(annotations["panel_chain_snapshot_loaded"], bool)
 
+    def test_tw_get_ports_use_typed_runner_and_cache_callbacks(self) -> None:
+        from nautical_core.integration_models import TaskCommandResult
+        from nautical_core.lifecycle.read_service import LifecycleReadService
+        from nautical_core.modify_read_effects import TwGetPorts
+
+        annotations = get_type_hints(TwGetPorts)
+        self.assertIs(annotations["service"], LifecycleReadService)
+        self.assertEqual(annotations["cache_get"], abc.Callable[[str, str], object])
+        self.assertEqual(
+            annotations["cache_set"], abc.Callable[[str, str, object], None]
+        )
+        self.assertEqual(annotations["run_task"], abc.Callable[..., TaskCommandResult])
+        self.assertEqual(annotations["command_prefix"], abc.Callable[[], list[str]])
+        self.assertEqual(annotations["environment"], abc.Callable[[], dict[str, str]])
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

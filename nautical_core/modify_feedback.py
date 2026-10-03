@@ -1371,7 +1371,7 @@ def render_cp_completion_feedback(
 
 def orchestrate_anchor_completion_feedback(
     *,
-    request: Any,
+    request: AnchorCompletionFeedbackModel,
     core: Any,
     panel: Any,
     calendar_feedback: Any,
@@ -1448,7 +1448,7 @@ def orchestrate_anchor_completion_feedback(
 
 def orchestrate_cp_completion_feedback(
     *,
-    request: Any,
+    request: CpCompletionFeedbackModel,
     core: Any,
     panel_diagnostics: Any,
     modify_models: Any,

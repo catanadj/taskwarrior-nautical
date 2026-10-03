@@ -132,6 +132,14 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertIs(cp_annotations["services"], CpFeedbackServices)
         self.assertIs(get_type_hints(AnchorCompletionFeedbackModel)["new"], TaskPayload)
         self.assertIs(get_type_hints(CpCompletionFeedbackModel)["child"], TaskPayload)
+        self.assertIs(
+            get_type_hints(modify_feedback.orchestrate_anchor_completion_feedback)["request"],
+            AnchorCompletionFeedbackModel,
+        )
+        self.assertIs(
+            get_type_hints(modify_feedback.orchestrate_cp_completion_feedback)["request"],
+            CpCompletionFeedbackModel,
+        )
 
     def test_recurrence_update_panel_does_not_hide_expression_helper_failures(self) -> None:
         def broken_helper(_expression):

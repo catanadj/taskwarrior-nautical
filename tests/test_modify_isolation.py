@@ -335,6 +335,16 @@ class ModifyIsolationTests(unittest.TestCase):
             context_annotations["snapshot_type"], type[CompletionChainSnapshot]
         )
 
+    def test_child_due_ports_use_generation_and_task_contracts(self) -> None:
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.modify_completion_effects import ChildDuePorts, TaskRowDecoder
+        from nautical_core.task_models import NauticalTask
+
+        annotations = get_type_hints(ChildDuePorts)
+        self.assertIs(annotations["generation"], ChainGenerationService)
+        self.assertIs(annotations["decode_task"], TaskRowDecoder)
+        self.assertEqual(annotations["task_type"], type[NauticalTask])
+
     def test_completion_feedback_and_validation_ports_reuse_callback_contracts(self) -> None:
         from nautical_core.modify_completion_effects import (
             CompletionFeedbackPorts,

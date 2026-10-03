@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from dataclasses import dataclass
+from collections.abc import Mapping
 from functools import partial
 from typing import Any, Callable, Protocol
 
-from .task_models import TaskPayload
+from .chain_generation import ChainGenerationService
+from .task_models import NauticalTask, TaskObservation, TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
 from .lifecycle.read_service import ChainSnapshotRepository
@@ -76,6 +78,10 @@ class CompletionSpawnService(Protocol):
     def completion_build_and_spawn_child(self, task: TaskPayload, *, services: Any, **kwargs: Any) -> Any: ...
 
 
+class TaskRowDecoder(Protocol):
+    def __call__(self, row: Mapping[str, Any], *, source_query: str) -> TaskObservation: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SnapshotPorts:
     repository: ChainSnapshotRepository
@@ -126,9 +132,9 @@ class CompletionCapsPorts:
 @dataclass(frozen=True, slots=True)
 class ChildDuePorts:
     compute: CompletionComputeService
-    generation: Any
-    decode_task: Any
-    task_model: Any
+    generation: ChainGenerationService
+    decode_task: TaskRowDecoder
+    task_type: type[NauticalTask]
     exhaustion_message: Callable[[OccurrenceSearchExhausted], str]
     ensure_terminal: Callable[[TaskPayload, str | None], bool]
     end_summary: EndChainSummaryCallback
@@ -360,7 +366,9 @@ def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str) -> Any:
     compute = ports.compute
 
     def typed_task(task: Any) -> Any:
-        return ports.task_model.NauticalTask.from_observation(ports.decode_task(task, source_query="on-modify completion"))
+        return ports.task_type.from_observation(
+            ports.decode_task(task, source_query="on-modify completion")
+        )
 
     def handle_terminal(exc: Any) -> bool:
         message = ports.exhaustion_message(exc)
@@ -462,7 +470,7 @@ def completion_compute_ports_for(host: Any) -> CompletionComputePorts:
         compute=compute,
         generation=generation,
         decode_task=host._module("task_codec").DEFAULT_TASK_CODEC.decode_row,
-        task_model=host._module("task_models"),
+        task_type=host._module("task_models").NauticalTask,
         exhaustion_message=host.core._import_sibling("scheduler_models").occurrence_exhaustion_message,
         ensure_terminal=ensure_terminal,
         end_summary=_end_summary_port_for(host),

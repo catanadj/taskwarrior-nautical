@@ -1245,6 +1245,61 @@ class ModifyIsolationTests(unittest.TestCase):
         ):
             self.assertIs(composition.capabilities_for(ImmutableHost()), capabilities)
 
+    def test_native_carry_summary_failure_does_not_mask_primary_rejection(self) -> None:
+        from nautical_core.modify_transition_effects import (
+            NativeCarryPorts,
+            reject_native_until_carry,
+        )
+
+        panels: list[tuple[str, list[tuple[str, str]], str]] = []
+
+        class HookAbort(Exception):
+            pass
+
+        def broken_summary(*_args: Any, **_kwargs: Any) -> str:
+            raise RuntimeError("optional carry summary failed")
+
+        def panel(title: str, rows: list[tuple[str, str]], *, kind: str) -> None:
+            panels.append((title, rows, kind))
+
+        def abort(code: int) -> None:
+            raise HookAbort(code)
+
+        ports = NativeCarryPorts(
+            describe_carry=broken_summary,
+            parse_datetime=lambda _value: None,
+            to_local=lambda value: value,
+            format_local=str,
+            anchor_field=lambda _task: "the next occurrence",
+            panel=panel,
+            abort=abort,
+        )
+
+        with self.assertRaises(HookAbort) as raised:
+            reject_native_until_carry(
+                ports,
+                {"until": "invalid"},
+                {},
+                None,
+                "due",
+                ValueError("until must be later than due"),
+            )
+
+        self.assertEqual(raised.exception.args, (1,))
+        self.assertEqual(
+            panels,
+            [
+                (
+                    "❌ Invalid expiration window",
+                    [
+                        ("Target", "the next occurrence"),
+                        ("Required", "until must be later than due"),
+                    ],
+                    "error",
+                )
+            ],
+        )
+
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin
         from nautical_core.lifecycle.read_service import LifecycleReadService

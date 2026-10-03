@@ -224,6 +224,8 @@ def reject_native_until_carry(
             to_local=ports.to_local,
         )
     except Exception:
+        # This explanation is optional; never let it replace the primary
+        # rejection or prevent the user from seeing the required action.
         pass
     target_label = (
         ports.format_local(new_target)

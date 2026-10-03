@@ -6,11 +6,18 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from .lifecycle.read_service import LifecycleReadService
 from .task_models import TaskObservation
 
 
 class ChainExportReader(Protocol):
     def get_chain_export(self, chain_id: str) -> list[TaskObservation] | None: ...
+
+
+class TaskRowDecoder(Protocol):
+    def __call__(
+        self, row: Mapping[str, Any], *, source_query: str
+    ) -> TaskObservation: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,9 +48,9 @@ class ChainExportPort:
 
 @dataclass(frozen=True, slots=True)
 class SeedLookupPorts:
-    service: Any
-    decode_row: Any
-    cache_set: Any
+    service: LifecycleReadService
+    decode_row: TaskRowDecoder
+    cache_set: Callable[[str, Any, Any], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +97,12 @@ def parse_extra_tokens(port: ExtraTokenPort, extra: str | None) -> list[str] | N
     return port.parse(extra)
 
 
-def seed_runtime_lookup_task(ports: SeedLookupPorts, payload: dict[str, Any] | None, *, lookup_short: str | None = None) -> Any:
+def seed_runtime_lookup_task(
+    ports: SeedLookupPorts,
+    payload: dict[str, Any] | None,
+    *,
+    lookup_short: str | None = None,
+) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     uuid_str = str(payload.get("uuid") or "").strip()
@@ -108,7 +120,9 @@ def seed_runtime_lookup_task(ports: SeedLookupPorts, payload: dict[str, Any] | N
     return task_obj.to_mapping()
 
 
-def seed_runtime_lookup_tasks(ports: SeedLookupPorts, *tasks: dict | None) -> None:
+def seed_runtime_lookup_tasks(
+    ports: SeedLookupPorts, *tasks: dict[str, Any] | None
+) -> None:
     for task in tasks:
         seed_runtime_lookup_task(ports, task)
 

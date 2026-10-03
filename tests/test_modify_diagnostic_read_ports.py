@@ -133,6 +133,15 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertIsNot(shared_reader, Any)
         self.assertIs(get_type_hints(ChainExportPort)["service"], shared_reader)
 
+    def test_seed_lookup_ports_use_lifecycle_reader_and_typed_callbacks(self) -> None:
+        from nautical_core.lifecycle.read_service import LifecycleReadService
+        from nautical_core.modify_read_effects import SeedLookupPorts
+
+        annotations = get_type_hints(SeedLookupPorts)
+        self.assertIs(annotations["service"], LifecycleReadService)
+        self.assertIsNot(annotations["decode_row"], Any)
+        self.assertEqual(annotations["cache_set"], abc.Callable[[str, Any, Any], None])
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

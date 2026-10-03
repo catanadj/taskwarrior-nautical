@@ -160,6 +160,43 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                     repository.acknowledge_integrity(intent_id="integrity:missing", owner="worker")
             self.assertIs(type(raised.exception), RuntimeError)
 
+    def test_integrity_enqueue_does_not_convert_unexpected_encoding_errors(self) -> None:
+        from nautical_core.chain_integrity_models import (
+            IntegrityOperation,
+            IntegrityRepairPlan,
+            RepairOperationKind,
+            RepairSafety,
+        )
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+
+        operation = IntegrityOperation(
+            "enqueue-integrity-op",
+            RepairOperationKind.METADATA_REPAIR,
+            "enqueue-integrity-chain",
+            "aaaaaaaa-0000-0000-0000-000000000951",
+            (("snapshot_id", "enqueue-integrity-snapshot"),),
+            ("target remains present",),
+            ("link is 2",),
+            (("link", 2),),
+        )
+        plan = IntegrityRepairPlan(
+            "enqueue-integrity-plan",
+            "enqueue-integrity-snapshot",
+            "enqueue-integrity-chain",
+            RepairSafety.SAFE,
+            "missing_link",
+            "integrity enqueue boundary test",
+            (operation,),
+            "cfg-enqueue-integrity",
+        )
+        envelope = IntegrityOutboxEnvelope(plan, "cfg-enqueue-integrity", "sch-enqueue-integrity")
+        repository = _LifecycleOutboxRepository(Path("/tmp/nautical-integrity-enqueue-test"))
+
+        with patch.object(IntegrityOutboxEnvelope, "to_json", side_effect=RuntimeError("injected encoder defect")):
+            with self.assertRaises(RuntimeError) as raised:
+                repository.enqueue_integrity(envelope)
+        self.assertIs(type(raised.exception), RuntimeError)
+
     def test_snapshot_does_not_misclassify_internal_decode_errors_as_poison(self) -> None:
         with TemporaryDirectory() as directory:
             repository = _LifecycleOutboxRepository(Path(directory))

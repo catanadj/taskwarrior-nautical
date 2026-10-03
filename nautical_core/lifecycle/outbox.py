@@ -874,7 +874,7 @@ class _LifecycleOutboxRepository:
             fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
             config = envelope.configuration_fingerprint
             schedule = envelope.schedule_fingerprint
-        except Exception as exc:
+        except (TypeError, ValueError) as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=f"invalid integrity envelope: {exc}")
         now = self._clock()
 

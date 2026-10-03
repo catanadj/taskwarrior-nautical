@@ -26,6 +26,16 @@ class ModifyCompletionFlowContracts(unittest.TestCase):
         self.assertIs(finalize_clock, datetime)
         self.assertIsNot(service_clock, Any)
 
+    def test_completion_flow_uses_runtime_and_unit_of_work_owners(self) -> None:
+        from nautical_core.modify_runtime import ModifyRuntimeState
+        from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+        runtime_state = get_type_hints(flow.CompletionFlowServices)["runtime_state"]
+        unit_of_work = get_type_hints(flow.handle_completion_modify)["unit_of_work"]
+
+        self.assertEqual(runtime_state, Callable[[], ModifyRuntimeState])
+        self.assertIs(unit_of_work, TaskwarriorUnitOfWork)
+
     def test_unavailable_chain_export_is_not_loaded_as_empty_snapshot(self) -> None:
         command = TaskCommand(("task", "export"), "completion snapshot", 3.0)
         unavailable = Unavailable(

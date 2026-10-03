@@ -17,13 +17,15 @@ from nautical_core.modify_models import (
 )
 from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation, TaskPayload
+from nautical_core.modify_runtime import ModifyRuntimeState
+from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
 
 
 @dataclass(slots=True)
 class CompletionFlowServices:
     """Typed collaborators for the complete-on-modify lifecycle boundary."""
 
-    runtime_state: Callable[[], Any]
+    runtime_state: Callable[[], ModifyRuntimeState]
     prepare_recurrence: Callable[[TaskPayload, TaskPayload], tuple[str, str, str]]
     preserve_cp_relative_offsets: Callable[[TaskPayload, TaskPayload, str], None]
     preserve_native_until: Callable[[TaskPayload, TaskPayload, str], None]
@@ -43,7 +45,7 @@ class CompletionFlowServices:
 def handle_completion_modify(
     old: TaskPayload,
     new: TaskPayload,
-    unit_of_work: Any,
+    unit_of_work: TaskwarriorUnitOfWork,
     *,
     services: CompletionFlowServices,
 ) -> CompletionLifecycleResult | None:

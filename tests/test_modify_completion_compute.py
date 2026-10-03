@@ -162,6 +162,50 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         )
         self.assertEqual((earlier_max[2], earlier_max[4]), (3, 5))
 
+    def test_completion_caps_do_not_hide_unexpected_forecast_failures(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        child_due = datetime(2026, 1, 2, 9, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(RuntimeError, "forecast defect"):
+            compute.completion_caps(
+                "cp",
+                {"chainMax": 8},
+                child_due,
+                None,
+                coerce_int=core.coerce_int,
+                dtparse=core.parse_dt_any,
+                estimate_cp_final_by_max=lambda *_args: (_ for _ in ()).throw(
+                    RuntimeError("forecast defect")
+                ),
+                estimate_anchor_final_by_max=lambda *_args: None,
+                cap_from_until_cp=lambda *_args: (None, None),
+                cap_from_until_anchor=lambda *_args: (None, None),
+            )
+
+    def test_completion_caps_keep_known_exhaustion_as_optional_forecast(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        child_due = datetime(2026, 1, 2, 9, tzinfo=timezone.utc)
+        result = compute.completion_caps(
+            "cp",
+            {"chainMax": 8},
+            child_due,
+            None,
+            coerce_int=core.coerce_int,
+            dtparse=core.parse_dt_any,
+            estimate_cp_final_by_max=lambda *_args: (_ for _ in ()).throw(
+                OccurrenceSearchExhausted(
+                    "CP forecast", reference=child_due, limit=2
+                )
+            ),
+            estimate_anchor_final_by_max=lambda *_args: None,
+            cap_from_until_cp=lambda *_args: (None, None),
+            cap_from_until_anchor=lambda *_args: (None, None),
+        )
+
+        self.assertEqual(result[2:], (8, [], None))
+
     def test_until_past_guard_orders_repeated_wall_times_by_instant(self) -> None:
         zone = ZoneInfo("Europe/Bucharest")
         now = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)

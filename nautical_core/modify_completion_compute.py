@@ -220,14 +220,14 @@ def completion_caps(
             fmax = estimate_cp_final_by_max(new, child_due)
             if fmax:
                 finals.append(("max", fmax))
-        except Exception:
+        except (ValueError, OverflowError, OccurrenceSearchExhausted):
             pass
     if kind in {"anchor", "anchor_file"} and cpmax:
         try:
             fmax = estimate_anchor_final_by_max(new, child_due, dnf)
             if fmax:
                 finals.append(("max", fmax))
-        except Exception:
+        except (ValueError, OverflowError, OccurrenceSearchExhausted):
             pass
 
     until_cap_no = None

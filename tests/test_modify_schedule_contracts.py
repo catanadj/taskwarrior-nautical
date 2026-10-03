@@ -93,6 +93,10 @@ class ModifyScheduleContractTests(unittest.TestCase):
             annotations["compare_datetimes"],
             Callable[[datetime, datetime], int],
         )
+        self.assertIs(
+            annotations["anchor_file_provider_for"],
+            modify_schedule_effects.AnchorFileProviderFactory,
+        )
 
     def test_schedule_ports_have_concrete_callback_signatures(self) -> None:
         annotations = get_type_hints(modify_schedule_effects.SchedulePorts)

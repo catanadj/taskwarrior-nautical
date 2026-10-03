@@ -15,6 +15,7 @@ from .modify_models import (
     SafeParseDatetimeCallback,
 )
 from .scheduler_service import SchedulerService
+from .occurrence_provider import Occurrence
 from .timeutil import compare_datetimes
 
 
@@ -63,6 +64,31 @@ class NextOccurrenceAfterLocalDateTime(Protocol):
     ) -> datetime | None: ...
 
 
+class AnchorFileOccurrenceSource(Protocol):
+    """Find one next anchor-file occurrence with bound scheduling context."""
+
+    def next_after(
+        self,
+        after_local: datetime,
+        *,
+        build_local_datetime: Callable[[date, tuple[int, int]], datetime],
+        to_local: Callable[[datetime], datetime],
+        inclusive: bool = False,
+    ) -> Occurrence | None: ...
+
+
+class AnchorFileProviderFactory(Protocol):
+    """Create the optional anchor-file occurrence source for one task."""
+
+    def __call__(
+        self,
+        anchor_file: str,
+        *,
+        fallback_hhmm: tuple[int, int],
+        seed_base: str,
+    ) -> AnchorFileOccurrenceSource | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class OccurrencePorts:
     next_occurrence: NextOccurrenceAfterLocalDateTime
@@ -106,7 +132,7 @@ class AnchorCompletionPorts:
     safe_parse_datetime: SafeParseDatetimeCallback
     anchor_file_fallback_hhmm: Callable[[dict[str, Any], datetime], tuple[int, int]]
     omit_dnf_from_parent: Callable[[dict[str, Any]], tuple[str, Any]]
-    anchor_file_provider_for: Any
+    anchor_file_provider_for: AnchorFileProviderFactory
     compare_datetimes: Callable[[datetime, datetime], int]
     max_iterations: int
     diagnostic: DiagnosticCallback

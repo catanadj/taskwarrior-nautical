@@ -144,6 +144,8 @@ def import_core_package(base: Path) -> tuple[Any | None, Path | None, Exception 
         try:
             existing_file = Path(str(getattr(existing, "__file__", ""))).resolve() if existing is not None else None
         except Exception:
+            # This identity check is only a reuse optimization; if stale
+            # module metadata fails, discard it and import the validated target.
             existing_file = None
         if existing is not None and existing_file == target.resolve():
             return existing, target, None
@@ -153,6 +155,8 @@ def import_core_package(base: Path) -> tuple[Any | None, Path | None, Exception 
         module = importlib.import_module("nautical_core")
         return module, target, None
     except Exception as exc:
+        # Return import-time failures intact so hook composition can decide
+        # whether the selected core module is required or optional.
         return None, target, exc
 
 

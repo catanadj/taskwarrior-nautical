@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +11,50 @@ from nautical_core.hook_runtime import HookModuleAccess
 
 
 class HookBootstrapTrustTests(unittest.TestCase):
+    def test_core_import_identity_probe_failure_reloads_selected_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "nautical_core"
+            package.mkdir()
+            (package / "__init__.py").write_text("# package\n", encoding="utf-8")
+            existing = ModuleType("nautical_core")
+
+            def broken_identity(name: str) -> None:
+                if name == "__file__":
+                    raise RuntimeError("existing module identity unavailable")
+
+            existing.__getattr__ = broken_identity
+            replacement = ModuleType("nautical_core")
+            with (
+                patch.dict(hook_bootstrap.sys.modules, {"nautical_core": existing}),
+                patch.object(hook_bootstrap.sys, "path", list(hook_bootstrap.sys.path)),
+                patch.object(hook_bootstrap.importlib, "import_module", return_value=replacement) as importer,
+            ):
+                module, target, error = hook_bootstrap.import_core_package(root)
+
+        self.assertIs(module, replacement)
+        self.assertEqual(target, package / "__init__.py")
+        self.assertIsNone(error)
+        importer.assert_called_once_with("nautical_core")
+
+    def test_core_import_failure_is_returned_with_original_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "nautical_core"
+            package.mkdir()
+            (package / "__init__.py").write_text("# package\n", encoding="utf-8")
+            failure = RuntimeError("core import defect")
+            with (
+                patch.dict(hook_bootstrap.sys.modules, {"nautical_core": None}),
+                patch.object(hook_bootstrap.sys, "path", list(hook_bootstrap.sys.path)),
+                patch.object(hook_bootstrap.importlib, "import_module", side_effect=failure),
+            ):
+                module, target, error = hook_bootstrap.import_core_package(root)
+
+        self.assertIsNone(module)
+        self.assertEqual(target, package / "__init__.py")
+        self.assertIs(error, failure)
+
     def test_core_override_resolution_contains_expected_path_failures(self) -> None:
         default_base = Path("/default-core")
         candidate = Path("/configured-core")

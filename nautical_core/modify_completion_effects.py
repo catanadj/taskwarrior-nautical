@@ -9,7 +9,7 @@ from functools import partial
 from typing import Any, Callable, Protocol
 
 from .chain_generation import ChainGenerationService
-from .task_models import NauticalTask, TaskObservation, TaskPayload
+from .task_models import NauticalTask, TaskDraft, TaskObservation, TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
 from .lifecycle.read_service import ChainSnapshotRepository
@@ -767,14 +767,31 @@ def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
     generation_module = host._module("modify_generation_effects")
     generation = generation_module.chain_generation_service(generation_module.generation_ports_for(host))
     codec = host._module("task_codec")
-    task_models = host._module("task_models")
     models = host._module("modify_models")
 
-    def build_child_draft(task: Any, *args: Any, **inner_kwargs: Any) -> Any:
-        typed_task = task_models.NauticalTask.from_observation(
+    def build_child_draft(
+        task: TaskPayload,
+        child_due: datetime | None,
+        child_field: str,
+        next_no: int,
+        parent_short: str,
+        kind: str,
+        cpmax: int,
+        until_dt: datetime | None,
+    ) -> TaskDraft:
+        typed_task = NauticalTask.from_observation(
             codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
         )
-        return generation.build_child_draft(typed_task, *args, **inner_kwargs)
+        return generation.build_child_draft(
+            typed_task,
+            child_due,
+            child_field,
+            next_no,
+            parent_short,
+            kind,
+            cpmax,
+            until_dt,
+        )
 
     spawn_effects = host._module("modify_spawn_effects")
     spawn_ports = spawn_effects.spawn_child_ports_for(host)
@@ -791,7 +808,19 @@ def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
     )
 
 
-def build_and_spawn_child(ports: CompletionSpawnPorts, new: TaskPayload, **kwargs: Any) -> Any:
+def build_and_spawn_child(
+    ports: CompletionSpawnPorts,
+    new: TaskPayload,
+    *,
+    child_due: datetime | None,
+    child_field: str = "due",
+    next_no: int,
+    parent_short: str,
+    kind: str,
+    cpmax: int,
+    until_dt: datetime | None,
+    lifecycle_plan: LifecyclePlan | None = None,
+) -> CompletionSpawnResult | None:
     services = ports.services_type(
         build_child_draft=ports.build_child_draft,
         spawn_child_atomic=ports.spawn_child_atomic,
@@ -799,7 +828,18 @@ def build_and_spawn_child(ports: CompletionSpawnPorts, new: TaskPayload, **kwarg
         print_task=ports.print_task,
         diag=ports.diagnostic,
     )
-    return ports.spawn.completion_build_and_spawn_child(new, services=services, **kwargs)
+    return ports.spawn.completion_build_and_spawn_child(
+        new,
+        child_due=child_due,
+        child_field=child_field,
+        next_no=next_no,
+        parent_short=parent_short,
+        kind=kind,
+        cpmax=cpmax,
+        until_dt=until_dt,
+        lifecycle_plan=lifecycle_plan,
+        services=services,
+    )
 
 
 __all__ = (

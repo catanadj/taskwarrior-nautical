@@ -91,6 +91,59 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                     repository.claim_batch(owner="worker", lease_seconds=30, limit=1)
             self.assertIs(type(raised.exception), RuntimeError)
 
+    def test_integrity_claim_quarantines_corruption_but_propagates_defects(self) -> None:
+        from nautical_core.chain_integrity_models import (
+            IntegrityOperation,
+            IntegrityRepairPlan,
+            RepairOperationKind,
+            RepairSafety,
+        )
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+
+        operation = IntegrityOperation(
+            "claim-integrity-op",
+            RepairOperationKind.METADATA_REPAIR,
+            "claim-integrity-chain",
+            "aaaaaaaa-0000-0000-0000-000000000951",
+            (("snapshot_id", "claim-integrity-snapshot"),),
+            ("target remains present",),
+            ("link is 2",),
+            (("link", 2),),
+        )
+        plan = IntegrityRepairPlan(
+            "claim-integrity-plan",
+            "claim-integrity-snapshot",
+            "claim-integrity-chain",
+            RepairSafety.SAFE,
+            "missing_link",
+            "integrity claim boundary test",
+            (operation,),
+            "cfg-claim-integrity",
+        )
+        envelope = IntegrityOutboxEnvelope(plan, "cfg-claim-integrity", "sch-claim-integrity")
+
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.enqueue_integrity(envelope).ok)
+            with patch.object(IntegrityOutboxEnvelope, "from_dict", side_effect=RuntimeError("injected decode defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.claim_integrity_batch(owner="worker", lease_seconds=30, limit=1)
+            self.assertIs(type(raised.exception), RuntimeError)
+
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.enqueue_integrity(envelope).ok)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_outbox SET plan_json='{' WHERE intent_id=?",
+                    (envelope.intent_id,),
+                )
+            claim, records = repository.claim_integrity_batch(owner="worker", lease_seconds=30, limit=1)
+            self.assertTrue(claim.ok)
+            self.assertEqual(records, ())
+            _, status = repository.status(intent_id=envelope.intent_id)
+            self.assertEqual(status["records"][0]["state"], "poison")
+
     def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
         from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
         from nautical_core.chain_integrity_models import (

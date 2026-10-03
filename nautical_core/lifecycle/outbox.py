@@ -1077,7 +1077,8 @@ class _LifecycleOutboxRepository:
                         envelope = IntegrityOutboxEnvelope.from_dict(json.loads(str(row["plan_json"] or "")))
                         if hashlib.sha256(envelope.to_json().encode("utf-8")).hexdigest() != str(row["plan_fingerprint"] or ""):
                             raise LifecycleOutboxError("integrity envelope fingerprint mismatch")
-                    except Exception as exc:
+                        attempts = int(row["attempts"] or 0)
+                    except (LifecycleOutboxError, ValueError, TypeError, KeyError, IndexError) as exc:
                         self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_integrity_row", str(exc)))
                         continue
                     conn.execute(
@@ -1088,12 +1089,12 @@ class _LifecycleOutboxRepository:
                     )
                     records.append(IntegrityOutboxRecord(
                         envelope, OutboxProcessingState.CLAIMED, ExecutionStage.PLANNED,
-                        owner, expires, int(row["attempts"] or 0) + 1,
+                        owner, expires, attempts + 1,
                     ))
                 return OutboxResult(OutboxResultKind.APPLIED), tuple(records)
         except sqlite3.OperationalError as exc:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()
-        except Exception as exc:
+        except (LifecycleOutboxError, sqlite3.Error, OSError) as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), ()
         finally:
             if conn is not None:

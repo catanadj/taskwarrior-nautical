@@ -42,8 +42,8 @@ class TimelineSummaryPorts:
 @dataclass(frozen=True, slots=True)
 class SpanFieldsPorts:
     summary: Any
-    export_endpoint: Any
-    parse_datetime: Any
+    export_endpoint: Callable[[str, str], TaskObservation | None]
+    parse_datetime: Callable[[object], datetime | None]
     human_delta: Any
 
 
@@ -122,7 +122,9 @@ def chain_export_ports_for(host: Any) -> ChainExportPorts:
     )
 
 
-def export_chain_endpoint(ports: ChainExportPorts, chain_id: str, direction: str) -> Any:
+def export_chain_endpoint(
+    ports: ChainExportPorts, chain_id: str, direction: str
+) -> TaskObservation | None:
     """Return a chain endpoint from the invocation's authoritative snapshot."""
     rows = ports.service.get_chain_export(chain_id)
     if rows is None:

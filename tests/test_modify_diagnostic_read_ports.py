@@ -63,6 +63,20 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             },
         )
 
+    def test_span_fields_ports_type_export_and_datetime_callbacks(self) -> None:
+        from nautical_core.modify_diagnostics_effects import SpanFieldsPorts
+        from nautical_core.task_models import TaskObservation
+
+        self.assertEqual(
+            get_type_hints(SpanFieldsPorts),
+            {
+                "summary": Any,
+                "export_endpoint": Callable[[str, str], TaskObservation | None],
+                "parse_datetime": Callable[[object], datetime | None],
+                "human_delta": Any,
+            },
+        )
+
     def test_summary_export_does_not_mask_analytics_sorting_defects(self) -> None:
         import nautical_core.modify_diagnostics_effects as diagnostics
         from nautical_core.task_models import TaskObservation

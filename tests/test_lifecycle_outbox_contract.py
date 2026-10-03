@@ -34,6 +34,22 @@ from nautical_core.lifecycle.outbox import (
 
 
 class LifecycleOutboxContractTests(unittest.TestCase):
+    def test_connection_scope_does_not_mask_unexpected_operation_errors(self) -> None:
+        for session in (False, True):
+            with self.subTest(session=session), TemporaryDirectory() as directory:
+                repository = _LifecycleOutboxRepository(Path(directory))
+
+                def fail(_connection):
+                    raise RuntimeError("injected repository defect")
+
+                if session:
+                    with repository.session():
+                        with self.assertRaisesRegex(RuntimeError, "injected repository defect"):
+                            repository._with_connection(fail)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "injected repository defect"):
+                        repository._with_connection(fail)
+
     def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
         from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
         from nautical_core.chain_integrity_models import (

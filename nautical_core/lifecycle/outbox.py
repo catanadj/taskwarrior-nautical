@@ -647,7 +647,7 @@ class _LifecycleOutboxRepository:
                 return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
             except LifecycleOutboxError as exc:
                 return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
-            except Exception as exc:
+            except (sqlite3.Error, OSError) as exc:
                 return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
             finally:
                 self._metric("outbox_operation_seconds", time.perf_counter() - started)
@@ -666,7 +666,7 @@ class _LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
         except LifecycleOutboxError as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
-        except Exception as exc:
+        except (sqlite3.Error, OSError) as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
         finally:
             self._metric("outbox_operation_seconds", time.perf_counter() - started)
@@ -692,6 +692,8 @@ class _LifecycleOutboxRepository:
             except LifecycleOutboxError as exc:
                 return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), {}
             except Exception as exc:
+                # This is the atomic bulk-transaction boundary: callback
+                # failures must become a rejected result after rollback.
                 return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), {}
             finally:
                 self._metric("outbox_operation_seconds", time.perf_counter() - started)
@@ -708,6 +710,8 @@ class _LifecycleOutboxRepository:
         except LifecycleOutboxError as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), {}
         except Exception as exc:
+            # This is the atomic bulk-transaction boundary: callback failures
+            # must become a rejected result after rollback.
             return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), {}
         finally:
             self._metric("outbox_operation_seconds", time.perf_counter() - started)

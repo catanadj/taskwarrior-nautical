@@ -22,7 +22,7 @@ def render_business_calendar_displacement(
             adjusted,
             calendar_name=calendar_name,
         )
-    except Exception:
+    except (OverflowError, OSError, TypeError, ValueError):
         return False
     if displacement is None:
         return False

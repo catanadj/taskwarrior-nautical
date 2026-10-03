@@ -9,6 +9,8 @@ from unittest.mock import patch
 import nautical_core as core
 from nautical_core.compiled_schedule import CompiledSchedule, CompiledScheduleCache
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+from nautical_core.recurrence_context import RecurrenceContext
+from nautical_core.recurrence_spec import RecurrenceSpec
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
@@ -20,6 +22,61 @@ def _compiled(row: dict) -> CompiledSchedule:
 
 
 class CompiledScheduleContractTests(unittest.TestCase):
+    def test_business_calendar_fingerprints_separate_compiled_cache_entries(self) -> None:
+        class Calendar:
+            name = "custom"
+
+            def __init__(self, fingerprint: str) -> None:
+                self.fingerprint = fingerprint
+
+            def is_business_day(self, _day) -> bool:
+                return True
+
+        first = CompiledSchedule.from_spec(
+            RecurrenceSpec(
+                context=RecurrenceContext(
+                    chain_id="same-chain",
+                    business_calendar=Calendar("calendar-one"),
+                ),
+                anchor="w:mon",
+            )
+        )
+        second = CompiledSchedule.from_spec(
+            RecurrenceSpec(
+                context=RecurrenceContext(
+                    chain_id="same-chain",
+                    business_calendar=Calendar("calendar-two"),
+                ),
+                anchor="w:mon",
+            )
+        )
+
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
+        cache = CompiledScheduleCache(max_entries=2)
+        self.assertIsNot(cache.get_or_compile(first.spec), cache.get_or_compile(second.spec))
+
+    def test_failing_context_fingerprint_is_not_replaced_by_type_identity(self) -> None:
+        class BrokenCalendar:
+            name = "custom"
+
+            @staticmethod
+            def fingerprint() -> str:
+                raise RuntimeError("business-calendar fingerprint failed")
+
+            def is_business_day(self, _day) -> bool:
+                return True
+
+        spec = RecurrenceSpec(
+            context=RecurrenceContext(
+                chain_id="same-chain",
+                business_calendar=BrokenCalendar(),
+            ),
+            anchor="w:mon",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "business-calendar fingerprint failed"):
+            CompiledSchedule.from_spec(spec)
+
     def test_equivalent_fields_share_canonical_fingerprint_and_cache_entry(self) -> None:
         first = _compiled(
             {

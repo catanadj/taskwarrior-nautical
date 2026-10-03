@@ -226,10 +226,9 @@ def _stable_context_value(value: Any) -> Any:
             return str(marker)
     fingerprint = getattr(value, "fingerprint", None)
     if callable(fingerprint):
-        try:
-            return str(fingerprint())
-        except Exception:
-            pass
+        return str(fingerprint())
+    if fingerprint is not None:
+        return str(fingerprint)
     return f"{type(value).__module__}.{type(value).__qualname__}"
 
 

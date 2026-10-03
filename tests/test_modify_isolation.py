@@ -918,7 +918,7 @@ class ModifyIsolationTests(unittest.TestCase):
             "prepare_recurrence": "_PrepareRecurrenceCallback",
             "preserve_cp_relative_offsets": "_PreserveCPCarryCallback",
             "preserve_native_until": "_PreserveNativeUntilCallback",
-            "compute_next_and_limits": "_ComputeNextAndLimitsCallback",
+            "compute_next_and_limits": "CompletionComputeCallback",
         }
         for field, protocol_name in expected.items():
             with self.subTest(field=field):

@@ -76,6 +76,29 @@ class ModifyCompletionFlowContracts(unittest.TestCase):
             ],
         )
 
+    def test_completion_compute_callback_has_typed_preflight_context(self) -> None:
+        from nautical_core.modify_models import (
+            CompletionComputeCallback,
+            CompletionPreflightContext,
+        )
+
+        callback_hints = get_type_hints(CompletionComputeCallback.__call__)
+
+        self.assertEqual(callback_hints["preflight"], CompletionPreflightContext | None)
+        flow_callback = get_type_hints(
+            flow.CompletionFlowServices,
+            localns={
+                "LifecycleReadService": LifecycleReadService,
+                "TaskReadRepository": TaskReadRepository,
+            },
+        )["compute_next_and_limits"]
+        self.assertIs(flow_callback, CompletionComputeCallback)
+
+        from nautical_core.modify_composition import ModifyRuntimeServices
+
+        runtime_callback = get_type_hints(ModifyRuntimeServices)["compute_next_and_limits"]
+        self.assertIs(runtime_callback, CompletionComputeCallback)
+
     def test_unavailable_chain_export_is_not_loaded_as_empty_snapshot(self) -> None:
         command = TaskCommand(("task", "export"), "completion snapshot", 3.0)
         unavailable = Unavailable(

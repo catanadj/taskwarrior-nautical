@@ -667,6 +667,20 @@ class CompletionLifecycleResult:
         object.__setattr__(self, "reason", str(self.reason or "").strip())
 
 
+class CompletionComputeCallback(Protocol):
+    """Compute one successor with the optional preflight snapshot context."""
+
+    def __call__(
+        self,
+        new: TaskPayload,
+        kind: str,
+        next_no: int,
+        now_utc: datetime,
+        *,
+        preflight: CompletionPreflightContext | None = None,
+    ) -> CompletionComputeResult | CompletionLifecycleResult | None: ...
+
+
 @dataclass(slots=True)
 class CompletionSpawnServices:
     build_child_draft: BuildChildDraftCallback

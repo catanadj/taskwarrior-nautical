@@ -12,6 +12,7 @@ from .modify_models import (
     AnchorCompletionRenderCallback,
     ChainIntegrityCallback,
     CpCompletionRenderCallback,
+    CompletionComputeCallback,
     LifecycleResultRenderCallback,
     SeedLookupCallback,
 )
@@ -20,7 +21,7 @@ from .task_models import NauticalTask, TaskObservation, TaskPayload
 
 if TYPE_CHECKING:
     from .lifecycle.models import LifecyclePlan
-    from .modify_models import CompletionComputeResult, CompletionLifecycleResult, TaskView
+    from .modify_models import CompletionLifecycleResult, TaskView
     from .modify_workflow import RecurrenceTransitionDecision
     from .modify_validation_effects import (
         AnchorValidationPorts,
@@ -209,18 +210,6 @@ class _PreserveNativeUntilCallback(Protocol):
         *,
         transition: Any = None,
     ) -> Any: ...
-
-
-class _ComputeNextAndLimitsCallback(Protocol):
-    def __call__(
-        self,
-        new: TaskPayload,
-        kind: str,
-        next_no: int,
-        now_utc: datetime,
-        *,
-        preflight: Any = None,
-    ) -> "CompletionComputeResult | CompletionLifecycleResult | None": ...
 
 
 class _TaskHookResponseFactory(Protocol):
@@ -716,7 +705,7 @@ class ModifyRuntimeServices:
     validate_native_until: Callable[[TaskPayload], None]
     validate_native_until_slots: Callable[[TaskPayload], None]
     now_utc: Callable[[], datetime]
-    compute_next_and_limits: _ComputeNextAndLimitsCallback
+    compute_next_and_limits: CompletionComputeCallback
 
     @classmethod
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None) -> "ModifyRuntimeServices":

@@ -45,7 +45,12 @@ def human_delta(
     return port.humanize(start, end, bool(prefer_months))
 
 
-def on_time_delta(port: HumanDeltaPort, due_dt: Any, end_dt: Any, tol_secs: int = 60) -> Any:
+def on_time_delta(
+    port: HumanDeltaPort,
+    due_dt: datetime | None,
+    end_dt: datetime | None,
+    tol_secs: int = 60,
+) -> str:
     if not (due_dt and end_dt):
         return ""
     diff = (end_dt - due_dt).total_seconds()
@@ -62,10 +67,17 @@ def line_preview(
     ports: LinePreviewPorts,
     link_no: int,
     task: TaskPayload,
-    child_due_utc: Any,
+    child_due_utc: datetime | None,
     child_short: str,
-    now_utc: Any,
-    **kwargs: Any,
+    now_utc: datetime,
+    *,
+    child_field: str = "due",
+    cap_no: int | None = None,
+    until_dt: datetime | None = None,
+    until_no: int | None = None,
+    child_until_dt: datetime | None = None,
+    kind: str = "cp",
+    minimal: bool = False,
 ) -> str:
     def format_on_time_delta(due: Any, end: Any) -> str:
         return on_time_delta(ports.delta, due, end)
@@ -75,11 +87,17 @@ def line_preview(
 
     return ports.format_line_preview(
         link_no, task, child_due_utc, child_short, now_utc,
+        child_field=child_field,
+        cap_no=cap_no,
+        until_dt=until_dt,
+        until_no=until_no,
+        child_until_dt=child_until_dt,
+        kind=kind,
+        minimal=minimal,
         core=ports.core,
         format_local=ports.format_local,
         on_time_delta=format_on_time_delta,
         human_delta=format_human_delta,
-        **kwargs,
     )
 
 

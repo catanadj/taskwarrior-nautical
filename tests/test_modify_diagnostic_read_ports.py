@@ -243,6 +243,20 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(annotations["format_local"], Callable[[Any], str])
         self.assertNotIn(Any, annotations.values())
 
+    def test_line_preview_adapters_expose_explicit_temporal_options(self) -> None:
+        import inspect
+        import nautical_core.modify_format_effects as formatting
+
+        annotations = get_type_hints(formatting.line_preview)
+        self.assertEqual(annotations["child_due_utc"], datetime | None)
+        self.assertEqual(annotations["now_utc"], datetime)
+        self.assertEqual(annotations["return"], str)
+        self.assertNotIn(
+            inspect.Parameter.VAR_KEYWORD,
+            [parameter.kind for parameter in inspect.signature(formatting.line_preview).parameters.values()],
+        )
+        self.assertEqual(get_type_hints(formatting.on_time_delta)["return"], str)
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

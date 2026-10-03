@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .chain_generation import CarryFieldError
+from .modify_carry_workflow import TemporalCarryDecision
 from .task_datetime import datetime_value, parser_for_host
 from .task_models import TaskPayload
 
@@ -296,7 +297,7 @@ def recurrence_enabled_rows_for(host: Any, new: TaskPayload, source: str) -> lis
     )
 
 
-def render_cp_schedule_adjusted_panel_for(host: Any, adjustment: Any) -> None:
+def render_cp_schedule_adjusted_panel_for(host: Any, adjustment: TemporalCarryDecision) -> None:
     ui = host._module("modify_ui_effects")
     ui_ports = ui.ui_ports_for(host)
     host._module("modify_feedback").render_cp_schedule_adjusted_panel(

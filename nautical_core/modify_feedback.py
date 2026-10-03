@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .callback_ports import CallbackPort
+from .modify_carry_workflow import TemporalCarryDecision
 from .parsing.parser_models import ParseError
 from .task_models import TaskPayload
 from .modify_models import CompletionLifecycleResult, TaskView
@@ -76,7 +77,7 @@ def _format_td_short(td: timedelta) -> str:
 
 
 def render_cp_schedule_adjusted_panel(
-    adjustment: Any,
+    adjustment: TemporalCarryDecision,
     *,
     format_local: Callable[[Any], str],
     semantic_diff_value: Callable[[str, str], str],
@@ -84,15 +85,11 @@ def render_cp_schedule_adjusted_panel(
     panel: CallbackPort,
 ) -> None:
     """Render the relative schedule changes applied after a CP due edit."""
-    old_due = getattr(adjustment, "target_old", None)
-    new_due = getattr(adjustment, "target_new", None)
-    if old_due is not None:
-        old_due = old_due.value
-    if new_due is not None:
-        new_due = new_due.value
+    old_due = adjustment.target_old.value if adjustment.target_old is not None else None
+    new_due = adjustment.target_new.value if adjustment.target_new is not None else None
     field_adjustments = tuple(
         (item.field, item.old_value.value, item.new_value.value, timedelta(seconds=item.offset_seconds))
-        for item in getattr(adjustment, "adjustments", ())
+        for item in adjustment.adjustments
     )
     rows = []
     if old_due is not None and new_due is not None:

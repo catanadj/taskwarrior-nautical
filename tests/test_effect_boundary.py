@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
+from typing import get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -30,6 +31,8 @@ from nautical_core.lifecycle.application import LifecycleApplicationOutcomeKind,
 from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 from nautical_core.task_models import TaskObservation
+from nautical_core.task_models import TaskTimestamp
+from nautical_core.modify_carry_workflow import TemporalCarryDecision
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 from nautical_core.lifecycle.models import recurrence_fingerprint
 from nautical_core.operator_models import OperatorOperation, OperatorResult, OperatorStatus
@@ -301,10 +304,14 @@ class EffectBoundaryTests(unittest.TestCase):
             rendered.append(view)
             return True
 
-        adjustment = SimpleNamespace(
-            target_old=SimpleNamespace(value=datetime(2026, 1, 1, tzinfo=timezone.utc)),
-            target_new=SimpleNamespace(value=datetime(2026, 1, 2, tzinfo=timezone.utc)),
-            adjustments=(),
+        adjustment = TemporalCarryDecision(
+            "unchanged",
+            target_old=TaskTimestamp(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+            target_new=TaskTimestamp(datetime(2026, 1, 2, tzinfo=timezone.utc)),
+        )
+        self.assertIs(
+            get_type_hints(modify_feedback.render_cp_schedule_adjusted_panel)["adjustment"],
+            TemporalCarryDecision,
         )
         with patch.object(modify_feedback, "render_panel_view", side_effect=record):
             modify_feedback.render_cp_schedule_adjusted_panel(

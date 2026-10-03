@@ -144,11 +144,13 @@ def validate_cp_on_modify(
 def validate_chain_limits_on_modify(
     task: TaskPayload,
     *,
-    parse_chain_max: Any,
-    parse_datetime: Any,
-    validate_until_not_past: Any,
-    now_utc: Any,
-    fail: Any,
+    parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+    parse_datetime: Callable[[object], datetime | None],
+    validate_until_not_past: Callable[
+        [datetime, datetime], tuple[bool, str | None]
+    ],
+    now_utc: Callable[[], datetime],
+    fail: Callable[[str, str], object],
 ) -> None:
     """Normalize and validate chainMax/chainUntil during modification."""
     cpmax, chain_max_error = parse_chain_max(task.get("chainMax"))

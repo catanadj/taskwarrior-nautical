@@ -331,6 +331,25 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
                 parse_datetime=lambda _value: None,
             )
 
+    def test_chain_limit_validator_uses_typed_effects(self) -> None:
+        from nautical_core.modify_validation import validate_chain_limits_on_modify
+
+        annotations = get_type_hints(validate_chain_limits_on_modify)
+        self.assertEqual(
+            annotations["parse_chain_max"],
+            abc.Callable[[object], tuple[int | None, str | None]],
+        )
+        self.assertEqual(
+            annotations["parse_datetime"],
+            abc.Callable[[object], datetime | None],
+        )
+        self.assertEqual(
+            annotations["validate_until_not_past"],
+            abc.Callable[[datetime, datetime], tuple[bool, str | None]],
+        )
+        self.assertEqual(annotations["now_utc"], abc.Callable[[], datetime])
+        self.assertEqual(annotations["fail"], abc.Callable[[str, str], object])
+
     def test_omit_ports_use_date_and_canonical_omit_state_contracts(self) -> None:
         import nautical_core.anchor_omit as anchor_omit
         import nautical_core.modify_anchor_effects as effects

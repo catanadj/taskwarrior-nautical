@@ -53,11 +53,48 @@ from .scheduler_models import OccurrenceSearchExhausted
 class CompletionPreflightService(Protocol):
     """Validated preflight service used by completion effects."""
 
-    def completion_link_numbers_or_fail(self, task: TaskPayload, **kwargs: Any) -> Any: ...
-    def completion_kind_or_stop(self, task: TaskPayload, now_utc: datetime, **kwargs: Any) -> Any: ...
-    def completion_chain_id_or_fail(self, task: TaskPayload, **kwargs: Any) -> str | None: ...
-    def completion_existing_next_or_fail(self, task: TaskPayload, next_no: int, **kwargs: Any) -> bool: ...
-    def completion_preflight_context(self, task: TaskPayload, now_utc: datetime, *, services: Any) -> Any: ...
+    def completion_link_numbers_or_fail(
+        self,
+        task: TaskPayload,
+        *,
+        coerce_int: CoerceIntCallback,
+        max_link_number: int,
+        panel: PanelCallback,
+        print_task: PrintTaskCallback,
+    ) -> tuple[int, int] | None: ...
+    def completion_kind_or_stop(
+        self,
+        task: TaskPayload,
+        now_utc: datetime,
+        *,
+        panel: PanelCallback,
+        print_task: PrintTaskCallback,
+        end_chain_summary: EndChainSummaryCallback,
+    ) -> str | None: ...
+    def completion_chain_id_or_fail(
+        self,
+        task: TaskPayload,
+        *,
+        panel: PanelCallback,
+        print_task: PrintTaskCallback,
+    ) -> str | None: ...
+    def completion_existing_next_or_fail(
+        self,
+        task: TaskPayload,
+        next_no: int,
+        *,
+        existing_next_lookup: ExistingNextLookupCallback,
+        short: ShortUuidCallback,
+        panel: PanelCallback,
+        print_task: PrintTaskCallback,
+    ) -> bool: ...
+    def completion_preflight_context(
+        self,
+        task: TaskPayload,
+        now_utc: datetime,
+        *,
+        services: CompletionPreflightServices,
+    ) -> CompletionPreflightContext | None: ...
 
 
 class CompletionComputeService(Protocol):

@@ -376,6 +376,70 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIs(annotations["print_task"], PrintTaskCallback)
         self.assertIs(annotations["diagnostic"], DiagnosticCallback)
 
+    def test_completion_preflight_service_has_explicit_arguments(self) -> None:
+        import inspect
+
+        from nautical_core.modify_completion_effects import CompletionPreflightService
+        from nautical_core.modify_models import (
+            CoerceIntCallback,
+            CompletionPreflightContext,
+            CompletionPreflightServices,
+            EndChainSummaryCallback,
+            ExistingNextLookupCallback,
+            PanelCallback,
+            PrintTaskCallback,
+            ShortUuidCallback,
+        )
+        from nautical_core.task_models import TaskPayload
+
+        contracts = {
+            "completion_link_numbers_or_fail": {
+                "task": TaskPayload,
+                "coerce_int": CoerceIntCallback,
+                "max_link_number": int,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "return": tuple[int, int] | None,
+            },
+            "completion_kind_or_stop": {
+                "task": TaskPayload,
+                "now_utc": datetime,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "end_chain_summary": EndChainSummaryCallback,
+                "return": str | None,
+            },
+            "completion_existing_next_or_fail": {
+                "task": TaskPayload,
+                "next_no": int,
+                "existing_next_lookup": ExistingNextLookupCallback,
+                "short": ShortUuidCallback,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "return": bool,
+            },
+            "completion_chain_id_or_fail": {
+                "task": TaskPayload,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "return": str | None,
+            },
+            "completion_preflight_context": {
+                "task": TaskPayload,
+                "now_utc": datetime,
+                "services": CompletionPreflightServices,
+                "return": CompletionPreflightContext | None,
+            },
+        }
+        for method_name, expected in contracts.items():
+            method = getattr(CompletionPreflightService, method_name)
+            with self.subTest(method=method_name):
+                self.assertEqual(get_type_hints(method), expected)
+                self.assertNotIn(
+                    inspect.Parameter.VAR_KEYWORD,
+                    (parameter.kind for parameter in inspect.signature(method).parameters.values()),
+                )
+
     def test_completion_feedback_and_validation_ports_reuse_callback_contracts(self) -> None:
         from nautical_core.modify_completion_effects import (
             CompletionFeedbackPorts,

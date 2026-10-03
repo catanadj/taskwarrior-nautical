@@ -1108,6 +1108,49 @@ class ModifyIsolationTests(unittest.TestCase):
                     )
                 )
 
+    def test_ordinary_modify_adapter_uses_runtime_transition_and_uow_owners(self) -> None:
+        from nautical_core.modify_composition import (
+            ModifyRuntimeServices,
+            _ModifyCompositionAdapters,
+            _ModifyLifecycle,
+            _ModifyOrdinaryEffects,
+        )
+        from nautical_core.modify_composition_adapters import handle_non_completion
+        from nautical_core.modify_ordinary import OrdinaryModifyServices
+        from nautical_core.task_changes import TaskTransition
+        from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+        localns = {
+            "ModifyRuntimeServices": ModifyRuntimeServices,
+            "ModifyCompositionRuntimeServices": ModifyRuntimeServices,
+            "TaskTransition": TaskTransition,
+            "TaskwarriorUnitOfWork": TaskwarriorUnitOfWork,
+        }
+        port = get_type_hints(
+            _ModifyCompositionAdapters.handle_non_completion,
+            localns=localns,
+        )
+        implementation = get_type_hints(handle_non_completion, localns=localns)
+
+        for hints in (port, implementation):
+            with self.subTest(hints=hints):
+                self.assertIs(hints["unit_of_work"], TaskwarriorUnitOfWork)
+                self.assertEqual(hints["transition"], TaskTransition | None)
+                self.assertEqual(hints["runtime"], ModifyRuntimeServices | None)
+
+        ordinary = get_type_hints(
+            _ModifyOrdinaryEffects.handle_non_completion_modify,
+            localns={
+                "OrdinaryModifyServices": OrdinaryModifyServices,
+                "OrdinaryModifyServicesContract": OrdinaryModifyServices,
+                "TaskTransition": TaskTransition,
+                "_ModifyLifecycle": _ModifyLifecycle,
+            },
+        )
+        self.assertIs(ordinary["services"], OrdinaryModifyServices)
+        self.assertIs(ordinary["lifecycle"], _ModifyLifecycle)
+        self.assertEqual(ordinary["transition"], TaskTransition | None)
+
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin
         from nautical_core.lifecycle.read_service import LifecycleReadService

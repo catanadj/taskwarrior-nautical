@@ -38,6 +38,9 @@ if TYPE_CHECKING:
         TaskView,
     )
     from .modify_runtime import ModifyRuntimeState
+    from .modify_ordinary import (
+        OrdinaryModifyServices as OrdinaryModifyServicesContract,
+    )
     from .modify_workflow import RecurrenceTransitionDecision
     from .modify_validation_effects import (
         AnchorValidationPorts,
@@ -56,6 +59,7 @@ if TYPE_CHECKING:
     )
     from .task_changes import TaskTransition
     from .task_read_repository import TaskReadRepository
+    from .taskwarrior_uow import TaskwarriorUnitOfWork
 
 
 class _NativeUntilGenerationService(Protocol):
@@ -138,7 +142,7 @@ class _ModifyDiagnosticsEffects(Protocol):
 
 
 class _ModifyOrdinaryEffects(Protocol):
-    OrdinaryModifyServices: _ServiceFactory
+    OrdinaryModifyServices: type[OrdinaryModifyServicesContract]
     RecurrenceActivationError: type[Exception]
 
     def handle_non_completion_modify(
@@ -146,9 +150,9 @@ class _ModifyOrdinaryEffects(Protocol):
         old: TaskPayload,
         new: TaskPayload,
         *,
-        services: Any,
-        lifecycle: Any,
-        transition: Any = None,
+        services: OrdinaryModifyServicesContract,
+        lifecycle: "_ModifyLifecycle",
+        transition: TaskTransition | None = None,
     ) -> None: ...
 
 
@@ -158,10 +162,10 @@ class _ModifyCompositionAdapters(Protocol):
         host: Any,
         old: TaskPayload,
         new: TaskPayload,
-        unit_of_work: Any,
+        unit_of_work: TaskwarriorUnitOfWork,
         *,
-        transition: Any = None,
-        runtime: Any = None,
+        transition: TaskTransition | None = None,
+        runtime: ModifyRuntimeServices | None = None,
     ) -> None: ...
 
     def handle_completion(
@@ -351,6 +355,14 @@ class _ModifyQueries(Protocol):
 
 
 class _ModifyLifecycle(Protocol):
+    def recurrence_setting_changes(
+        self,
+        old: TaskPayload | None,
+        new: TaskPayload | None,
+        *,
+        transition: TaskTransition | None = None,
+    ) -> list[tuple[str, str, str]]: ...
+
     def task_has_nautical_fields(self, task: TaskPayload | None) -> bool: ...
 
     def task_has_nautical_recurrence_fields(self, task: TaskPayload | None) -> bool: ...

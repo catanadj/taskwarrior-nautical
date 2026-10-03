@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
+from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.modify_models import (
     CapFromUntilAnchorCallback,
     CapFromUntilCpCallback,
@@ -13,6 +14,7 @@ from nautical_core.modify_models import (
     CompletionLifecycleDiagnostic,
     CompletionLifecycleResult,
     CompletionComputeServices,
+    CompletionPreflightContext,
     DatetimeParserCallback,
     EndChainSummaryCallback,
     EstimateAnchorFinalCallback,
@@ -21,6 +23,7 @@ from nautical_core.modify_models import (
     PrintTaskCallback,
     SafeParseDatetimeCallback,
     DiagnosticCallback,
+    InvalidRelativeCarryReasonCallback,
     ValidateChainDurationCallback,
     ValidateUntilCallback,
 )
@@ -29,7 +32,12 @@ from nautical_core.scheduler_models import (
     occurrence_exhaustion_message,
 )
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.lifecycle.models import LifecycleEvent
+from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, TaskSnapshot
+from nautical_core.lifecycle.planner import (
+    LifecyclePreflight,
+    RecurrenceCandidate,
+    plan_candidate_successor,
+)
 from nautical_core.modify_lifecycle import apply_terminal_transition
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import TaskPayload
@@ -539,44 +547,41 @@ def completion_cap_guard_or_stop(
 
 
 def attach_lifecycle_plan(
-    new: dict[str, Any],
+    new: TaskPayload,
     computed: CompletionComputeResult,
     next_no: int,
-    now_utc: Any,
+    now_utc: datetime,
     *,
-    preflight: Any | None,
-    generation: Any,
+    preflight: CompletionPreflightContext | None,
+    generation: ChainGenerationService,
     scheduler_fingerprint: str,
-    compare_datetimes: Any,
-    invalid_relative_carry_reason: Any,
-    lifecycle_planner: Any,
-    lifecycle_models: Any,
-    modify_models: Any,
+    compare_datetimes: Callable[[datetime, datetime], int],
+    invalid_relative_carry_reason: InvalidRelativeCarryReasonCallback,
     end_chain_summary: EndChainSummaryCallback,
-    ensure_terminal_chain_off: Any,
+    ensure_terminal_chain_off: Callable[[TaskPayload, str | None], bool],
     panel: PanelCallback,
     print_task: PrintTaskCallback,
     diag: DiagnosticCallback,
 ) -> CompletionComputeResult | CompletionLifecycleResult:
     """Attach the shared lifecycle successor plan to a computed result."""
     try:
-        candidate = lifecycle_planner.RecurrenceCandidate(
+        candidate = RecurrenceCandidate(
             child_due=computed.child_due,
             metadata=tuple(sorted(dict(computed.meta or {}).items())),
             dnf=computed.dnf,
             until=computed.until_dt,
         )
-        plan = lifecycle_planner.plan_candidate_successor(
-            lifecycle_models.TaskSnapshot.from_observation(
+        plan = plan_candidate_successor(
+            TaskSnapshot.from_observation(
                 DEFAULT_TASK_CODEC.decode_row(new, source_query="modify completion")
             ),
-            lifecycle_models.LifecycleEvent.COMPLETE,
+            LifecycleEvent.COMPLETE,
             candidate,
             generation=generation,
             validated_configuration={"scheduler_fingerprint": scheduler_fingerprint},
             compare_datetimes=compare_datetimes,
             preflight=(
-                lifecycle_planner.LifecyclePreflight.from_context(
+                LifecyclePreflight.from_context(
                     base_link=preflight.base_no,
                     next_link=preflight.next_no,
                     kind=preflight.kind,
@@ -592,14 +597,14 @@ def attach_lifecycle_plan(
                 generation=generation,
             ),
         )
-        if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
+        if plan.action is LifecycleAction.FINALIZE_CHAIN:
             end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
             ensure_terminal_chain_off(new, "complete")
             print_task(new)
-            return modify_models.CompletionLifecycleResult(
+            return CompletionLifecycleResult(
                 state="terminal",
                 reason="successor limit reached",
-                diagnostic=modify_models.CompletionLifecycleDiagnostic(
+                diagnostic=CompletionLifecycleDiagnostic(
                     transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
                     chain_id=str(new.get("chainID") or "").strip(),
                     parent_link=int(str(new.get("link"))) if str(new.get("link") or "").isdigit() else None,
@@ -613,10 +618,10 @@ def attach_lifecycle_plan(
         diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
         panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")
         print_task(new)
-        return modify_models.CompletionLifecycleResult(
+        return CompletionLifecycleResult(
             state="retryable",
             reason=str(exc).strip() or "Could not construct a lifecycle successor plan",
-            diagnostic=modify_models.CompletionLifecycleDiagnostic(
+            diagnostic=CompletionLifecycleDiagnostic(
                 transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
                 chain_id=str(new.get("chainID") or "").strip(),
                 parent_link=int(str(new.get("link"))) if str(new.get("link") or "").isdigit() else None,

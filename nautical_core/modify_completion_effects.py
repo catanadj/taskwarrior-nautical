@@ -23,9 +23,11 @@ from .modify_models import (
     CompletionChildDueCallback,
     CompletionChildRequiredCallback,
     CompletionComputeServices,
+    CompletionComputeResult,
     CompletionDurationWarningCallback,
     CompletionChainSnapshot,
     CompletionPreflightServices,
+    CompletionPreflightContext,
     CompletionSpawnServices,
     CoerceIntCallback,
     BuildChildDraftCallback,
@@ -68,8 +70,33 @@ class CompletionComputeService(Protocol):
     def completion_warn_unreasonable_duration(self, task: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime, **kwargs: Any) -> None: ...
     def completion_caps(self, kind: str, task: TaskPayload, child_due: Any, dnf: Any, **kwargs: Any) -> Any: ...
     def completion_cap_guard_or_stop(self, task: TaskPayload, next_no: int, cap_no: int | None, now_utc: datetime, **kwargs: Any) -> bool: ...
-    def completion_compute_next_and_limits(self, task: TaskPayload, kind: str, next_no: int, now_utc: datetime, *, services: Any) -> Any: ...
-    def attach_lifecycle_plan(self, task: TaskPayload, computed: Any, next_no: int, now_utc: datetime, **kwargs: Any) -> Any: ...
+    def completion_compute_next_and_limits(
+        self,
+        task: TaskPayload,
+        kind: str,
+        next_no: int,
+        now_utc: datetime,
+        *,
+        services: CompletionComputeServices,
+    ) -> CompletionComputeResult | CompletionLifecycleResult | None: ...
+    def attach_lifecycle_plan(
+        self,
+        task: TaskPayload,
+        computed: CompletionComputeResult,
+        next_no: int,
+        now_utc: datetime,
+        *,
+        preflight: CompletionPreflightContext | None,
+        generation: ChainGenerationService,
+        scheduler_fingerprint: str,
+        compare_datetimes: Callable[[datetime, datetime], int],
+        invalid_relative_carry_reason: InvalidRelativeCarryReasonCallback,
+        end_chain_summary: EndChainSummaryCallback,
+        ensure_terminal_chain_off: Callable[[TaskPayload, str | None], bool],
+        panel: PanelCallback,
+        print_task: PrintTaskCallback,
+        diag: DiagnosticCallback,
+    ) -> CompletionComputeResult | CompletionLifecycleResult: ...
 
 
 class CompletionSpawnService(Protocol):
@@ -153,13 +180,10 @@ class DurationWarningPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionLifecyclePlanPorts:
-    generation: Any
+    generation: ChainGenerationService
     scheduler_fingerprint: Callable[[], str]
     compare_datetimes: Callable[[datetime, datetime], int]
     invalid_relative_carry_reason: InvalidRelativeCarryReasonCallback
-    lifecycle_planner: Any
-    lifecycle_models: Any
-    modify_models: Any
     end_chain_summary: EndChainSummaryCallback
     ensure_terminal_chain_off: Callable[[TaskPayload, str | None], bool]
     panel: PanelCallback
@@ -178,7 +202,6 @@ class CompletionComputePorts:
     warn_unreasonable_duration: CompletionDurationWarningCallback
     caps: CompletionCapsCallback
     cap_guard_or_stop: CompletionCapGuardCallback
-    lifecycle_result_type: type[CompletionLifecycleResult]
     lifecycle_plan: CompletionLifecyclePlanPorts
 
 
@@ -539,9 +562,6 @@ def completion_compute_ports_for(host: Any) -> CompletionComputePorts:
         invalid_relative_carry_reason=host._module(
             "chain_integrity_lifecycle"
         ).invalid_relative_carry_reason,
-        lifecycle_planner=host._module("lifecycle_planner"),
-        lifecycle_models=host._module("lifecycle_models"),
-        modify_models=models,
         end_chain_summary=_end_summary_port_for(host),
         ensure_terminal_chain_off=ensure_terminal_chain_off,
         panel=_panel_port_for(host),
@@ -570,7 +590,6 @@ def completion_compute_ports_for(host: Any) -> CompletionComputePorts:
         cap_guard_or_stop=lambda value, number, cap, clock: cap_guard_or_stop(
             feedback, value, number, cap, clock
         ),
-        lifecycle_result_type=models.CompletionLifecycleResult,
         lifecycle_plan=plan_ports,
     )
 
@@ -582,8 +601,8 @@ def compute_next_and_limits(
     next_no: int,
     now_utc: datetime,
     *,
-    preflight: Any = None,
-) -> Any:
+    preflight: CompletionPreflightContext | None = None,
+) -> CompletionComputeResult | CompletionLifecycleResult | None:
     services = ports.services_type(
         completion_compute_child_due=ports.compute_child_due,
         completion_until_or_fail=ports.until_or_fail,
@@ -598,7 +617,7 @@ def compute_next_and_limits(
     )
     if computed is None:
         return None
-    if isinstance(computed, ports.lifecycle_result_type):
+    if isinstance(computed, CompletionLifecycleResult):
         return computed
     if not str(new.get("uuid") or "").strip() or not str(new.get("chainID") or "").strip():
         return computed
@@ -613,9 +632,6 @@ def compute_next_and_limits(
         scheduler_fingerprint=plan.scheduler_fingerprint(),
         compare_datetimes=plan.compare_datetimes,
         invalid_relative_carry_reason=plan.invalid_relative_carry_reason,
-        lifecycle_planner=plan.lifecycle_planner,
-        lifecycle_models=plan.lifecycle_models,
-        modify_models=plan.modify_models,
         end_chain_summary=plan.end_chain_summary,
         ensure_terminal_chain_off=plan.ensure_terminal_chain_off,
         panel=plan.panel,

@@ -266,7 +266,6 @@ class ModifyIsolationTests(unittest.TestCase):
             CompletionChildRequiredCallback,
             CompletionComputeServices,
             CompletionDurationWarningCallback,
-            CompletionLifecycleResult,
             CompletionUntilCallback,
             CompletionUntilGuardCallback,
         )
@@ -281,7 +280,6 @@ class ModifyIsolationTests(unittest.TestCase):
             "warn_unreasonable_duration": CompletionDurationWarningCallback,
             "caps": CompletionCapsCallback,
             "cap_guard_or_stop": CompletionCapGuardCallback,
-            "lifecycle_result_type": type[CompletionLifecycleResult],
         }
         for name, contract in expected.items():
             with self.subTest(field=name):
@@ -344,6 +342,39 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIs(annotations["generation"], ChainGenerationService)
         self.assertIs(annotations["decode_task"], TaskRowDecoder)
         self.assertEqual(annotations["task_type"], type[NauticalTask])
+
+    def test_completion_lifecycle_plan_ports_do_not_carry_module_bags(self) -> None:
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.modify_completion_effects import CompletionLifecyclePlanPorts
+        from nautical_core.modify_models import (
+            DiagnosticCallback,
+            EndChainSummaryCallback,
+            InvalidRelativeCarryReasonCallback,
+            PanelCallback,
+            PrintTaskCallback,
+        )
+
+        annotations = get_type_hints(CompletionLifecyclePlanPorts)
+        self.assertEqual(
+            set(annotations),
+            {
+                "generation",
+                "scheduler_fingerprint",
+                "compare_datetimes",
+                "invalid_relative_carry_reason",
+                "end_chain_summary",
+                "ensure_terminal_chain_off",
+                "panel",
+                "print_task",
+                "diagnostic",
+            },
+        )
+        self.assertIs(annotations["generation"], ChainGenerationService)
+        self.assertIs(annotations["invalid_relative_carry_reason"], InvalidRelativeCarryReasonCallback)
+        self.assertIs(annotations["end_chain_summary"], EndChainSummaryCallback)
+        self.assertIs(annotations["panel"], PanelCallback)
+        self.assertIs(annotations["print_task"], PrintTaskCallback)
+        self.assertIs(annotations["diagnostic"], DiagnosticCallback)
 
     def test_completion_feedback_and_validation_ports_reuse_callback_contracts(self) -> None:
         from nautical_core.modify_completion_effects import (

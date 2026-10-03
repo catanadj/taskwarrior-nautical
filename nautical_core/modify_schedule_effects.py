@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
+from .modify_models import CoerceIntCallback, DatetimeParserCallback, DiagnosticCallback
 from .timeutil import compare_datetimes
 
 
@@ -76,20 +77,20 @@ class AnchorOccurrencePorts:
 @dataclass(frozen=True, slots=True)
 class CPCompletionPorts:
     compute: Any
-    parse_datetime: Any
-    coerce_int: Any
-    parse_cp_sequence_tokens: Any
+    parse_datetime: DatetimeParserCallback
+    coerce_int: CoerceIntCallback
+    parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None]
     sequence: SequencePorts
     schedule: SchedulePorts
     max_iterations: int
-    diagnostic: Any
+    diagnostic: DiagnosticCallback
 
 
 @dataclass(frozen=True, slots=True)
 class AnchorCompletionPorts:
     compute: Any
-    parse_datetime: Any
-    coerce_int: Any
+    parse_datetime: DatetimeParserCallback
+    coerce_int: CoerceIntCallback
     scheduler: SchedulerPorts
     to_local_cached: Any
     safe_parse_datetime: Any
@@ -98,7 +99,7 @@ class AnchorCompletionPorts:
     anchor_file_provider_for: Any
     compare_datetimes: Any
     max_iterations: int
-    diagnostic: Any
+    diagnostic: DiagnosticCallback
 
 
 def scheduler_ports_for(host: Any) -> SchedulerPorts:

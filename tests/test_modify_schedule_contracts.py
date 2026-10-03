@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Callable, get_type_hints
+from typing import Any, Callable, get_type_hints
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -13,6 +13,7 @@ import nautical_core as core
 import nautical_core.modify_completion_compute as modify_completion_compute
 import nautical_core.modify_runtime as modify_runtime
 import nautical_core.modify_schedule_effects as modify_schedule_effects
+import nautical_core.modify_models as modify_models
 import nautical_core.timezone_facade as timezone_facade
 from nautical_core.add_anchor_compute import anchor_next_occurrence_after_local_dt
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
@@ -31,6 +32,23 @@ class ModifyScheduleContractTests(unittest.TestCase):
         self.assertIs(
             get_type_hints(modify_schedule_effects.OccurrencePorts)["next_occurrence"],
             modify_schedule_effects.NextOccurrenceAfterLocalDateTime,
+        )
+
+    def test_completion_ports_type_shared_runtime_callbacks(self) -> None:
+        for ports_type in (
+            modify_schedule_effects.CPCompletionPorts,
+            modify_schedule_effects.AnchorCompletionPorts,
+        ):
+            annotations = get_type_hints(ports_type)
+            self.assertIs(annotations["parse_datetime"], modify_models.DatetimeParserCallback)
+            self.assertIs(annotations["coerce_int"], modify_models.CoerceIntCallback)
+            self.assertIs(annotations["diagnostic"], modify_models.DiagnosticCallback)
+
+        self.assertEqual(
+            get_type_hints(modify_schedule_effects.CPCompletionPorts)[
+                "parse_cp_sequence_tokens"
+            ],
+            Callable[[str], list[dict[str, Any]] | None],
         )
 
     def test_schedule_ports_have_concrete_callback_signatures(self) -> None:

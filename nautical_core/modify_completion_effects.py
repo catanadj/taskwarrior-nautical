@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
 from .modify_models import (
+    DiagnosticCallback,
     CapFromUntilAnchorCallback,
     CapFromUntilCpCallback,
     CoerceIntCallback,
@@ -23,6 +25,7 @@ from .modify_models import (
     ValidateChainDurationCallback,
     ValidateUntilCallback,
 )
+from .scheduler_models import OccurrenceSearchExhausted
 
 
 class CompletionPreflightService(Protocol):
@@ -109,13 +112,13 @@ class ChildDuePorts:
     generation: Any
     decode_task: Any
     task_model: Any
-    exhaustion_message: Any
-    ensure_terminal: Any
-    end_summary: Any
-    now_utc: Any
-    panel: Any
-    print_task: Any
-    diag: Any
+    exhaustion_message: Callable[[OccurrenceSearchExhausted], str]
+    ensure_terminal: Callable[[TaskPayload, str | None], bool]
+    end_summary: EndChainSummaryCallback
+    now_utc: Callable[[], datetime]
+    panel: PanelCallback
+    print_task: PrintTaskCallback
+    diag: DiagnosticCallback
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,15 +441,17 @@ def completion_compute_ports_for(host: Any) -> CompletionComputePorts:
     anchor_schedule_ports = schedule.anchor_completion_ports_for(host)
     feedback = _feedback_ports_for(host, compute)
     feedback_without_summary = _feedback_ports_for(host, compute, summarize=False)
+    ensure_terminal: Callable[[TaskPayload, str | None], bool] = partial(
+        host._module("modify_composition_adapters").ensure_terminal_chain_off_for,
+        host,
+    )
     child_due_ports = ChildDuePorts(
         compute=compute,
         generation=generation,
         decode_task=host._module("task_codec").DEFAULT_TASK_CODEC.decode_row,
         task_model=host._module("task_models"),
         exhaustion_message=host.core._import_sibling("scheduler_models").occurrence_exhaustion_message,
-        ensure_terminal=lambda task, event=None: host._module(
-            "modify_composition_adapters"
-        ).ensure_terminal_chain_off_for(host, task, event),
+        ensure_terminal=ensure_terminal,
         end_summary=_end_summary_port_for(host),
         now_utc=host._workflow_now_utc,
         panel=_panel_port_for(host),

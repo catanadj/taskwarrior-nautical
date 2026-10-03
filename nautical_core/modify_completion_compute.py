@@ -525,7 +525,7 @@ def first_recurrence_target(
         else:
             result = generation.compute_cp_child_due(typed_parent)
         return result[0] if result else None
-    except Exception:
+    except (ValueError, OverflowError, OccurrenceSearchExhausted):
         return None
 
 

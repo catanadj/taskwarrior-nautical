@@ -206,6 +206,38 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
 
         self.assertEqual(result[2:], (8, [], None))
 
+    def test_optional_recurrence_projection_does_not_hide_unexpected_failures(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        task = {"due": "2026-01-02T09:00:00Z", "cp": "1d"}
+
+        with self.assertRaisesRegex(RuntimeError, "projection defect"):
+            compute.first_recurrence_target(
+                task,
+                "cp",
+                parse_datetime=core.parse_dt_any,
+                format_datetime=core.fmt_isoz,
+                generation_service=lambda: (_ for _ in ()).throw(
+                    RuntimeError("projection defect")
+                ),
+            )
+
+    def test_optional_recurrence_projection_degrades_on_invalid_input(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        task = {"due": "2026-01-02T09:00:00Z", "cp": "1d"}
+        result = compute.first_recurrence_target(
+            task,
+            "cp",
+            parse_datetime=core.parse_dt_any,
+            format_datetime=core.fmt_isoz,
+            generation_service=lambda: (_ for _ in ()).throw(
+                ValueError("invalid recurrence projection")
+            ),
+        )
+
+        self.assertIsNone(result)
+
     def test_until_past_guard_orders_repeated_wall_times_by_instant(self) -> None:
         zone = ZoneInfo("Europe/Bucharest")
         now = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)

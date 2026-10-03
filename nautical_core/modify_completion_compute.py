@@ -105,7 +105,7 @@ def completion_compute_child_due(
         )
         print_task(task_row)
         return None
-    except Exception as exc:
+    except (ValueError, OverflowError) as exc:
         if callable(diag):
             diag(f"compute next due failed: {exc}")
         reason = str(exc).strip() or type(exc).__name__

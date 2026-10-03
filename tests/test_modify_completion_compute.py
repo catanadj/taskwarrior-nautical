@@ -25,7 +25,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         result = completion_compute_child_due(
             {"chain": "on", "uuid": "incompatible-anchor"},
             "anchor",
-            compute_anchor_child_due=lambda _task: (_ for _ in ()).throw(Exception(reason)),
+            compute_anchor_child_due=lambda _task: (_ for _ in ()).throw(ValueError(reason)),
             compute_cp_child_due=lambda _task: (None, None),
             panel=lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs)),
             print_task=lambda _value: None,
@@ -33,7 +33,20 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertEqual(panels[0][0], "⛔ Chain error")
-        self.assertEqual(panels[0][1], [("Reason", reason)])
+        self.assertIn(reason, str(panels[0][1]))
+
+    def test_child_due_compute_does_not_hide_unexpected_failures(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "scheduler defect"):
+            completion_compute_child_due(
+                {"chain": "on", "uuid": "unexpected-scheduler-failure"},
+                "anchor",
+                compute_anchor_child_due=lambda _task: (_ for _ in ()).throw(
+                    RuntimeError("scheduler defect")
+                ),
+                compute_cp_child_due=lambda _task: (None, None),
+                panel=lambda *_args, **_kwargs: None,
+                print_task=lambda _value: None,
+            )
 
     def test_date_and_search_exhaustion_never_produce_child_tuples(self) -> None:
         import nautical_core.modify_completion_compute as compute

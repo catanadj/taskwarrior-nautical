@@ -919,6 +919,29 @@ class ModifyIsolationTests(unittest.TestCase):
             Callable[[], LifecycleReadService],
         )
 
+    def test_completion_feedback_adapter_ports_use_typed_request_models(self) -> None:
+        from nautical_core.modify_composition import _ModifyCompositionAdapters
+        from nautical_core.modify_models import (
+            AnchorCompletionFeedbackModel,
+            CpCompletionFeedbackModel,
+        )
+
+        localns = {
+            "AnchorCompletionFeedbackModel": AnchorCompletionFeedbackModel,
+            "CpCompletionFeedbackModel": CpCompletionFeedbackModel,
+        }
+        anchor_request = get_type_hints(
+            _ModifyCompositionAdapters.render_anchor_completion_feedback_for,
+            localns=localns,
+        )["request"]
+        cp_request = get_type_hints(
+            _ModifyCompositionAdapters.render_cp_completion_feedback_for,
+            localns=localns,
+        )["request"]
+
+        self.assertIs(anchor_request, AnchorCompletionFeedbackModel)
+        self.assertIs(cp_request, CpCompletionFeedbackModel)
+
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin
         from nautical_core.lifecycle.read_service import LifecycleReadService

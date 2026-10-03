@@ -22,7 +22,12 @@ from .task_models import NauticalTask, TaskObservation, TaskPayload
 if TYPE_CHECKING:
     from .lifecycle.models import LifecyclePlan
     from .lifecycle.read_service import LifecycleReadService
-    from .modify_models import CompletionLifecycleResult, TaskView
+    from .modify_models import (
+        AnchorCompletionFeedbackModel,
+        CompletionLifecycleResult,
+        CpCompletionFeedbackModel,
+        TaskView,
+    )
     from .modify_runtime import ModifyRuntimeState
     from .modify_workflow import RecurrenceTransitionDecision
     from .modify_validation_effects import (
@@ -165,9 +170,13 @@ class _ModifyCompositionAdapters(Protocol):
         runtime: Any = None,
     ) -> None: ...
 
-    def render_anchor_completion_feedback_for(self, host: Any, *, request: Any) -> None: ...
+    def render_anchor_completion_feedback_for(
+        self, host: Any, *, request: AnchorCompletionFeedbackModel
+    ) -> None: ...
 
-    def render_cp_completion_feedback_for(self, host: Any, *, request: Any) -> None: ...
+    def render_cp_completion_feedback_for(
+        self, host: Any, *, request: CpCompletionFeedbackModel
+    ) -> None: ...
 
 
 class _ChainHealthAdviceCallback(Protocol):
@@ -716,6 +725,17 @@ class ModifyRuntimeServices:
         native_preserve_ports = _native_preserve_ports(host, capabilities)
         completion_validation_ports = _completion_validation_ports(host, capabilities)
         completion_compute_ports = capabilities.modify_completion_effects.completion_compute_ports_for(host)
+
+        def render_anchor_completion_feedback(*, request: AnchorCompletionFeedbackModel) -> None:
+            capabilities.modify_composition_adapters.render_anchor_completion_feedback_for(
+                host, request=request
+            )
+
+        def render_cp_completion_feedback(*, request: CpCompletionFeedbackModel) -> None:
+            capabilities.modify_composition_adapters.render_cp_completion_feedback_for(
+                host, request=request
+            )
+
         return cls(
             non_completion=NonCompletionRouteCapabilities(
                 modify_ordinary=capabilities.modify_ordinary,
@@ -754,8 +774,8 @@ class ModifyRuntimeServices:
             chain_integrity_warnings=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_integrity_warnings(
                 capabilities.modify_diagnostics_effects.analytics_ports_for(host), *args, **kwargs
             ),
-            render_anchor_completion_feedback=lambda **kwargs: capabilities.modify_composition_adapters.render_anchor_completion_feedback_for(host, **kwargs),
-            render_cp_completion_feedback=lambda **kwargs: capabilities.modify_composition_adapters.render_cp_completion_feedback_for(host, **kwargs),
+            render_anchor_completion_feedback=render_anchor_completion_feedback,
+            render_cp_completion_feedback=render_cp_completion_feedback,
             render_lifecycle_result=lambda result, task: capabilities.modify_presentation_effects.render_lifecycle_result(
                 capabilities.modify_presentation_effects.lifecycle_result_port_for(host), result, task
             ),

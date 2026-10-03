@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .chain_generation import CarryFieldError
 from .task_datetime import datetime_value, parser_for_host
 from .task_models import TaskPayload
+
+if TYPE_CHECKING:
+    from .modify_models import AnchorCompletionFeedbackModel, CpCompletionFeedbackModel
 
 
 def _capabilities(host: Any) -> Any:
@@ -351,7 +354,9 @@ def ensure_terminal_chain_off_for(host: Any, task: TaskPayload, event: str | Non
     return host._module("modify_lifecycle").ensure_terminal_chain_off(task)
 
 
-def render_anchor_completion_feedback_for(host: Any, *, request: Any) -> None:
+def render_anchor_completion_feedback_for(
+    host: Any, *, request: AnchorCompletionFeedbackModel
+) -> None:
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
     ui = host._module("modify_ui_effects")
@@ -368,7 +373,9 @@ def render_anchor_completion_feedback_for(host: Any, *, request: Any) -> None:
     )
 
 
-def render_cp_completion_feedback_for(host: Any, *, request: Any) -> None:
+def render_cp_completion_feedback_for(
+    host: Any, *, request: CpCompletionFeedbackModel
+) -> None:
     feedback = host._module("modify_feedback")
     feedback.orchestrate_cp_completion_feedback(
         request=request,

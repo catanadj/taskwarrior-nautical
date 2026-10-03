@@ -41,6 +41,20 @@ class TimelineSummaryService(Protocol):
     ) -> list[str]: ...
 
 
+class SpanSummaryService(Protocol):
+    def span_fields(
+        self,
+        chain_id: str,
+        chain: list[TaskObservation],
+        *,
+        stop_at: datetime | None = None,
+        stopped_by_delete: bool = False,
+        export_endpoint: Callable[[str, str], TaskObservation | None],
+        parse_datetime: Callable[[Any], datetime | None],
+        human_delta: Callable[..., str],
+    ) -> tuple[datetime | None, datetime | None, str]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ChainExportPorts:
     service: ChainExportReader
@@ -59,10 +73,10 @@ class TimelineSummaryPorts:
 
 @dataclass(frozen=True, slots=True)
 class SpanFieldsPorts:
-    summary: Any
+    summary: SpanSummaryService
     export_endpoint: Callable[[str, str], TaskObservation | None]
     parse_datetime: Callable[[object], datetime | None]
-    human_delta: Any
+    human_delta: Callable[..., str]
 
 
 @dataclass(frozen=True, slots=True)

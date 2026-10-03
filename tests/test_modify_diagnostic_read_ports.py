@@ -68,13 +68,14 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         from nautical_core.modify_diagnostics_effects import SpanFieldsPorts
         from nautical_core.task_models import TaskObservation
 
+        annotations = get_type_hints(SpanFieldsPorts)
+        self.assertIsNot(annotations["summary"], Any)
         self.assertEqual(
-            get_type_hints(SpanFieldsPorts),
+            {name: annotations[name] for name in annotations if name != "summary"},
             {
-                "summary": Any,
                 "export_endpoint": Callable[[str, str], TaskObservation | None],
                 "parse_datetime": Callable[[object], datetime | None],
-                "human_delta": Any,
+                "human_delta": Callable[..., str],
             },
         )
 

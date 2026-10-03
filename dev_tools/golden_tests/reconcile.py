@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 import json
 import os
-import sqlite3
 import shutil
 import subprocess
 import sys
@@ -25,7 +24,6 @@ from dev_tools.golden_tests.support import (
     recovery_action,
     recovery_child,
     recovery_plan,
-    task_observation,
 )
 
 ROOT = Path(__file__).resolve().parents[2]

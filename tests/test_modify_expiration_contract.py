@@ -163,6 +163,30 @@ class ModifyExpirationContractTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "codec defect"):
                 modify_expiration.handle_expired_deleted_modify(task, services=services)
 
+    def test_malformed_deleted_task_disposition_uses_safe_recovery_warning(self) -> None:
+        warnings: list[tuple[dict, str]] = []
+        services = self._deleted_services(object(), warnings=warnings)
+        old = {"status": "pending", "chainID": "chain-1"}
+        new = {"status": "deleted", "chainID": "chain-1", "uuid": object()}
+
+        modify_expiration.handle_deleted_modify(old, new, services=services)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("could not be classified safely", warnings[0][1])
+
+    def test_deleted_task_disposition_does_not_hide_unexpected_service_failure(self) -> None:
+        services = self._deleted_services(object(), warnings=[])
+        old = {"status": "pending", "chainID": "chain-1"}
+        new = {"status": "deleted", "chainID": "chain-1"}
+
+        with patch.object(
+            modify_expiration,
+            "classify_deleted_task",
+            side_effect=RuntimeError("classification defect"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "classification defect"):
+                modify_expiration.handle_deleted_modify(old, new, services=services)
+
 
 if __name__ == "__main__":
     unittest.main()

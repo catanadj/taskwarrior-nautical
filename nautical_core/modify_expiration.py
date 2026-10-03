@@ -239,7 +239,7 @@ def handle_deleted_modify(
         )
         disposition = evidence.disposition.value
         disposition_reason = evidence.reason
-    except Exception as exc:
+    except TaskCodecError as exc:
         services.diag(f"deleted-task disposition failed: {exc}")
         services.recovery_warning(new, "Deletion evidence could not be classified safely.")
         return

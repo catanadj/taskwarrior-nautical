@@ -259,7 +259,7 @@ def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield
-    except Exception:
+    except BaseException:
         conn.rollback()
         raise
     else:

@@ -20,6 +20,27 @@ from nautical_core.panel_diagnostics import file_source_warnings
 
 
 class StructuredFailureBoundaryTests(unittest.TestCase):
+    def test_outbox_transaction_rolls_back_on_keyboard_interrupt(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with repository.session():
+                connection = repository._session_conn
+                self.assertIsNotNone(connection)
+                connection.execute("CREATE TABLE transaction_probe (value TEXT)")
+
+                with self.assertRaises(KeyboardInterrupt):
+                    with repository._transaction(connection):
+                        connection.execute(
+                            "INSERT INTO transaction_probe (value) VALUES ('partial')"
+                        )
+                        raise KeyboardInterrupt()
+
+                self.assertFalse(connection.in_transaction)
+                self.assertEqual(
+                    connection.execute("SELECT value FROM transaction_probe").fetchall(),
+                    [],
+                )
+
     def test_outbox_integrity_check_accepts_healthy_database(self) -> None:
         repository = _LifecycleOutboxRepository(Path("/tmp/nautical-integrity-test"))
         connection = Mock()

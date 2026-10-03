@@ -48,6 +48,21 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             },
         )
 
+    def test_timeline_summary_ports_match_owner_callback_contracts(self) -> None:
+        from nautical_core.modify_diagnostics_effects import TimelineSummaryPorts
+
+        self.assertEqual(
+            get_type_hints(TimelineSummaryPorts),
+            {
+                "summary": Any,
+                "coerce_int": Callable[[Any, Any], int | None],
+                "parse_datetime": Callable[[object], datetime | None],
+                "format_local": Callable[[Any], str],
+                "format_on_time_delta": Callable[[datetime, datetime, int], str],
+                "short_uuid": Callable[[Any], str],
+            },
+        )
+
     def test_summary_export_does_not_mask_analytics_sorting_defects(self) -> None:
         import nautical_core.modify_diagnostics_effects as diagnostics
         from nautical_core.task_models import TaskObservation

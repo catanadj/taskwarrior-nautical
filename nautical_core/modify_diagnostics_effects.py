@@ -32,11 +32,11 @@ class ChainExportPorts:
 @dataclass(frozen=True, slots=True)
 class TimelineSummaryPorts:
     summary: Any
-    coerce_int: Any
-    parse_datetime: Any
-    format_local: Any
-    format_on_time_delta: Any
-    short_uuid: Any
+    coerce_int: Callable[[Any, Any], int | None]
+    parse_datetime: Callable[[object], datetime | None]
+    format_local: Callable[[Any], str]
+    format_on_time_delta: Callable[[datetime, datetime, int], str]
+    short_uuid: Callable[[Any], str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,14 +140,24 @@ def export_chain_endpoint(ports: ChainExportPorts, chain_id: str, direction: str
 
 def timeline_summary_ports_for(host: Any) -> TimelineSummaryPorts:
     formatting = host._module("modify_format_effects")
+    humanize_delta = host.core.humanize_delta
+
+    def format_on_time_delta(
+        due: datetime, end: datetime, tolerance_seconds: int = 60
+    ) -> str:
+        return formatting.on_time_delta(
+            formatting.HumanDeltaPort(humanize_delta),
+            due,
+            end,
+            tolerance_seconds,
+        )
+
     return TimelineSummaryPorts(
         summary=host._module("modify_chain_summary"),
         coerce_int=host.core.coerce_int,
         parse_datetime=lambda value: _parse_datetime_value(DatetimeValuePort(parser_for_host(host)), value),
         format_local=host._fmtlocal,
-        format_on_time_delta=lambda due, end, tol=60: formatting.on_time_delta(
-            formatting.HumanDeltaPort(host.core.humanize_delta), due, end, tol
-        ),
+        format_on_time_delta=format_on_time_delta,
         short_uuid=host.core.short_uuid,
     )
 

@@ -17,7 +17,7 @@ _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
 HOOK_DIR = _IMPL_CORE_DIR.parent
 _TW_DIR_BOOT = _IMPL_CORE_DIR.parent
 try:
-    import hook_bootstrap
+    import hook_bootstrap  # type: ignore[import-not-found]  # standalone hook fallback
 except ModuleNotFoundError:
     hook_bootstrap = None
     _bootstrap_paths = [

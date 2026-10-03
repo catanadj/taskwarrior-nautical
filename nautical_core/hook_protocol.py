@@ -42,7 +42,7 @@ def _codec() -> Any:
                 from nautical_core.task_codec import DEFAULT_TASK_CODEC as _codec_b, TaskCodecError as _error_b
                 imported_codec, imported_error = _codec_b, _error_b
             except Exception:
-                from task_codec import DEFAULT_TASK_CODEC as _codec_c, TaskCodecError as _error_c
+                from task_codec import DEFAULT_TASK_CODEC as _codec_c, TaskCodecError as _error_c  # type: ignore[import-not-found]  # standalone hook fallback
                 imported_codec, imported_error = _codec_c, _error_c
 
         DEFAULT_TASK_CODEC = imported_codec

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Sequence
 from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
+from .task_models import TaskObservation, TaskPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,13 +64,13 @@ def _parse_datetime_value(port: DatetimeValuePort, value: object) -> Any:
 
 def chain_health_advice(
     ports: AnalyticsPorts,
-    chain: Any,
+    chain: Sequence[TaskObservation],
     kind: str,
-    task: Any,
+    task: TaskPayload,
     *,
     tol_secs: int = 60,
     style: str,
-) -> Any:
+) -> str | None:
     return ports.core._import_sibling("modify_analytics").chain_health_advice(
         chain,
         kind,

@@ -1020,6 +1020,23 @@ class ModifyIsolationTests(unittest.TestCase):
                     )
                 )
 
+    def test_chain_health_advice_uses_task_observation_and_text_result(self) -> None:
+        from typing import Sequence
+        from nautical_core.modify_composition import (
+            _ChainHealthAdviceCallback,
+            _ModifyDiagnosticsEffects,
+        )
+        from nautical_core.task_models import TaskObservation
+
+        expected_chain = Sequence[TaskObservation]
+        callback = get_type_hints(_ChainHealthAdviceCallback.__call__)
+        effect = get_type_hints(_ModifyDiagnosticsEffects.chain_health_advice)
+
+        self.assertEqual(callback["chain"], expected_chain)
+        self.assertEqual(effect["chain"], expected_chain)
+        self.assertEqual(callback["return"], str | None)
+        self.assertEqual(effect["return"], str | None)
+
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin
         from nautical_core.lifecycle.read_service import LifecycleReadService

@@ -112,13 +112,13 @@ class _ModifyDiagnosticsEffects(Protocol):
     def chain_health_advice(
         self,
         ports: object,
-        chain: Sequence[TaskPayload],
+        chain: Sequence[TaskObservation],
         kind: str,
         task: TaskPayload,
         *,
         tol_secs: int = 60,
         style: str,
-    ) -> Any: ...
+    ) -> str | None: ...
 
     def chain_integrity_warnings(
         self,
@@ -190,13 +190,13 @@ class _ModifyCompositionAdapters(Protocol):
 class _ChainHealthAdviceCallback(Protocol):
     def __call__(
         self,
-        chain: Sequence[TaskPayload],
+        chain: Sequence[TaskObservation],
         kind: str,
         task: TaskPayload,
         *,
         tol_secs: int = 60,
         style: str,
-    ) -> Any: ...
+    ) -> str | None: ...
 
 
 class _PrepareRecurrenceCallback(Protocol):

@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
-from .callback_ports import CallbackPort
+from typing import Any, Callable
+
+from .task_datetime import datetime_value, parser_for_host
 
 
 @dataclass(frozen=True, slots=True)
 class DatetimeEffectPorts:
-    parse_datetime: CallbackPort
-    utc_to_local: CallbackPort
-    local_to_utc: CallbackPort
+    parse_datetime: Callable[[object], datetime | None]
+    utc_to_local: Callable[[datetime], datetime]
+    local_to_utc: Callable[[datetime], datetime]
 
 
-def safe_dt(ports: DatetimeEffectPorts, value: Any) -> datetime | None:
+def safe_dt(ports: DatetimeEffectPorts, value: object) -> datetime | None:
     try:
         return value if isinstance(value, datetime) else ports.parse_datetime(value)
     except Exception:

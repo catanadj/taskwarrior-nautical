@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from typing import Callable, get_type_hints
 
 from nautical_core.modify_datetime_effects import (
     DatetimeEffectPorts,
@@ -16,6 +17,17 @@ class ModifyDatetimeEffectsTests(unittest.TestCase):
             parse_datetime=lambda value: datetime(2026, 1, 2, 3, 4),
             utc_to_local=lambda value: value.astimezone(timezone.utc).replace(tzinfo=None),
             local_to_utc=lambda value: value.replace(tzinfo=timezone.utc),
+        )
+
+    def test_datetime_ports_have_concrete_parser_and_conversion_contracts(self) -> None:
+        annotations = get_type_hints(DatetimeEffectPorts)
+        self.assertEqual(
+            annotations,
+            {
+                "parse_datetime": Callable[[object], datetime | None],
+                "utc_to_local": Callable[[datetime], datetime],
+                "local_to_utc": Callable[[datetime], datetime],
+            },
         )
 
     def test_safe_dt_preserves_datetime_and_parses_other_values(self) -> None:

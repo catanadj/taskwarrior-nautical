@@ -23,9 +23,17 @@ if TYPE_CHECKING:
     from .lifecycle.models import LifecyclePlan
     from .lifecycle.read_service import LifecycleReadService
     from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
+    from .modify_completion_effects import (
+        CompletionComputePorts,
+        CompletionPreflightContextPorts,
+        CompletionSpawnPorts,
+    )
     from .modify_models import (
         AnchorCompletionFeedbackModel,
+        CompletionComputeResult,
         CompletionLifecycleResult,
+        CompletionPreflightContext,
+        CompletionSpawnResult,
         CpCompletionFeedbackModel,
         TaskView,
     )
@@ -47,6 +55,7 @@ if TYPE_CHECKING:
         NativePreservePorts as NativePreservePortsContract,
     )
     from .task_changes import TaskTransition
+    from .task_read_repository import TaskReadRepository
 
 
 class _NativeUntilGenerationService(Protocol):
@@ -279,32 +288,47 @@ class _ModifyDeletionDiagnosticsEffects(_ModifyDiagnosticsEffects, Protocol):
 
 
 class _ModifyCompletionEffects(Protocol):
-    def completion_preflight_context_ports_for(self, host: Any) -> object: ...
+    def completion_preflight_context_ports_for(
+        self, host: Any
+    ) -> CompletionPreflightContextPorts: ...
 
-    def completion_compute_ports_for(self, host: Any) -> object: ...
+    def completion_compute_ports_for(self, host: Any) -> CompletionComputePorts: ...
 
-    def completion_spawn_ports_for(self, host: Any) -> object: ...
+    def completion_spawn_ports_for(self, host: Any) -> CompletionSpawnPorts: ...
 
     def preflight_context(
         self,
-        ports: object,
+        ports: CompletionPreflightContextPorts,
         new: TaskPayload,
         now_utc: datetime,
-        repository: Any,
-    ) -> Any: ...
+        repository: TaskReadRepository,
+    ) -> CompletionPreflightContext | None: ...
 
     def compute_next_and_limits(
         self,
-        ports: object,
+        ports: CompletionComputePorts,
         new: TaskPayload,
         kind: str,
         next_no: int,
         now_utc: datetime,
         *,
-        preflight: Any = None,
-    ) -> Any: ...
+        preflight: CompletionPreflightContext | None = None,
+    ) -> CompletionComputeResult | CompletionLifecycleResult | None: ...
 
-    def build_and_spawn_child(self, ports: object, new: TaskPayload, **kwargs: Any) -> Any: ...
+    def build_and_spawn_child(
+        self,
+        ports: CompletionSpawnPorts,
+        new: TaskPayload,
+        *,
+        child_due: datetime | None,
+        child_field: str = "due",
+        next_no: int,
+        parent_short: str,
+        kind: str,
+        cpmax: int,
+        until_dt: datetime | None,
+        lifecycle_plan: LifecyclePlan | None = None,
+    ) -> CompletionSpawnResult | None: ...
 
 
 class _ModifyUIEffects(Protocol):

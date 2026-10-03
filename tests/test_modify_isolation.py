@@ -979,6 +979,7 @@ class ModifyIsolationTests(unittest.TestCase):
 
     def test_transition_effect_adapter_ports_have_explicit_owner_contracts(self) -> None:
         from inspect import Parameter, signature
+        from nautical_core.lifecycle.models import LifecyclePlan
         from nautical_core.modify_carry_workflow import (
             NativeUntilDecision,
             TemporalCarryDecision,
@@ -993,6 +994,7 @@ class ModifyIsolationTests(unittest.TestCase):
         from nautical_core.task_changes import TaskTransition
 
         localns = {
+            "LifecyclePlan": LifecyclePlan,
             "CPCarryPortsContract": CPCarryPorts,
             "CompletionValidationPortsContract": CompletionValidationPorts,
             "NativeCarryPortsContract": NativeCarryPorts,
@@ -1036,6 +1038,75 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertEqual(effect["chain"], expected_chain)
         self.assertEqual(callback["return"], str | None)
         self.assertEqual(effect["return"], str | None)
+
+    def test_completion_effect_adapter_uses_existing_ports_and_results(self) -> None:
+        from inspect import Parameter, signature
+        from nautical_core.lifecycle.models import LifecyclePlan
+        from nautical_core.modify_completion_effects import (
+            CompletionComputePorts,
+            CompletionPreflightContextPorts,
+            CompletionSpawnPorts,
+        )
+        from nautical_core.modify_composition import _ModifyCompletionEffects
+        from nautical_core.modify_models import (
+            CompletionComputeResult,
+            CompletionLifecycleResult,
+            CompletionPreflightContext,
+            CompletionSpawnResult,
+        )
+        from nautical_core.task_read_repository import TaskReadRepository
+
+        localns = {
+            "LifecyclePlan": LifecyclePlan,
+            "CompletionComputePorts": CompletionComputePorts,
+            "CompletionPreflightContextPorts": CompletionPreflightContextPorts,
+            "CompletionSpawnPorts": CompletionSpawnPorts,
+            "CompletionComputeResult": CompletionComputeResult,
+            "CompletionLifecycleResult": CompletionLifecycleResult,
+            "CompletionPreflightContext": CompletionPreflightContext,
+            "CompletionSpawnResult": CompletionSpawnResult,
+            "TaskReadRepository": TaskReadRepository,
+        }
+        expected = {
+            "completion_preflight_context_ports_for": CompletionPreflightContextPorts,
+            "completion_compute_ports_for": CompletionComputePorts,
+            "completion_spawn_ports_for": CompletionSpawnPorts,
+        }
+        for name, result_type in expected.items():
+            with self.subTest(factory=name):
+                method = getattr(_ModifyCompletionEffects, name)
+                self.assertIs(get_type_hints(method, localns=localns)["return"], result_type)
+
+        preflight = get_type_hints(
+            _ModifyCompletionEffects.preflight_context, localns=localns
+        )
+        compute = get_type_hints(
+            _ModifyCompletionEffects.compute_next_and_limits, localns=localns
+        )
+        spawn = get_type_hints(
+            _ModifyCompletionEffects.build_and_spawn_child, localns=localns
+        )
+        self.assertIs(preflight["repository"], TaskReadRepository)
+        self.assertEqual(
+            preflight["return"], CompletionPreflightContext | None
+        )
+        self.assertEqual(
+            compute["return"],
+            CompletionComputeResult | CompletionLifecycleResult | None,
+        )
+        self.assertEqual(spawn["return"], CompletionSpawnResult | None)
+        for method in (
+            _ModifyCompletionEffects.preflight_context,
+            _ModifyCompletionEffects.compute_next_and_limits,
+            _ModifyCompletionEffects.build_and_spawn_child,
+        ):
+            with self.subTest(method=method.__name__):
+                self.assertFalse(
+                    any(
+                        parameter.kind in {Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD}
+                        for parameter in signature(method).parameters.values()
+                    )
+                )
 
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin

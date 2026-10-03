@@ -8,6 +8,7 @@ import unittest
 
 import nautical_core.modify_completion_flow as flow
 from nautical_core.lifecycle.read_service import LifecycleReadService
+from nautical_core.task_read_repository import TaskReadRepository
 from nautical_core.integration_models import (
     CommandFailureKind,
     FailureEvidence,
@@ -20,7 +21,10 @@ from nautical_core.modify_models import CompletionChainSnapshot
 
 class ModifyCompletionFlowContracts(unittest.TestCase):
     def test_completion_clock_contract_uses_datetime(self) -> None:
-        localns = {"LifecycleReadService": LifecycleReadService}
+        localns = {
+            "LifecycleReadService": LifecycleReadService,
+            "TaskReadRepository": TaskReadRepository,
+        }
         service_clock = get_type_hints(flow.CompletionFlowServices, localns=localns)["now_utc"]
         finalize_clock = get_type_hints(flow.finalize_completion_modify)["now_utc"]
 
@@ -34,7 +38,10 @@ class ModifyCompletionFlowContracts(unittest.TestCase):
 
         runtime_state = get_type_hints(
             flow.CompletionFlowServices,
-            localns={"LifecycleReadService": LifecycleReadService},
+            localns={
+                "LifecycleReadService": LifecycleReadService,
+                "TaskReadRepository": TaskReadRepository,
+            },
         )["runtime_state"]
         unit_of_work = get_type_hints(flow.handle_completion_modify)["unit_of_work"]
 
@@ -42,12 +49,32 @@ class ModifyCompletionFlowContracts(unittest.TestCase):
         self.assertIs(unit_of_work, TaskwarriorUnitOfWork)
 
     def test_completion_services_use_lifecycle_read_owner(self) -> None:
-        localns = {"LifecycleReadService": LifecycleReadService}
+        localns = {
+            "LifecycleReadService": LifecycleReadService,
+            "TaskReadRepository": TaskReadRepository,
+        }
         flow_services = get_type_hints(flow.CompletionFlowServices, localns=localns)
         finalize_services = get_type_hints(flow.CompletionFinalizeServices, localns=localns)
 
         self.assertIs(flow_services["lifecycle_read_service"], LifecycleReadService)
         self.assertIs(finalize_services["lifecycle_read_service"], LifecycleReadService)
+
+    def test_preflight_callback_uses_datetime_and_task_repository(self) -> None:
+        preflight = get_type_hints(
+            flow.CompletionFlowServices,
+            localns={
+                "LifecycleReadService": LifecycleReadService,
+                "TaskReadRepository": TaskReadRepository,
+            },
+        )["preflight_context"]
+
+        self.assertEqual(
+            preflight,
+            Callable[
+                [flow.TaskPayload, datetime, TaskReadRepository],
+                flow.CompletionPreflightContext | None,
+            ],
+        )
 
     def test_unavailable_chain_export_is_not_loaded_as_empty_snapshot(self) -> None:
         command = TaskCommand(("task", "export"), "completion snapshot", 3.0)

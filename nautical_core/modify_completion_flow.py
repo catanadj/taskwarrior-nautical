@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from nautical_core.modify_models import (
     CompletionLifecycleResult,
@@ -22,6 +22,7 @@ from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
 
 if TYPE_CHECKING:
     from nautical_core.lifecycle.read_service import LifecycleReadService
+    from nautical_core.task_read_repository import TaskReadRepository
 
 
 @dataclass(slots=True)
@@ -35,7 +36,9 @@ class CompletionFlowServices:
     validate_native_until: Callable[[TaskPayload], None]
     validate_native_until_slots: Callable[[TaskPayload], None]
     now_utc: Callable[[], datetime]
-    preflight_context: Callable[[TaskPayload, Any, Any], CompletionPreflightContext | None]
+    preflight_context: Callable[
+        [TaskPayload, datetime, TaskReadRepository], CompletionPreflightContext | None
+    ]
     compute_next_and_limits: Callable[..., CompletionComputeResult | CompletionLifecycleResult | None]
     lifecycle_read_service: LifecycleReadService
     diag_count: Callable[[str, int], None]

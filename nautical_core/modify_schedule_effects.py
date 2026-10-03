@@ -49,6 +49,20 @@ class SequencePorts:
     sequence_interval: SequenceIntervalForToken
 
 
+class CPCompletionCompute(Protocol):
+    """CP final-date calculations exposed by the completion compute owner."""
+
+    estimate_cp_final_by_max: Callable[..., datetime | None]
+    cap_from_until_cp: Callable[..., tuple[int | None, datetime | None]]
+
+
+class AnchorCompletionCompute(Protocol):
+    """Anchor final-date calculations exposed by the completion compute owner."""
+
+    estimate_anchor_final_by_max: Callable[..., datetime | None]
+    cap_from_until_anchor: Callable[..., tuple[int | None, datetime | None]]
+
+
 class NextOccurrenceAfterLocalDateTime(Protocol):
     """Resolve the next anchor occurrence using an explicit date context."""
 
@@ -113,7 +127,7 @@ class AnchorOccurrencePorts:
 
 @dataclass(frozen=True, slots=True)
 class CPCompletionPorts:
-    compute: Any
+    compute: CPCompletionCompute
     parse_datetime: DatetimeParserCallback
     coerce_int: CoerceIntCallback
     parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None]
@@ -125,7 +139,7 @@ class CPCompletionPorts:
 
 @dataclass(frozen=True, slots=True)
 class AnchorCompletionPorts:
-    compute: Any
+    compute: AnchorCompletionCompute
     parse_datetime: DatetimeParserCallback
     coerce_int: CoerceIntCallback
     scheduler: SchedulerPorts

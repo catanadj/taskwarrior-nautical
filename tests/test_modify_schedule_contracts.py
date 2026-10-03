@@ -83,6 +83,15 @@ class ModifyScheduleContractTests(unittest.TestCase):
             self.assertIs(annotations["coerce_int"], modify_models.CoerceIntCallback)
             self.assertIs(annotations["diagnostic"], modify_models.DiagnosticCallback)
 
+        self.assertIs(
+            get_type_hints(modify_schedule_effects.CPCompletionPorts)["compute"],
+            modify_schedule_effects.CPCompletionCompute,
+        )
+        self.assertIs(
+            get_type_hints(modify_schedule_effects.AnchorCompletionPorts)["compute"],
+            modify_schedule_effects.AnchorCompletionCompute,
+        )
+
         self.assertEqual(
             get_type_hints(modify_schedule_effects.CPCompletionPorts)[
                 "parse_cp_sequence_tokens"

@@ -366,7 +366,7 @@ class SpawnChildCallback(Protocol):
         child: TaskDraft | TaskRow,
         parent: TaskRow,
         *,
-            lifecycle_plan: "LifecyclePlan | None" = None,
+        lifecycle_plan: "LifecyclePlan | None",
     ) -> tuple[str, list[str], bool, bool, str | None, str | None]:
         ...
 ModifyChainStateCallback: TypeAlias = Callable[[], Any]

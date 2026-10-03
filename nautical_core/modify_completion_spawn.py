@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from datetime import datetime
 
 from nautical_core.modify_models import CompletionSpawnResult, CompletionSpawnServices
@@ -57,24 +56,11 @@ def completion_build_and_spawn_child(
     deferred_spawn = False
     spawn_intent_id = None
     try:
-        accepts_plan = False
-        try:
-            parameters = inspect.signature(spawn_child_atomic).parameters.values()
-            accepts_plan = any(
-                parameter.name == "lifecycle_plan"
-                or parameter.kind is inspect.Parameter.VAR_KEYWORD
-                for parameter in parameters
-            )
-        except (TypeError, ValueError):
-            accepts_plan = lifecycle_plan is not None
-        if lifecycle_plan is None or not accepts_plan:
-            spawn_result = spawn_child_atomic(child_draft or child, task_row)
-        else:
-            spawn_result = spawn_child_atomic(
-                child_draft or child,
-                task_row,
-                lifecycle_plan=lifecycle_plan,
-            )
+        spawn_result = spawn_child_atomic(
+            child_draft or child,
+            task_row,
+            lifecycle_plan=lifecycle_plan,
+        )
         (
             child_short,
             stripped_attrs,

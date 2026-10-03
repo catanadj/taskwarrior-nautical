@@ -8,6 +8,7 @@ import nautical_core as core
 from nautical_core.modify_timeline import (
     _timeline_base_line,
     _timeline_future_anchor_items,
+    _timeline_omit_label,
 )
 from nautical_core.recurrence_context import RecurrenceContext
 from nautical_core.scheduler_service import SchedulerService
@@ -17,6 +18,17 @@ from nautical_core.timeutil import parse_dt_any
 
 
 class ModifyTimelineContractTests(unittest.TestCase):
+    def test_omit_label_does_not_hide_unexpected_formatter_failure(self) -> None:
+        def broken_formatter(_omit_dnf, _omit_date):
+            raise RuntimeError("omit description implementation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "omit description implementation failed"):
+            _timeline_omit_label(
+                [[{"kind": "w", "value": "mon", "mods": {}}]],
+                date(2026, 8, 3),
+                omit_description_for_date=broken_formatter,
+            )
+
     def test_positional_anchor_timeline_projects_future_selected_dates(self) -> None:
         expression = "(w:tue | w:thu)@in-month=last"
         task = {

@@ -54,10 +54,7 @@ def _timeline_omit_label(
 ) -> str | None:
     if omit_description_for_date is None:
         return None
-    try:
-        text = str(omit_description_for_date(omit_dnf, omit_date) or "").strip()
-    except Exception:
-        return None
+    text = str(omit_description_for_date(omit_dnf, omit_date) or "").strip()
     if not text:
         return None
     if len(text) <= 14:

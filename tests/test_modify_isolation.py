@@ -320,6 +320,31 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertEqual(annotations[name], contract)
 
+    def test_completion_preflight_context_ports_use_concrete_models_and_callbacks(self) -> None:
+        from nautical_core.modify_completion_effects import CompletionPreflightContextPorts
+        from nautical_core.modify_models import (
+            CoerceIntCallback,
+            EndChainSummaryCallback,
+            PanelCallback,
+            PrintTaskCallback,
+            ShortUuidCallback,
+        )
+        from nautical_core.task_models import TaskObservation
+
+        annotations = get_type_hints(CompletionPreflightContextPorts)
+        expected = {
+            "task_observation": type[TaskObservation],
+            "snapshot_mode": Callable[[], str],
+            "coerce_int": CoerceIntCallback,
+            "short_uuid": ShortUuidCallback,
+            "panel": PanelCallback,
+            "print_task": PrintTaskCallback,
+            "end_chain_summary": EndChainSummaryCallback,
+        }
+        for name, contract in expected.items():
+            with self.subTest(field=name):
+                self.assertEqual(annotations[name], contract)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Protocol
 
-from .task_models import TaskPayload
+from .task_models import TaskObservation, TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
 from .modify_models import (
@@ -20,6 +20,7 @@ from .modify_models import (
     EstimateCpFinalCallback,
     EndChainSummaryCallback,
     ExistingNextLookupCallback,
+    ShortUuidCallback,
     PanelCallback,
     PrintTaskCallback,
     ValidateChainDurationCallback,
@@ -163,14 +164,14 @@ class CompletionComputePorts:
 class CompletionPreflightContextPorts:
     preflight: CompletionPreflightService
     models: Any
-    task_observation: Any
-    snapshot_mode: Any
-    coerce_int: Any
+    task_observation: type[TaskObservation]
+    snapshot_mode: Callable[[], str]
+    coerce_int: CoerceIntCallback
     max_link_number: int
-    short_uuid: Any
-    panel: Any
-    print_task: Any
-    end_chain_summary: Any
+    short_uuid: ShortUuidCallback
+    panel: PanelCallback
+    print_task: PrintTaskCallback
+    end_chain_summary: EndChainSummaryCallback
 
 
 @dataclass(frozen=True, slots=True)

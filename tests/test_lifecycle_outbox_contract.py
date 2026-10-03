@@ -91,6 +91,14 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                     repository.claim_batch(owner="worker", lease_seconds=30, limit=1)
             self.assertIs(type(raised.exception), RuntimeError)
 
+    def test_claim_intent_does_not_convert_unexpected_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch.object(repository, "_connect", side_effect=RuntimeError("injected exact claim defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.claim_intent(owner="worker", lease_seconds=30, intent_id="intent-1")
+            self.assertIs(type(raised.exception), RuntimeError)
+
     def test_integrity_claim_quarantines_corruption_but_propagates_defects(self) -> None:
         from nautical_core.chain_integrity_models import (
             IntegrityOperation,

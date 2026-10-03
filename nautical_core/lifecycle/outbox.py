@@ -1221,7 +1221,7 @@ class _LifecycleOutboxRepository:
                 return self._claim_row(conn, intent_id=intent_id, owner=owner, expires=expires, now=now)
         except sqlite3.OperationalError as exc:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
-        except Exception as exc:
+        except (LifecycleOutboxError, sqlite3.Error, OSError) as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
         finally:
             if conn is not None:

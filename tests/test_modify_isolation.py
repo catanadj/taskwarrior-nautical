@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Callable, get_args, get_origin, get_type_hints
 
 
@@ -178,6 +178,23 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertEqual(
             get_type_hints(compare_datetimes),
             {"ports": DatetimePorts, "left": datetime, "right": datetime, "return": int},
+        )
+
+    def test_time_slot_effect_port_has_concrete_normalization_contract(self) -> None:
+        from nautical_core.modify_time_effects import TimeSlotPorts, normalize_hhmm_list
+
+        self.assertEqual(
+            get_type_hints(TimeSlotPorts)["resolve_time_slots"],
+            Callable[[object, date | None], list[tuple[int, int]]],
+        )
+        self.assertEqual(
+            get_type_hints(normalize_hhmm_list),
+            {
+                "ports": TimeSlotPorts,
+                "value": object,
+                "target_date": date | None,
+                "return": list[tuple[int, int]],
+            },
         )
 
     def test_read_effects_import_without_hook_bootstrap(self) -> None:

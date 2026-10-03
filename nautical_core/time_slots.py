@@ -31,7 +31,7 @@ def _parse_hhmm(value: str) -> tuple[int, int] | None:
 
 def resolve_time_slots(
     value: Any,
-    target_date: date,
+    target_date: date | None,
     *,
     config: dict[str, Any] | None = None,
     to_local: Callable[[Any], Any] | None = None,

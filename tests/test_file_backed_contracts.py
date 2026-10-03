@@ -14,6 +14,18 @@ import nautical_core.omit_files as omit_files
 
 
 class FileBackedRecurrenceContractTests(unittest.TestCase):
+    def test_date_range_parser_does_not_hide_unexpected_datetime_failures(self) -> None:
+        import nautical_core.file_backed_dates as file_backed_dates
+
+        class BrokenDateParser:
+            @staticmethod
+            def fromisoformat(_value: str) -> date:
+                raise RuntimeError("date parser implementation failed")
+
+        with patch.object(file_backed_dates, "date", BrokenDateParser):
+            with self.assertRaisesRegex(RuntimeError, "date parser implementation failed"):
+                file_backed_dates._expand_date_spec("2026-01-01", label="calendar")
+
     def test_csv_without_date_column_reports_available_columns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "calendar.csv").write_text(

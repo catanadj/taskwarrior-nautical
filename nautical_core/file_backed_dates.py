@@ -65,7 +65,7 @@ def _expand_date_spec(spec: str, *, label: str) -> set[date]:
         left, right = text.split("..", 1)
         start = date.fromisoformat(left.strip())
         end = date.fromisoformat(right.strip())
-    except Exception:
+    except ValueError:
         raise ValueError(f"{label} contains an invalid date or range.")
     if end < start:
         raise ValueError(f"{label} contains a backward date range.")

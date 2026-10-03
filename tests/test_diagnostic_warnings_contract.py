@@ -166,6 +166,52 @@ class DiagnosticWarningsContractTests(unittest.TestCase):
             self.assertTrue((Path(directory) / ".diag_contract.stamp").is_file())
             self.assertEqual(stderr.getvalue(), "")
 
+    def test_daily_warning_does_not_hide_unexpected_filesystem_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(
+                diagnostic_warnings.os,
+                "makedirs",
+                side_effect=RuntimeError("warning filesystem implementation failed"),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "warning filesystem implementation failed"
+                ):
+                    diagnostic_warnings.warn_once_per_day(
+                        "contract", "diagnostic message", cache_dir=directory, require_diag=False
+                    )
+
+    def test_rate_limited_warning_does_not_hide_unexpected_filesystem_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(
+                diagnostic_warnings.os,
+                "makedirs",
+                side_effect=RuntimeError("warning filesystem implementation failed"),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "warning filesystem implementation failed"
+                ):
+                    diagnostic_warnings.warn_rate_limited_any(
+                        "contract", "diagnostic message", cache_dir=directory
+                    )
+
+    def test_warning_filesystem_unavailability_remains_best_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            warning_calls = (
+                lambda: diagnostic_warnings.warn_once_per_day(
+                    "contract", "diagnostic message", cache_dir=directory, require_diag=False
+                ),
+                lambda: diagnostic_warnings.warn_rate_limited_any(
+                    "contract", "diagnostic message", cache_dir=directory
+                ),
+            )
+            for warn in warning_calls:
+                with patch.object(
+                    diagnostic_warnings.os,
+                    "makedirs",
+                    side_effect=OSError("disk unavailable"),
+                ):
+                    warn()
+
 
 if __name__ == "__main__":
     unittest.main()

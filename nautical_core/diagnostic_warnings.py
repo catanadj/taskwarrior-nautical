@@ -21,7 +21,7 @@ def warn_once_per_day(key: str, message: str, *, cache_dir: str, require_diag: b
                 with open(stamp_path, "r", encoding="utf-8") as f:
                     if f.read().strip() == today:
                         return
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
         with open(stamp_path, "w", encoding="utf-8") as f:
@@ -29,9 +29,11 @@ def warn_once_per_day(key: str, message: str, *, cache_dir: str, require_diag: b
         if os.environ.get("NAUTICAL_DIAG") == "1":
             try:
                 print(message, file=sys.stderr)
-            except Exception:
+            except (OSError, ValueError):
                 pass
-    except Exception:
+    except (OSError, TypeError, ValueError, OverflowError):
+        # Warning persistence is optional; expected filesystem/data failures
+        # must not disrupt callers.
         pass
 
 
@@ -47,7 +49,7 @@ def warn_rate_limited_any(key: str, message: str, *, cache_dir: str, min_interva
                 with open(stamp_path, "r", encoding="utf-8") as f:
                     raw = f.read().strip()
                 last = float(raw) if raw else None
-            except Exception:
+            except (OSError, ValueError):
                 last = None
         if last is not None and (now - last) < float(min_interval_s or 0.0):
             return
@@ -56,9 +58,11 @@ def warn_rate_limited_any(key: str, message: str, *, cache_dir: str, min_interva
         if os.environ.get("NAUTICAL_DIAG") == "1":
             try:
                 print(message, file=sys.stderr)
-            except Exception:
+            except (OSError, ValueError):
                 pass
-    except Exception:
+    except (OSError, TypeError, ValueError, OverflowError):
+        # Warning persistence is optional; expected filesystem/data failures
+        # must not disrupt callers.
         pass
 
 

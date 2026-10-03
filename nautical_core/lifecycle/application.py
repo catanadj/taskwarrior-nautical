@@ -808,7 +808,7 @@ class LifecycleApplicationService:
             claim, records = self._outbox.claim_batch(
                 owner=self._owner, lease_seconds=self._lease_seconds, limit=max(1, int(limit))
             )
-        except Exception as exc:
+        except (LifecycleOutboxError, OSError, sqlite3.Error) as exc:
             claim = OutboxResult(
                 OutboxResultKind.RETRYABLE,
                 reason=f"outbox claim failed: {str(exc).strip() or type(exc).__name__}",

@@ -63,6 +63,25 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "outbox implementation defect"):
             service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
 
+    def test_drain_does_not_relabel_unexpected_claim_defects_as_retryable(self) -> None:
+        class BrokenClaimOutbox(_LifecycleOutboxRepository):
+            def claim_batch(self, **_kwargs):
+                raise RuntimeError("claim implementation defect")
+
+        with TemporaryDirectory() as directory:
+            outbox = BrokenClaimOutbox(Path(directory))
+            execution = LifecycleExecutionFixture(object())
+            service = LifecycleApplicationService(
+                unit_of_work=type("UnitOfWork", (), {"mutation_epoch": 0})(),
+                mutations=execution,
+                execution=execution,
+                outbox=outbox,
+                owner="failure-test",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "claim implementation defect"):
+                service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+
     def test_outbox_session_reuses_one_connection_and_closes_at_boundary(self) -> None:
         with TemporaryDirectory() as directory:
             repo = _LifecycleOutboxRepository(Path(directory))

@@ -42,6 +42,7 @@ def chain_root_and_age(
                     age_days = 0
         return root_short or "—", age_days
     except Exception:
+        # Chain age is optional display context; never fail a task mutation for it.
         return "—", None
 
 
@@ -59,6 +60,7 @@ def cached_chain_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc: Any
     try:
         cache_key = (ports.root_uuid(task), str(ports.tolocal(now_utc).date()))
     except Exception:
+        # A cache key is only an optimization; recompute the context uncached.
         cache_key = None
     if cache_key is not None:
         cached = ports.cache_get("chain_root_age", cache_key)
@@ -84,6 +86,7 @@ def cached_format_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc: An
     try:
         cache_key = (ports.root_uuid(task), str(ports.tolocal(now_utc).date()))
     except Exception:
+        # A cache key is only an optimization; recompute the formatted context.
         cache_key = None
     if cache_key is not None:
         cached = ports.cache_get("format_root_age", cache_key)

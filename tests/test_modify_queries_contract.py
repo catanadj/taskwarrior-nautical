@@ -1,0 +1,78 @@
+"""Best-effort display contracts for optional chain-root context."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import unittest
+
+from nautical_core.modify_queries import QueryPorts, cached_chain_root_and_age, cached_format_root_and_age, chain_root_and_age
+
+
+class ModifyQueriesContractTests(unittest.TestCase):
+    def test_chain_root_context_failure_uses_display_fallback(self) -> None:
+        result = chain_root_and_age(
+            {"chainID": "chain-1"},
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+            root_uuid_from=lambda _task: "root-1",
+            tw_get_cached=lambda _ref: "20260101T090000Z",
+            dtparse=lambda _value: datetime(2026, 1, 1, tzinfo=timezone.utc),
+            tolocal=lambda _value: (_ for _ in ()).throw(RuntimeError("timezone adapter defect")),
+        )
+
+        self.assertEqual(result, ("—", None))
+
+    def test_chain_root_cache_key_failure_does_not_block_context_recalculation(self) -> None:
+        root_calls = 0
+
+        def root_uuid(_task: dict[str, object]) -> str:
+            nonlocal root_calls
+            root_calls += 1
+            if root_calls == 1:
+                raise RuntimeError("transient cache-key defect")
+            return "root-1"
+
+        now = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        ports = QueryPorts(
+            root_uuid=root_uuid,
+            tw_get_cached=lambda _ref: "entry",
+            dtparse=lambda _value: datetime(2026, 1, 1, tzinfo=timezone.utc),
+            tolocal=lambda value: value,
+            cache_get=lambda _kind, _key: None,
+            cache_set=lambda *_args: None,
+            diag_count=lambda _name: None,
+        )
+
+        self.assertEqual(
+            cached_chain_root_and_age(ports, {"chainID": "chain-1"}, now),
+            ("root-1", 1),
+        )
+
+    def test_format_cache_key_failure_does_not_block_context_rendering(self) -> None:
+        root_calls = 0
+
+        def root_uuid(_task: dict[str, object]) -> str:
+            nonlocal root_calls
+            root_calls += 1
+            if root_calls == 1:
+                raise RuntimeError("transient cache-key defect")
+            return "root-1"
+
+        now = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        ports = QueryPorts(
+            root_uuid=root_uuid,
+            tw_get_cached=lambda _ref: "entry",
+            dtparse=lambda _value: now,
+            tolocal=lambda value: value,
+            cache_get=lambda _kind, _key: None,
+            cache_set=lambda *_args: None,
+            diag_count=lambda _name: None,
+        )
+
+        self.assertEqual(
+            cached_format_root_and_age(ports, {"chainID": "chain-1"}, now),
+            "root-1",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -91,10 +91,27 @@ class ModifyPresentationPortTests(unittest.TestCase):
         self.assertEqual(passthrough, [task])
 
     def test_lifecycle_result_renderer_uses_only_panel_port(self) -> None:
-        from nautical_core.modify_presentation_effects import LifecycleResultPort, render_lifecycle_result
+        from nautical_core.modify_models import CompletionLifecycleResult, TaskView
+        from nautical_core.modify_presentation_effects import (
+            ChainStylePorts,
+            LifecycleResultPort,
+            render_lifecycle_result,
+        )
+        from nautical_core.task_models import TaskPayload
+        from collections import abc
+        from typing import Any, get_type_hints
+
+        self.assertEqual(
+            get_type_hints(ChainStylePorts)["root_uuid"],
+            abc.Callable[[TaskPayload], str],
+        )
+        result_annotations = get_type_hints(render_lifecycle_result)
+        self.assertIs(result_annotations["result"], CompletionLifecycleResult)
+        self.assertIs(result_annotations["_task"], TaskView)
+        self.assertIsNot(get_type_hints(LifecycleResultPort)["panel"], Any)
 
         rendered: list[tuple[str, list[tuple[str, str]], str]] = []
-        result = SimpleNamespace(
+        result = CompletionLifecycleResult(
             state="manual_review",
             reason="ambiguous child",
             child_short="abc123",
@@ -106,7 +123,7 @@ class ModifyPresentationPortTests(unittest.TestCase):
                 panel=lambda title, rows, **options: rendered.append((title, rows, options["kind"]))
             ),
             result,
-            {},
+            TaskView.from_mapping({}),
         )
 
         self.assertEqual(rendered[0][0], "⛓ Chain warning")

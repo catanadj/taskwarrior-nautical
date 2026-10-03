@@ -118,7 +118,7 @@ def path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | None
                     return "path is not readable"
             elif not os.access(probe, os.W_OK | os.X_OK):
                 return "parent path is not writable/searchable"
-    except Exception as exc:
+    except OSError as exc:
         return str(exc)
     return None
 

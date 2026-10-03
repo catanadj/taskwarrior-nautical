@@ -109,6 +109,15 @@ class ConfigSupportContractTests(unittest.TestCase):
                     warn_toml_parse_error=lambda _path, _err: None,
                 )
 
+    def test_path_safety_probe_does_not_hide_unexpected_failure(self) -> None:
+        with patch.object(
+            config_support.os.path,
+            "exists",
+            side_effect=RuntimeError("unexpected path-probe defect"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected path-probe defect"):
+                config_support.path_safety_error("/tmp/nautical-config")
+
     def test_world_writable_file_is_rejected_with_path_reason(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "nautical.toml"

@@ -31,6 +31,10 @@ class TaskRowDecoder(Protocol):
     ) -> TaskObservation: ...
 
 
+class TaskFieldReader(Protocol):
+    def get(self, key: str, default: Any = None) -> Any: ...
+
+
 @dataclass(frozen=True, slots=True)
 class LifecycleReadCapabilities:
     """Explicit collaborators required to construct lifecycle read services."""
@@ -83,7 +87,7 @@ class TwGetPorts:
     environment: Callable[[], dict[str, str]]
 
 
-def _token_match(coerce_int: Any, task: Any, token: str) -> bool:
+def _token_match(coerce_int: CoerceInt, task: TaskFieldReader, token: str) -> bool:
     if not hasattr(task, "get") or not isinstance(token, str) or not token:
         return False
     if token.startswith("+"):

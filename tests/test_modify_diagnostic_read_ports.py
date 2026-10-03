@@ -199,6 +199,16 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             },
         )
 
+    def test_runtime_token_match_uses_owner_task_and_coercion_types(self) -> None:
+        from nautical_core.lifecycle.read_service import CoerceInt
+        from nautical_core.modify_read_effects import _token_match
+
+        annotations = get_type_hints(_token_match)
+        self.assertEqual(annotations["coerce_int"], CoerceInt)
+        self.assertIsNot(annotations["task"], Any)
+        self.assertEqual(annotations["token"], str)
+        self.assertIs(annotations["return"], bool)
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

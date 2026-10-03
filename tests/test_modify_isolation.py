@@ -197,6 +197,14 @@ class ModifyIsolationTests(unittest.TestCase):
             },
         )
 
+    def test_modify_ui_ports_use_typed_process_boundary_contracts(self) -> None:
+        from nautical_core.callback_ports import CallbackPort
+        from nautical_core.modify_ui_effects import UIEffectsPorts
+
+        for field_name, annotation in get_type_hints(UIEffectsPorts).items():
+            with self.subTest(field=field_name):
+                self.assertIsNot(annotation, CallbackPort)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

@@ -4,21 +4,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import sys
-from typing import Any
+from typing import Any, Callable, Protocol
 
-from .callback_ports import CallbackPort
+from .task_models import TaskPayload
+
+
+class EmitTaskJson(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        sanitize: bool = False,
+        core: Any = None,
+        prof: Any = None,
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
 class UIEffectsPorts:
     """Process-boundary capabilities required by modify UI effects."""
 
-    core: CallbackPort
-    load_core: CallbackPort
-    override: CallbackPort
-    emit_passthrough_json: CallbackPort
-    emit_task_json: CallbackPort
-    stderr_write: CallbackPort
+    core: Callable[[], Any]
+    load_core: Callable[[], None]
+    override: Callable[[str], Callable[..., Any] | None]
+    emit_passthrough_json: Callable[[TaskPayload], None]
+    emit_task_json: EmitTaskJson
+    stderr_write: Callable[[str], int]
 
 
 def ui_ports_for(host: Any) -> UIEffectsPorts:
@@ -28,7 +39,7 @@ def ui_ports_for(host: Any) -> UIEffectsPorts:
         values = vars(host)
     values_map = values if isinstance(values, dict) else {}
 
-    def test_override(name: str) -> Any:
+    def test_override(name: str) -> Callable[..., Any] | None:
         override = values_map.get(name)
         is_root_delegate = callable(override) and getattr(override, "__name__", "") == name and (
             getattr(getattr(override, "__code__", None), "co_filename", "") == values_map.get("__file__")
@@ -39,8 +50,14 @@ def ui_ports_for(host: Any) -> UIEffectsPorts:
         core=lambda: host.core,
         load_core=host._load_core,
         override=test_override,
-        emit_passthrough_json=lambda task: host._module("hook_results").emit_passthrough_json(task),
-        emit_task_json=lambda task, **kwargs: host._module("hook_results").emit_task_json(task, **kwargs),
+        emit_passthrough_json=lambda task: host._module("hook_results").emit_passthrough_json(
+            task
+        ),
+        emit_task_json=(
+            lambda task, *, sanitize=False, core=None, prof=None: host._module(
+                "hook_results"
+            ).emit_task_json(task, sanitize=sanitize, core=core, prof=prof)
+        ),
         stderr_write=sys.stderr.write,
     )
 

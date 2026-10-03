@@ -133,6 +133,6 @@ def normalize_weekday(s: str) -> str | None:
         n = int(s)
         if 1 <= n <= 7:
             return WD_ABBR[n - 1]
-    except Exception:
+    except ValueError:
         pass
     return None

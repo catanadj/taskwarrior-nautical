@@ -128,6 +128,27 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 self.assertIsNot(annotation, Any)
 
+    def test_omit_validation_ports_have_specific_callback_contracts(self) -> None:
+        from nautical_core.modify_validation_effects import OmitValidationPorts
+
+        annotations = get_type_hints(OmitValidationPorts)
+        self.assertEqual(
+            set(annotations),
+            {
+                "pipeline",
+                "parse_anchor",
+                "validate_anchor",
+                "validate_omit",
+                "validate_files",
+                "load_anchor_file",
+                "load_omit_file",
+                "fail",
+            },
+        )
+        for field_name, annotation in annotations.items():
+            with self.subTest(field=field_name):
+                self.assertIsNot(annotation, Any)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

@@ -58,6 +58,32 @@ class SharedValidationPorts:
     validate_omit: Callable[[str], object]
 
 
+class OmitValidationPipeline(SharedValidationPipeline, Protocol):
+    def validate_recurrence_files(
+        self,
+        anchor: object,
+        anchor_file: object,
+        omit: object,
+        omit_file: object,
+        *,
+        load_anchor_file: Callable[[str], object],
+        load_omit_file: Callable[[str], object],
+    ) -> tuple[ValidationFinding, ...]: ...
+
+
+class ValidateRecurrenceFiles(Protocol):
+    def __call__(
+        self,
+        anchor: object,
+        anchor_file: object,
+        omit: object,
+        omit_file: object,
+        *,
+        load_anchor_file: Callable[[str], object],
+        load_omit_file: Callable[[str], object],
+    ) -> tuple[ValidationFinding, ...]: ...
+
+
 class CPValidationOperation(Protocol):
     def __call__(
         self,
@@ -243,14 +269,14 @@ class AnchorValidationPorts:
 
 @dataclass(frozen=True, slots=True)
 class OmitValidationPorts:
-    pipeline: Any
-    parse_anchor: Any
-    validate_anchor: Any
-    validate_omit: Any
-    validate_files: Any
-    load_anchor_file: Any
-    load_omit_file: Any
-    fail: Any
+    pipeline: OmitValidationPipeline
+    parse_anchor: Callable[[str], object]
+    validate_anchor: Callable[[str], object]
+    validate_omit: Callable[[str], object]
+    validate_files: ValidateRecurrenceFiles
+    load_anchor_file: Callable[[str], object]
+    load_omit_file: Callable[[str], object]
+    fail: Callable[[str, str], NoReturn]
 
 
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:

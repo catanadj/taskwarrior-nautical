@@ -288,7 +288,7 @@ def _config_source_hint() -> str:
         # identity. File edits are checked by configuration_drift(), not by
         # every hot cache-key call.
         return _CONFIG_SOURCE_PATH_CACHE or "auto"
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return "auto"
 
 

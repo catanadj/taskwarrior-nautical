@@ -111,6 +111,25 @@ class RuntimeConfigContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "stat adapter defect"):
                 core_config.effective_config_snapshot()
 
+    def test_source_hint_contains_expected_path_normalization_failure(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_CONFIG": "/tmp/nautical.toml"}),
+            patch.object(core_config.os.path, "abspath", side_effect=ValueError("bad path")),
+        ):
+            self.assertEqual(core_config._config_source_hint(), "auto")
+
+    def test_source_hint_does_not_hide_internal_path_failure(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_CONFIG": "/tmp/nautical.toml"}),
+            patch.object(
+                core_config.os.path,
+                "abspath",
+                side_effect=RuntimeError("path normalization defect"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "path normalization defect"):
+                core_config._config_source_hint()
+
     def test_outbox_drain_limit_config_and_env_override(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:

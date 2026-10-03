@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 from .callback_ports import CallbackPort
 from .hook_validation_pipeline import ValidationFinding
 from .task_models import TaskPayload
@@ -98,6 +98,31 @@ class ChainLimitsValidationOperation(Protocol):
     ) -> None: ...
 
 
+class ValidationPanel(Protocol):
+    def __call__(
+        self,
+        title: str,
+        rows: list[tuple[str, str]],
+        *,
+        kind: str,
+    ) -> object: ...
+
+
+class NativeUntilValidationOperation(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        validate_anchor_mode: Callable[[object, object, object, object], tuple[bool, str | None]],
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        validate_after_target: Callable[[datetime | None, datetime | None, str], tuple[bool, str | None]],
+        format_local: Callable[[datetime], str],
+        panel: ValidationPanel,
+        fail: Callable[[str, str], NoReturn],
+        abort: Callable[[int], NoReturn],
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CPValidationPorts:
     validate: CPValidationOperation
@@ -122,14 +147,14 @@ class ChainLimitPorts:
 
 @dataclass(frozen=True, slots=True)
 class NativeUntilPorts:
-    validate: Any
-    validate_anchor_mode: Any
-    parse_datetime: Any
-    validate_after_target: Any
-    format_local: Any
-    panel: Any
-    fail: Any
-    abort: Any
+    validate: NativeUntilValidationOperation
+    validate_anchor_mode: Callable[[object, object, object, object], tuple[bool, str | None]]
+    parse_datetime: Callable[[object], tuple[datetime | None, str | None]]
+    validate_after_target: Callable[[datetime | None, datetime | None, str], tuple[bool, str | None]]
+    format_local: Callable[[datetime], str]
+    panel: ValidationPanel
+    fail: Callable[[str, str], NoReturn]
+    abort: Callable[[int], NoReturn]
 
 
 @dataclass(frozen=True, slots=True)

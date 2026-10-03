@@ -55,6 +55,22 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
                 1,
             )
 
+    def test_outbox_quarantine_does_not_hide_unexpected_replace_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            state = Path(directory) / ".nautical-state"
+            state.mkdir()
+            database = state / ".nautical_lifecycle_outbox.db"
+            database.write_bytes(b"corrupt")
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch(
+                "nautical_core.lifecycle.outbox.os.replace",
+                side_effect=RuntimeError("injected quarantine defect"),
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository._quarantine_corrupt_state("corrupt database")
+            self.assertIs(type(raised.exception), RuntimeError)
+            self.assertFalse((state / ".nautical_outbox_recovery.lock").exists())
+
     def test_stale_outbox_recovery_marker_is_reclaimed_only_after_process_exit(self) -> None:
         with TemporaryDirectory() as directory:
             marker = Path(directory) / ".nautical_outbox_recovery.lock"

@@ -569,7 +569,7 @@ class _LifecycleOutboxRepository:
             self._fsync_directory(state_dir)
             self._schema_identity = None
             return quarantine
-        except Exception as exc:
+        except OSError as exc:
             raise LifecycleOutboxError(f"could not quarantine corrupt outbox: {exc}") from exc
         finally:
             os.close(lock_fd)

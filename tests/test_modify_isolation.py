@@ -205,6 +205,15 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 self.assertIsNot(annotation, CallbackPort)
 
+    def test_completion_preflight_coercion_uses_shared_typed_contract(self) -> None:
+        from nautical_core.modify_completion_effects import CompletionPreflightPorts
+        from nautical_core.modify_models import CoerceIntCallback
+
+        self.assertIs(
+            get_type_hints(CompletionPreflightPorts)["coerce_int"],
+            CoerceIntCallback,
+        )
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

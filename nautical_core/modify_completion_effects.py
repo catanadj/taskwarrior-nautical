@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
-from .callback_ports import CallbackPort
+from .modify_models import CoerceIntCallback
 
 
 class CompletionPreflightService(Protocol):
@@ -53,7 +53,7 @@ class SnapshotPorts:
 @dataclass(frozen=True, slots=True)
 class CompletionPreflightPorts:
     preflight: CompletionPreflightService
-    coerce_int: CallbackPort
+    coerce_int: CoerceIntCallback
     max_link_number: int
     short_uuid: Any
     panel: Any

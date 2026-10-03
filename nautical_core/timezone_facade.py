@@ -28,7 +28,7 @@ def resolve(
         _local_timezone = zoneinfo_module.ZoneInfo(timezone_name)
         _configuration_error = ""
         return _local_timezone, ""
-    except Exception:
+    except (KeyError, ValueError, TypeError, OSError):
         message = f"configured timezone '{timezone_name}' is invalid or unavailable"
         warn_once(
             "timezone_local_invalid",

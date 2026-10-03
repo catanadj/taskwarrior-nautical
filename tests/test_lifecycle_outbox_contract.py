@@ -75,6 +75,14 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                     repository.open()
             self.assertIs(type(raised.exception), RuntimeError)
 
+    def test_open_does_not_convert_unexpected_initialization_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch.object(repository, "_initialize", side_effect=RuntimeError("injected open defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.open()
+            self.assertIs(type(raised.exception), RuntimeError)
+
     def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
         from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
         from nautical_core.chain_integrity_models import (

@@ -476,7 +476,7 @@ class _LifecycleOutboxRepository:
                     return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
                 self._metric("outbox_busy_retries")
                 time.sleep(min(_MAX_INIT_BACKOFF_S, _INIT_BACKOFF_S * (2**attempt)))
-            except Exception as exc:
+            except (LifecycleOutboxError, sqlite3.Error, OSError) as exc:
                 return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
             finally:
                 if conn is not None:

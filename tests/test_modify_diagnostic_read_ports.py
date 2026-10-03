@@ -5,10 +5,26 @@ from __future__ import annotations
 from types import SimpleNamespace
 import inspect
 import unittest
+from datetime import datetime
+from typing import get_type_hints
 from unittest.mock import patch
 
 
 class ModifyDiagnosticReadPortTests(unittest.TestCase):
+    def test_diagnostic_datetime_parser_port_has_typed_owner_contract(self) -> None:
+        from nautical_core.modify_diagnostics_effects import (
+            DatetimeValuePort,
+            _parse_datetime_value,
+        )
+        from nautical_core.task_datetime import TaskDatetimeParser
+
+        self.assertEqual(
+            get_type_hints(DatetimeValuePort)["parser"], TaskDatetimeParser
+        )
+        self.assertEqual(
+            get_type_hints(_parse_datetime_value)["return"], datetime | None
+        )
+
     def test_summary_export_does_not_mask_analytics_sorting_defects(self) -> None:
         import nautical_core.modify_diagnostics_effects as diagnostics
         from nautical_core.task_models import TaskObservation

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
-from .task_datetime import datetime_value, parser_for_host
+from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from dataclasses import dataclass
 from .task_models import TaskObservation, TaskPayload
 
 
 @dataclass(frozen=True, slots=True)
 class DatetimeValuePort:
-    parser: Any
+    parser: TaskDatetimeParser
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +58,7 @@ class EndChainSummaryPorts:
     services: Any
 
 
-def _parse_datetime_value(port: DatetimeValuePort, value: object) -> Any:
+def _parse_datetime_value(port: DatetimeValuePort, value: object) -> datetime | None:
     return datetime_value(port.parser, value)
 
 

@@ -245,6 +245,31 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertIn("[bold yellow]Period:[/] [white]P1D[/]", output)
         self.assertIn("[bold cyan]Result:[/] [white]Applied now[/]", output)
 
+    def test_expiration_summary_failure_preserves_primary_expiration_row(self) -> None:
+        rows: list[tuple[str, object]] = []
+        core = SimpleNamespace(
+            _import_sibling=lambda _name: (_ for _ in ()).throw(
+                RuntimeError("optional carry presentation unavailable")
+            ),
+            humanize_delta=lambda *_args, **_kwargs: "in 2 days",
+            fmt_dt_local=lambda value: value.isoformat(),
+        )
+        child_due = datetime(2026, 10, 3, 9, tzinfo=timezone.utc)
+        child = {
+            "until": "20261005T090000Z",
+        }
+
+        modify_feedback._append_next_expiration_row(
+            rows,
+            child,
+            child_due,
+            core=core,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], "Next expires")
+        self.assertIn("2026-10-05", str(rows[0][1]))
+
     def test_anchor_feedback_expands_presets_and_keeps_lifecycle_result_without_analytics(self) -> None:
         now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
         panels = []

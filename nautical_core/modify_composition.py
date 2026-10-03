@@ -867,7 +867,7 @@ def capabilities_for(host: Any) -> ModifyHookCapabilities:
         cached = ModifyHookCapabilities.from_host(host)
         try:
             setattr(host, "_MODIFY_CAPABILITIES", cached)
-        except Exception:
+        except AttributeError:
             pass
     # Construct the datetime port once at the composition root.  Effects may
     # consume it through their narrow parser adapter without rediscovering the
@@ -879,7 +879,7 @@ def capabilities_for(host: Any) -> ModifyHookCapabilities:
                 "_TASK_DATETIME_PARSER",
                 parser_for_core(host.core, diagnostic=getattr(host, "_diag", None)),
             )
-        except Exception:
+        except AttributeError:
             pass
     return cached
 

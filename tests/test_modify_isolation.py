@@ -1181,6 +1181,70 @@ class ModifyIsolationTests(unittest.TestCase):
                     annotations["return"], CompletionLifecycleResult | None
                 )
 
+    def test_capability_cache_does_not_hide_unexpected_attribute_failures(self) -> None:
+        from unittest.mock import patch
+        import nautical_core.modify_composition as composition
+
+        capabilities = object()
+
+        class Host:
+            _TASK_DATETIME_PARSER = object()
+
+            def __setattr__(self, name: str, value: object) -> None:
+                if name == "_MODIFY_CAPABILITIES":
+                    raise RuntimeError("broken capability cache descriptor")
+                object.__setattr__(self, name, value)
+
+        with patch.object(
+            composition.ModifyHookCapabilities,
+            "from_host",
+            return_value=capabilities,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "broken capability cache descriptor"):
+                composition.capabilities_for(Host())
+
+    def test_datetime_parser_cache_does_not_hide_unexpected_attribute_failures(self) -> None:
+        from unittest.mock import patch
+        import nautical_core.modify_composition as composition
+
+        capabilities = object()
+
+        class Host:
+            _MODIFY_CAPABILITIES = capabilities
+            _TASK_DATETIME_PARSER = None
+
+            def __init__(self) -> None:
+                self.core = object()
+                self._diag = None
+
+            def __setattr__(self, name: str, value: object) -> None:
+                if name == "_TASK_DATETIME_PARSER":
+                    raise RuntimeError("broken datetime parser cache descriptor")
+                object.__setattr__(self, name, value)
+
+        with patch.object(composition, "parser_for_core", return_value=object()):
+            with self.assertRaisesRegex(
+                RuntimeError, "broken datetime parser cache descriptor"
+            ):
+                composition.capabilities_for(Host())
+
+    def test_capabilities_still_work_when_immutable_host_cannot_cache_them(self) -> None:
+        from unittest.mock import patch
+        import nautical_core.modify_composition as composition
+
+        capabilities = object()
+
+        class ImmutableHost:
+            __slots__ = ()
+            _TASK_DATETIME_PARSER = object()
+
+        with patch.object(
+            composition.ModifyHookCapabilities,
+            "from_host",
+            return_value=capabilities,
+        ):
+            self.assertIs(composition.capabilities_for(ImmutableHost()), capabilities)
+
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin
         from nautical_core.lifecycle.read_service import LifecycleReadService

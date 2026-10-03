@@ -24,6 +24,8 @@ def completion_build_and_spawn_child(
     build_child_draft = services.build_child_draft
     spawn_child_atomic = services.spawn_child_atomic
     diag = services.diag
+    # Child planning is a recoverable lifecycle step. Preserve its failure as
+    # a typed retryable result so completion can proceed without linking a child.
     try:
         if lifecycle_plan is not None:
             if getattr(getattr(lifecycle_plan, "action", None), "value", "") != "spawn_child":
@@ -55,6 +57,8 @@ def completion_build_and_spawn_child(
 
     deferred_spawn = False
     spawn_intent_id = None
+    # A failed staging callback has not verified or durably linked a child;
+    # return retryable evidence and leave the parent's nextLink untouched.
     try:
         spawn_result = spawn_child_atomic(
             child_draft or child,

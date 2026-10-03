@@ -144,6 +144,14 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             _, status = repository.status(intent_id=envelope.intent_id)
             self.assertEqual(status["records"][0]["state"], "poison")
 
+    def test_integrity_transition_does_not_convert_unexpected_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch.object(repository, "_connect", side_effect=RuntimeError("injected transition defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.acknowledge_integrity(intent_id="integrity:missing", owner="worker")
+            self.assertIs(type(raised.exception), RuntimeError)
+
     def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
         from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
         from nautical_core.chain_integrity_models import (

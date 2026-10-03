@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
+from .modify_models import PreviewLineFormatter
 from .task_models import TaskPayload
+
+
+class MarkupStripper(Protocol):
+    def strip_rich_markup(self, text: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,16 +21,14 @@ class HumanDeltaPort:
 
 @dataclass(frozen=True, slots=True)
 class LinePreviewPorts:
-    task_view: Any
-    format_line_preview: Any
-    core: Any
-    format_local: Any
+    format_line_preview: PreviewLineFormatter
+    core: MarkupStripper
+    format_local: Callable[[Any], str]
     delta: HumanDeltaPort
 
 
 def line_preview_ports_for(host: Any) -> LinePreviewPorts:
     return LinePreviewPorts(
-        task_view=host._module("modify_models").TaskView,
         format_line_preview=host._module("modify_feedback").format_line_preview,
         core=host.core,
         format_local=host._fmtlocal,
@@ -64,13 +67,18 @@ def line_preview(
     now_utc: Any,
     **kwargs: Any,
 ) -> str:
-    task_view = ports.task_view.from_mapping(task)
+    def format_on_time_delta(due: Any, end: Any) -> str:
+        return on_time_delta(ports.delta, due, end)
+
+    def format_human_delta(start: Any, end: Any, prefer: bool = True) -> str:
+        return human_delta(ports.delta, start, end, prefer)
+
     return ports.format_line_preview(
-        link_no, task_view, child_due_utc, child_short, now_utc,
+        link_no, task, child_due_utc, child_short, now_utc,
         core=ports.core,
         format_local=ports.format_local,
-        on_time_delta=lambda due, end, tol=60: on_time_delta(ports.delta, due, end, tol),
-        human_delta=lambda start, end, prefer=True: human_delta(ports.delta, start, end, prefer),
+        on_time_delta=format_on_time_delta,
+        human_delta=format_human_delta,
         **kwargs,
     )
 

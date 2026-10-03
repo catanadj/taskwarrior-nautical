@@ -232,6 +232,17 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             export_chain_required(port, {"chainID": "chain-1"}, object())
 
+    def test_line_preview_ports_use_task_view_formatter_and_markup_contracts(self) -> None:
+        from nautical_core.modify_format_effects import LinePreviewPorts
+        from nautical_core.modify_format_effects import MarkupStripper
+        from nautical_core.modify_models import PreviewLineFormatter
+
+        annotations = get_type_hints(LinePreviewPorts)
+        self.assertIs(annotations["format_line_preview"], PreviewLineFormatter)
+        self.assertIs(annotations["core"], MarkupStripper)
+        self.assertEqual(annotations["format_local"], Callable[[Any], str])
+        self.assertNotIn(Any, annotations.values())
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

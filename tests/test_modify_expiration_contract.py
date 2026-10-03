@@ -7,7 +7,16 @@ from unittest.mock import patch
 
 import nautical_core.add_validation as add_validation
 import nautical_core.modify_expiration as modify_expiration
-from nautical_core.lifecycle.models import LifecycleAction
+from nautical_core.lifecycle.models import (
+    LifecycleAction,
+    LifecycleEvent,
+    LifecycleIdentity,
+    LifecyclePlan,
+    ParentGuard,
+)
+from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
+from nautical_core.lifecycle.outbox import LifecycleOutboxError
+from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
 
 
 class ModifyExpirationContractTests(unittest.TestCase):
@@ -23,6 +32,48 @@ class ModifyExpirationContractTests(unittest.TestCase):
             diag=lambda _message: None,
             recovery_warning=lambda task, reason: warnings.append((task, reason)),
         )
+
+    def _spawn_recovery_result(self) -> RecoveryPlanResult:
+        parent_uuid = "00000000-0000-4000-8000-000000000111"
+        parent = TaskObservation.from_mapping(
+            {
+                "uuid": parent_uuid,
+                "status": "deleted",
+                "chain": "on",
+                "chainID": "expiration-chain",
+                "link": 1,
+                "cp": "1d",
+                "due": "2026-07-27T09:00:00Z",
+            },
+            source_query="expiration contract",
+        )
+        child = NauticalTask.from_observation(
+            TaskObservation.from_mapping(
+                {
+                    "uuid": "00000000-0000-4000-8000-000000000222",
+                    "status": "pending",
+                    "chain": "on",
+                    "chainID": "expiration-chain",
+                    "link": 2,
+                    "prevLink": parent_uuid,
+                    "description": "next occurrence",
+                    "cp": "1d",
+                    "due": "2026-07-28T09:00:00Z",
+                },
+                source_query="expiration contract child",
+            )
+        )
+        plan = LifecyclePlan.from_draft(
+            identity=LifecycleIdentity(
+                "expiration-chain", parent_uuid, 1, 2, LifecycleEvent.EXPIRE
+            ),
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=ParentGuard("deleted", "on", "expiration-chain", 1),
+            draft=TaskDraft.from_task(child),
+            parent_patch={"nextLink": "00000000-0000-4000-8000-000000000222"},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
+        return RecoveryPlanResult(parent, plan, child_due=datetime(2026, 7, 28, 9, tzinfo=timezone.utc))
 
     def test_expiration_disposition_delegates_to_recovery_owner(self) -> None:
         old = {"status": "pending", "chainID": "expiration-chain"}
@@ -186,6 +237,75 @@ class ModifyExpirationContractTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "classification defect"):
                 modify_expiration.handle_deleted_modify(old, new, services=services)
+
+    def test_outbox_failure_during_expiration_stage_still_warns_and_defers(self) -> None:
+        warnings: list[tuple[str, list[tuple[str, str]], dict[str, str]]] = []
+        diagnostics: list[str] = []
+        recovery = self._spawn_recovery_result()
+        services = SimpleNamespace(
+            core=SimpleNamespace(),
+            reconcile=SimpleNamespace(
+                is_orphan_expiration_candidate=lambda *_args, **_kwargs: True,
+                plan_recovery_decision=lambda *_args, **_kwargs: recovery,
+            ),
+            safe_parse_datetime=lambda _value: (None, "invalid"),
+            compute_anchor_child_due=lambda _task: (None, None, None),
+            compute_cp_child_due=lambda _task: (None, None),
+            build_child_draft=lambda *_args, **_kwargs: None,
+            stage_recovery_plan=lambda _plan: (_ for _ in ()).throw(
+                LifecycleOutboxError("outbox unavailable")
+            ),
+            panel=lambda title, rows, **kwargs: warnings.append((title, rows, kwargs)),
+            short=lambda value: str(value or ""),
+            diag=diagnostics.append,
+        )
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "deleted",
+            "chain": "on",
+            "chainID": "expiration-chain",
+            "link": 1,
+            "cp": "1d",
+            "due": "2026-07-27T09:00:00Z",
+        }
+
+        handled = modify_expiration.handle_expired_deleted_modify(task, services=services)
+
+        self.assertTrue(handled)
+        self.assertTrue(any("expiration lifecycle staging failed" in item for item in diagnostics))
+        self.assertTrue(any("could not be staged" in str(rows) for _, rows, _ in warnings))
+
+    def test_expiration_stage_does_not_hide_unexpected_failure(self) -> None:
+        recovery = self._spawn_recovery_result()
+        services = SimpleNamespace(
+            core=SimpleNamespace(),
+            reconcile=SimpleNamespace(
+                is_orphan_expiration_candidate=lambda *_args, **_kwargs: True,
+                plan_recovery_decision=lambda *_args, **_kwargs: recovery,
+            ),
+            safe_parse_datetime=lambda _value: (None, "invalid"),
+            compute_anchor_child_due=lambda _task: (None, None, None),
+            compute_cp_child_due=lambda _task: (None, None),
+            build_child_draft=lambda *_args, **_kwargs: None,
+            stage_recovery_plan=lambda _plan: (_ for _ in ()).throw(
+                RuntimeError("staging defect")
+            ),
+            panel=lambda *_args, **_kwargs: None,
+            short=lambda value: str(value or ""),
+            diag=lambda _message: None,
+        )
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "deleted",
+            "chain": "on",
+            "chainID": "expiration-chain",
+            "link": 1,
+            "cp": "1d",
+            "due": "2026-07-27T09:00:00Z",
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "staging defect"):
+            modify_expiration.handle_expired_deleted_modify(task, services=services)
 
 
 if __name__ == "__main__":

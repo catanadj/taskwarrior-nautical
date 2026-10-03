@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import sqlite3
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -10,6 +11,7 @@ from .task_models import TaskObservation
 
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle.models import DeletionEvidence, LifecycleAction
+from nautical_core.lifecycle.outbox import LifecycleOutboxError
 from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
 from nautical_core.task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 
@@ -177,7 +179,7 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
 
     try:
         staged, reason = services.stage_recovery_plan(plan.plan)
-    except Exception as exc:
+    except (LifecycleOutboxError, OSError, sqlite3.Error) as exc:
         services.diag(f"expiration lifecycle staging failed: {exc}")
         reason = "The expired successor could not be staged for lifecycle drain."
         if os.environ.get("NAUTICAL_DIAG") == "1":

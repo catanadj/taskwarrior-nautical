@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import get_type_hints
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,12 @@ from nautical_core.timeutil import compare_datetimes
 
 
 class ModifyScheduleContractTests(unittest.TestCase):
+    def test_sequence_interval_port_uses_named_protocol(self) -> None:
+        self.assertIs(
+            get_type_hints(modify_schedule_effects.SequencePorts)["sequence_interval"],
+            modify_schedule_effects.SequenceIntervalForToken,
+        )
+
     def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding(self) -> None:
         task = {
             "uuid": "00000000-0000-4000-8000-000000000111",

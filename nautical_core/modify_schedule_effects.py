@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
@@ -19,11 +19,25 @@ class SchedulePorts:
     build_local_datetime: Any
 
 
+class SequenceIntervalForToken(Protocol):
+    """Resolve one parsed CP token to its recurrence interval."""
+
+    def __call__(
+        self,
+        token: dict[str, Any],
+        *,
+        cp: str,
+        link_no: int,
+        token_index: int,
+        chain_id: str | None = None,
+    ) -> timedelta | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SequencePorts:
     """Minimal port for computing a CP sequence period."""
 
-    sequence_interval: Any
+    sequence_interval: SequenceIntervalForToken
 
 
 @dataclass(frozen=True, slots=True)

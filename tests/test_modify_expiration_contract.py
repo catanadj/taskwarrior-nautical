@@ -282,6 +282,36 @@ class ModifyExpirationContractTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "classification defect"):
                 modify_expiration.handle_deleted_modify(old, new, services=services)
 
+    def test_deleted_task_renders_minimal_summary_if_rich_summary_fails(self) -> None:
+        old = {"status": "pending", "chainID": "chain-1", "uuid": "old-task"}
+        new = {"status": "deleted", "chainID": "chain-1", "uuid": "deleted-task"}
+        events: list[str] = []
+        diagnostics: list[str] = []
+        panels: list[tuple[str, list[tuple[str, object]], str]] = []
+        services = self._deleted_services(object(), warnings=[])
+        services.terminal_chain_off = lambda _task, event: events.append(f"off:{event}") is None
+
+        def fail_to_render_summary(*_args: object, **_kwargs: object) -> None:
+            events.append("rich-summary")
+            raise OSError("chain summary unavailable")
+
+        services.end_chain_summary = fail_to_render_summary
+        services.format_root_and_age = lambda _task, _now: "root age"
+        services.short = lambda value: str(value)
+        services.panel = lambda title, rows, *, kind="info", **_kwargs: (
+            events.append("fallback-panel"), panels.append((title, rows, kind))
+        )
+        services.diag = diagnostics.append
+        evidence = SimpleNamespace(disposition=SimpleNamespace(value="manual"), reason="manual deletion")
+
+        with patch.object(modify_expiration, "classify_deleted_task", return_value=evidence):
+            modify_expiration.handle_deleted_modify(old, new, services=services)
+
+        self.assertEqual(events, ["off:manual_delete", "rich-summary", "fallback-panel"])
+        self.assertEqual(panels[0][0], "⛔ Nautical chain stopped")
+        self.assertIn(("Reason", "Pending Nautical task was deleted."), panels[0][1])
+        self.assertEqual(diagnostics, ["deleted Nautical task classified as manual stop", "delete chain summary failed: chain summary unavailable"])
+
     def test_outbox_failure_during_expiration_stage_still_warns_and_defers(self) -> None:
         warnings: list[tuple[str, list[tuple[str, str]], dict[str, str]]] = []
         diagnostics: list[str] = []

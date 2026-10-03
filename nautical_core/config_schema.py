@@ -99,7 +99,7 @@ def normalized_choice(key: str, value: Any) -> str:
 def _effective_int(spec: dict[str, Any], value: Any) -> int:
     try:
         effective = int(str(value).strip())
-    except Exception:
+    except ValueError:
         effective = int(spec["default"])
     if "min" in spec:
         effective = max(int(spec["min"]), effective)

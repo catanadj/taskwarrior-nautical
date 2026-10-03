@@ -11,6 +11,46 @@ from nautical_core.modify_composition import hook_host
 
 
 class HookHostIsolationTests(unittest.TestCase):
+    def test_redaction_uses_local_fallback_when_core_redactor_fails(self) -> None:
+        from nautical_core.hook_runtime import redact_diagnostic_message
+
+        def broken_redactor(_message: str) -> str:
+            raise RuntimeError("core redactor unavailable")
+
+        core = type("Core", (), {"diag_log_redact": staticmethod(broken_redactor)})()
+        result = redact_diagnostic_message(
+            '{"description":"private text","status":"pending"}', core=core
+        )
+
+        self.assertEqual(result, '{"description":"[redacted]","status":"pending"}')
+
+    def test_opt_in_stderr_diagnostic_failure_is_contained(self) -> None:
+        from nautical_core.hook_runtime import emit_diagnostic
+
+        class BrokenStderr:
+            def write(self, _message: str) -> None:
+                raise RuntimeError("diagnostic stream defect")
+
+        with (
+            patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}),
+            patch("nautical_core.hook_runtime.sys.stderr", BrokenStderr()),
+        ):
+            emit_diagnostic("diagnostic", hook_name="on-add")
+
+    def test_diagnostic_block_emitter_failure_is_contained(self) -> None:
+        from nautical_core.hook_runtime import emit_diagnostic_block
+
+        def broken_emitter(_message: str) -> None:
+            raise RuntimeError("diagnostic block sink failed")
+
+        emit_diagnostic_block(
+            "stats",
+            (("tasks", 2),),
+            hook_name="on-exit",
+            emit=broken_emitter,
+            enabled=True,
+        )
+
     def test_shared_runtime_state_exposes_context_and_access_metadata(self) -> None:
         from nautical_core.hook_runtime import HookRuntimeState
 

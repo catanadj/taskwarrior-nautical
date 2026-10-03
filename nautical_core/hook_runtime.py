@@ -27,6 +27,8 @@ def redact_diagnostic_message(msg: object, *, core: Any = None) -> str:
             redacted = redactor(raw)
             return redacted if isinstance(redacted, str) else str(redacted)
         except Exception:
+            # The privacy fallback below is local and deterministic; a broken
+            # optional core redactor must not expose the original task text.
             pass
     # Keep this boundary independent from the task/domain codec.  Redact
     # scalar JSON values in-place while preserving the original Unicode text.
@@ -48,6 +50,7 @@ def emit_diagnostic(msg: object, *, hook_name: str, core: Any = None, taskdata: 
             import sys
             sys.stderr.write(f"[nautical] {safe_msg}\n")
         except Exception:
+            # Opt-in diagnostics are best-effort and must not alter hook output.
             pass
 
 
@@ -70,6 +73,7 @@ def emit_diagnostic_block(
         for index in range(0, len(pairs), step):
             emit("  " + "  ".join(pairs[index:index + step]))
     except Exception:
+        # Formatting and emission are optional observability, not hook work.
         pass
 
 

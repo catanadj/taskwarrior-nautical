@@ -1357,8 +1357,10 @@ class ModifyIsolationTests(unittest.TestCase):
                 self.assertEqual(annotations[field].__name__, protocol_name)
 
     def test_spawn_services_use_named_payload_callback_contracts(self) -> None:
-        from nautical_core.lifecycle.models import LifecyclePlan
+        from nautical_core.lifecycle.models import LifecycleIdentity, LifecyclePlan
         from nautical_core.modify_spawn import SpawnServices, spawn_child_atomic
+        from nautical_core.modify_models import DatetimeParserCallback
+        from nautical_core.task_models import TaskPayload
 
         annotations = get_type_hints(SpawnServices)
         self.assertEqual(
@@ -1373,6 +1375,16 @@ class ModifyIsolationTests(unittest.TestCase):
             get_type_hints(spawn_child_atomic)["lifecycle_plan"],
             LifecyclePlan | None,
         )
+        self.assertEqual(annotations["lifecycle_models"].__name__, "_LifecycleModels")
+        self.assertEqual(
+            annotations["lifecycle_spawn_identity"],
+            Callable[[TaskPayload, TaskPayload], LifecycleIdentity],
+        )
+        self.assertEqual(
+            annotations["enqueue_spawn_intent"],
+            Callable[[LifecyclePlan], tuple[bool, str]],
+        )
+        self.assertIs(annotations["parse_datetime"], DatetimeParserCallback)
 
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone

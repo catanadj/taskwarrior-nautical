@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any, Callable, Protocol
 
 from .lifecycle.models import LifecyclePlan
+from .lifecycle.models import LifecycleAction, LifecycleIdentity, ParentGuard
+from .modify_models import DatetimeParserCallback
 from nautical_core.task_models import TaskDraft, TaskPayload
 
 
@@ -33,16 +35,29 @@ class _PrepareSpawnChildPayload(Protocol):
     ) -> tuple[TaskDraft, str, str]: ...
 
 
+class _LifecycleModels(Protocol):
+    LifecycleAction: type[LifecycleAction]
+    LifecyclePlan: type[LifecyclePlan]
+    ParentGuard: type[ParentGuard]
+
+    def recurrence_fingerprint(
+        self,
+        task: TaskPayload,
+        *,
+        parse_datetime: DatetimeParserCallback,
+    ) -> str: ...
+
+
 @dataclass(slots=True)
 class SpawnServices:
     prepare_spawn_child_payload: _PrepareSpawnChildPayload
     child_uuid_for_spawn: _ChildUUIDForSpawn
     fmt_isoz: Callable[[Any], str]
     now_utc: Callable[[], Any]
-    lifecycle_models: Any
-    lifecycle_spawn_identity: Callable[[dict, dict], Any]
-    enqueue_spawn_intent: Callable[[Any], tuple[bool, str]]
-    parse_datetime: Callable[[Any], Any]
+    lifecycle_models: _LifecycleModels
+    lifecycle_spawn_identity: Callable[[TaskPayload, TaskPayload], LifecycleIdentity]
+    enqueue_spawn_intent: Callable[[LifecyclePlan], tuple[bool, str]]
+    parse_datetime: DatetimeParserCallback
     diag_count: Callable[[str], None]
 
 

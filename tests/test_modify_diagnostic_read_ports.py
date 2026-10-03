@@ -295,6 +295,42 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(annotations["fail"], abc.Callable[[str, str], NoReturn])
         self.assertEqual(annotations["abort"], abc.Callable[[int], NoReturn])
 
+    def test_cp_on_modify_uses_typed_parser_contracts(self) -> None:
+        from nautical_core.modify_validation import validate_cp_on_modify
+
+        annotations = get_type_hints(validate_cp_on_modify)
+        self.assertIs(annotations["chain_max_value"], object)
+        self.assertIs(annotations["chain_until_value"], object)
+        self.assertEqual(
+            annotations["parse_cp_sequence"],
+            abc.Callable[[str], list[timedelta] | None],
+        )
+        self.assertEqual(
+            annotations["cp_sequence_parse_error"], abc.Callable[[str], str | None]
+        )
+        self.assertEqual(
+            annotations["parse_chain_max"],
+            abc.Callable[[object], tuple[int | None, str | None]],
+        )
+        self.assertEqual(
+            annotations["parse_datetime"],
+            abc.Callable[[object], datetime | None],
+        )
+
+    def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:
+        from nautical_core.modify_validation import validate_cp_on_modify
+
+        with self.assertRaisesRegex(ValueError, "Invalid chainUntil '123'"):
+            validate_cp_on_modify(
+                "P1D",
+                None,
+                123,
+                parse_cp_sequence=lambda _value: [timedelta(days=1)],
+                cp_sequence_parse_error=lambda _value: None,
+                parse_chain_max=lambda _value: (None, None),
+                parse_datetime=lambda _value: None,
+            )
+
     def test_omit_ports_use_date_and_canonical_omit_state_contracts(self) -> None:
         import nautical_core.anchor_omit as anchor_omit
         import nautical_core.modify_anchor_effects as effects

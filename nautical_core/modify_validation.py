@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, NoReturn
 
 from .modify_models import PanelCallback
@@ -118,13 +118,13 @@ def validate_omit_on_modify(expr: str, *, validate_omit_expr: Any) -> None:
 
 def validate_cp_on_modify(
     cp_value: str,
-    chain_max_value: Any,
-    chain_until_value: Any,
+    chain_max_value: object,
+    chain_until_value: object,
     *,
-    parse_cp_sequence: Any,
-    cp_sequence_parse_error: Any,
-    parse_chain_max: Any,
-    parse_datetime: Any,
+    parse_cp_sequence: Callable[[str], list[timedelta] | None],
+    cp_sequence_parse_error: Callable[[str], str | None],
+    parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+    parse_datetime: Callable[[object], datetime | None],
 ) -> None:
     """Validate a CP value and its optional chain limits."""
     if not cp_value or not cp_value.strip():
@@ -136,7 +136,7 @@ def validate_cp_on_modify(
     _cpmax, chain_max_error = parse_chain_max(chain_max_value)
     if chain_max_error:
         raise ValueError(chain_max_error)
-    chain_until = (chain_until_value or "").strip()
+    chain_until = str(chain_until_value or "").strip()
     if chain_until and parse_datetime(chain_until) is None:
         raise ValueError(f"Invalid chainUntil '{chain_until}'")
 

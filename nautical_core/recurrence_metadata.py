@@ -30,7 +30,7 @@ def atom_mods(atom: Any) -> dict:
 def atom_interval(atom: Any) -> int:
     try:
         return int(atom.get("ival") or atom.get("intv") or 1)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return 1
 
 

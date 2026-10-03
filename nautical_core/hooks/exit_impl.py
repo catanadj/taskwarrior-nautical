@@ -203,18 +203,6 @@ core = None
 _CORE_IMPORT_TARGET = None
 _CORE_IMPORT_ERROR = None
 
-
-def _resolve_task_data_context() -> tuple[str, bool]:
-    return hook_bootstrap.resolve_task_data_context_lazy(
-        core=core,
-        core_import_error=_CORE_IMPORT_ERROR,
-        core_import_target=_CORE_IMPORT_TARGET,
-        core_base=_CORE_BASE,
-        tw_dir=str(TW_DIR),
-        argv=sys.argv[1:],
-        env=os.environ,
-    )
-
 _TASKDATA_RAW = ""
 _USE_RC_DATA_LOCATION = False
 TW_DATA_DIR = Path(TW_DIR).expanduser()

@@ -27,6 +27,20 @@ class ChainExportReader(Protocol):
     def get_chain_export(self, chain_id: str) -> list[TaskObservation] | None: ...
 
 
+class TimelineSummaryService(Protocol):
+    def last_n_timeline(
+        self,
+        chain: list[TaskObservation],
+        n: int = 6,
+        *,
+        coerce_int: Callable[[Any, Any], int | None],
+        parse_datetime: Callable[[Any], datetime | None],
+        format_local: Callable[[Any], str],
+        format_on_time_delta: Callable[[Any, Any], str],
+        short_uuid: Callable[[Any], str],
+    ) -> list[str]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ChainExportPorts:
     service: ChainExportReader
@@ -35,11 +49,11 @@ class ChainExportPorts:
 
 @dataclass(frozen=True, slots=True)
 class TimelineSummaryPorts:
-    summary: Any
+    summary: TimelineSummaryService
     coerce_int: Callable[[Any, Any], int | None]
     parse_datetime: Callable[[object], datetime | None]
     format_local: Callable[[Any], str]
-    format_on_time_delta: Callable[[datetime, datetime, int], str]
+    format_on_time_delta: Callable[[datetime, datetime], str]
     short_uuid: Callable[[Any], str]
 
 
@@ -148,14 +162,11 @@ def timeline_summary_ports_for(host: Any) -> TimelineSummaryPorts:
     formatting = host._module("modify_format_effects")
     humanize_delta = host.core.humanize_delta
 
-    def format_on_time_delta(
-        due: datetime, end: datetime, tolerance_seconds: int = 60
-    ) -> str:
+    def format_on_time_delta(due: datetime, end: datetime) -> str:
         return formatting.on_time_delta(
             formatting.HumanDeltaPort(humanize_delta),
             due,
             end,
-            tolerance_seconds,
         )
 
     return TimelineSummaryPorts(

@@ -51,14 +51,15 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
     def test_timeline_summary_ports_match_owner_callback_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import TimelineSummaryPorts
 
+        annotations = get_type_hints(TimelineSummaryPorts)
+        self.assertIsNot(annotations["summary"], Any)
         self.assertEqual(
-            get_type_hints(TimelineSummaryPorts),
+            {name: annotations[name] for name in annotations if name != "summary"},
             {
-                "summary": Any,
                 "coerce_int": Callable[[Any, Any], int | None],
                 "parse_datetime": Callable[[object], datetime | None],
                 "format_local": Callable[[Any], str],
-                "format_on_time_delta": Callable[[datetime, datetime, int], str],
+                "format_on_time_delta": Callable[[datetime, datetime], str],
                 "short_uuid": Callable[[Any], str],
             },
         )

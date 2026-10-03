@@ -3,12 +3,29 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import nautical_core.hook_protocol as hook_protocol
+import nautical_core.modify_protocol as modify_protocol
 from tests.support.hook_process import HookSubprocessFixture
 
 
 class HookProtocolTests(HookSubprocessFixture):
+    def test_modify_json_decoder_translates_excessive_nesting(self) -> None:
+        raw = "[" * 2000 + "0" + "]" * 2000
+
+        with self.assertRaisesRegex(modify_protocol.ModifyProtocolError, "Invalid JSON input"):
+            modify_protocol.decode_leading_json_objects(raw)
+
+    def test_modify_json_decoder_does_not_hide_unexpected_decoder_failures(self) -> None:
+        with patch.object(
+            json.JSONDecoder,
+            "raw_decode",
+            side_effect=RuntimeError("JSON decoder implementation failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "JSON decoder implementation failed"):
+                modify_protocol.decode_leading_json_objects("{}")
+
     def test_protocol_file_load_does_not_import_the_core_package(self) -> None:
         root = Path(__file__).resolve().parents[1]
         protocol = root / "nautical_core" / "hook_protocol.py"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import io
 import sys
 from datetime import date, timedelta, timezone
 import tempfile
@@ -1962,33 +1961,6 @@ TESTS = TESTS + (
     test_on_modify_link_limit,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
     test_on_modify_expands_and_clears_description_uda_aliases,
-)
-
-
-def test_on_modify_panel_fallback():
-    """on-modify panel should fall back to plain output on errors."""
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_on_modify_panel_fallback_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    orig_term = mod.core.term_width_stderr
-    mod.core.term_width_stderr = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom"))
-    stderr = io.StringIO()
-    orig_stderr = sys.stderr
-    try:
-        sys.stderr = stderr
-        mod._panel("Test Panel", [("Key", "Value")], kind="info")
-    finally:
-        sys.stderr = orig_stderr
-        mod.core.term_width_stderr = orig_term
-
-    out = stderr.getvalue()
-    expect("Test Panel" in out, "fallback panel should emit title")
-
-
-TESTS = TESTS + (
-    test_on_modify_panel_fallback,
 )
 
 

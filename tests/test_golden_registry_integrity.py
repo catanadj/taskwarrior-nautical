@@ -13,7 +13,7 @@ import unittest
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
 EXPECTED_GOLDEN_REGISTRY_ORDER_SHA256 = (
-    "56f8f82037a85426363faf929425f1d4743f83f8e7d332b72349c6c7c4b822de"
+    "75a7d866683e42b31e74173f5c99cbcf15e7d36dc4e36f10fc656a7228ab0258"
 )
 GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
     (
@@ -59,8 +59,8 @@ EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
         "3f231d13386fde51907b43f62cd02da910cccfd81438f6dda155f3db77cc59d2",
     ),
     "recurrence and hook integration": (
-        73,
-        "2db93929f643f0d8db2cbd9a1aed9005b02b4262dda4d74c99b2528baf911179",
+        72,
+        "4755a1a2518a95a05d4295e331d027ea923c406398427f80899236b9fb9bdc1e",
     ),
     "storage and filesystem safety": (
         1,
@@ -818,6 +818,7 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_navigator_shared_graph_scales_to_large_chain",
         "test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts",
         "test_on_modify_panel_forwards_live_duration",
+        "test_fast_panel_falls_back_to_plain_output_when_width_probe_fails",
     }
 )
 
@@ -1518,18 +1519,20 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         self.assertEqual(tuple(test.__name__ for test in modify.TESTS[34:39]), expected)
         self.assertFalse(set(expected) & top_level)
 
-    def test_hook_panel_cases_are_owned_by_modify_domain(self):
-        modify = importlib.import_module("dev_tools.golden_tests.modify")
+    def test_panel_fallback_is_owned_by_direct_suite(self):
         expected = ("test_on_modify_panel_fallback",)
         registered = {test.__name__ for test in (*self.golden.TESTS, *self.golden.DEEP_TESTS)}
-        top_level = {
-            name
-            for name, value in vars(self.golden).items()
-            if name.startswith("test_") and callable(value)
-        }
-        self.assertTrue(set(expected) <= registered)
-        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[39:40]), expected)
-        self.assertFalse(set(expected) & top_level)
+        direct = importlib.import_module("tests.test_panel_renderer_contract")
+        self.assertNotIn(expected[0], registered)
+        self.assertTrue(
+            callable(
+                getattr(
+                    direct.PanelRendererContractTests,
+                    "test_fast_panel_falls_back_to_plain_output_when_width_probe_fails",
+                    None,
+                )
+            )
+        )
 
     def test_malformed_cp_guidance_case_is_owned_by_modify_domain(self):
         modify = importlib.import_module("dev_tools.golden_tests.modify")
@@ -1540,7 +1543,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             for name, value in vars(self.golden).items()
             if name.startswith("test_") and callable(value)
         }
-        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[40:41]), expected)
+        self.assertEqual(tuple(test.__name__ for test in modify.TESTS[39:40]), expected)
         self.assertTrue(set(expected) <= registered)
         self.assertFalse(set(expected) & top_level)
 
@@ -1715,19 +1718,19 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         timeline = importlib.import_module("dev_tools.golden_tests.timeline")
         scheduling = importlib.import_module("dev_tools.golden_tests.scheduling")
         self.assertEqual(len(top_level), 0)
-        self.assertEqual(len(registered), 136)
+        self.assertEqual(len(registered), 135)
         self.assertEqual(len(operator.TESTS), 14)
         self.assertEqual(len(configuration.TESTS), 3)
         self.assertEqual(len(installer.TESTS), 9)
         modify = importlib.import_module("dev_tools.golden_tests.modify")
-        self.assertEqual(len(modify.TESTS), 41)
+        self.assertEqual(len(modify.TESTS), 40)
         self.assertEqual(len(lifecycle.TESTS), 31)
         self.assertEqual(len(reconcile.TESTS), 9)
         self.assertEqual(len(storage.TESTS), 1)
         self.assertEqual(len(timeline.TESTS), 9)
         self.assertEqual(len(scheduling.TESTS), 13)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 0)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 728)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 729)
 
     def test_cross_process_lock_golden_is_owned_by_storage_domain(self):
         storage = importlib.import_module("dev_tools.golden_tests.storage")

@@ -168,6 +168,25 @@ class PanelRendererContractTests(unittest.TestCase):
         self.assertIn("Title", stderr.getvalue())
         self.assertIn("Key", stderr.getvalue())
 
+    def test_fast_panel_falls_back_to_plain_output_when_width_probe_fails(self) -> None:
+        stderr = StringIO()
+        with (
+            patch.object(ui, "term_width_stderr", side_effect=RuntimeError("boom")),
+            redirect_stderr(stderr),
+        ):
+            ui.render_panel(
+                "Test Panel",
+                [("Key", "Value")],
+                panel_mode="fast",
+                fast_color=False,
+            )
+
+        output = stderr.getvalue()
+        self.assertIn("Test Panel", output)
+        self.assertIn("Key", output)
+        self.assertIn("Value", output)
+        self.assertNotIn("boom", output)
+
     def test_live_failure_preserves_generator_rows_for_static_fallback(self) -> None:
         stderr = StringIO()
         stdout = StringIO()

@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Protocol
 
-from .task_models import TaskObservation, TaskPayload
+from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
+from .lifecycle.read_service import ChainSnapshotRepository
+from .task_read_repository import AuthoritativeTaskSnapshot
 from .modify_models import (
     DiagnosticCallback,
     CapFromUntilAnchorCallback,
@@ -20,10 +22,11 @@ from .modify_models import (
     CompletionChildRequiredCallback,
     CompletionComputeServices,
     CompletionDurationWarningCallback,
+    CompletionChainSnapshot,
+    CompletionPreflightServices,
     CompletionSpawnServices,
     CoerceIntCallback,
     BuildChildDraftCallback,
-    DiagnosticCallback,
     CompletionLifecycleResult,
     CompletionUntilCallback,
     CompletionUntilGuardCallback,
@@ -75,10 +78,9 @@ class CompletionSpawnService(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SnapshotPorts:
-    repository: Any
-    mode: Any
-    models: Any
-    task_observation: Any
+    repository: ChainSnapshotRepository
+    mode: Callable[[], str]
+    snapshot_type: type[CompletionChainSnapshot]
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,8 +179,8 @@ class CompletionComputePorts:
 @dataclass(frozen=True, slots=True)
 class CompletionPreflightContextPorts:
     preflight: CompletionPreflightService
-    models: Any
-    task_observation: type[TaskObservation]
+    services_type: type[CompletionPreflightServices]
+    snapshot_type: type[CompletionChainSnapshot]
     snapshot_mode: Callable[[], str]
     coerce_int: CoerceIntCallback
     max_link_number: int
@@ -275,18 +277,16 @@ def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: i
 
     snapshot = ports.repository.chain_snapshot(chain_id)
     if isinstance(snapshot, Found):
-        value = getattr(snapshot.value, "rows", snapshot.value)
-        if not isinstance(value, (list, tuple)):
-            return ports.models.CompletionChainSnapshot(
+        if isinstance(snapshot.value, AuthoritativeTaskSnapshot):
+            value = snapshot.value.rows
+        elif isinstance(snapshot.value, tuple):
+            value = snapshot.value
+        else:
+            return ports.snapshot_type(
                 mode=_snapshot_mode(ports), rows=[], loaded=False,
                 chain_id=chain_id, error="typed chain snapshot rows are unavailable"
             )
-        rows = [
-            row if hasattr(row, "to_mapping") else ports.task_observation.from_mapping(
-                row, source_query=f"chain:{chain_id}:completion"
-            )
-            for row in value
-        ]
+        rows = list(value)
         loaded, error = True, ""
     elif isinstance(snapshot, Absent):
         rows, loaded, error = [], True, ""
@@ -295,7 +295,7 @@ def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: i
         error = snapshot.evidence.detail or snapshot.evidence.kind.value
     else:
         rows, loaded, error = [], False, "typed chain read returned an unsupported result"
-    return ports.models.CompletionChainSnapshot(
+    return ports.snapshot_type(
         mode=_snapshot_mode(ports), rows=rows, loaded=loaded, chain_id=chain_id, error=error
     )
 
@@ -305,8 +305,8 @@ def completion_preflight_context_ports_for(host: Any) -> CompletionPreflightCont
     models = host._module("modify_models")
     return CompletionPreflightContextPorts(
         preflight=preflight,
-        models=models,
-        task_observation=host._module("task_models").TaskObservation,
+        services_type=models.CompletionPreflightServices,
+        snapshot_type=models.CompletionChainSnapshot,
         snapshot_mode=lambda: (
             "full" if host._SHOW_ANALYTICS or host._CHECK_CHAIN_INTEGRITY else
             "next" if str(getattr(host.core, "PANEL_MODE", "rich") or "rich").strip().lower()
@@ -328,12 +328,10 @@ def preflight_context(
     repository: Any,
 ) -> Any:
     preflight = ports.preflight
-    models = ports.models
     snapshot_ports = SnapshotPorts(
         repository=repository,
         mode=ports.snapshot_mode,
-        models=models,
-        task_observation=ports.task_observation,
+        snapshot_type=ports.snapshot_type,
     )
     preflight_ports = CompletionPreflightPorts(
         preflight=preflight,
@@ -345,7 +343,7 @@ def preflight_context(
         end_chain_summary=ports.end_chain_summary,
         existing_next_lookup=lambda task, link: repository.exact_child_slot(str(task.get("chainID") or ""), link),
     )
-    services = models.CompletionPreflightServices(
+    services = ports.services_type(
         short=ports.short_uuid,
         completion_link_numbers_or_fail=lambda task: link_numbers_or_fail(preflight_ports, task),
         completion_kind_or_stop=lambda task, clock: kind_or_stop(

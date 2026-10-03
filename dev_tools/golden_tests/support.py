@@ -633,8 +633,7 @@ class _BoundCompletionEffects:
                 ports = self._module.SnapshotPorts(
                     repository=repository,
                     mode=context_ports.snapshot_mode,
-                    models=context_ports.models,
-                    task_observation=context_ports.task_observation,
+                    snapshot_type=context_ports.snapshot_type,
                 )
                 return fn(ports, chain_id, base_no, next_no)
             return bound_chain_snapshot

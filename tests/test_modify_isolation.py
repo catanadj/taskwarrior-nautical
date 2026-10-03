@@ -311,6 +311,30 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertEqual(annotations[name], contract)
 
+    def test_completion_snapshot_ports_use_repository_and_model_contracts(self) -> None:
+        from nautical_core.lifecycle.read_service import ChainSnapshotRepository
+        from nautical_core.modify_completion_effects import (
+            CompletionPreflightContextPorts,
+            SnapshotPorts,
+        )
+        from nautical_core.modify_models import CompletionChainSnapshot, CompletionPreflightServices
+        snapshot_annotations = get_type_hints(SnapshotPorts)
+        self.assertEqual(
+            snapshot_annotations,
+            {
+                "repository": ChainSnapshotRepository,
+                "mode": Callable[[], str],
+                "snapshot_type": type[CompletionChainSnapshot],
+            },
+        )
+        context_annotations = get_type_hints(CompletionPreflightContextPorts)
+        self.assertEqual(
+            context_annotations["services_type"], type[CompletionPreflightServices]
+        )
+        self.assertEqual(
+            context_annotations["snapshot_type"], type[CompletionChainSnapshot]
+        )
+
     def test_completion_feedback_and_validation_ports_reuse_callback_contracts(self) -> None:
         from nautical_core.modify_completion_effects import (
             CompletionFeedbackPorts,
@@ -378,16 +402,18 @@ class ModifyIsolationTests(unittest.TestCase):
         from nautical_core.modify_completion_effects import CompletionPreflightContextPorts
         from nautical_core.modify_models import (
             CoerceIntCallback,
+            CompletionChainSnapshot,
+            CompletionPreflightServices,
             EndChainSummaryCallback,
             PanelCallback,
             PrintTaskCallback,
             ShortUuidCallback,
         )
-        from nautical_core.task_models import TaskObservation
 
         annotations = get_type_hints(CompletionPreflightContextPorts)
         expected = {
-            "task_observation": type[TaskObservation],
+            "services_type": type[CompletionPreflightServices],
+            "snapshot_type": type[CompletionChainSnapshot],
             "snapshot_mode": Callable[[], str],
             "coerce_int": CoerceIntCallback,
             "short_uuid": ShortUuidCallback,

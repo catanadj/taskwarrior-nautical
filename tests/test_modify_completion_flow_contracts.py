@@ -13,7 +13,6 @@ from nautical_core.integration_models import (
 )
 from nautical_core.modify_completion_effects import SnapshotPorts, chain_snapshot
 from nautical_core.modify_models import CompletionChainSnapshot
-from nautical_core.task_models import TaskObservation
 
 
 class ModifyCompletionFlowContracts(unittest.TestCase):
@@ -36,8 +35,7 @@ class ModifyCompletionFlowContracts(unittest.TestCase):
                 chain_snapshot=lambda _chain_id: unavailable,
             ),
             mode=lambda: "full",
-            models=SimpleNamespace(CompletionChainSnapshot=CompletionChainSnapshot),
-            task_observation=TaskObservation,
+            snapshot_type=CompletionChainSnapshot,
         )
 
         snapshot = chain_snapshot(ports, "malformed01", 1, 2)

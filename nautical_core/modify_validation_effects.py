@@ -32,12 +32,29 @@ class AnchorModePorts:
     panel: CallbackPort
 
 
+class SharedValidationPipeline(Protocol):
+    def validate_anchor_expression(
+        self,
+        expr: str,
+        *,
+        parse_anchor_expr: Callable[[str], object],
+        validate_anchor_expr: Callable[[str], object],
+    ) -> None: ...
+
+    def validate_omit_expression(
+        self,
+        expr: str,
+        *,
+        validate_omit_expr: Callable[[str], object],
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SharedValidationPorts:
-    pipeline: Any
-    parse_anchor: Any
-    validate_anchor: Any
-    validate_omit: Any
+    pipeline: SharedValidationPipeline
+    parse_anchor: Callable[[str], object]
+    validate_anchor: Callable[[str], object]
+    validate_omit: Callable[[str], object]
 
 
 class CPValidationOperation(Protocol):

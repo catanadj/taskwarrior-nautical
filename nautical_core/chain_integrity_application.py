@@ -64,6 +64,8 @@ class RepositoryIntegrityOutboxSink:
                 plan, self._configuration_fingerprint, self._schedule_fingerprint,
             ))
         except Exception as exc:
+            # An adapter may fail after the durable write outcome is uncertain;
+            # report refusal so callers never proceed to task mutation.
             return IntegrityOutboxPersistResult(False, f"integrity outbox persistence failed: {type(exc).__name__}: {exc}")
         return IntegrityOutboxPersistResult(bool(getattr(result, "ok", False)), str(getattr(result, "reason", "")))
 
@@ -123,6 +125,8 @@ class IntegrityApplicationService:
             try:
                 persisted = outbox.persist(plan)
             except Exception as exc:
+                # Persistence uncertainty must fail closed before any operation
+                # in this multi-step plan reaches Taskwarrior.
                 persisted = IntegrityOutboxPersistResult(False, f"outbox persistence failed: {type(exc).__name__}: {exc}")
             if not persisted.accepted:
                 return tuple(IntegrityApplicationResult(
@@ -145,6 +149,8 @@ class IntegrityApplicationService:
                 self._validate_request(operation, request)
                 outcome = executor.repair_metadata(request)
             except Exception as exc:
+                # Adapter failures require operator review; continuing could
+                # apply later repairs against an unverified partial state.
                 results.append(IntegrityApplicationResult(
                     plan.plan_id,
                     operation.operation_id,

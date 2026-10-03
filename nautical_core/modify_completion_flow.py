@@ -10,6 +10,7 @@ from nautical_core.modify_models import (
     CompletionLifecycleDiagnostic,
     CompletionComputeResult,
     CompletionComputeCallback,
+    CompletionFinalizeCallback,
     CompletionFinalizeServices,
     CompletionPreflightContext,
     AnchorCompletionFeedbackModel,
@@ -44,7 +45,7 @@ class CompletionFlowServices:
     lifecycle_read_service: LifecycleReadService
     diag_count: Callable[[str, int], None]
     diag_lifecycle_result: Callable[[CompletionLifecycleResult], None]
-    finalize_completion: Callable[..., CompletionLifecycleResult]
+    finalize_completion: CompletionFinalizeCallback
     finalize_services: CompletionFinalizeServices
     transition: TaskTransition | None = None
 

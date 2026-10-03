@@ -99,6 +99,37 @@ class ModifyCompletionFlowContracts(unittest.TestCase):
         runtime_callback = get_type_hints(ModifyRuntimeServices)["compute_next_and_limits"]
         self.assertIs(runtime_callback, CompletionComputeCallback)
 
+    def test_completion_finalize_callback_has_explicit_arguments(self) -> None:
+        from inspect import Parameter, signature
+        from nautical_core.modify_models import CompletionFinalizeCallback
+
+        callback = get_type_hints(
+            flow.CompletionFlowServices,
+            localns={
+                "LifecycleReadService": LifecycleReadService,
+                "TaskReadRepository": TaskReadRepository,
+            },
+        )["finalize_completion"]
+
+        self.assertIs(callback, CompletionFinalizeCallback)
+        callback_signature = signature(CompletionFinalizeCallback.__call__)
+        self.assertEqual(
+            tuple(callback_signature.parameters),
+            (
+                "self", "new", "ctx", "computed", "now_utc", "need_chain",
+                "chain_snapshot_loaded", "preloaded_chain", "preloaded_chain_by_link",
+                "preloaded_chain_by_short", "chain_id", "services",
+            ),
+        )
+        self.assertTrue(all(
+            callback_signature.parameters[name].kind is Parameter.KEYWORD_ONLY
+            for name in (
+                "new", "ctx", "computed", "now_utc", "need_chain",
+                "chain_snapshot_loaded", "preloaded_chain", "preloaded_chain_by_link",
+                "preloaded_chain_by_short", "chain_id", "services",
+            )
+        ))
+
     def test_unavailable_chain_export_is_not_loaded_as_empty_snapshot(self) -> None:
         command = TaskCommand(("task", "export"), "completion snapshot", 3.0)
         unavailable = Unavailable(

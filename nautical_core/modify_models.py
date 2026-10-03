@@ -709,6 +709,26 @@ class CompletionFinalizeServices:
     diagnostic: DiagnosticCallback | None = None
 
 
+class CompletionFinalizeCallback(Protocol):
+    """Finalize a computed successor through explicit orchestration inputs."""
+
+    def __call__(
+        self,
+        *,
+        new: TaskPayload,
+        ctx: CompletionPreflightContext,
+        computed: CompletionComputeResult,
+        now_utc: datetime,
+        need_chain: bool,
+        chain_snapshot_loaded: bool,
+        preloaded_chain: list[TaskObservation],
+        preloaded_chain_by_link: dict[int, list[TaskObservation]],
+        preloaded_chain_by_short: dict[str, TaskObservation],
+        chain_id: str,
+        services: CompletionFinalizeServices,
+    ) -> CompletionLifecycleResult: ...
+
+
 @dataclass(slots=True)
 class AnchorFeedbackServices:
     core: Any

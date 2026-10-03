@@ -124,7 +124,7 @@ def core_target_from_base(base: Path) -> Path | None:
             if base.name == "__init__.py" and base.parent.name == "nautical_core":
                 return base
             return None
-    except Exception:
+    except OSError:
         return None
     pkg_init = base / "nautical_core" / "__init__.py"
     return pkg_init if pkg_init.is_file() else None

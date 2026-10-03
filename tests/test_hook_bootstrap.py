@@ -11,6 +11,19 @@ from nautical_core.hook_runtime import HookModuleAccess
 
 
 class HookBootstrapTrustTests(unittest.TestCase):
+    def test_core_target_probe_contains_expected_oserror(self) -> None:
+        base = Path("/unavailable-hook-base")
+        with patch.object(type(base), "is_file", side_effect=OSError("unavailable")):
+            self.assertIsNone(hook_bootstrap.core_target_from_base(base))
+
+    def test_core_target_probe_does_not_hide_unexpected_failure(self) -> None:
+        base = Path("/unavailable-hook-base")
+        with patch.object(
+            type(base), "is_file", side_effect=RuntimeError("path adapter defect")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "path adapter defect"):
+                hook_bootstrap.core_target_from_base(base)
+
     def test_helper_path_probe_contains_expected_oserror(self) -> None:
         base = Path("/unavailable-hook-base")
         with patch.object(type(base), "is_file", side_effect=OSError("unavailable")):

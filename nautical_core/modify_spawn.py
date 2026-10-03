@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Protocol
 
+from .lifecycle.models import LifecyclePlan
 from nautical_core.task_models import TaskDraft, TaskPayload
 
 
@@ -49,7 +50,7 @@ def spawn_child_atomic(
     child_task: dict,
     parent_task_with_nextlink: dict,
     *,
-    lifecycle_plan: Any = None,
+    lifecycle_plan: LifecyclePlan | None = None,
     services: SpawnServices,
 ) -> tuple[str, set[str], bool, bool, str | None, str | None]:
     """Queue a child spawn intent for on-exit processing.
@@ -73,7 +74,7 @@ def spawn_child_atomic(
                 False,
                 False,
                 f"Spawn intent queue failed: {queue_reason}",
-                getattr(getattr(lifecycle_plan, "identity", None), "idempotency_key", None),
+                lifecycle_plan.identity.idempotency_key,
             )
         services.diag_count("spawn_deferred")
         return (
@@ -82,7 +83,7 @@ def spawn_child_atomic(
             False,
             True,
             "Spawn intent queued for on-exit processing",
-            getattr(getattr(lifecycle_plan, "identity", None), "idempotency_key", None),
+            lifecycle_plan.identity.idempotency_key,
         )
 
     env = os.environ.copy()

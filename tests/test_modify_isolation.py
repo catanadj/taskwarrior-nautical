@@ -1357,7 +1357,8 @@ class ModifyIsolationTests(unittest.TestCase):
                 self.assertEqual(annotations[field].__name__, protocol_name)
 
     def test_spawn_services_use_named_payload_callback_contracts(self) -> None:
-        from nautical_core.modify_spawn import SpawnServices
+        from nautical_core.lifecycle.models import LifecyclePlan
+        from nautical_core.modify_spawn import SpawnServices, spawn_child_atomic
 
         annotations = get_type_hints(SpawnServices)
         self.assertEqual(
@@ -1367,6 +1368,10 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertEqual(
             annotations["child_uuid_for_spawn"].__name__,
             "_ChildUUIDForSpawn",
+        )
+        self.assertEqual(
+            get_type_hints(spawn_child_atomic)["lifecycle_plan"],
+            LifecyclePlan | None,
         )
 
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:

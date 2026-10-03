@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol, Sequence
 from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from dataclasses import dataclass
+from .modify_chain_summary import ChainSummaryRenderServices
 from .task_models import TaskObservation, TaskPayload
 
 
@@ -55,6 +56,18 @@ class SpanSummaryService(Protocol):
     ) -> tuple[datetime | None, datetime | None, str]: ...
 
 
+class EndChainSummaryRenderer(Protocol):
+    def render_chain_summary(
+        self,
+        current: dict[str, Any],
+        reason: str,
+        now_utc: datetime,
+        current_task: TaskPayload | None = None,
+        *,
+        services: ChainSummaryRenderServices,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ChainExportPorts:
     service: ChainExportReader
@@ -86,8 +99,8 @@ class SecondsDeltaPort:
 
 @dataclass(frozen=True, slots=True)
 class EndChainSummaryPorts:
-    summary: Any
-    services: Any
+    summary: EndChainSummaryRenderer
+    services: ChainSummaryRenderServices
 
 
 def _parse_datetime_value(port: DatetimeValuePort, value: object) -> datetime | None:

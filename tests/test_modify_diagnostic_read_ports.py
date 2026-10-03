@@ -79,6 +79,14 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             },
         )
 
+    def test_end_chain_summary_ports_use_renderer_and_service_contracts(self) -> None:
+        from nautical_core.modify_chain_summary import ChainSummaryRenderServices
+        from nautical_core.modify_diagnostics_effects import EndChainSummaryPorts
+
+        annotations = get_type_hints(EndChainSummaryPorts)
+        self.assertIsNot(annotations["summary"], Any)
+        self.assertIs(annotations["services"], ChainSummaryRenderServices)
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

@@ -1375,7 +1375,7 @@ class ModifyIsolationTests(unittest.TestCase):
             get_type_hints(spawn_child_atomic)["lifecycle_plan"],
             LifecyclePlan | None,
         )
-        self.assertEqual(annotations["lifecycle_models"].__name__, "_LifecycleModels")
+        self.assertNotIn("lifecycle_models", annotations)
         self.assertEqual(annotations["fmt_isoz"], Callable[[datetime], str])
         self.assertEqual(annotations["now_utc"], Callable[[], datetime])
         self.assertEqual(
@@ -1387,6 +1387,11 @@ class ModifyIsolationTests(unittest.TestCase):
             Callable[[LifecyclePlan], tuple[bool, str]],
         )
         self.assertIs(annotations["parse_datetime"], DatetimeParserCallback)
+
+        from nautical_core.modify_spawn_effects import SpawnChildPorts, SpawnIntentPorts
+
+        self.assertNotIn("lifecycle_models", get_type_hints(SpawnChildPorts))
+        self.assertNotIn("models", get_type_hints(SpawnIntentPorts))
 
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone

@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
 
-
-@dataclass(frozen=True, slots=True)
-class SpawnIdentityPorts:
-    models: Any
+if TYPE_CHECKING:
+    from .lifecycle.models import LifecycleIdentity
 
 
 @dataclass(frozen=True, slots=True)
 class SpawnIntentPorts:
     context: Any
-    models: Any
     outbox_factory: Any
     application_service: Any
     data_dir: str
@@ -38,7 +35,6 @@ class SpawnChildPorts:
     child_uuid: Any
     format_datetime: Any
     now_utc: Any
-    lifecycle_models: Any
     spawn_identity: Any
     enqueue_intent: Any
     parse_datetime: Any
@@ -49,7 +45,6 @@ def spawn_intent_ports_for(host: Any) -> SpawnIntentPorts:
     lifecycle_outbox = host._module("lifecycle_outbox")
     return SpawnIntentPorts(
         context=getattr(host, "_INTEGRATION_CONTEXT", None),
-        models=host._module("lifecycle_models"),
         outbox_factory=lifecycle_outbox.LifecycleOutboxRepository,
         application_service=host._module("lifecycle_application").LifecycleApplicationService,
         data_dir=host.TW_DATA_DIR,
@@ -69,8 +64,6 @@ def child_uuid_ports_for(host: Any) -> ChildUuidPorts:
 
 
 def spawn_child_ports_for(host: Any) -> SpawnChildPorts:
-    models = host._module("lifecycle_models")
-    identity_ports = SpawnIdentityPorts(models)
     intent_ports = spawn_intent_ports_for(host)
     uuid_ports = child_uuid_ports_for(host)
     return SpawnChildPorts(
@@ -79,21 +72,21 @@ def spawn_child_ports_for(host: Any) -> SpawnChildPorts:
         child_uuid=lambda parent, child, env: child_uuid_for_spawn(uuid_ports, parent, child, env),
         format_datetime=host.core.fmt_isoz,
         now_utc=host.core.now_utc,
-        lifecycle_models=models,
-        spawn_identity=lambda parent, child: lifecycle_spawn_identity(identity_ports, parent, child),
+        spawn_identity=lifecycle_spawn_identity,
         enqueue_intent=lambda plan: enqueue_spawn_intent(intent_ports, plan),
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         diag_count=host._diag_count,
     )
 
 
-def enqueue_spawn_intent(ports: SpawnIntentPorts, plan: Any) -> tuple[bool, str]:
+def enqueue_spawn_intent(ports: SpawnIntentPorts, plan: object) -> tuple[bool, str]:
     """Stage one immutable lifecycle plan without re-entering Taskwarrior."""
     context = ports.context
     if context is None:
         return False, "validated integration context is unavailable"
-    models = ports.models
-    if not isinstance(plan, models.LifecyclePlan):
+    from .lifecycle.models import LifecyclePlan
+
+    if not isinstance(plan, LifecyclePlan):
         return False, "invalid lifecycle plan"
     outbox = ports.outbox_factory(ports.data_dir)
     # This hook runs while Taskwarrior holds its datastore lock; intentionally
@@ -113,8 +106,11 @@ def enqueue_spawn_intent(ports: SpawnIntentPorts, plan: Any) -> tuple[bool, str]
     return False, f"lifecycle outbox staging returned {kind}"
 
 
-def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict[str, Any], child: dict[str, Any]) -> Any:
-    models = ports.models
+def lifecycle_spawn_identity(
+    parent: dict[str, Any], child: dict[str, Any]
+) -> LifecycleIdentity:
+    from .lifecycle.models import LifecycleEvent, LifecycleIdentity
+
     chain_id = str(parent.get("chainID") or "").strip()
     parent_uuid = str(parent.get("uuid") or "").strip()
     try:
@@ -126,11 +122,11 @@ def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict[str, Any], 
     except (TypeError, ValueError) as exc:
         raise RuntimeError("lifecycle transition requires a numeric child link") from exc
     event = (
-        models.LifecycleEvent.EXPIRE
+        LifecycleEvent.EXPIRE
         if str(parent.get("status") or "").strip().lower() == "deleted"
-        else models.LifecycleEvent.COMPLETE
+        else LifecycleEvent.COMPLETE
     )
-    return models.LifecycleIdentity(
+    return LifecycleIdentity(
         chain_id=chain_id,
         parent_uuid=parent_uuid,
         source_link=source_link,
@@ -157,7 +153,6 @@ def spawn_child_atomic(
             child_uuid_for_spawn=ports.child_uuid,
             fmt_isoz=ports.format_datetime,
             now_utc=ports.now_utc,
-            lifecycle_models=ports.lifecycle_models,
             lifecycle_spawn_identity=ports.spawn_identity,
             enqueue_spawn_intent=ports.enqueue_intent,
             parse_datetime=ports.parse_datetime,
@@ -185,7 +180,7 @@ def child_uuid_for_spawn(ports: ChildUuidPorts, parent_task: dict | None, child_
 
 
 __all__ = (
-    "SpawnIdentityPorts", "SpawnIntentPorts", "ChildUuidPorts", "SpawnChildPorts",
+    "SpawnIntentPorts", "ChildUuidPorts", "SpawnChildPorts",
     "spawn_intent_ports_for", "child_uuid_ports_for", "spawn_child_ports_for",
     "enqueue_spawn_intent", "lifecycle_spawn_identity", "spawn_child_atomic",
     "child_uuid_for_spawn",

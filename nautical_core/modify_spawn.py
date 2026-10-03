@@ -7,8 +7,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Protocol
 
-from .lifecycle.models import LifecyclePlan
-from .lifecycle.models import LifecycleAction, LifecycleIdentity, ParentGuard
+from .lifecycle.models import (
+    LifecycleAction,
+    LifecycleIdentity,
+    LifecyclePlan,
+    ParentGuard,
+    recurrence_fingerprint,
+)
 from .modify_models import DatetimeParserCallback
 from nautical_core.task_models import TaskDraft, TaskPayload
 
@@ -35,26 +40,12 @@ class _PrepareSpawnChildPayload(Protocol):
     ) -> tuple[TaskDraft, str, str]: ...
 
 
-class _LifecycleModels(Protocol):
-    LifecycleAction: type[LifecycleAction]
-    LifecyclePlan: type[LifecyclePlan]
-    ParentGuard: type[ParentGuard]
-
-    def recurrence_fingerprint(
-        self,
-        task: TaskPayload,
-        *,
-        parse_datetime: DatetimeParserCallback,
-    ) -> str: ...
-
-
 @dataclass(slots=True)
 class SpawnServices:
     prepare_spawn_child_payload: _PrepareSpawnChildPayload
     child_uuid_for_spawn: _ChildUUIDForSpawn
     fmt_isoz: Callable[[datetime], str]
     now_utc: Callable[[], datetime]
-    lifecycle_models: _LifecycleModels
     lifecycle_spawn_identity: Callable[[TaskPayload, TaskPayload], LifecycleIdentity]
     enqueue_spawn_intent: Callable[[LifecyclePlan], tuple[bool, str]]
     parse_datetime: DatetimeParserCallback
@@ -112,10 +103,9 @@ def spawn_child_atomic(
     )
     child_obj = child_draft.to_mapping()
 
-    lifecycle_models = services.lifecycle_models
     lifecycle_identity = services.lifecycle_spawn_identity(parent_task_with_nextlink, child_obj)
     spawn_intent_id = lifecycle_identity.idempotency_key
-    recurrence_guard = lifecycle_models.recurrence_fingerprint(
+    recurrence_guard = recurrence_fingerprint(
         parent_task_with_nextlink,
         parse_datetime=services.parse_datetime,
     )
@@ -126,7 +116,7 @@ def spawn_child_atomic(
         else ""
     )
     modified_guard = "" if end_guard else str(parent_task_with_nextlink.get("modified") or "").strip()
-    parent_guard = lifecycle_models.ParentGuard(
+    parent_guard = ParentGuard(
         status=str(parent_task_with_nextlink.get("status") or ""),
         chain=str(parent_task_with_nextlink.get("chain") or ""),
         chain_id=str(parent_task_with_nextlink.get("chainID") or ""),
@@ -135,9 +125,9 @@ def spawn_child_atomic(
         end=end_guard,
         recurrence_fingerprint=recurrence_guard,
     )
-    lifecycle_plan = lifecycle_models.LifecyclePlan.from_draft(
+    lifecycle_plan = LifecyclePlan.from_draft(
         identity=lifecycle_identity,
-        action=lifecycle_models.LifecycleAction.SPAWN_CHILD,
+        action=LifecycleAction.SPAWN_CHILD,
         parent_guard=parent_guard,
         draft=child_draft,
         parent_patch={"nextLink": child_short},

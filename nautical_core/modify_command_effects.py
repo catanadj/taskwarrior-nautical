@@ -4,18 +4,29 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
+
+from .integration_models import TaskCommandResult
+
+
+class DiagCounter(Protocol):
+    def __call__(self, key: str, inc: float = 1) -> None: ...
+
+
+class RunTaskRecorder(Protocol):
+    def __call__(self, cmd: list[str], *, ok: bool, elapsed: float) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class CommandPorts:
-    execute: Any
-    purpose_bucket: Any
-    diag_count: Any
-    diag_record: Any
-    diag: Any
-    task_cmd_prefix: Any
+    execute: Callable[..., TaskCommandResult]
+    purpose_bucket: Callable[[list[str]], str]
+    diag_count: DiagCounter
+    diag_record: RunTaskRecorder
+    diag: Callable[[str], None]
+    task_cmd_prefix: Callable[[], list[str]]
 
 
 def command_ports_for(host: Any) -> CommandPorts:
@@ -30,7 +41,9 @@ def command_ports_for(host: Any) -> CommandPorts:
     )
 
 
-def run_task_result(ports: CommandPorts, cmd: list[str], **kwargs: Any) -> Any:
+def run_task_result(
+    ports: CommandPorts, cmd: list[str], **kwargs: Any
+) -> TaskCommandResult:
     started = time.perf_counter()
     result = ports.execute(
         cmd,
@@ -46,7 +59,9 @@ def run_task_result(ports: CommandPorts, cmd: list[str], **kwargs: Any) -> Any:
     return result
 
 
-def generate_child_uuid_candidate(ports: CommandPorts, env: dict) -> str:
+def generate_child_uuid_candidate(
+    ports: CommandPorts, env: Mapping[str, str]
+) -> str:
     candidate = str(uuid.uuid4())
     while True:
         result = run_task_result(

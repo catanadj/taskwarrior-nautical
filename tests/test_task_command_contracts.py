@@ -2,6 +2,8 @@
 
 import sys
 import unittest
+from collections import abc
+from typing import Any, get_type_hints
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -17,6 +19,24 @@ from nautical_core.task_command import failure_message, run_task_command
 
 
 class TaskCommandContractTests(unittest.TestCase):
+    def test_modify_command_ports_have_typed_task_and_diagnostic_contracts(self) -> None:
+        from nautical_core.modify_command_effects import CommandPorts
+        from nautical_core.modify_command_effects import DiagCounter, RunTaskRecorder
+
+        annotations = get_type_hints(CommandPorts)
+        self.assertEqual(
+            annotations,
+            {
+                "execute": abc.Callable[..., TaskCommandResult],
+                "purpose_bucket": abc.Callable[[list[str]], str],
+                "diag_count": DiagCounter,
+                "diag_record": RunTaskRecorder,
+                "diag": abc.Callable[[str], None],
+                "task_cmd_prefix": abc.Callable[[], list[str]],
+            },
+        )
+        self.assertNotIn(Any, annotations.values())
+
     def test_modify_run_task_diagnostics_classify_commands_and_accumulate_stats(self) -> None:
         from nautical_core.hooks import modify_impl
 

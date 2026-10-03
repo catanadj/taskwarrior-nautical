@@ -231,6 +231,71 @@ class QueueReviewTests(HookSubprocessFixture):
                         Path(directory), task_binary="task", runtime=object()
                     )
 
+    def test_review_guard_fingerprint_internal_defect_propagates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            records = [{
+                "intent_id": "review-guard",
+                "state": "manual_review",
+                "plan": {
+                    "parent_uuid": "parent12345678",
+                    "parent_guard": {
+                        "status": "pending", "chain": "on", "chainID": "chain-a",
+                        "link": 1, "recurrence_identity": "rf1-expected",
+                    },
+                },
+            }]
+
+            class Command:
+                ok = True
+                stdout = json.dumps([{
+                    "uuid": "parent12345678", "status": "pending", "chain": "on",
+                    "chainID": "chain-a", "link": 1, "modified": "20261001T120000Z",
+                }])
+                stderr = ""
+
+            status = (type("Result", (), {"ok": True, "reason": ""})(), {"records": records})
+            with patch.object(queue_status_service.LifecycleOutboxRepository, "status", return_value=status), \
+                 patch.object(queue_status_service.TaskwarriorClient, "execute", return_value=Command()), \
+                 patch.object(queue_status_service, "recurrence_fingerprint", side_effect=RuntimeError("fingerprint defect")):
+                with self.assertRaisesRegex(RuntimeError, "fingerprint defect"):
+                    QueueStatusService().review_payload(
+                        Path(directory), intent_id="review-guard", task_binary="task"
+                    )
+
+    def test_review_guard_malformed_fingerprint_data_is_reported_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            records = [{
+                "intent_id": "review-guard",
+                "state": "manual_review",
+                "plan": {
+                    "parent_uuid": "parent12345678",
+                    "parent_guard": {
+                        "status": "pending", "chain": "on", "chainID": "chain-a",
+                        "link": 1, "recurrence_identity": "rf1-expected",
+                    },
+                },
+            }]
+
+            class Command:
+                ok = True
+                stdout = json.dumps([{
+                    "uuid": "parent12345678", "status": "pending", "chain": "on",
+                    "chainID": "chain-a", "link": 1, "modified": "20261001T120000Z",
+                }])
+                stderr = ""
+
+            status = (type("Result", (), {"ok": True, "reason": ""})(), {"records": records})
+            with patch.object(queue_status_service.LifecycleOutboxRepository, "status", return_value=status), \
+                 patch.object(queue_status_service.TaskwarriorClient, "execute", return_value=Command()), \
+                 patch.object(queue_status_service, "recurrence_fingerprint", side_effect=ValueError("bad recurrence data")):
+                payload = QueueStatusService().review_payload(
+                    Path(directory), intent_id="review-guard", task_binary="task"
+                )
+            comparison = payload["intents"][0]["guard_comparison"]
+            self.assertEqual(comparison["status"], "changed")
+            self.assertEqual(comparison["differences"][0]["field"], "recurrence_identity")
+            self.assertIn("unavailable: bad recurrence data", comparison["differences"][0]["actual"])
+
     def test_review_exact_non_reviewable_intent_is_distinguished(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(

@@ -215,7 +215,7 @@ class QueueStatusService:
                             if expected_identity:
                                 try:
                                     actual_identity = recurrence_fingerprint(current)
-                                except Exception as exc:
+                                except (TypeError, ValueError) as exc:
                                     comparisons.append({"field": "recurrence_identity", "expected": expected_identity, "actual": f"unavailable: {exc}"})
                                 else:
                                     if actual_identity != expected_identity:

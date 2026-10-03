@@ -606,7 +606,6 @@ def main() -> int:
             result = hook_engine.handle_on_exit(
                 request,
                 services=_module("exit_composition").ExitServices(
-                    hook_results.ExitHookResponse,
                     redirect_stdout=_redirect_stdout_to_devnull,
                     drain_outbox=_drain_outbox_result,
                     strict_feedback=lambda stats: _module("exit_diagnostics").strict_feedback(

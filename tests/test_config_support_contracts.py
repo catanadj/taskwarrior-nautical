@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -75,6 +76,38 @@ class ConfigSupportContractTests(unittest.TestCase):
             self.assertEqual(data, {})
             self.assertTrue(errors)
             self.assertIn(str(path), errors[0])
+
+    def test_toml_loader_does_not_hide_unexpected_parser_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nautical.toml"
+            path.write_text('tz = "UTC"\n', encoding="utf-8")
+            parser = SimpleNamespace(
+                load=lambda _stream: (_ for _ in ()).throw(
+                    RuntimeError("unexpected parser defect")
+                )
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "unexpected parser defect"):
+                config_support.read_toml_result(
+                    str(path),
+                    tomllib_mod=parser,
+                    warn_missing_toml_parser=lambda _path: None,
+                    warn_toml_parse_error=lambda _path, _err: None,
+                )
+
+    def test_config_existence_probe_does_not_hide_unexpected_failure(self) -> None:
+        with patch.object(
+            config_support.os.path,
+            "exists",
+            side_effect=RuntimeError("unexpected filesystem defect"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected filesystem defect"):
+                config_support.read_toml_result(
+                    "config-nautical.toml",
+                    tomllib_mod=tomllib,
+                    warn_missing_toml_parser=lambda _path: None,
+                    warn_toml_parse_error=lambda _path, _err: None,
+                )
 
     def test_world_writable_file_is_rejected_with_path_reason(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -165,7 +165,7 @@ def read_toml_result(
     try:
         if not path or not os.path.exists(path):
             return ConfigReadResult("absent", {})
-    except Exception as exc:
+    except OSError as exc:
         message = f"config inspection failed for {path}: {exc}"
         if callable(error_sink):
             error_sink(message)
@@ -221,7 +221,7 @@ def read_toml_result(
                     error_sink(message)
                 return ConfigReadResult("invalid", {}, message)
             return ConfigReadResult("present", data)
-    except Exception as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         message = f"config parse failed for {path}: {exc}"
         if callable(error_sink):
             error_sink(message)

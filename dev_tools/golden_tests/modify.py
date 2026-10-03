@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from datetime import date, timedelta, timezone
 import tempfile
 from pathlib import Path
@@ -1852,54 +1851,6 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     expect(repair.state == "disabled", f"malformed recurrence should remain repairable: {repair!r}")
     expect(repair_new.get("chain") == "off", f"repair disable changed chain unexpectedly: {repair_new!r}")
 
-def test_on_modify_link_limit():
-    """on-modify should block spawns when link exceeds max."""
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_on_modify_link_limit_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._SHOW_ANALYTICS = False
-    mod._CHECK_CHAIN_INTEGRITY = False
-    previous_max_link = mod.core.MAX_LINK_NUMBER
-    mod.core.MAX_LINK_NUMBER = 3
-
-    spawn_effects = mod._module("modify_spawn_effects")
-    original_spawn = spawn_effects.spawn_child_atomic
-    spawn_effects.spawn_child_atomic = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not spawn"))
-
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000111",
-        "status": "pending",
-        "description": "limit test",
-        "anchor": "w:mon",
-        "chainID": "abcd1234",
-        "link": 3,
-        "due": "20250101T090000Z",
-    }
-    new = dict(old)
-    new.update({"status": "completed", "end": "20250102T090000Z"})
-
-    import io
-    from contextlib import redirect_stdout, redirect_stderr
-
-    raw = json.dumps(old) + "\n" + json.dumps(new)
-    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    orig_stdin = sys.stdin
-    try:
-        sys.stdin = stdin
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            mod.main()
-    finally:
-        sys.stdin = orig_stdin
-        mod.core.MAX_LINK_NUMBER = previous_max_link
-        spawn_effects.spawn_child_atomic = original_spawn
-
-    out = json.loads((stdout.getvalue() or "{}").strip() or "{}")
-    expect(out.get("link") == 3, "should pass task through unchanged")
-
 def test_on_modify_stable_child_uuid_is_slot_deterministic():
     """stable child UUID should be deterministic for the same parent slot and change with link."""
     hook = find_hook_file("on-modify.nautical")
@@ -1932,7 +1883,6 @@ def test_on_modify_stable_child_uuid_is_slot_deterministic():
 TESTS = TESTS + (
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
-    test_on_modify_link_limit,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
 )
 

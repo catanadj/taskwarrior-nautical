@@ -212,6 +212,69 @@ class ModifyCompletionFlowContracts(unittest.TestCase):
         self.assertEqual(events, ["preflight"])
         self.assertEqual(chain_reads, [])
 
+    def test_link_limit_stops_preflight_before_snapshot_or_next_link_lookup(self) -> None:
+        from nautical_core.modify_completion_preflight import (
+            completion_link_numbers_or_fail,
+            completion_preflight_context,
+        )
+
+        panels = []
+        printed = []
+        later_calls = []
+
+        def unexpected(name):
+            def fail(*_args):
+                later_calls.append(name)
+                raise AssertionError(f"{name} must not run after the link limit")
+
+            return fail
+
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "completed",
+            "description": "limit test",
+            "anchor": "w:mon",
+            "chainID": "abcd1234",
+            "link": 3,
+            "due": "20250101T090000Z",
+        }
+        services = SimpleNamespace(
+            short=lambda value: str(value or "")[:8],
+            completion_link_numbers_or_fail=lambda new: completion_link_numbers_or_fail(
+                new,
+                coerce_int=lambda value, default: int(value or default),
+                max_link_number=3,
+                panel=lambda *args, **kwargs: panels.append((args, kwargs)),
+                print_task=printed.append,
+            ),
+            completion_kind_or_stop=unexpected("kind"),
+            completion_chain_id_or_fail=unexpected("chain-id"),
+            completion_chain_snapshot=unexpected("snapshot"),
+            completion_existing_next_or_fail=unexpected("next-link"),
+        )
+
+        context = completion_preflight_context(
+            task,
+            datetime(2025, 1, 2, tzinfo=timezone.utc),
+            services=services,
+        )
+
+        self.assertIsNone(context)
+        self.assertEqual(
+            panels,
+            [
+                (
+                    (
+                        "⛔ Link limit exceeded",
+                        [("Reason", "Link number 4 exceeds max_link_number=3.")],
+                    ),
+                    {"kind": "error"},
+                )
+            ],
+        )
+        self.assertEqual(printed, [task])
+        self.assertEqual(later_calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

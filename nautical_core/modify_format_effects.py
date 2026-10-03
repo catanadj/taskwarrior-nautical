@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
-from .modify_models import PreviewLineFormatter
+from .modify_models import MarkupStripper, PreviewLineFormatter
 from .task_models import TaskPayload
-
-
-class MarkupStripper(Protocol):
-    def strip_rich_markup(self, text: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)

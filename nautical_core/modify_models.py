@@ -197,6 +197,10 @@ class FeedbackRowsFormatter(Protocol):
         ...
 
 
+class MarkupStripper(Protocol):
+    def strip_rich_markup(self, text: str) -> str: ...
+
+
 class PreviewLineFormatter(Protocol):
     def __call__(
         self,
@@ -213,6 +217,10 @@ class PreviewLineFormatter(Protocol):
         child_until_dt: Any = None,
         kind: str = "cp",
         minimal: bool = False,
+        core: MarkupStripper,
+        format_local: Callable[[Any], str],
+        on_time_delta: Callable[[Any, Any], str],
+        human_delta: Callable[[Any, Any, bool], str],
     ) -> str:
         ...
 

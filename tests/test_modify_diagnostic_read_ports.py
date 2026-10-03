@@ -234,14 +234,23 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
 
     def test_line_preview_ports_use_task_view_formatter_and_markup_contracts(self) -> None:
         from nautical_core.modify_format_effects import LinePreviewPorts
-        from nautical_core.modify_format_effects import MarkupStripper
-        from nautical_core.modify_models import PreviewLineFormatter
+        from nautical_core.modify_models import MarkupStripper, PreviewLineFormatter
 
         annotations = get_type_hints(LinePreviewPorts)
         self.assertIs(annotations["format_line_preview"], PreviewLineFormatter)
         self.assertIs(annotations["core"], MarkupStripper)
         self.assertEqual(annotations["format_local"], Callable[[Any], str])
         self.assertNotIn(Any, annotations.values())
+        preview_annotations = get_type_hints(PreviewLineFormatter.__call__)
+        self.assertIs(preview_annotations["core"], MarkupStripper)
+        self.assertEqual(preview_annotations["format_local"], abc.Callable[[Any], str])
+        self.assertEqual(
+            preview_annotations["on_time_delta"], abc.Callable[[Any, Any], str]
+        )
+        self.assertEqual(
+            preview_annotations["human_delta"],
+            abc.Callable[[Any, Any, bool], str],
+        )
 
     def test_line_preview_adapters_expose_explicit_temporal_options(self) -> None:
         import inspect

@@ -20,14 +20,18 @@ from nautical_core.task_command import failure_message, run_task_command
 
 class TaskCommandContractTests(unittest.TestCase):
     def test_modify_command_ports_have_typed_task_and_diagnostic_contracts(self) -> None:
-        from nautical_core.modify_command_effects import CommandPorts
-        from nautical_core.modify_command_effects import DiagCounter, RunTaskRecorder
+        from nautical_core.modify_command_effects import (
+            CommandPorts,
+            DiagCounter,
+            RunTaskRecorder,
+            TaskCommandExecutor,
+        )
 
         annotations = get_type_hints(CommandPorts)
         self.assertEqual(
             annotations,
             {
-                "execute": abc.Callable[..., TaskCommandResult],
+                "execute": TaskCommandExecutor,
                 "purpose_bucket": abc.Callable[[list[str]], str],
                 "diag_count": DiagCounter,
                 "diag_record": RunTaskRecorder,
@@ -36,6 +40,26 @@ class TaskCommandContractTests(unittest.TestCase):
             },
         )
         self.assertNotIn(Any, annotations.values())
+
+    def test_modify_task_runner_has_explicit_command_options(self) -> None:
+        from collections.abc import Mapping
+        from nautical_core.modify_command_effects import CommandPorts, run_task_result
+
+        annotations = get_type_hints(run_task_result)
+        self.assertEqual(
+            annotations,
+            {
+                "ports": CommandPorts,
+                "cmd": list[str],
+                "env": Mapping[str, str] | None,
+                "input_text": str | None,
+                "timeout": float,
+                "retries": int,
+                "retry_delay": float,
+                "use_tempfiles": bool,
+                "return": TaskCommandResult,
+            },
+        )
 
     def test_modify_run_task_diagnostics_classify_commands_and_accumulate_stats(self) -> None:
         from nautical_core.hooks import modify_impl

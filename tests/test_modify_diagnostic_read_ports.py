@@ -166,7 +166,9 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(
             annotations["cache_set"], abc.Callable[[str, str, object], None]
         )
-        self.assertEqual(annotations["run_task"], abc.Callable[..., TaskCommandResult])
+        self.assertEqual(
+            annotations["run_task"], abc.Callable[..., TaskCommandResult]
+        )
         self.assertEqual(annotations["command_prefix"], abc.Callable[[], list[str]])
         self.assertEqual(annotations["environment"], abc.Callable[[], dict[str, str]])
 

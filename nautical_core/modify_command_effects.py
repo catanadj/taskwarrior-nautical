@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -19,9 +19,24 @@ class RunTaskRecorder(Protocol):
     def __call__(self, cmd: list[str], *, ok: bool, elapsed: float) -> None: ...
 
 
+class TaskCommandExecutor(Protocol):
+    def __call__(
+        self,
+        cmd: Sequence[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        input_text: str | None = None,
+        timeout: float = 3.0,
+        retries: int = 2,
+        retry_delay: float = 0.15,
+        use_tempfiles: bool = False,
+        purpose: str = "Nautical hook command",
+    ) -> TaskCommandResult: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CommandPorts:
-    execute: Callable[..., TaskCommandResult]
+    execute: TaskCommandExecutor
     purpose_bucket: Callable[[list[str]], str]
     diag_count: DiagCounter
     diag_record: RunTaskRecorder
@@ -42,13 +57,26 @@ def command_ports_for(host: Any) -> CommandPorts:
 
 
 def run_task_result(
-    ports: CommandPorts, cmd: list[str], **kwargs: Any
+    ports: CommandPorts,
+    cmd: list[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    retry_delay: float = 0.15,
+    use_tempfiles: bool = False,
 ) -> TaskCommandResult:
     started = time.perf_counter()
     result = ports.execute(
         cmd,
         purpose=f"on-modify {ports.purpose_bucket(cmd)}",
-        **kwargs,
+        env=env,
+        input_text=input_text,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+        use_tempfiles=use_tempfiles,
     )
     elapsed = time.perf_counter() - started
     ports.diag_count("run_task_calls")

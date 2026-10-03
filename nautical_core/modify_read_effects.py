@@ -180,15 +180,35 @@ def export_chain_required(
 def tw_get_ports_for(host: Any) -> TwGetPorts:
     command = host._module("modify_command_effects")
     composition = host._module("modify_composition")
+
+    def run_task(
+        argv: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        input_text: str | None = None,
+        timeout: float = 3.0,
+        retries: int = 2,
+        retry_delay: float = 0.15,
+        use_tempfiles: bool = False,
+    ) -> TaskCommandResult:
+        return command.run_task_result(
+            command.command_ports_for(host),
+            argv,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+            use_tempfiles=use_tempfiles,
+        )
+
     return TwGetPorts(
         service=composition.lifecycle_read_service_for(host),
         cache_get=host._query_ctx_get,
         cache_set=host._query_ctx_set,
         count=host._diag_count,
         diagnostic=host._diag,
-        run_task=lambda argv, **kwargs: command.run_task_result(
-            command.command_ports_for(host), argv, **kwargs
-        ),
+        run_task=run_task,
         command_prefix=host._task_cmd_prefix,
         environment=lambda: host.os.environ.copy(),
     )

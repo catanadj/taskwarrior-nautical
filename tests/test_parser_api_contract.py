@@ -12,6 +12,7 @@ from nautical_core.parser_api import ParserOwnerDependencies, _parse_anchor_expr
 from nautical_core.parsing import parser_frontend
 from nautical_core.parsing import parser_dnf
 from nautical_core.parsing import parser_support_api
+from nautical_core.parsing.parser_models import YearTokenFormatError
 
 
 class ParseError(ValueError):
@@ -165,6 +166,7 @@ class ParserPresetContractTests(unittest.TestCase):
         namespace = {
             **vars(core),
             "ParseError": core.ParseError,
+            "YearTokenFormatError": YearTokenFormatError,
             "ANCHOR_PRESETS": anchors or {},
             "OMIT_PRESETS": omits or {},
         }

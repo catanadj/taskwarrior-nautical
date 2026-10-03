@@ -2,16 +2,36 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from .anchor_omit import OmitState
+
+
+OmitDNF = list[list[dict[str, Any]]]
+
+
+class OmitStateCombiner(Protocol):
+    def __call__(
+        self,
+        *,
+        omit_dnf: OmitDNF | None = None,
+        omit_dates: frozenset[date] | None = None,
+        omit_descriptions: Mapping[date, str] | None = None,
+    ) -> OmitState | None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class OmitPorts:
-    validate_omit: Any
-    load_omit_file_data: Any
+    validate_omit: Callable[[str], OmitDNF]
+    load_omit_file_data: Callable[
+        [str | None, str | None], tuple[frozenset[date], dict[date, str]]
+    ]
     omit_file_dir: str
-    combine_omit_state: Any
+    combine_omit_state: OmitStateCombiner
 
 
 def omit_ports_for(host: Any) -> OmitPorts:
@@ -24,12 +44,14 @@ def omit_ports_for(host: Any) -> OmitPorts:
     )
 
 
-def omit_dnf_from_parent(ports: OmitPorts, task_mapping: dict[str, Any]) -> Any:
+def omit_dnf_from_parent(
+    ports: OmitPorts, task_mapping: dict[str, Any]
+) -> tuple[str, OmitState | None]:
     expr_str = (task_mapping.get("omit") or "").strip()
     omit_file = (task_mapping.get("omit_file") or "").strip()
     omit_dnf = None
-    omit_dates: frozenset[Any] = frozenset()
-    omit_descriptions: dict[Any, str] = {}
+    omit_dates: frozenset[date] = frozenset()
+    omit_descriptions: dict[date, str] = {}
     if expr_str:
         try:
             omit_dnf = ports.validate_omit(expr_str)

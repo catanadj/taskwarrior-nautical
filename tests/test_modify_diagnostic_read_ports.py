@@ -257,6 +257,22 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
         self.assertEqual(get_type_hints(formatting.on_time_delta)["return"], str)
 
+    def test_omit_ports_use_date_and_canonical_omit_state_contracts(self) -> None:
+        import nautical_core.anchor_omit as anchor_omit
+        import nautical_core.modify_anchor_effects as effects
+
+        annotations = get_type_hints(
+            effects.OmitPorts, localns={"OmitState": anchor_omit.OmitState}
+        )
+        self.assertNotIn(Any, annotations.values())
+        self.assertIsNot(
+            get_type_hints(
+                effects.omit_dnf_from_parent,
+                localns={"OmitState": anchor_omit.OmitState},
+            )["return"],
+            Any,
+        )
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

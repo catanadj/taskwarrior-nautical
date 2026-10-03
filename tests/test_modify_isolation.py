@@ -257,6 +257,36 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertIs(annotations[name], contract)
 
+    def test_completion_compute_ports_reuse_model_callback_contracts(self) -> None:
+        from nautical_core.modify_completion_effects import CompletionComputePorts
+        from nautical_core.modify_models import (
+            CompletionCapGuardCallback,
+            CompletionCapsCallback,
+            CompletionChildDueCallback,
+            CompletionChildRequiredCallback,
+            CompletionComputeServices,
+            CompletionDurationWarningCallback,
+            CompletionLifecycleResult,
+            CompletionUntilCallback,
+            CompletionUntilGuardCallback,
+        )
+
+        annotations = get_type_hints(CompletionComputePorts)
+        expected = {
+            "services_type": type[CompletionComputeServices],
+            "compute_child_due": CompletionChildDueCallback,
+            "until_or_fail": CompletionUntilCallback,
+            "until_guard_or_stop": CompletionUntilGuardCallback,
+            "require_child_due_or_fail": CompletionChildRequiredCallback,
+            "warn_unreasonable_duration": CompletionDurationWarningCallback,
+            "caps": CompletionCapsCallback,
+            "cap_guard_or_stop": CompletionCapGuardCallback,
+            "lifecycle_result_type": type[CompletionLifecycleResult],
+        }
+        for name, contract in expected.items():
+            with self.subTest(field=name):
+                self.assertEqual(annotations[name], contract)
+
     def test_completion_feedback_and_validation_ports_reuse_callback_contracts(self) -> None:
         from nautical_core.modify_completion_effects import (
             CompletionFeedbackPorts,

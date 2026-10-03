@@ -14,7 +14,16 @@ from .modify_models import (
     DiagnosticCallback,
     CapFromUntilAnchorCallback,
     CapFromUntilCpCallback,
+    CompletionCapGuardCallback,
+    CompletionCapsCallback,
+    CompletionChildDueCallback,
+    CompletionChildRequiredCallback,
+    CompletionComputeServices,
+    CompletionDurationWarningCallback,
     CoerceIntCallback,
+    CompletionLifecycleResult,
+    CompletionUntilCallback,
+    CompletionUntilGuardCallback,
     DatetimeParserCallback,
     EstimateAnchorFinalCallback,
     EstimateCpFinalCallback,
@@ -149,15 +158,15 @@ class CompletionLifecyclePlanPorts:
 @dataclass(frozen=True, slots=True)
 class CompletionComputePorts:
     compute: CompletionComputeService
-    services_type: Any
-    compute_child_due: Any
-    until_or_fail: Any
-    until_guard_or_stop: Any
-    require_child_due_or_fail: Any
-    warn_unreasonable_duration: Any
-    caps: Any
-    cap_guard_or_stop: Any
-    lifecycle_result_type: Any
+    services_type: type[CompletionComputeServices]
+    compute_child_due: CompletionChildDueCallback
+    until_or_fail: CompletionUntilCallback
+    until_guard_or_stop: CompletionUntilGuardCallback
+    require_child_due_or_fail: CompletionChildRequiredCallback
+    warn_unreasonable_duration: CompletionDurationWarningCallback
+    caps: CompletionCapsCallback
+    cap_guard_or_stop: CompletionCapGuardCallback
+    lifecycle_result_type: type[CompletionLifecycleResult]
     lifecycle_plan: CompletionLifecyclePlanPorts
 
 

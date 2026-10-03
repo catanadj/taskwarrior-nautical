@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
@@ -15,8 +15,8 @@ from .timeutil import compare_datetimes
 class SchedulePorts:
     """Minimal clock/calendar ports needed by schedule projection helpers."""
 
-    to_local: Any
-    build_local_datetime: Any
+    to_local: Callable[[datetime], datetime]
+    build_local_datetime: Callable[[date, tuple[int, int]], datetime]
 
 
 class SequenceIntervalForToken(Protocol):

@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import get_type_hints
+from typing import Callable, get_type_hints
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,14 @@ class ModifyScheduleContractTests(unittest.TestCase):
         self.assertIs(
             get_type_hints(modify_schedule_effects.SequencePorts)["sequence_interval"],
             modify_schedule_effects.SequenceIntervalForToken,
+        )
+
+    def test_schedule_ports_have_concrete_callback_signatures(self) -> None:
+        annotations = get_type_hints(modify_schedule_effects.SchedulePorts)
+        self.assertEqual(annotations["to_local"], Callable[[datetime], datetime])
+        self.assertEqual(
+            annotations["build_local_datetime"],
+            Callable[[date, tuple[int, int]], datetime],
         )
 
     def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding(self) -> None:

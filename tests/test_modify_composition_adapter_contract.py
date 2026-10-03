@@ -3,11 +3,40 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
+import nautical_core.modify_composition_adapters as adapters
 from nautical_core.modify_composition_adapters import render_disabled_chain_summary_for
 
 
 class ModifyCompositionAdapterContractTests(unittest.TestCase):
+    def test_expiration_warning_propagates_unexpected_renderer_failure(self) -> None:
+        fallback_panels: list[str] = []
+
+        def fail_to_render(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("recovery renderer defect")
+
+        capabilities = SimpleNamespace(
+            modify_expiration=SimpleNamespace(render_recovery_warning=fail_to_render),
+            modify_ui_effects=SimpleNamespace(
+                ui_ports_for=lambda _host: object(),
+                panel=lambda _ports, title, *_args, **_kwargs: fallback_panels.append(title),
+            ),
+        )
+        host = SimpleNamespace(
+            _diag=lambda _message: None,
+            core=SimpleNamespace(short_uuid=lambda value: str(value)),
+        )
+
+        with (
+            patch.object(adapters, "_capabilities", return_value=capabilities),
+            patch.object(adapters, "expiration_services_for", return_value=object()),
+            self.assertRaisesRegex(RuntimeError, "recovery renderer defect"),
+        ):
+            adapters.expiration_recovery_warning_for(host, {"uuid": "task-1"}, "reason")
+
+        self.assertEqual(fallback_panels, [])
+
     def test_disabled_chain_summary_falls_back_when_rich_summary_fails(self) -> None:
         events: list[str] = []
         diagnostics: list[str] = []

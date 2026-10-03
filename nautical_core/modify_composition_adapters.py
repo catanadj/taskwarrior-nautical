@@ -53,11 +53,8 @@ def expiration_recovery_warning_for(host: Any, new: TaskPayload, reason: str) ->
     capabilities = _capabilities(host)
     modify_expiration = capabilities.modify_expiration
     if modify_expiration is not None:
-        try:
-            modify_expiration.render_recovery_warning(new, reason, services=expiration_services_for(host))
-            return
-        except Exception as exc:
-            host._diag(f"expiration recovery warning render failed: {exc}")
+        modify_expiration.render_recovery_warning(new, reason, services=expiration_services_for(host))
+        return
     ui = capabilities.modify_ui_effects
     ui.panel(
         ui.ui_ports_for(host),

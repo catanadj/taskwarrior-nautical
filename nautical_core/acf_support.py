@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Any
 
+from .parsing.parser_models import ParseError
+
 
 def atom_sort_key(x: dict, *, json_mod: Any) -> tuple:
     sj = json_mod.dumps(x.get("s"), separators=(",", ":"), sort_keys=True)
@@ -93,7 +95,7 @@ def build_acf(
 
     try:
         dnf = parse_anchor_expr_to_dnf_cached(expr)
-    except Exception:
+    except ParseError:
         return "!PARSE_ERROR"
 
     terms = _build_acf_terms(

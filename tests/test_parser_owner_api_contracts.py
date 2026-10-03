@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 import nautical_core as core
 import nautical_core.acf_api as acf_api
@@ -81,6 +82,22 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         self.assertTrue(self.acf.is_valid_acf(packed))
         self.assertEqual(self.acf.acf_to_original_format(packed), "w:mon")
         self.assertFalse(self.acf.is_valid_acf(packed[:-1] + ("0" if packed[-1] != "0" else "1")))
+
+    def test_acf_builder_contains_expected_parse_errors_only(self) -> None:
+        with patch.object(
+            core,
+            "parse_anchor_expr_to_dnf_cached",
+            side_effect=core.ParseError("invalid anchor expression"),
+        ):
+            self.assertEqual(self.acf._build_acf_impl("w:mon"), "!PARSE_ERROR")
+
+        with patch.object(
+            core,
+            "parse_anchor_expr_to_dnf_cached",
+            side_effect=RuntimeError("parser implementation failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "parser implementation failed"):
+                self.acf._build_acf_impl("w:mon")
 
     def test_expansion_produces_hand_checked_weekdays_and_month_days(self) -> None:
         self.assertEqual(self.expansion._weekly_spec_to_wset("mon..wed,fri"), {0, 1, 2, 4})

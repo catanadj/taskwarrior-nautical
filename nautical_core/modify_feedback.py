@@ -1281,20 +1281,17 @@ def render_cp_completion_feedback(
         cp_tokens = [p.strip() for p in str(feedback.new.get("cp") or "").split(",")]
         step_token = cp_tokens[step - 1] if 0 <= step - 1 < len(cp_tokens) else ""
         token_index = max(0, step - 1)
-        try:
-            tokens = core.parse_cp_sequence_tokens(feedback.new.get("cp") or "")
-            if tokens and 0 <= token_index < len(tokens) and tokens[token_index].get("kind") == "rand":
-                td = core.cp_sequence_interval_for_token(
-                    tokens[token_index],
-                    cp=feedback.new.get("cp") or "",
-                    link_no=int(feedback.new.get("link") or 1),
-                    token_index=token_index,
-                    chain_id=str(feedback.new.get("chainID") or "").strip(),
-                )
-                if td:
-                    step_token = _format_td_short(td)
-        except Exception:
-            pass
+        tokens = core.parse_cp_sequence_tokens(feedback.new.get("cp") or "")
+        if tokens and 0 <= token_index < len(tokens) and tokens[token_index].get("kind") == "rand":
+            td = core.cp_sequence_interval_for_token(
+                tokens[token_index],
+                cp=feedback.new.get("cp") or "",
+                link_no=int(feedback.new.get("link") or 1),
+                token_index=token_index,
+                chain_id=str(feedback.new.get("chainID") or "").strip(),
+            )
+            if td:
+                step_token = _format_td_short(td)
         suffix = f" ({step_token})" if step_token else ""
         fb.append(("Step", f"{step}/{feedback.meta.get('cp_sequence_len')}{suffix}"))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))

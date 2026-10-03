@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import importlib
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import nautical_core
 import nautical_core.modify_feedback as modify_feedback
@@ -272,6 +273,17 @@ class ModifyFeedbackContractTests(unittest.TestCase):
     def test_cp_jitter_feedback_shows_the_selected_interval(self) -> None:
         _title, rows, _text = _render_cp_completion_feedback("15d~0d")
         self.assertIn(("Step", "1/1 (15d)"), rows)
+
+    def test_cp_random_step_does_not_hide_parser_or_interval_failures(self) -> None:
+        for function_name in ("parse_cp_sequence_tokens", "cp_sequence_interval_for_token"):
+            with self.subTest(function=function_name):
+                with patch.object(
+                    nautical_core,
+                    function_name,
+                    side_effect=RuntimeError("CP interval implementation failed"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "CP interval implementation failed"):
+                        _render_cp_completion_feedback("rand(11d..14d)", sequence_len=1)
 
     def test_cp_random_feedback_shows_the_chain_scoped_selected_interval(self) -> None:
         cp = "rand(11d..14d)"

@@ -4,12 +4,38 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import nautical_core.hook_bootstrap as hook_bootstrap
 from nautical_core.hook_runtime import HookModuleAccess
 
 
 class HookBootstrapTrustTests(unittest.TestCase):
+    def test_helper_path_probe_contains_expected_oserror(self) -> None:
+        base = Path("/unavailable-hook-base")
+        with patch.object(type(base), "is_file", side_effect=OSError("unavailable")):
+            module, helper_path, error = hook_bootstrap.load_core_helper_module(
+                base,
+                "optional_helper.py",
+                "nautical_test_optional_helper",
+            )
+
+        self.assertIsNone(module)
+        self.assertIsNone(helper_path)
+        self.assertIsNone(error)
+
+    def test_helper_path_probe_does_not_hide_unexpected_failure(self) -> None:
+        base = Path("/unavailable-hook-base")
+        with patch.object(
+            type(base), "is_file", side_effect=RuntimeError("path adapter defect")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "path adapter defect"):
+                hook_bootstrap.load_core_helper_module(
+                    base,
+                    "optional_helper.py",
+                    "nautical_test_optional_helper",
+                )
+
     def test_core_target_requires_package_layout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

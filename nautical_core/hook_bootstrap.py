@@ -168,7 +168,7 @@ def load_core_helper_module(
             candidates.append(base.parent / filename)
         else:
             candidates.extend((base / "nautical_core" / filename, base / filename))
-    except Exception:
+    except OSError:
         pass
     helper_path = next((path for path in candidates if path.is_file()), None)
     if helper_path is None:

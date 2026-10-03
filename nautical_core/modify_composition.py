@@ -173,11 +173,11 @@ class _ModifyCompositionAdapters(Protocol):
         host: Any,
         old: TaskPayload,
         new: TaskPayload,
-        unit_of_work: Any,
+        unit_of_work: TaskwarriorUnitOfWork,
         *,
-        transition: Any = None,
-        runtime: Any = None,
-    ) -> Any: ...
+        transition: TaskTransition | None = None,
+        runtime: ModifyRuntimeServices | None = None,
+    ) -> CompletionLifecycleResult | None: ...
 
     def handle_deleted(
         self,

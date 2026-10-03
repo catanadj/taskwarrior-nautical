@@ -1151,6 +1151,36 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIs(ordinary["lifecycle"], _ModifyLifecycle)
         self.assertEqual(ordinary["transition"], TaskTransition | None)
 
+    def test_completion_modify_adapter_uses_typed_runtime_and_lifecycle_result(self) -> None:
+        from nautical_core.modify_composition import (
+            ModifyRuntimeServices,
+            _ModifyCompositionAdapters,
+        )
+        from nautical_core.modify_composition_adapters import handle_completion
+        from nautical_core.modify_models import CompletionLifecycleResult
+        from nautical_core.task_changes import TaskTransition
+        from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+        localns = {
+            "ModifyRuntimeServices": ModifyRuntimeServices,
+            "ModifyCompositionRuntimeServices": ModifyRuntimeServices,
+            "CompletionLifecycleResult": CompletionLifecycleResult,
+            "TaskTransition": TaskTransition,
+            "TaskwarriorUnitOfWork": TaskwarriorUnitOfWork,
+        }
+        for method in (
+            _ModifyCompositionAdapters.handle_completion,
+            handle_completion,
+        ):
+            with self.subTest(method=method.__name__):
+                annotations = get_type_hints(method, localns=localns)
+                self.assertIs(annotations["unit_of_work"], TaskwarriorUnitOfWork)
+                self.assertEqual(annotations["transition"], TaskTransition | None)
+                self.assertEqual(annotations["runtime"], ModifyRuntimeServices | None)
+                self.assertEqual(
+                    annotations["return"], CompletionLifecycleResult | None
+                )
+
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin
         from nautical_core.lifecycle.read_service import LifecycleReadService

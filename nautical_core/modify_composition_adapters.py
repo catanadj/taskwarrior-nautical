@@ -9,7 +9,11 @@ from .task_datetime import datetime_value, parser_for_host
 from .task_models import TaskPayload
 
 if TYPE_CHECKING:
-    from .modify_models import AnchorCompletionFeedbackModel, CpCompletionFeedbackModel
+    from .modify_models import (
+        AnchorCompletionFeedbackModel,
+        CompletionLifecycleResult,
+        CpCompletionFeedbackModel,
+    )
     from .modify_composition import ModifyRuntimeServices as ModifyCompositionRuntimeServices
     from .task_changes import TaskTransition
     from .taskwarrior_uow import TaskwarriorUnitOfWork
@@ -151,11 +155,11 @@ def handle_completion(
     host: Any,
     old: TaskPayload,
     new: TaskPayload,
-    unit_of_work: Any,
+    unit_of_work: TaskwarriorUnitOfWork,
     *,
-    transition: Any = None,
-    runtime: Any = None,
-) -> Any:
+    transition: TaskTransition | None = None,
+    runtime: ModifyCompositionRuntimeServices | None = None,
+) -> CompletionLifecycleResult | None:
     runtime = _runtime(host, runtime)
     runtime.runtime_state().task_repository = unit_of_work.repository
     capabilities = runtime.completion

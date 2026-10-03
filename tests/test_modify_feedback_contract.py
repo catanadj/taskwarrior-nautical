@@ -120,6 +120,43 @@ def _omit_summary_core(
 
 
 class ModifyFeedbackContractTests(unittest.TestCase):
+    def test_recurrence_update_panel_does_not_hide_expression_helper_failures(self) -> None:
+        def broken_helper(_expression):
+            raise RuntimeError("expression feedback implementation failed")
+
+        cases = (
+            (
+                [("anchor", "", "w:mon")],
+                {"anchor": "w:mon"},
+                broken_helper,
+                lambda value: value,
+            ),
+            (
+                [("omit", "", "w:mon")],
+                {"omit": "w:mon"},
+                lambda _value: "natural",
+                broken_helper,
+            ),
+        )
+        for changes, new, describe_anchor, resolve_omit_presets in cases:
+            with self.subTest(field=changes[0][0]):
+                with self.assertRaisesRegex(RuntimeError, "expression feedback implementation failed"):
+                    modify_feedback.render_recurrence_updated_panel(
+                        changes,
+                        new,
+                        parse_datetime=lambda _value: None,
+                        format_local=str,
+                        describe_native_until_carry=lambda *_args, **_kwargs: None,
+                        to_local=lambda value: value,
+                        coerce_int=lambda _value, default: default,
+                        describe_anchor=describe_anchor,
+                        resolve_omit_presets=resolve_omit_presets,
+                        first_recurrence_target=lambda *_args: None,
+                        panel_mode="panel",
+                        strip_markup=lambda value: value,
+                        panel=lambda *_args, **_kwargs: None,
+                    )
+
     def test_omit_summary_falls_back_to_raw_expression_on_parse_error(self) -> None:
         def invalid_preset(_expression):
             raise ParseError("unknown omit preset")

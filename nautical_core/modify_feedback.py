@@ -291,17 +291,11 @@ def render_recurrence_updated_panel(
 
     anchor_expr = str(new.get("anchor") or "").strip()
     if anchor_expr and any(field == "anchor" for field, _old, _new in changes):
-        try:
-            rows.append(("Natural", describe_anchor(anchor_expr)))
-        except Exception:
-            pass
+        rows.append(("Natural", describe_anchor(anchor_expr)))
 
     omit_expr = str(new.get("omit") or "").strip()
     if omit_expr and any(field == "omit" for field, _old, _new in changes):
-        try:
-            rows.append(("Except", describe_anchor(resolve_omit_presets(omit_expr))))
-        except Exception:
-            pass
+        rows.append(("Except", describe_anchor(resolve_omit_presets(omit_expr))))
 
     recurrence_fields = {
         "anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc",

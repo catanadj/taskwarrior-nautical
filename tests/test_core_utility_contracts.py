@@ -22,6 +22,14 @@ class CoreUtilityContractTests(unittest.TestCase):
         self.assertEqual(coerce_int(too_large, default=7), 7)
         self.assertEqual(coerce_int(float(too_large), default=7), 7)
 
+    def test_integer_coercion_does_not_hide_unexpected_string_conversion_failure(self) -> None:
+        class BrokenString:
+            def __str__(self) -> str:
+                raise RuntimeError("conversion implementation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "conversion implementation failed"):
+            coerce_int(BrokenString(), default=7)
+
 
 if __name__ == "__main__":
     unittest.main()

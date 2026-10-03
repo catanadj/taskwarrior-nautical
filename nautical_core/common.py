@@ -75,5 +75,5 @@ def coerce_int(v: Any, default: Any = None) -> Any:
             return iv if abs(iv) <= (2**63 - 1) else default
         iv = int(s)
         return iv if abs(iv) <= (2**63 - 1) else default
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default

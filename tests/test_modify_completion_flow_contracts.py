@@ -95,8 +95,15 @@ class ModifyCompletionFlowContracts(unittest.TestCase):
         self.assertIs(flow_callback, CompletionComputeCallback)
 
         from nautical_core.modify_composition import ModifyRuntimeServices
+        from nautical_core.modify_runtime import ModifyRuntimeState
 
-        runtime_callback = get_type_hints(ModifyRuntimeServices)["compute_next_and_limits"]
+        runtime_callback = get_type_hints(
+            ModifyRuntimeServices,
+            localns={
+                "LifecycleReadService": LifecycleReadService,
+                "ModifyRuntimeState": ModifyRuntimeState,
+            },
+        )["compute_next_and_limits"]
         self.assertIs(runtime_callback, CompletionComputeCallback)
 
     def test_completion_finalize_callback_has_explicit_arguments(self) -> None:

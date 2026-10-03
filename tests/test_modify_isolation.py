@@ -873,8 +873,16 @@ class ModifyIsolationTests(unittest.TestCase):
     def test_modify_runtime_services_do_not_use_catch_all_callback_protocol(self) -> None:
         from collections.abc import Callable as CallableOrigin
         from nautical_core.modify_composition import ModifyRuntimeServices
+        from nautical_core.lifecycle.read_service import LifecycleReadService
+        from nautical_core.modify_runtime import ModifyRuntimeState
 
-        annotations = get_type_hints(ModifyRuntimeServices)
+        annotations = get_type_hints(
+            ModifyRuntimeServices,
+            localns={
+                "LifecycleReadService": LifecycleReadService,
+                "ModifyRuntimeState": ModifyRuntimeState,
+            },
+        )
         callback_fields = {
             "runtime_state",
             "import_module",
@@ -889,11 +897,41 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertTrue(all(get_origin(annotations[name]) is CallableOrigin for name in callback_fields))
         self.assertEqual(annotations["chain_health_advice"].__name__, "_ChainHealthAdviceCallback")
 
+    def test_modify_runtime_services_use_runtime_state_and_read_service_owners(self) -> None:
+        from nautical_core.lifecycle.read_service import LifecycleReadService
+        from nautical_core.modify_composition import ModifyRuntimeServices
+        from nautical_core.modify_runtime import ModifyRuntimeState
+
+        annotations = get_type_hints(
+            ModifyRuntimeServices,
+            localns={
+                "LifecycleReadService": LifecycleReadService,
+                "ModifyRuntimeState": ModifyRuntimeState,
+            },
+        )
+
+        self.assertEqual(
+            annotations["runtime_state"],
+            Callable[[], ModifyRuntimeState],
+        )
+        self.assertEqual(
+            annotations["lifecycle_read_service"],
+            Callable[[], LifecycleReadService],
+        )
+
     def test_modify_runtime_services_completion_callbacks_have_named_contracts(self) -> None:
         from collections.abc import Callable as CallableOrigin
+        from nautical_core.lifecycle.read_service import LifecycleReadService
         from nautical_core.modify_composition import ModifyRuntimeServices
+        from nautical_core.modify_runtime import ModifyRuntimeState
 
-        annotations = get_type_hints(ModifyRuntimeServices)
+        annotations = get_type_hints(
+            ModifyRuntimeServices,
+            localns={
+                "LifecycleReadService": LifecycleReadService,
+                "ModifyRuntimeState": ModifyRuntimeState,
+            },
+        )
         expected = {
             "chain_integrity_warnings": "ChainIntegrityCallback",
             "render_anchor_completion_feedback": "AnchorCompletionRenderCallback",
@@ -911,9 +949,17 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertEqual(len(seed_arguments), 2)
 
     def test_modify_runtime_services_recurrence_callbacks_have_named_contracts(self) -> None:
+        from nautical_core.lifecycle.read_service import LifecycleReadService
         from nautical_core.modify_composition import ModifyRuntimeServices
+        from nautical_core.modify_runtime import ModifyRuntimeState
 
-        annotations = get_type_hints(ModifyRuntimeServices)
+        annotations = get_type_hints(
+            ModifyRuntimeServices,
+            localns={
+                "LifecycleReadService": LifecycleReadService,
+                "ModifyRuntimeState": ModifyRuntimeState,
+            },
+        )
         expected = {
             "prepare_recurrence": "_PrepareRecurrenceCallback",
             "preserve_cp_relative_offsets": "_PreserveCPCarryCallback",

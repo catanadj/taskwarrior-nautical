@@ -21,7 +21,9 @@ from .task_models import NauticalTask, TaskObservation, TaskPayload
 
 if TYPE_CHECKING:
     from .lifecycle.models import LifecyclePlan
+    from .lifecycle.read_service import LifecycleReadService
     from .modify_models import CompletionLifecycleResult, TaskView
+    from .modify_runtime import ModifyRuntimeState
     from .modify_workflow import RecurrenceTransitionDecision
     from .modify_validation_effects import (
         AnchorValidationPorts,
@@ -684,7 +686,7 @@ class ModifyRuntimeServices:
     non_completion: NonCompletionRouteCapabilities
     completion: CompletionRouteCapabilities
     deletion: DeletionRouteCapabilities
-    runtime_state: Callable[[], Any]
+    runtime_state: Callable[[], ModifyRuntimeState]
     import_module: Callable[[str], Any]
     diag_summary: Callable[[], None]
     diagnostic: Callable[[str], None]
@@ -692,7 +694,7 @@ class ModifyRuntimeServices:
     check_integrity: bool
     analytics_style: str
     seed_runtime_lookup_tasks: SeedLookupCallback
-    lifecycle_read_service: Callable[[], Any]
+    lifecycle_read_service: Callable[[], LifecycleReadService]
     chain_health_advice: _ChainHealthAdviceCallback
     chain_integrity_warnings: ChainIntegrityCallback
     render_anchor_completion_feedback: AnchorCompletionRenderCallback
@@ -806,7 +808,7 @@ def capabilities_for(host: Any) -> ModifyHookCapabilities:
     return cached
 
 
-def lifecycle_read_service_for(host: Any) -> Any:
+def lifecycle_read_service_for(host: Any) -> LifecycleReadService:
     """Construct and retain the invocation's lifecycle read service."""
     state = host._modify_runtime_state()
     existing = getattr(state, "lifecycle_read_service", None)

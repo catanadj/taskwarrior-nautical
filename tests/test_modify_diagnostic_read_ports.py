@@ -77,6 +77,15 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             },
         )
 
+    def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
+        from nautical_core.modify_diagnostics_effects import ChainExportPorts
+
+        annotations = get_type_hints(ChainExportPorts)
+        self.assertIsNot(annotations["service"], Any)
+        self.assertEqual(
+            annotations["coerce_int"], Callable[[Any, Any], int | None]
+        )
+
     def test_summary_export_does_not_mask_analytics_sorting_defects(self) -> None:
         import nautical_core.modify_diagnostics_effects as diagnostics
         from nautical_core.task_models import TaskObservation

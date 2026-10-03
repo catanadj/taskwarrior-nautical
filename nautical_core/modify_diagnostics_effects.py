@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Protocol, Sequence
 from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from dataclasses import dataclass
 from .task_models import TaskObservation, TaskPayload
@@ -23,10 +23,14 @@ class AnalyticsPorts:
     short_uuid: Callable[[Any], str]
 
 
+class ChainExportReader(Protocol):
+    def get_chain_export(self, chain_id: str) -> list[TaskObservation] | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ChainExportPorts:
-    service: Any
-    coerce_int: Any
+    service: ChainExportReader
+    coerce_int: Callable[[Any, Any], int | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,11 +133,11 @@ def export_chain_endpoint(
     rows = ports.service.get_chain_export(chain_id)
     if rows is None:
         raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
-    with_links = [
-        (ports.coerce_int(row.get("link"), None), row)
-        for row in rows
-    ]
-    with_links = [(link, row) for link, row in with_links if link is not None]
+    with_links: list[tuple[int, TaskObservation]] = []
+    for row in rows:
+        link = ports.coerce_int(row.get("link"), None)
+        if link is not None:
+            with_links.append((link, row))
     if not with_links:
         return None
     with_links.sort(key=lambda item: item[0])

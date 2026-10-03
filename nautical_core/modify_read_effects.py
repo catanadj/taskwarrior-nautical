@@ -165,12 +165,12 @@ def collect_prev_two(
     return list(read.value)
 
 
-def export_chain_required(port: ChainExportPort, seed_payload: dict[str, Any], env: Any = None) -> Any:
+def export_chain_required(
+    port: ChainExportPort, seed_payload: Mapping[str, Any]
+) -> list[TaskObservation]:
     chain_id = seed_payload.get("chainID")
     if not chain_id:
         raise RuntimeError("ChainID is required (legacy chain traversal removed). Run chainID backfill, then retry.")
-    if env is not None:
-        raise RuntimeError("chain reads must use the invocation Taskwarrior repository")
     rows = port.service.get_chain_export(chain_id)
     if rows is None:
         raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")

@@ -209,6 +209,27 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(annotations["token"], str)
         self.assertIs(annotations["return"], bool)
 
+    def test_chain_export_adapter_has_no_rejected_environment_argument(self) -> None:
+        from nautical_core.modify_read_effects import ChainExportPort, export_chain_required
+        from nautical_core.task_models import TaskObservation
+
+        row = TaskObservation.from_mapping(
+            {"uuid": "task-1", "chainID": "chain-1", "link": 1},
+            source_query="test chain export",
+        )
+
+        class Reader:
+            def get_chain_export(self, _chain_id: str) -> list[TaskObservation]:
+                return [row]
+
+        port = ChainExportPort(Reader())
+        self.assertEqual(export_chain_required(port, {"chainID": "chain-1"}), [row])
+        self.assertEqual(
+            get_type_hints(export_chain_required)["return"], list[TaskObservation]
+        )
+        with self.assertRaises(TypeError):
+            export_chain_required(port, {"chainID": "chain-1"}, object())
+
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts
 

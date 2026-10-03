@@ -16,6 +16,7 @@ from .modify_models import (
 )
 from .scheduler_service import SchedulerService
 from .occurrence_provider import Occurrence
+from .recurrence_evaluator import RecurrenceEvaluator
 from .timeutil import compare_datetimes
 
 
@@ -191,12 +192,16 @@ def anchor_completion_ports_for(host: Any) -> AnchorCompletionPorts:
     )
 
 
-def scheduler_callbacks(ports: SchedulerPorts) -> tuple[Any, Any]:
+def scheduler_callbacks(
+    ports: SchedulerPorts,
+) -> tuple[Callable[[TaskPayload], RecurrenceEvaluator], SchedulerServiceForTask]:
     """Return the stable one-argument callbacks used by projection services."""
-    def service_for_task(task: TaskPayload) -> Any:
-        return ports.service_for_task(task)
+    service_for_task = ports.service_for_task
 
-    return lambda task: service_for_task(task).session.evaluator, service_for_task
+    def evaluator_for_task(task: TaskPayload) -> RecurrenceEvaluator:
+        return service_for_task(task).session.evaluator
+
+    return evaluator_for_task, service_for_task
 
 
 def recurrence_seed_base(task: TaskPayload) -> str:

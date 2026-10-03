@@ -100,7 +100,7 @@ def base_next_after_atom(
                         had_expandable_token = True
                     for d0 in expanded:
                         doms_union.add(d0)
-                except Exception:
+                except (TypeError, ValueError, OverflowError):
                     pass
             for d0 in sorted(doms_union):
                 cand = date_cls(y, m, d0)
@@ -126,7 +126,7 @@ def base_next_after_atom(
                 days = expand_yearly_cached(spec, y)
                 if days:
                     had_expandable_token = True
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 days = []
             for cand in days:
                 if cand > ref_d:

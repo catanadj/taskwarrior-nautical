@@ -14,6 +14,40 @@ from nautical_core.schedule_utils import roll_apply
 
 
 class SchedulerAtomContractTests(unittest.TestCase):
+    def test_monthly_atom_surfaces_unexpected_expansion_failures(self):
+        def broken_expansion(*_args):
+            raise RuntimeError("monthly expansion implementation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "monthly expansion implementation failed"):
+            scheduler_atom.base_next_after_atom(
+                {"typ": "m", "spec": "1"},
+                date(2026, 1, 1),
+                expand_weekly_cached_mods=lambda *_args: set(),
+                split_csv_tokens=lambda value: value.split(","),
+                expand_monthly_cached=broken_expansion,
+                expand_yearly_cached=lambda *_args: [],
+                weekly_rand_pick=lambda *_args, **_kwargs: None,
+                week_monday=lambda day: day - timedelta(days=day.weekday()),
+                date_cls=date,
+            )
+
+    def test_yearly_atom_surfaces_unexpected_expansion_failures(self):
+        def broken_expansion(*_args):
+            raise RuntimeError("yearly expansion implementation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "yearly expansion implementation failed"):
+            scheduler_atom.base_next_after_atom(
+                {"typ": "y", "spec": "01-01"},
+                date(2026, 1, 1),
+                expand_weekly_cached_mods=lambda *_args: set(),
+                split_csv_tokens=lambda value: value.split(","),
+                expand_monthly_cached=lambda *_args: [],
+                expand_yearly_cached=broken_expansion,
+                weekly_rand_pick=lambda *_args, **_kwargs: None,
+                week_monday=lambda day: day - timedelta(days=day.weekday()),
+                date_cls=date,
+            )
+
     def test_roll_apply_guard_fails_when_weekday_never_converges(self):
         class NonConvergingDate(date):
             def weekday(self):

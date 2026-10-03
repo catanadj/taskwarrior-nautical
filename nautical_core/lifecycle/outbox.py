@@ -1785,7 +1785,7 @@ class _LifecycleOutboxRepository:
                 retention_seconds=retention,
                 reason=f"{OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE}: {type(exc).__name__}: {exc}",
             )
-        except Exception as exc:
+        except (LifecycleOutboxError, sqlite3.Error) as exc:
             return OutboxMaintenanceResult(
                 OutboxResultKind.REJECTED,
                 cutoff=cutoff,
@@ -1876,7 +1876,7 @@ class _LifecycleOutboxRepository:
                 retention_seconds=retention,
                 reason=f"{OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE}: {type(exc).__name__}: {exc}",
             )
-        except Exception as exc:
+        except (LifecycleOutboxError, sqlite3.Error) as exc:
             return OutboxMaintenanceResult(
                 OutboxResultKind.REJECTED,
                 cutoff=cutoff,

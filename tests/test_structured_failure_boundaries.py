@@ -236,6 +236,30 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
             self.assertTrue(result.reason.startswith(f"{OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE}:"))
             connection.close.assert_called_once_with()
 
+    def test_prune_does_not_convert_unexpected_maintenance_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            with patch(
+                "nautical_core.lifecycle.outbox_maintenance.prune_acknowledged_rows",
+                side_effect=RuntimeError("injected prune defect"),
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.prune_acknowledged()
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_housekeeping_does_not_convert_unexpected_maintenance_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            with patch(
+                "nautical_core.lifecycle.outbox_maintenance.housekeeping_rows",
+                side_effect=RuntimeError("injected housekeeping defect"),
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.opportunistic_housekeeping(size_threshold_bytes=0)
+            self.assertIs(type(raised.exception), RuntimeError)
+
     def test_panel_source_missing_file_is_optional(self) -> None:
         loader = SimpleNamespace(
             load_anchor_file_dates=Mock(side_effect=FileNotFoundError("gone")),

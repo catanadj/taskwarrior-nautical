@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Iterator, Literal, Protocol, TypeAlias, Mapping
+from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol, TypeAlias, Mapping
 from types import MappingProxyType
 
 from .integration_models import TaskRead
@@ -23,6 +23,9 @@ from .task_models import (
     TaskPayload,
 )
 from .lifecycle.models import LifecyclePlan
+
+if TYPE_CHECKING:
+    from .lifecycle.read_service import LifecycleReadService
 
 
 # Hook implementations are intentionally assembled at runtime, but the
@@ -678,7 +681,7 @@ class CompletionFinalizeServices:
     build_and_spawn_child: BuildAndSpawnCallback
     seed_runtime_lookup_tasks: SeedLookupCallback
     modify_chain_state: ModifyChainStateCallback
-    lifecycle_read_service: Any
+    lifecycle_read_service: LifecycleReadService
     chain_health_advice: ChainHealthCallback
     chain_integrity_warnings: ChainIntegrityCallback
     render_anchor_completion_feedback: AnchorCompletionRenderCallback

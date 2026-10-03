@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from nautical_core.modify_models import (
     CompletionLifecycleResult,
@@ -20,6 +20,9 @@ from nautical_core.task_models import TaskObservation, TaskPayload
 from nautical_core.modify_runtime import ModifyRuntimeState
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
 
+if TYPE_CHECKING:
+    from nautical_core.lifecycle.read_service import LifecycleReadService
+
 
 @dataclass(slots=True)
 class CompletionFlowServices:
@@ -34,7 +37,7 @@ class CompletionFlowServices:
     now_utc: Callable[[], datetime]
     preflight_context: Callable[[TaskPayload, Any, Any], CompletionPreflightContext | None]
     compute_next_and_limits: Callable[..., CompletionComputeResult | CompletionLifecycleResult | None]
-    lifecycle_read_service: Any
+    lifecycle_read_service: LifecycleReadService
     diag_count: Callable[[str, int], None]
     diag_lifecycle_result: Callable[[CompletionLifecycleResult], None]
     finalize_completion: Callable[..., CompletionLifecycleResult]
@@ -241,9 +244,10 @@ def finalize_completion_modify(
                 chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                 read_service.replace_chain_cache(chain_id, chain)
             elif need_chain and not chain_snapshot_loaded:
-                chain = read_service.get_chain_export(chain_id)
-                if chain:
-                    indexes = read_service.build_indexes(chain)
+                exported_chain = read_service.get_chain_export(chain_id)
+                if exported_chain:
+                    chain = exported_chain
+                    indexes = read_service.build_indexes(exported_chain)
                     chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                     read_service.replace_chain_cache(chain_id, chain)
         except Exception as exc:

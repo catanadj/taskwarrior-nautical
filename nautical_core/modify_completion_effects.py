@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
-from .modify_models import CoerceIntCallback
+from .modify_models import CoerceIntCallback, DatetimeParserCallback
 
 
 class CompletionPreflightService(Protocol):
@@ -82,8 +82,8 @@ class UntilCompletionPorts:
 @dataclass(frozen=True, slots=True)
 class CompletionCapsPorts:
     compute: CompletionComputeService
-    coerce_int: Any
-    parse_datetime: Any
+    coerce_int: CoerceIntCallback
+    parse_datetime: DatetimeParserCallback
     estimate_cp: Any
     estimate_anchor: Any
     cap_cp: Any

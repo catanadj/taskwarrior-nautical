@@ -31,6 +31,8 @@ from .modify_models import (
     CompletionSpawnServices,
     CoerceIntCallback,
     BuildChildDraftCallback,
+    ComputeAnchorChildDueCallback,
+    ComputeCpChildDueCallback,
     CompletionLifecycleResult,
     CompletionUntilCallback,
     CompletionUntilGuardCallback,
@@ -43,6 +45,7 @@ from .modify_models import (
     ShortUuidCallback,
     PanelCallback,
     PrintTaskCallback,
+    SafeParseDatetimeCallback,
     SpawnChildCallback,
     ValidateChainDurationCallback,
     ValidateUntilCallback,
@@ -100,13 +103,80 @@ class CompletionPreflightService(Protocol):
 class CompletionComputeService(Protocol):
     """Validated compute service used by completion effects."""
 
-    def completion_compute_child_due(self, task: TaskPayload, kind: str, **kwargs: Any) -> Any: ...
-    def completion_until_or_fail(self, task: TaskPayload, now_utc: datetime, **kwargs: Any) -> Any: ...
-    def completion_until_guard_or_stop(self, task: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime, **kwargs: Any) -> bool: ...
-    def completion_require_child_due_or_fail(self, task: TaskPayload, child_due: Any, **kwargs: Any) -> bool: ...
-    def completion_warn_unreasonable_duration(self, task: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime, **kwargs: Any) -> None: ...
-    def completion_caps(self, kind: str, task: TaskPayload, child_due: Any, dnf: Any, **kwargs: Any) -> Any: ...
-    def completion_cap_guard_or_stop(self, task: TaskPayload, next_no: int, cap_no: int | None, now_utc: datetime, **kwargs: Any) -> bool: ...
+    def completion_compute_child_due(
+        self,
+        task: TaskPayload,
+        kind: str,
+        *,
+        compute_anchor_child_due: ComputeAnchorChildDueCallback,
+        compute_cp_child_due: ComputeCpChildDueCallback,
+        panel: PanelCallback,
+        print_task: PrintTaskCallback,
+        diag: DiagnosticCallback | None = None,
+        on_terminal: Callable[[OccurrenceSearchExhausted], bool] | None = None,
+    ) -> tuple[datetime | None, dict[str, Any] | None, Any] | None: ...
+    def completion_until_or_fail(
+        self,
+        task: TaskPayload,
+        now_utc: datetime,
+        *,
+        safe_parse_datetime: SafeParseDatetimeCallback,
+        validate_until_not_past: ValidateUntilCallback,
+        panel: PanelCallback,
+        print_task: PrintTaskCallback,
+    ) -> datetime | None | bool: ...
+    def completion_until_guard_or_stop(
+        self,
+        task: TaskPayload,
+        child_due: datetime | None,
+        until_dt: datetime | None,
+        now_utc: datetime,
+        *,
+        end_chain_summary: EndChainSummaryCallback,
+        print_task: PrintTaskCallback,
+    ) -> bool: ...
+    def completion_require_child_due_or_fail(
+        self,
+        task: TaskPayload,
+        child_due: datetime | None,
+        *,
+        panel: PanelCallback,
+        print_task: PrintTaskCallback,
+    ) -> bool: ...
+    def completion_warn_unreasonable_duration(
+        self,
+        task: TaskPayload,
+        child_due: datetime | None,
+        until_dt: datetime | None,
+        now_utc: datetime,
+        *,
+        validate_chain_duration_reasonable: ValidateChainDurationCallback,
+        panel: PanelCallback,
+    ) -> None: ...
+    def completion_caps(
+        self,
+        kind: str,
+        task: TaskPayload,
+        child_due: datetime | None,
+        dnf: Any,
+        *,
+        coerce_int: CoerceIntCallback,
+        dtparse: DatetimeParserCallback,
+        estimate_cp_final_by_max: EstimateCpFinalCallback,
+        estimate_anchor_final_by_max: EstimateAnchorFinalCallback,
+        cap_from_until_cp: CapFromUntilCpCallback,
+        cap_from_until_anchor: CapFromUntilAnchorCallback,
+    ) -> tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None]: ...
+    def completion_cap_guard_or_stop(
+        self,
+        task: TaskPayload,
+        next_no: int,
+        cap_no: int | None,
+        now_utc: datetime,
+        *,
+        end_chain_summary: EndChainSummaryCallback,
+        print_task: PrintTaskCallback,
+    ) -> bool: ...
     def completion_compute_next_and_limits(
         self,
         task: TaskPayload,
@@ -176,7 +246,7 @@ class CompletionFeedbackPorts:
 @dataclass(frozen=True, slots=True)
 class UntilCompletionPorts:
     compute: CompletionComputeService
-    parse_datetime: DatetimeParserCallback
+    parse_datetime: SafeParseDatetimeCallback
     validate_until_not_past: ValidateUntilCallback
     panel: PanelCallback
     print_task: PrintTaskCallback

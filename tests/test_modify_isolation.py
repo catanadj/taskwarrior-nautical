@@ -440,6 +440,108 @@ class ModifyIsolationTests(unittest.TestCase):
                     (parameter.kind for parameter in inspect.signature(method).parameters.values()),
                 )
 
+    def test_completion_compute_service_has_explicit_arguments(self) -> None:
+        import inspect
+
+        from nautical_core.modify_completion_effects import CompletionComputeService
+        from nautical_core.modify_models import (
+            CapFromUntilAnchorCallback,
+            CapFromUntilCpCallback,
+            CoerceIntCallback,
+            ComputeAnchorChildDueCallback,
+            ComputeCpChildDueCallback,
+            DatetimeParserCallback,
+            DiagnosticCallback,
+            EstimateAnchorFinalCallback,
+            EstimateCpFinalCallback,
+            EndChainSummaryCallback,
+            PanelCallback,
+            PrintTaskCallback,
+            SafeParseDatetimeCallback,
+            ValidateChainDurationCallback,
+            ValidateUntilCallback,
+        )
+        from nautical_core.task_models import TaskPayload
+        from nautical_core.scheduler_models import OccurrenceSearchExhausted
+
+        contracts = {
+            "completion_compute_child_due": {
+                "task": TaskPayload,
+                "kind": str,
+                "compute_anchor_child_due": ComputeAnchorChildDueCallback,
+                "compute_cp_child_due": ComputeCpChildDueCallback,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "diag": DiagnosticCallback | None,
+                "on_terminal": Callable[[OccurrenceSearchExhausted], bool] | None,
+                "return": tuple[datetime | None, dict[str, Any] | None, Any] | None,
+            },
+            "completion_until_or_fail": {
+                "task": TaskPayload,
+                "now_utc": datetime,
+                "safe_parse_datetime": SafeParseDatetimeCallback,
+                "validate_until_not_past": ValidateUntilCallback,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "return": datetime | None | bool,
+            },
+            "completion_until_guard_or_stop": {
+                "task": TaskPayload,
+                "child_due": datetime | None,
+                "until_dt": datetime | None,
+                "now_utc": datetime,
+                "end_chain_summary": EndChainSummaryCallback,
+                "print_task": PrintTaskCallback,
+                "return": bool,
+            },
+            "completion_require_child_due_or_fail": {
+                "task": TaskPayload,
+                "child_due": datetime | None,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "return": bool,
+            },
+            "completion_warn_unreasonable_duration": {
+                "task": TaskPayload,
+                "child_due": datetime | None,
+                "until_dt": datetime | None,
+                "now_utc": datetime,
+                "validate_chain_duration_reasonable": ValidateChainDurationCallback,
+                "panel": PanelCallback,
+                "return": type(None),
+            },
+            "completion_caps": {
+                "kind": str,
+                "task": TaskPayload,
+                "child_due": datetime | None,
+                "dnf": Any,
+                "coerce_int": CoerceIntCallback,
+                "dtparse": DatetimeParserCallback,
+                "estimate_cp_final_by_max": EstimateCpFinalCallback,
+                "estimate_anchor_final_by_max": EstimateAnchorFinalCallback,
+                "cap_from_until_cp": CapFromUntilCpCallback,
+                "cap_from_until_anchor": CapFromUntilAnchorCallback,
+                "return": tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None],
+            },
+            "completion_cap_guard_or_stop": {
+                "task": TaskPayload,
+                "next_no": int,
+                "cap_no": int | None,
+                "now_utc": datetime,
+                "end_chain_summary": EndChainSummaryCallback,
+                "print_task": PrintTaskCallback,
+                "return": bool,
+            },
+        }
+        for method_name, expected in contracts.items():
+            method = getattr(CompletionComputeService, method_name)
+            with self.subTest(method=method_name):
+                self.assertEqual(get_type_hints(method), expected)
+                self.assertNotIn(
+                    inspect.Parameter.VAR_KEYWORD,
+                    (parameter.kind for parameter in inspect.signature(method).parameters.values()),
+                )
+
     def test_completion_feedback_and_validation_ports_reuse_callback_contracts(self) -> None:
         from nautical_core.modify_completion_effects import (
             CompletionFeedbackPorts,
@@ -447,10 +549,10 @@ class ModifyIsolationTests(unittest.TestCase):
             UntilCompletionPorts,
         )
         from nautical_core.modify_models import (
-            DatetimeParserCallback,
             EndChainSummaryCallback,
             PanelCallback,
             PrintTaskCallback,
+            SafeParseDatetimeCallback,
             ValidateChainDurationCallback,
             ValidateUntilCallback,
         )
@@ -462,7 +564,7 @@ class ModifyIsolationTests(unittest.TestCase):
                 "end_chain_summary": EndChainSummaryCallback,
             }),
             (UntilCompletionPorts, {
-                "parse_datetime": DatetimeParserCallback,
+                "parse_datetime": SafeParseDatetimeCallback,
                 "validate_until_not_past": ValidateUntilCallback,
                 "panel": PanelCallback,
                 "print_task": PrintTaskCallback,

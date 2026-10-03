@@ -17,10 +17,10 @@ class DatetimeValuePort:
 @dataclass(frozen=True, slots=True)
 class AnalyticsPorts:
     core: Any
-    parse_datetime: Any
-    format_delta: Any
-    coerce_int: Any
-    short_uuid: Any
+    parse_datetime: Callable[[object], datetime | None]
+    format_delta: Callable[[timedelta], str]
+    coerce_int: Callable[[Any, Any], int | None]
+    short_uuid: Callable[[Any], str]
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,7 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 import inspect
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any
 from typing import Callable, get_type_hints
 from unittest.mock import patch
 
@@ -31,6 +32,20 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(
             get_type_hints(SecondsDeltaPort)["humanize"],
             Callable[[datetime, datetime, bool], str],
+        )
+
+    def test_analytics_ports_match_owner_callback_contracts(self) -> None:
+        from nautical_core.modify_diagnostics_effects import AnalyticsPorts
+
+        self.assertEqual(
+            get_type_hints(AnalyticsPorts),
+            {
+                "core": Any,
+                "parse_datetime": Callable[[object], datetime | None],
+                "format_delta": Callable[[timedelta], str],
+                "coerce_int": Callable[[Any, Any], int | None],
+                "short_uuid": Callable[[Any], str],
+            },
         )
 
     def test_summary_export_does_not_mask_analytics_sorting_defects(self) -> None:

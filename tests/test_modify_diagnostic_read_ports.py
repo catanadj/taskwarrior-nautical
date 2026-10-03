@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from collections import abc
 import inspect
 import unittest
 from datetime import datetime, timedelta
-from typing import Any
-from typing import Callable, get_type_hints
+from typing import Any, Callable, get_type_hints
 from unittest.mock import patch
 
 
@@ -116,6 +116,14 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
         self.assertEqual(get_type_hints(diagnostics.end_chain_summary)["now_utc"], datetime)
         self.assertEqual(get_type_hints(diagnostics.end_chain_summary)["current"], TaskPayload)
+
+    def test_extra_token_port_uses_hook_parser_contract(self) -> None:
+        from nautical_core.modify_read_effects import ExtraTokenPort
+
+        self.assertEqual(
+            get_type_hints(ExtraTokenPort)["parse"],
+            abc.Callable[[str | None], list[str] | None],
+        )
 
     def test_chain_export_ports_use_read_service_and_coercion_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import ChainExportPorts

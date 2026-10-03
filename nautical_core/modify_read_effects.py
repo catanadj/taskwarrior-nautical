@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,7 +25,7 @@ class LifecycleReadCapabilities:
 
 @dataclass(frozen=True, slots=True)
 class ExtraTokenPort:
-    parse: Any
+    parse: Callable[[str | None], list[str] | None]
 
 
 @dataclass(frozen=True, slots=True)

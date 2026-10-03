@@ -205,7 +205,7 @@ def _loaded_file_dates(
             if field_label in str(exc):
                 raise
             raise BusinessCalendarConfigError(f"Invalid {field_label}: {exc}") from exc
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             raise BusinessCalendarConfigError(f"Invalid {field_label}: {exc}") from exc
     return frozenset(out)
 

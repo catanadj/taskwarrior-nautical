@@ -169,6 +169,10 @@ class BusinessCalendarConfigContractTests(unittest.TestCase):
         with self.assertRaisesRegex(business_calendar_config.BusinessCalendarConfigError, "Invalid business_calendar.work.anchor_file"):
             business_calendar_config.resolve_business_calendars(file_config, **kwargs)
 
+        kwargs["load_anchor_file_dates"] = lambda *_args: (_ for _ in ()).throw(RuntimeError("loader defect"))
+        with self.assertRaisesRegex(RuntimeError, "loader defect"):
+            business_calendar_config.resolve_business_calendars(file_config, **kwargs)
+
 
 class TimeUtilContractTests(unittest.TestCase):
     def test_dst_gap_fold_and_noon_round_trips_preserve_local_contract(self):

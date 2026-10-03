@@ -15,11 +15,64 @@ from nautical_core.modify_carry_workflow import (
     verify_temporal_carry_task,
 )
 from nautical_core.modify_carry import preserve_native_until_on_target_change
+from nautical_core.modify_carry import preserve_cp_relative_offsets_on_due_change
 from nautical_core.modify_lifecycle import recurrence_setting_changes
 from nautical_core.task_models import TaskTimestamp
 
 
 class TemporalCarryWorkflowTests(unittest.TestCase):
+    def test_cp_carry_does_not_translate_unexpected_due_parser_failures(self) -> None:
+        old = {"cp": "P1D", "due": "old"}
+        new = {**old, "due": "new"}
+
+        def parse_datetime(_value):
+            raise RuntimeError("parser implementation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "parser implementation failed") as caught:
+            preserve_cp_relative_offsets_on_due_change(
+                old,
+                new,
+                "P1D",
+                field_changed=lambda _old, _new, field: field == "due",
+                parse_datetime=parse_datetime,
+                utc_to_local_naive=lambda value: value,
+                local_naive_to_utc=lambda value: value,
+                format_datetime=str,
+                carry_error=lambda field, reason: ValueError(f"{field}: {reason}"),
+            )
+
+        self.assertIs(type(caught.exception), RuntimeError)
+
+    def test_cp_carry_does_not_translate_unexpected_scheduled_conversion_failures(self) -> None:
+        old = {
+            "cp": "P1D",
+            "due": "old-due",
+            "scheduled": "old-scheduled",
+        }
+        new = {**old, "due": "new-due"}
+
+        def parse_datetime(value):
+            if value == "old-scheduled":
+                raise RuntimeError("scheduled conversion implementation failed")
+            return datetime(2026, 8, 25, 9, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(
+            RuntimeError, "scheduled conversion implementation failed"
+        ) as caught:
+            preserve_cp_relative_offsets_on_due_change(
+                old,
+                new,
+                "P1D",
+                field_changed=lambda _old, _new, field: field == "due",
+                parse_datetime=parse_datetime,
+                utc_to_local_naive=lambda value: value,
+                local_naive_to_utc=lambda value: value,
+                format_datetime=str,
+                carry_error=lambda field, reason: ValueError(f"{field}: {reason}"),
+            )
+
+        self.assertIs(type(caught.exception), RuntimeError)
+
     def test_wait_edit_does_not_carry_native_until(self) -> None:
         old = {
             "due": "2026-08-25T09:00:00Z",

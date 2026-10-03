@@ -30,7 +30,7 @@ def preserve_cp_relative_offsets_on_due_change(
         new_due = parse_datetime(new.get("due"))
         if not (old_due and new_due):
             raise ValueError("due timestamp is missing or invalid")
-    except Exception as exc:
+    except (ValueError, OverflowError) as exc:
         raise carry_error("due", str(exc) or "timestamp conversion failed") from exc
 
     adjustments: list[tuple[str, Any, Any, Any]] = []
@@ -46,7 +46,7 @@ def preserve_cp_relative_offsets_on_due_change(
             new_value = local_naive_to_utc(new_value_local)
             new[field] = format_datetime(new_value)
             adjustments.append((field, old_value, new_value, local_offset))
-        except Exception as exc:
+        except (ValueError, OverflowError) as exc:
             raise carry_error(field, str(exc) or "timezone conversion failed") from exc
     return (old_due, new_due, adjustments) if adjustments else None
 

@@ -17,6 +17,7 @@ from .modify_models import (
     EstimateAnchorFinalCallback,
     EstimateCpFinalCallback,
     EndChainSummaryCallback,
+    ExistingNextLookupCallback,
     PanelCallback,
     PrintTaskCallback,
 )
@@ -69,7 +70,7 @@ class CompletionPreflightPorts:
     panel: PanelCallback
     print_task: PrintTaskCallback
     end_chain_summary: EndChainSummaryCallback
-    existing_next_lookup: Any
+    existing_next_lookup: ExistingNextLookupCallback
 
 
 @dataclass(frozen=True, slots=True)

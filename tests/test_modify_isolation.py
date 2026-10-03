@@ -205,11 +205,13 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 self.assertIsNot(annotation, CallbackPort)
 
-    def test_completion_preflight_coercion_uses_shared_typed_contract(self) -> None:
+    def test_completion_preflight_ports_use_shared_typed_contracts(self) -> None:
         from nautical_core.modify_completion_effects import CompletionPreflightPorts
+        from nautical_core.modify_completion_preflight import completion_existing_next_or_fail
         from nautical_core.modify_models import (
             CoerceIntCallback,
             EndChainSummaryCallback,
+            ExistingNextLookupCallback,
             PanelCallback,
             PrintTaskCallback,
         )
@@ -221,10 +223,15 @@ class ModifyIsolationTests(unittest.TestCase):
             "panel": PanelCallback,
             "print_task": PrintTaskCallback,
             "end_chain_summary": EndChainSummaryCallback,
+            "existing_next_lookup": ExistingNextLookupCallback,
         }
         for name, contract in expected.items():
             with self.subTest(field=name):
-                self.assertIs(annotations[name], contract)
+                self.assertEqual(annotations[name], contract)
+        self.assertEqual(
+            get_type_hints(completion_existing_next_or_fail)["existing_next_lookup"],
+            ExistingNextLookupCallback,
+        )
 
     def test_completion_caps_parser_uses_shared_datetime_contract(self) -> None:
         from nautical_core.modify_completion_effects import CompletionCapsPorts

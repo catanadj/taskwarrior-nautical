@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Iterator, Literal, Protocol, TypeAlias, Mapping
 from types import MappingProxyType
 
+from .integration_models import TaskRead
 from .task_models import (
     ChainIdentity,
     ChainID,
@@ -30,6 +31,9 @@ from .lifecycle.models import LifecyclePlan
 # modules support Taskwarrior's heterogeneous JSON fields.
 TaskRow: TypeAlias = TaskPayload
 ShortUuidCallback: TypeAlias = Callable[[Any], str]
+ExistingNextLookupCallback: TypeAlias = Callable[
+    [TaskPayload, int], TaskRead[TaskObservation] | None
+]
 
 
 class TaskView(Mapping[str, Any]):

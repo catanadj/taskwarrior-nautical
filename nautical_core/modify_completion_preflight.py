@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from nautical_core.integration_models import Absent, Found, Unavailable
-from nautical_core.modify_models import CompletionPreflightContext
+from nautical_core.modify_models import CompletionPreflightContext, ExistingNextLookupCallback
 from nautical_core.task_models import TaskPayload
 
 
@@ -89,7 +89,7 @@ def completion_existing_next_or_fail(
     new: TaskPayload,
     next_no: int,
     *,
-    existing_next_lookup: Any,
+    existing_next_lookup: ExistingNextLookupCallback,
     short: Any,
     panel: Any,
     print_task: Any,
@@ -120,13 +120,14 @@ def completion_existing_next_or_fail(
         return False
     if isinstance(existing_next, Absent):
         return True
+    candidate: object = existing_next
     if isinstance(existing_next, Found):
-        existing_next = existing_next.value
-    if not existing_next:
+        candidate = existing_next.value
+    if not candidate:
         return True
-    if hasattr(existing_next, "to_mapping"):
-        existing_next = existing_next.to_mapping()
-    if not isinstance(existing_next, dict):
+    if hasattr(candidate, "to_mapping"):
+        candidate = candidate.to_mapping()
+    if not isinstance(candidate, dict):
         panel(
             "⚠ Chain lookup unavailable",
             [
@@ -137,9 +138,9 @@ def completion_existing_next_or_fail(
         )
         print_task(new)
         return False
-    ex_uuid = (existing_next.get("uuid") or "").strip()
+    ex_uuid = (candidate.get("uuid") or "").strip()
     ex_short = short(ex_uuid)
-    ex_status = ((existing_next.get("status") or "").strip() or "unknown").lower()
+    ex_status = ((candidate.get("status") or "").strip() or "unknown").lower()
     panel(
         "ℹ Spawn skipped",
         [

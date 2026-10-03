@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import nautical_core as core
 import nautical_core.core_config as core_config
@@ -39,6 +40,29 @@ def _validate_scheduling_owner(
 
 
 class RuntimeConfigContracts(unittest.TestCase):
+    def test_configuration_error_contains_expected_path_failure(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_CONFIG": ""}),
+            patch.object(core_config, "_CONFIG_ERROR", "bad config"),
+            patch.object(core_config, "_CONFIG_ERROR_PATH", "/tmp/config.toml"),
+            patch.object(core_config, "_config_paths", side_effect=OSError("path unavailable")),
+        ):
+            self.assertEqual(core_config.configuration_error(), "")
+
+    def test_configuration_error_does_not_hide_internal_path_failure(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_CONFIG": ""}),
+            patch.object(core_config, "_CONFIG_ERROR", "bad config"),
+            patch.object(core_config, "_CONFIG_ERROR_PATH", "/tmp/config.toml"),
+            patch.object(
+                core_config,
+                "_config_paths",
+                side_effect=RuntimeError("configuration path defect"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "configuration path defect"):
+                core_config.configuration_error()
+
     def test_outbox_drain_limit_config_and_env_override(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:

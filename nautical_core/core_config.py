@@ -190,7 +190,7 @@ def configuration_error() -> str:
         return _CONFIG_ERROR if active_path == os.path.abspath(_CONFIG_ERROR_PATH) else ""
     try:
         active_paths = {os.path.abspath(path) for path in _config_paths()}
-    except Exception:
+    except (OSError, TypeError, ValueError):
         active_paths = set()
     return _CONFIG_ERROR if os.path.abspath(_CONFIG_ERROR_PATH) in active_paths else ""
 

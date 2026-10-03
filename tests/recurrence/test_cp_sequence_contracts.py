@@ -10,6 +10,27 @@ import nautical_core.timezone_facade as timezone_facade
 
 
 class CpSequenceContractTests(unittest.TestCase):
+    def test_interval_selection_defaults_missing_link_to_first_step(self) -> None:
+        self.assertEqual(
+            cp_parser.cp_sequence_interval_for_link("3d,7d", None),
+            timedelta(days=3),
+        )
+
+    def test_unexpected_link_conversion_failure_is_not_hidden_by_retrying_conversion(self) -> None:
+        class TransientlyBrokenLink:
+            conversions = 0
+
+            def __int__(self) -> int:
+                self.conversions += 1
+                if self.conversions == 1:
+                    raise RuntimeError("link number conversion failed")
+                return 1
+
+        link = TransientlyBrokenLink()
+        with self.assertRaisesRegex(RuntimeError, "link number conversion failed"):
+            cp_parser.cp_sequence_interval_for_link("3d,7d", link)
+        self.assertEqual(link.conversions, 1)
+
     def test_duration_and_sequence_parser_expands_and_rejects_invalid_values(self) -> None:
         self.assertEqual(
             cp_parser.parse_cp_duration("P1DT2H30M"),

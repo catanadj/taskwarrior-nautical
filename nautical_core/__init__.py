@@ -686,7 +686,11 @@ def cp_sequence_interval_for_token(token: Any, *, cp: str, link_no: int, token_i
     )
 
 
-def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = None) -> Any:
+def cp_sequence_interval_for_link(
+    cp: str,
+    link_no: int | None,
+    chain_id: str | None = None,
+) -> Any:
     return _cp_parser.cp_sequence_interval_for_link(cp, link_no, chain_id)
 
 

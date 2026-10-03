@@ -284,19 +284,21 @@ def parse_cp_sequence(cp: str) -> list[timedelta] | None:
     return durations
 
 
-def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = None) -> timedelta | None:
+def cp_sequence_interval_for_link(
+    cp: str,
+    link_no: int | None,
+    chain_id: str | None = None,
+) -> timedelta | None:
     """Return the interval used to spawn ``link_no + 1`` from ``link_no``."""
     tokens = parse_cp_sequence_tokens(cp)
     if not tokens:
         return None
-    try:
-        idx = max(0, int(link_no) - 1) % len(tokens)
-    except Exception:
-        idx = 0
+    normalized_link_no = int(link_no or 1)
+    idx = max(0, normalized_link_no - 1) % len(tokens)
     return cp_sequence_interval_for_token(
         tokens[idx],
         cp=str(cp),
-        link_no=int(link_no or 1),
+        link_no=normalized_link_no,
         token_index=idx,
         chain_id=chain_id,
     )

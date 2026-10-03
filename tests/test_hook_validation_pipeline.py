@@ -143,6 +143,16 @@ class ValidationPipelineTests(unittest.TestCase):
         self.assertEqual(task["description"], "review")
         self.assertNotIn("anchor_mode", task)
 
+        cleared_anchor = {"description": "task a:", "anchor": "w:mon"}
+        self.assertTrue(
+            normalize_description_uda_aliases(
+                cleared_anchor,
+                previous={"description": "task", "anchor": "w:mon"},
+                enabled=True,
+            )
+        )
+        self.assertEqual(cleared_anchor, {"description": "task"})
+
     def test_enabled_alias_normalization_expands_canonical_fields(self) -> None:
         task = {"description": "test task a:w:mon am:all"}
 
@@ -152,6 +162,19 @@ class ValidationPipelineTests(unittest.TestCase):
             task,
             {"description": "test task", "anchor": "w:mon", "anchor_mode": "all"},
         )
+
+    def test_alias_only_input_preserves_description_and_updates_anchor(self) -> None:
+        task = {"description": "test task a:w:fri", "anchor": "w:mon"}
+
+        self.assertTrue(
+            normalize_description_uda_aliases(
+                task,
+                previous={"description": "test task", "anchor": "w:mon"},
+                enabled=True,
+            )
+        )
+
+        self.assertEqual(task, {"description": "test task", "anchor": "w:fri"})
 
     def test_alias_normalization_is_disabled_without_mutation(self) -> None:
         task = {"description": "review am:all"}

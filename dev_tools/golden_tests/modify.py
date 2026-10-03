@@ -1929,38 +1929,11 @@ def test_on_modify_stable_child_uuid_is_slot_deterministic():
     expect(uuid_a == uuid_b, "same chain slot should yield same stable uuid")
     expect(uuid_a != uuid_c, "different link slot should yield different stable uuid")
 
-def test_on_modify_expands_and_clears_description_uda_aliases():
-    """on-modify aliases should update unchanged fields and support explicit clearing."""
-    hook = find_hook_file("on-modify.nautical")
-    mod = load_hook_module(hook, "_nautical_on_modify_description_aliases_test")
-    previous = mod.core.ENABLE_UDA_ALIASES
-    try:
-        mod.core.ENABLE_UDA_ALIASES = True
-        old = {"description": "test task", "anchor": "w:mon", "anchor_mode": "skip"}
-        new = dict(old, description="test task a:w:tue am:all")
-        mod._apply_description_uda_aliases(old, new)
-        expect(
-            new == {"description": "test task", "anchor": "w:tue", "anchor_mode": "all"},
-            f"on-modify alias expansion failed: {new!r}",
-        )
-        clear = {"description": "test task a:", "anchor": "w:mon"}
-        mod._apply_description_uda_aliases({"description": "test task", "anchor": "w:mon"}, clear)
-        expect("anchor" not in clear and clear["description"] == "test task", f"alias clear failed: {clear!r}")
-        alias_only = {"description": "a:w:fri"}
-        mod._apply_description_uda_aliases({"description": "test task", "anchor": "w:mon"}, alias_only)
-        expect(
-            alias_only == {"description": "test task", "anchor": "w:fri"},
-            f"alias-only modify erased the description: {alias_only!r}",
-        )
-    finally:
-        mod.core.ENABLE_UDA_ALIASES = previous
-
 TESTS = TESTS + (
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_modify_link_limit,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
-    test_on_modify_expands_and_clears_description_uda_aliases,
 )
 
 

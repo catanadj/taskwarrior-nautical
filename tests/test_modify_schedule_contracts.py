@@ -51,6 +51,26 @@ class ModifyScheduleContractTests(unittest.TestCase):
             Callable[[str], list[dict[str, Any]] | None],
         )
 
+    def test_anchor_completion_ports_type_projection_callbacks(self) -> None:
+        annotations = get_type_hints(modify_schedule_effects.AnchorCompletionPorts)
+        self.assertIs(annotations["safe_parse_datetime"], modify_models.SafeParseDatetimeCallback)
+        self.assertEqual(
+            annotations["to_local_cached"],
+            Callable[[datetime], datetime],
+        )
+        self.assertEqual(
+            annotations["anchor_file_fallback_hhmm"],
+            Callable[[dict[str, Any], datetime], tuple[int, int]],
+        )
+        self.assertEqual(
+            annotations["omit_dnf_from_parent"],
+            Callable[[dict[str, Any]], tuple[str, Any]],
+        )
+        self.assertEqual(
+            annotations["compare_datetimes"],
+            Callable[[datetime, datetime], int],
+        )
+
     def test_schedule_ports_have_concrete_callback_signatures(self) -> None:
         annotations = get_type_hints(modify_schedule_effects.SchedulePorts)
         self.assertEqual(annotations["to_local"], Callable[[datetime], datetime])

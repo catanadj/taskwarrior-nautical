@@ -8,7 +8,12 @@ from typing import Any, Callable, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
-from .modify_models import CoerceIntCallback, DatetimeParserCallback, DiagnosticCallback
+from .modify_models import (
+    CoerceIntCallback,
+    DatetimeParserCallback,
+    DiagnosticCallback,
+    SafeParseDatetimeCallback,
+)
 from .timeutil import compare_datetimes
 
 
@@ -92,12 +97,12 @@ class AnchorCompletionPorts:
     parse_datetime: DatetimeParserCallback
     coerce_int: CoerceIntCallback
     scheduler: SchedulerPorts
-    to_local_cached: Any
-    safe_parse_datetime: Any
-    anchor_file_fallback_hhmm: Any
-    omit_dnf_from_parent: Any
+    to_local_cached: Callable[[datetime], datetime]
+    safe_parse_datetime: SafeParseDatetimeCallback
+    anchor_file_fallback_hhmm: Callable[[dict[str, Any], datetime], tuple[int, int]]
+    omit_dnf_from_parent: Callable[[dict[str, Any]], tuple[str, Any]]
     anchor_file_provider_for: Any
-    compare_datetimes: Any
+    compare_datetimes: Callable[[datetime, datetime], int]
     max_iterations: int
     diagnostic: DiagnosticCallback
 

@@ -1,6 +1,7 @@
 import unittest
 from datetime import date, datetime, timezone
 from types import MappingProxyType
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import nautical_core as core
@@ -264,6 +265,39 @@ class TimeUtilContractTests(unittest.TestCase):
         self.assertEqual(timeutil.parse_dt_any("2026-01-02 trailing", formats), datetime(2026, 1, 2, tzinfo=timezone.utc))
         self.assertIsNone(timeutil.parse_dt_any("", formats))
         self.assertIsNone(timeutil.parse_dt_any("not-a-date", formats))
+
+    def test_parse_dt_any_does_not_hide_unexpected_configured_format_failure(self):
+        class DatetimeParser:
+            calls = 0
+
+            @staticmethod
+            def fromisoformat(_value):
+                raise ValueError("not ISO format")
+
+            @classmethod
+            def strptime(cls, _value, _format):
+                cls.calls += 1
+                if cls.calls == 1:
+                    raise RuntimeError("configured format parser failed")
+                raise ValueError("not a supported date")
+
+        with patch.object(timeutil, "datetime", DatetimeParser):
+            with self.assertRaisesRegex(RuntimeError, "configured format parser failed"):
+                timeutil.parse_dt_any("not-a-date", ("%d/%m/%Y",))
+
+    def test_parse_dt_any_does_not_hide_unexpected_iso_date_fallback_failure(self):
+        class DatetimeParser:
+            @staticmethod
+            def fromisoformat(_value):
+                raise ValueError("not ISO format")
+
+            @staticmethod
+            def strptime(_value, _format):
+                raise RuntimeError("ISO date parser failed")
+
+        with patch.object(timeutil, "datetime", DatetimeParser):
+            with self.assertRaisesRegex(RuntimeError, "ISO date parser failed"):
+                timeutil.parse_dt_any("not-a-date", ())
 
 
 if __name__ == "__main__":

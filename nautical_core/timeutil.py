@@ -113,12 +113,12 @@ def parse_dt_any(s: str, date_formats: Any) -> datetime | None:
     for fmt in date_formats:
         try:
             return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
-        except Exception:
+        except (TypeError, ValueError):
             pass
     try:
         d = datetime.strptime(s[:10], "%Y-%m-%d")
         return d.replace(tzinfo=timezone.utc)
-    except Exception:
+    except ValueError:
         return None
 
 

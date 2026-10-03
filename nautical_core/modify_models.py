@@ -335,6 +335,19 @@ class EndChainSummaryCallback(Protocol):
         ...
 
 
+class InvalidRelativeCarryReasonCallback(Protocol):
+    def __call__(
+        self,
+        parent: TaskObservation,
+        child: TaskDraft,
+        *,
+        child_field: str,
+        hook: Any = None,
+        generation: Any = None,
+    ) -> str | None:
+        ...
+
+
 CompletionLinkNumbersCallback: TypeAlias = Callable[
     [TaskRow], tuple[int, int] | None
 ]

@@ -345,6 +345,32 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertEqual(annotations[name], contract)
 
+    def test_completion_lifecycle_plan_ports_have_typed_callbacks(self) -> None:
+        from nautical_core.modify_completion_effects import CompletionLifecyclePlanPorts
+        from nautical_core.modify_models import (
+            DiagnosticCallback,
+            EndChainSummaryCallback,
+            InvalidRelativeCarryReasonCallback,
+            PanelCallback,
+            PrintTaskCallback,
+        )
+        from nautical_core.task_models import TaskPayload
+
+        annotations = get_type_hints(CompletionLifecyclePlanPorts)
+        expected = {
+            "scheduler_fingerprint": Callable[[], str],
+            "compare_datetimes": Callable[[datetime, datetime], int],
+            "invalid_relative_carry_reason": InvalidRelativeCarryReasonCallback,
+            "end_chain_summary": EndChainSummaryCallback,
+            "ensure_terminal_chain_off": Callable[[TaskPayload, str | None], bool],
+            "panel": PanelCallback,
+            "print_task": PrintTaskCallback,
+            "diagnostic": DiagnosticCallback,
+        }
+        for name, contract in expected.items():
+            with self.subTest(field=name):
+                self.assertEqual(annotations[name], contract)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

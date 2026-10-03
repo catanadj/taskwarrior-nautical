@@ -20,6 +20,7 @@ from .modify_models import (
     EstimateCpFinalCallback,
     EndChainSummaryCallback,
     ExistingNextLookupCallback,
+    InvalidRelativeCarryReasonCallback,
     ShortUuidCallback,
     PanelCallback,
     PrintTaskCallback,
@@ -132,17 +133,17 @@ class DurationWarningPorts:
 @dataclass(frozen=True, slots=True)
 class CompletionLifecyclePlanPorts:
     generation: Any
-    scheduler_fingerprint: Any
-    compare_datetimes: Any
-    invalid_relative_carry_reason: Any
+    scheduler_fingerprint: Callable[[], str]
+    compare_datetimes: Callable[[datetime, datetime], int]
+    invalid_relative_carry_reason: InvalidRelativeCarryReasonCallback
     lifecycle_planner: Any
     lifecycle_models: Any
     modify_models: Any
-    end_chain_summary: Any
-    ensure_terminal_chain_off: Any
-    panel: Any
-    print_task: Any
-    diagnostic: Any
+    end_chain_summary: EndChainSummaryCallback
+    ensure_terminal_chain_off: Callable[[TaskPayload, str | None], bool]
+    panel: PanelCallback
+    print_task: PrintTaskCallback
+    diagnostic: DiagnosticCallback
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,6 +501,10 @@ def completion_compute_ports_for(host: Any) -> CompletionComputePorts:
         ),
     )
     fingerprint = getattr(host.core, "scheduler_config_fingerprint", None)
+    ensure_terminal_chain_off: Callable[[TaskPayload, str | None], bool] = partial(
+        host._module("modify_composition_adapters").ensure_terminal_chain_off_for,
+        host,
+    )
     plan_ports = CompletionLifecyclePlanPorts(
         generation=generation,
         scheduler_fingerprint=fingerprint if callable(fingerprint) else (lambda: ""),
@@ -519,9 +524,7 @@ def completion_compute_ports_for(host: Any) -> CompletionComputePorts:
         lifecycle_models=host._module("lifecycle_models"),
         modify_models=models,
         end_chain_summary=_end_summary_port_for(host),
-        ensure_terminal_chain_off=lambda task, event=None: host._module(
-            "modify_composition_adapters"
-        ).ensure_terminal_chain_off_for(host, task, event),
+        ensure_terminal_chain_off=ensure_terminal_chain_off,
         panel=_panel_port_for(host),
         print_task=_print_task_port_for(host),
         diagnostic=host._diag,

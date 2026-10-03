@@ -216,11 +216,27 @@ class ModifyIsolationTests(unittest.TestCase):
 
     def test_completion_caps_parser_uses_shared_datetime_contract(self) -> None:
         from nautical_core.modify_completion_effects import CompletionCapsPorts
-        from nautical_core.modify_models import CoerceIntCallback, DatetimeParserCallback
+        from nautical_core.modify_models import (
+            CapFromUntilAnchorCallback,
+            CapFromUntilCpCallback,
+            CoerceIntCallback,
+            DatetimeParserCallback,
+            EstimateAnchorFinalCallback,
+            EstimateCpFinalCallback,
+        )
 
         annotations = get_type_hints(CompletionCapsPorts)
-        self.assertIs(annotations["coerce_int"], CoerceIntCallback)
-        self.assertIs(annotations["parse_datetime"], DatetimeParserCallback)
+        expected = {
+            "coerce_int": CoerceIntCallback,
+            "parse_datetime": DatetimeParserCallback,
+            "estimate_cp": EstimateCpFinalCallback,
+            "estimate_anchor": EstimateAnchorFinalCallback,
+            "cap_cp": CapFromUntilCpCallback,
+            "cap_anchor": CapFromUntilAnchorCallback,
+        }
+        for name, contract in expected.items():
+            with self.subTest(field=name):
+                self.assertIs(annotations[name], contract)
 
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)

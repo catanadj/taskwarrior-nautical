@@ -9,7 +9,14 @@ from typing import Any, Protocol
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
-from .modify_models import CoerceIntCallback, DatetimeParserCallback
+from .modify_models import (
+    CapFromUntilAnchorCallback,
+    CapFromUntilCpCallback,
+    CoerceIntCallback,
+    DatetimeParserCallback,
+    EstimateAnchorFinalCallback,
+    EstimateCpFinalCallback,
+)
 
 
 class CompletionPreflightService(Protocol):
@@ -84,10 +91,10 @@ class CompletionCapsPorts:
     compute: CompletionComputeService
     coerce_int: CoerceIntCallback
     parse_datetime: DatetimeParserCallback
-    estimate_cp: Any
-    estimate_anchor: Any
-    cap_cp: Any
-    cap_anchor: Any
+    estimate_cp: EstimateCpFinalCallback
+    estimate_anchor: EstimateAnchorFinalCallback
+    cap_cp: CapFromUntilCpCallback
+    cap_anchor: CapFromUntilAnchorCallback
 
 
 @dataclass(frozen=True, slots=True)

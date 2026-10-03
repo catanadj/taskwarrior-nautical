@@ -35,6 +35,7 @@ from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, TaskSnapshot
 from nautical_core.lifecycle.planner import (
     LifecyclePreflight,
+    LifecyclePlanningError,
     RecurrenceCandidate,
     plan_candidate_successor,
 )
@@ -614,7 +615,7 @@ def attach_lifecycle_plan(
                 ),
             )
         computed.lifecycle_plan = plan
-    except Exception as exc:
+    except (LifecyclePlanningError, ValueError, OverflowError) as exc:
         diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
         panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")
         print_task(new)

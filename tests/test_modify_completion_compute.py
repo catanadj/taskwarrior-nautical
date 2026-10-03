@@ -7,8 +7,17 @@ from zoneinfo import ZoneInfo
 
 import nautical_core as core
 import nautical_core.add_validation as add_validation
-from nautical_core.modify_completion_compute import completion_compute_child_due, completion_compute_next_and_limits
-from nautical_core.modify_models import CompletionComputeServices, CompletionLifecycleResult
+from nautical_core.modify_completion_compute import (
+    attach_lifecycle_plan,
+    completion_compute_child_due,
+    completion_compute_next_and_limits,
+)
+from nautical_core.modify_models import (
+    CompletionComputeResult,
+    CompletionComputeServices,
+    CompletionLifecycleResult,
+    CompletionPreflightContext,
+)
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
 from nautical_core.modify_completion_preflight import completion_existing_next_or_fail
@@ -47,6 +56,94 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
                 panel=lambda *_args, **_kwargs: None,
                 print_task=lambda _value: None,
             )
+
+    def test_lifecycle_plan_attachment_does_not_hide_invalid_computed_shape(self) -> None:
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": 1,
+            "cp": "1d",
+            "due": "2026-01-01T09:00:00Z",
+        }
+        computed = CompletionComputeResult(
+            child_due=datetime(2026, 1, 2, 9, tzinfo=timezone.utc),
+            meta=object(),
+            dnf=None,
+            until_dt=None,
+            cpmax=0,
+            cap_no=None,
+            finals=[],
+            until_cap_no=None,
+        )
+
+        with self.assertRaises(TypeError):
+            attach_lifecycle_plan(
+                task,
+                computed,
+                2,
+                datetime(2026, 1, 1, tzinfo=timezone.utc),
+                preflight=None,
+                generation=None,
+                scheduler_fingerprint="",
+                compare_datetimes=lambda left, right: (left > right) - (left < right),
+                invalid_relative_carry_reason=lambda *_args, **_kwargs: None,
+                end_chain_summary=lambda *_args, **_kwargs: None,
+                ensure_terminal_chain_off=lambda *_args: True,
+                panel=lambda *_args, **_kwargs: None,
+                print_task=lambda _task: None,
+                diag=lambda _message: None,
+            )
+
+    def test_lifecycle_planning_failures_remain_retryable_results(self) -> None:
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": 1,
+            "cp": "1d",
+            "due": "2026-01-01T09:00:00Z",
+        }
+        computed = CompletionComputeResult(
+            child_due=datetime(2026, 1, 2, 9, tzinfo=timezone.utc),
+            meta={},
+            dnf=None,
+            until_dt=None,
+            cpmax=0,
+            cap_no=None,
+            finals=[],
+            until_cap_no=None,
+        )
+
+        result = attach_lifecycle_plan(
+            task,
+            computed,
+            2,
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            preflight=CompletionPreflightContext(
+                parent_short="parent",
+                base_no=1,
+                next_no=3,
+                kind="cp",
+                chain_id="chain-1",
+                chain_snapshot=None,
+            ),
+            generation=None,
+            scheduler_fingerprint="",
+            compare_datetimes=lambda left, right: (left > right) - (left < right),
+            invalid_relative_carry_reason=lambda *_args, **_kwargs: None,
+            end_chain_summary=lambda *_args, **_kwargs: None,
+            ensure_terminal_chain_off=lambda *_args: True,
+            panel=lambda *_args, **_kwargs: None,
+            print_task=lambda _task: None,
+            diag=lambda _message: None,
+        )
+
+        self.assertIsInstance(result, CompletionLifecycleResult)
+        self.assertEqual(result.state, "retryable")
+        self.assertIn("adjacent", result.reason)
 
     def test_date_and_search_exhaustion_never_produce_child_tuples(self) -> None:
         import nautical_core.modify_completion_compute as compute

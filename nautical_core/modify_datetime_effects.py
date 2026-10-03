@@ -19,7 +19,7 @@ class DatetimeEffectPorts:
 def safe_dt(ports: DatetimeEffectPorts, value: object) -> datetime | None:
     try:
         return value if isinstance(value, datetime) else ports.parse_datetime(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 

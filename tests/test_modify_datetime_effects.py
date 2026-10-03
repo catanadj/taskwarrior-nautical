@@ -39,6 +39,15 @@ class ModifyDatetimeEffectsTests(unittest.TestCase):
         ports = DatetimeEffectPorts(lambda _value: (_ for _ in ()).throw(ValueError("bad")), lambda value: value, lambda value: value)
         self.assertIsNone(safe_dt(ports, "bad"))
 
+    def test_safe_dt_propagates_unexpected_parser_failure(self) -> None:
+        ports = DatetimeEffectPorts(
+            lambda _value: (_ for _ in ()).throw(RuntimeError("parser failed")),
+            lambda value: value,
+            lambda value: value,
+        )
+        with self.assertRaisesRegex(RuntimeError, "parser failed"):
+            safe_dt(ports, "value")
+
     def test_timezone_adapters_validate_and_normalize_values(self) -> None:
         aware = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
         self.assertEqual(utc_to_local_naive(self.ports, aware), datetime(2026, 1, 1, 12, 0))

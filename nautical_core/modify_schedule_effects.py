@@ -14,6 +14,7 @@ from .modify_models import (
     DiagnosticCallback,
     SafeParseDatetimeCallback,
 )
+from .scheduler_service import SchedulerService
 from .timeutil import compare_datetimes
 
 
@@ -69,9 +70,13 @@ class OccurrencePorts:
 
 @dataclass(frozen=True, slots=True)
 class SchedulerPorts:
-    runtime_module: Any
-    state: Any
-    core: Any
+    service_for_task: SchedulerServiceForTask
+
+
+class SchedulerServiceForTask(Protocol):
+    """Bind one Taskwarrior task to its task-scoped scheduler service."""
+
+    def __call__(self, task: TaskPayload) -> SchedulerService: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,11 +113,19 @@ class AnchorCompletionPorts:
 
 
 def scheduler_ports_for(host: Any) -> SchedulerPorts:
-    return SchedulerPorts(
-        runtime_module=host._module("modify_runtime"),
-        state=host._modify_runtime_state(),
-        core=host.core,
-    )
+    runtime_module = host._module("modify_runtime")
+    state = host._modify_runtime_state()
+    core = host.core
+
+    def service_for_task(task: TaskPayload) -> SchedulerService:
+        return runtime_module.scheduler_service_for_task(
+            task,
+            state=state,
+            core=core,
+            recurrence_seed_base=recurrence_seed_base,
+        )
+
+    return SchedulerPorts(service_for_task=service_for_task)
 
 
 def cp_completion_ports_for(host: Any) -> CPCompletionPorts:
@@ -155,12 +168,7 @@ def anchor_completion_ports_for(host: Any) -> AnchorCompletionPorts:
 def scheduler_callbacks(ports: SchedulerPorts) -> tuple[Any, Any]:
     """Return the stable one-argument callbacks used by projection services."""
     def service_for_task(task: TaskPayload) -> Any:
-        return ports.runtime_module.scheduler_service_for_task(
-            task,
-            state=ports.state,
-            core=ports.core,
-            recurrence_seed_base=recurrence_seed_base,
-        )
+        return ports.service_for_task(task)
 
     return lambda task: service_for_task(task).session.evaluator, service_for_task
 

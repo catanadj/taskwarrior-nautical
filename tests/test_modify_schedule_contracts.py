@@ -22,6 +22,29 @@ from nautical_core.timeutil import compare_datetimes
 
 
 class ModifyScheduleContractTests(unittest.TestCase):
+    def _scheduler_ports(
+        self, state: modify_runtime.ModifyRuntimeState
+    ) -> modify_schedule_effects.SchedulerPorts:
+        return modify_schedule_effects.SchedulerPorts(
+            service_for_task=lambda task: modify_runtime.scheduler_service_for_task(
+                task,
+                state=state,
+                core=core,
+                recurrence_seed_base=modify_schedule_effects.recurrence_seed_base,
+            )
+        )
+
+    def test_scheduler_ports_use_task_service_factory_contract(self) -> None:
+        annotations = get_type_hints(modify_schedule_effects.SchedulerPorts)
+        self.assertEqual(
+            tuple(annotations),
+            ("service_for_task",),
+        )
+        self.assertIs(
+            annotations["service_for_task"],
+            modify_schedule_effects.SchedulerServiceForTask,
+        )
+
     def test_sequence_interval_port_uses_named_protocol(self) -> None:
         self.assertIs(
             get_type_hints(modify_schedule_effects.SequencePorts)["sequence_interval"],
@@ -92,11 +115,7 @@ class ModifyScheduleContractTests(unittest.TestCase):
             "end": "20250106T100000Z",
         }
         state = modify_runtime.new_runtime_state()
-        ports = modify_schedule_effects.SchedulerPorts(
-            runtime_module=modify_runtime,
-            state=state,
-            core=core,
-        )
+        ports = self._scheduler_ports(state)
         with (
             patch.object(timezone_facade, "_local_timezone", timezone.utc),
             patch.object(
@@ -118,11 +137,28 @@ class ModifyScheduleContractTests(unittest.TestCase):
         zone = ZoneInfo("Europe/Bucharest")
         dnf = core.validate_anchor_expr_strict("w:sat@t=22:20..03:20/6")
         cursor = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-        ports = modify_schedule_effects.OccurrencePorts(
-            lambda expression, after, **kwargs: anchor_next_occurrence_after_local_dt(
-                expression, after, core=core, **kwargs
+        def next_occurrence(
+            expression: Any,
+            after: datetime,
+            *,
+            fallback_hhmm: tuple[int, int],
+            interval_seed: date | None,
+            seed_base: str,
+            omit_dnf: Any,
+            default_seed_date: date | None,
+        ) -> datetime | None:
+            return anchor_next_occurrence_after_local_dt(
+                expression,
+                after,
+                fallback_hhmm=fallback_hhmm,
+                interval_seed=interval_seed,
+                seed_base=seed_base,
+                omit_dnf=omit_dnf,
+                default_seed_date=default_seed_date,
+                core=core,
             )
-        )
+
+        ports = modify_schedule_effects.OccurrencePorts(next_occurrence)
 
         with patch.object(timezone_facade, "_local_timezone", zone):
             result = modify_schedule_effects.next_occurrence_after_local_dt(
@@ -140,7 +176,7 @@ class ModifyScheduleContractTests(unittest.TestCase):
     def test_cp_chain_max_estimate_advances_through_sequence_intervals(self) -> None:
         ports = modify_schedule_effects.CPCompletionPorts(
             compute=modify_completion_compute,
-            parse_datetime=lambda value: (core.parse_dt_any(value), None),
+            parse_datetime=core.parse_dt_any,
             coerce_int=core.coerce_int,
             parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
             sequence=modify_schedule_effects.SequencePorts(
@@ -171,10 +207,10 @@ class ModifyScheduleContractTests(unittest.TestCase):
         self.assertEqual((final_local.hour, final_local.minute), (9, 0))
 
     def test_cp_chain_max_forecast_stops_at_iteration_budget(self) -> None:
-        diagnostics = []
+        diagnostics: list[str] = []
         ports = modify_schedule_effects.CPCompletionPorts(
             compute=modify_completion_compute,
-            parse_datetime=lambda value: (core.parse_dt_any(value), None),
+            parse_datetime=core.parse_dt_any,
             coerce_int=core.coerce_int,
             parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
             sequence=modify_schedule_effects.SequencePorts(
@@ -272,11 +308,7 @@ class ModifyScheduleContractTests(unittest.TestCase):
 
     def _completion_ports(self, *, max_iterations: int, anchor_file_provider_for=None):
         parser = parser_for_core(core)
-        scheduler = modify_schedule_effects.SchedulerPorts(
-            runtime_module=modify_runtime,
-            state=modify_runtime.new_runtime_state(),
-            core=core,
-        )
+        scheduler = self._scheduler_ports(modify_runtime.new_runtime_state())
         return modify_schedule_effects.AnchorCompletionPorts(
             compute=modify_completion_compute,
             parse_datetime=core.parse_dt_any,
@@ -285,7 +317,7 @@ class ModifyScheduleContractTests(unittest.TestCase):
             to_local_cached=core.to_local,
             safe_parse_datetime=parser.parse,
             anchor_file_fallback_hhmm=lambda _task, _next: (9, 0),
-            omit_dnf_from_parent=lambda _task: (None, None),
+            omit_dnf_from_parent=lambda _task: ("", None),
             anchor_file_provider_for=(
                 anchor_file_provider_for
                 if anchor_file_provider_for is not None
@@ -298,11 +330,7 @@ class ModifyScheduleContractTests(unittest.TestCase):
 
     def test_included_occurrence_collection_rejects_non_advancing_scheduler(self) -> None:
         ports = modify_schedule_effects.AnchorOccurrencePorts(
-            modify_schedule_effects.SchedulerPorts(
-                runtime_module=modify_runtime,
-                state=modify_runtime.new_runtime_state(),
-                core=core,
-            )
+            self._scheduler_ports(modify_runtime.new_runtime_state())
         )
         task = {
             "uuid": "00000000-0000-4000-8000-000000000960",

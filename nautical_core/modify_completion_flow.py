@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from nautical_core.modify_models import (
@@ -28,7 +29,7 @@ class CompletionFlowServices:
     preserve_native_until: Callable[[TaskPayload, TaskPayload, str], None]
     validate_native_until: Callable[[TaskPayload], None]
     validate_native_until_slots: Callable[[TaskPayload], None]
-    now_utc: Callable[[], Any]
+    now_utc: Callable[[], datetime]
     preflight_context: Callable[[TaskPayload, Any, Any], CompletionPreflightContext | None]
     compute_next_and_limits: Callable[..., CompletionComputeResult | CompletionLifecycleResult | None]
     lifecycle_read_service: Any
@@ -141,7 +142,7 @@ def finalize_completion_modify(
     new: TaskPayload,
     ctx: CompletionPreflightContext,
     computed: CompletionComputeResult,
-    now_utc: Any,
+    now_utc: datetime,
     need_chain: bool,
     chain_snapshot_loaded: bool,
     preloaded_chain: list[TaskObservation],

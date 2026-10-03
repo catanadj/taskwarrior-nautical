@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 import unittest
 
 import nautical_core.modify_completion_flow as flow
@@ -16,6 +18,14 @@ from nautical_core.modify_models import CompletionChainSnapshot
 
 
 class ModifyCompletionFlowContracts(unittest.TestCase):
+    def test_completion_clock_contract_uses_datetime(self) -> None:
+        service_clock = get_type_hints(flow.CompletionFlowServices)["now_utc"]
+        finalize_clock = get_type_hints(flow.finalize_completion_modify)["now_utc"]
+
+        self.assertEqual(service_clock, Callable[[], datetime])
+        self.assertIs(finalize_clock, datetime)
+        self.assertIsNot(service_clock, Any)
+
     def test_unavailable_chain_export_is_not_loaded_as_empty_snapshot(self) -> None:
         command = TaskCommand(("task", "export"), "completion snapshot", 3.0)
         unavailable = Unavailable(

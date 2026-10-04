@@ -75,6 +75,20 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             "HumanizeUntilDelta",
         )
 
+    def test_completion_runtime_state_uses_workflow_context_model(self) -> None:
+        from nautical_core.hook_workflow_context import WorkflowInvocationContext
+        from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
+        from nautical_core.modify_runtime import ModifyRuntimeState
+
+        expected = f"{WorkflowInvocationContext.__name__} | None"
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["workflow_context"], expected
+        )
+        self.assertEqual(
+            _CompletionComputeRuntimeState.__annotations__["workflow_context"],
+            expected,
+        )
+
     def test_generation_service_contract_includes_completion_draft_builder(self) -> None:
         from nautical_core.modify_generation_effects import ChainGenerationServicePort
 

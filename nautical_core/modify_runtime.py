@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import time as _time
 
 from nautical_core.modify_models import (
@@ -28,10 +28,13 @@ from nautical_core.modify_models import (
 from nautical_core.task_models import TaskPayload
 import nautical_core.timezone_facade as timezone_facade
 
+if TYPE_CHECKING:
+    from nautical_core.hook_workflow_context import WorkflowInvocationContext
+
 
 @dataclass(slots=True)
 class ModifyRuntimeState:
-    workflow_context: Any = None
+    workflow_context: WorkflowInvocationContext | None = None
     task_repository: Any = None
     scheduler_services: dict[Any, Any] = field(default_factory=dict)
     chain_generation_service: Any = None

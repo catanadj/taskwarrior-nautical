@@ -60,6 +60,7 @@ from .scheduler_models import OccurrenceSearchExhausted
 from .modify_generation_effects import ChainGenerationServicePort
 
 if TYPE_CHECKING:
+    from .hook_workflow_context import WorkflowInvocationContext
     from .modify_generation_effects import (
         _ChainGenerationModule,
         GenerationHost,
@@ -548,7 +549,7 @@ class _CompletionComputeCore(Protocol):
 class _CompletionComputeRuntimeState(Protocol):
     scheduler_services: dict[Any, Any]
     diag_stats: dict[str, Any]
-    workflow_context: Any
+    workflow_context: WorkflowInvocationContext | None
     chain_generation_service: ChainGenerationServicePort | None
 
 

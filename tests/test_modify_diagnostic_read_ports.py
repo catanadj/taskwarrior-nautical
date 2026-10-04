@@ -389,6 +389,16 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             omit_annotations["validate_omit_expr"], abc.Callable[[str], object]
         )
 
+    def test_cp_validation_effect_keeps_raw_task_values_at_object_boundary(self) -> None:
+        from nautical_core.modify_validation_effects import CPValidationPorts, validate_cp
+
+        annotations = get_type_hints(validate_cp)
+        self.assertIs(annotations["ports"], CPValidationPorts)
+        self.assertIs(annotations["cp_value"], str)
+        self.assertIs(annotations["chain_max_value"], object)
+        self.assertIs(annotations["chain_until_value"], object)
+        self.assertIs(annotations["return"], type(None))
+
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:
         from nautical_core.modify_validation import validate_cp_on_modify
 

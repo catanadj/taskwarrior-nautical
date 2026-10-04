@@ -339,7 +339,12 @@ def validate_shared_omit(ports: SharedValidationPorts, expr: str) -> None:
     )
 
 
-def validate_cp(ports: CPValidationPorts, cp_value: str, chain_max_value: Any, chain_until_value: Any) -> None:
+def validate_cp(
+    ports: CPValidationPorts,
+    cp_value: str,
+    chain_max_value: object,
+    chain_until_value: object,
+) -> None:
     ports.validate(
         cp_value,
         chain_max_value,

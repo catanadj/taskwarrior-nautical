@@ -11,6 +11,28 @@ from nautical_core.modify_models import PanelCallback
 
 
 class CalendarFeedbackContractTests(unittest.TestCase):
+    def test_add_preview_ports_use_calendar_feedback_callback_contract(self) -> None:
+        from typing import get_type_hints
+
+        from nautical_core.add_anchor_preview import (
+            AnchorExpressionPreviewServices,
+            AnchorFilePreviewServices,
+        )
+        from nautical_core.add_anchor_preview import AddCalendarFeedbackCallback
+
+        self.assertIs(
+            get_type_hints(AnchorExpressionPreviewServices)[
+                "render_business_calendar_displacement"
+            ],
+            AddCalendarFeedbackCallback,
+        )
+        self.assertIs(
+            get_type_hints(AnchorFilePreviewServices)[
+                "render_business_calendar_displacement"
+            ],
+            AddCalendarFeedbackCallback,
+        )
+
     def test_calendar_feedback_uses_shared_panel_callback_contract(self) -> None:
         self.assertIs(
             get_type_hints(render_business_calendar_displacement)["panel"],

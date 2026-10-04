@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, NoReturn, Protocol
 
 from . import panel_diagnostics
@@ -23,6 +23,16 @@ class PreviewPanelCallback(Protocol):
     ) -> Any: ...
 
 
+class AddCalendarFeedbackCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        occurrence: date | datetime,
+        *,
+        panel: PreviewPanelCallback,
+    ) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorExpressionPreviewServices:
     """Composition-root dependencies for the anchor preview renderer."""
@@ -38,7 +48,7 @@ class AnchorExpressionPreviewServices:
     coerce_int: Callable[..., Any]
     expr_has_m_or_y: Callable[[Any], bool]
     append_dst_adjustment: Callable[[list[tuple[str, str]], Any, datetime], None]
-    render_business_calendar_displacement: Callable[..., Any]
+    render_business_calendar_displacement: AddCalendarFeedbackCallback
     lint_and_validate: Callable[..., None]
     omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
     root_uuid_from: Callable[[TaskPayload], str | None]
@@ -67,7 +77,7 @@ class AnchorFilePreviewServices:
     to_local: Callable[[datetime], datetime]
     fmt_dt_local: Callable[[Any], str]
     coerce_int: Callable[..., Any]
-    render_business_calendar_displacement: Callable[..., Any]
+    render_business_calendar_displacement: AddCalendarFeedbackCallback
     omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
     append_wait_sched_rows: Callable[..., Any]
     validate_chain_duration_reasonable: Callable[..., Any]

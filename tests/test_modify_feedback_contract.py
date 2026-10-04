@@ -231,6 +231,16 @@ class ModifyFeedbackContractTests(unittest.TestCase):
                     DatetimeParserCallback,
                 )
 
+    def test_recurrence_feedback_uses_shared_integer_coercion_contract(self) -> None:
+        from nautical_core.modify_models import CoerceIntCallback
+
+        self.assertIs(
+            get_type_hints(modify_feedback.render_recurrence_updated_panel)[
+                "coerce_int"
+            ],
+            CoerceIntCallback,
+        )
+
     def test_completion_preview_uses_datetime_callback_contracts(self) -> None:
         from nautical_core.modify_models import (
             CompletionPreviewFormatter,

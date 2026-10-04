@@ -24,6 +24,7 @@ from .modify_models import (
     FirstRecurrenceTargetCallback,
     DatetimeParserCallback,
     MarkupStripper,
+    CoerceIntCallback,
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
@@ -291,7 +292,7 @@ def render_recurrence_updated_panel(
     format_local: Callable[[datetime], str],
     describe_native_until_carry: NativeCarryDescription,
     to_local: Callable[[datetime], datetime],
-    coerce_int: Callable[[Any, Any], int | None],
+    coerce_int: CoerceIntCallback,
     describe_anchor: Callable[[str], str],
     resolve_omit_presets: Callable[[str], str],
     first_recurrence_target: FirstRecurrenceTargetCallback,

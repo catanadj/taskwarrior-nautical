@@ -143,8 +143,10 @@ def _render_lifecycle_result(services: CompletionFinalizeServices, result: Compl
     try:
         services.render_lifecycle_result(result, task)
     except Exception as exc:
-        if services.diagnostic is not None:
-            services.diagnostic(f"completion lifecycle presentation failed: {type(exc).__name__}: {exc}")
+        _diagnose_optional_failure(
+            services,
+            f"completion lifecycle presentation failed: {type(exc).__name__}: {exc}",
+        )
 
 
 def _diagnose_optional_failure(services: CompletionFinalizeServices, message: str) -> None:

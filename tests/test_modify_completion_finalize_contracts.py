@@ -9,6 +9,66 @@ from nautical_core.modify_models import CompletionLifecycleResult, CompletionSpa
 
 
 class ModifyCompletionFinalizeContractTests(unittest.TestCase):
+    def test_lifecycle_presentation_diagnostic_failure_does_not_block_task_response(self) -> None:
+        diagnostic_messages = []
+        printed_tasks = []
+
+        def failed_diagnostic(message):
+            diagnostic_messages.append(message)
+            raise OSError("stderr is unavailable")
+
+        services = flow.CompletionFinalizeServices(
+            build_and_spawn_child=lambda *_args, **_kwargs: None,
+            seed_runtime_lookup_tasks=lambda *_args, **_kwargs: None,
+            modify_chain_state=lambda: SimpleNamespace(
+                panel_chain_by_link=None, panel_chain_by_short=None
+            ),
+            lifecycle_read_service=None,
+            chain_health_advice=lambda *_args, **_kwargs: None,
+            chain_integrity_warnings=lambda *_args, **_kwargs: [],
+            render_anchor_completion_feedback=lambda **_kwargs: None,
+            render_cp_completion_feedback=lambda **_kwargs: None,
+            render_lifecycle_result=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("optional lifecycle panel failed")
+            ),
+            print_task=printed_tasks.append,
+            diag_summary=lambda: None,
+            show_analytics=False,
+            check_integrity=False,
+            analytics_style="clinical",
+            diagnostic=failed_diagnostic,
+        )
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "completed",
+            "description": "completed task",
+        }
+        now = datetime(2026, 9, 14, tzinfo=timezone.utc)
+
+        result = flow.finalize_completion_modify(
+            new=task,
+            ctx=SimpleNamespace(parent_short="00000000", base_no=1, next_no=2, kind="cp", chain_id=""),
+            computed=SimpleNamespace(
+                child_due=now,
+                meta={},
+                cpmax=0,
+                until_dt=None,
+            ),
+            now_utc=now,
+            need_chain=False,
+            chain_snapshot_loaded=True,
+            preloaded_chain=[],
+            preloaded_chain_by_link={},
+            preloaded_chain_by_short={},
+            chain_id="",
+            services=services,
+        )
+
+        self.assertEqual(result.state, "retryable")
+        self.assertEqual(printed_tasks, [task])
+        self.assertEqual(len(diagnostic_messages), 1)
+        self.assertIn("completion lifecycle presentation failed", diagnostic_messages[0])
+
     def test_optional_completion_enrichment_and_diagnostic_failures_preserve_task_result(self) -> None:
         diagnostic_messages = []
         printed_tasks = []

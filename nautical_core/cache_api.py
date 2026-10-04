@@ -56,7 +56,15 @@ class CacheFilesystemPort(Protocol):
     def replace(self, src: str, dst: str) -> None: ...
 
 
-fcntl: Any
+class CacheFcntlPort(Protocol):
+    LOCK_EX: int
+    LOCK_NB: int
+    LOCK_UN: int
+
+    def flock(self, file_descriptor: int, operation: int) -> None: ...
+
+
+fcntl: CacheFcntlPort | None
 try:
     import fcntl
 except ImportError:
@@ -84,7 +92,7 @@ class CacheRuntimeDependencies:
     filesystem: CacheFilesystemPort
     clock: CacheClockPort
     random: CacheRandomPort
-    fcntl: Any
+    fcntl: CacheFcntlPort | None
     json: Any
     compression: Any
     base64: Any

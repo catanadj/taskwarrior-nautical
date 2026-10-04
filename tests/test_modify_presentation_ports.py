@@ -5,10 +5,16 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 import inspect
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 import unittest
 
 
 class ModifyPresentationPortTests(unittest.TestCase):
+    def test_ui_factory_has_typed_host_contract(self) -> None:
+        from nautical_core.modify_ui_effects import ui_ports_for
+
+        self.assertIsNot(get_type_hints(ui_ports_for)["host"], Any)
+
     def test_panel_forwards_configured_live_duration_and_semantic_themes(self) -> None:
         from nautical_core.modify_ui_effects import UIEffectsPorts, panel
 

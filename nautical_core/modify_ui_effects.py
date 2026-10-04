@@ -20,6 +20,28 @@ class EmitTaskJson(Protocol):
     ) -> None: ...
 
 
+class _HookResults(Protocol):
+    def emit_passthrough_json(self, task: TaskPayload) -> None: ...
+
+    def emit_task_json(
+        self,
+        task: TaskPayload,
+        *,
+        sanitize: bool = False,
+        core: Any = None,
+        prof: Any = None,
+    ) -> None: ...
+
+
+class UIEffectsHost(Protocol):
+    @property
+    def core(self) -> object | None: ...
+
+    def _load_core(self) -> None: ...
+
+    def _module(self, name: str) -> _HookResults: ...
+
+
 @dataclass(frozen=True)
 class UIEffectsPorts:
     """Process-boundary capabilities required by modify UI effects."""
@@ -32,7 +54,7 @@ class UIEffectsPorts:
     stderr_write: Callable[[str], int]
 
 
-def ui_ports_for(host: Any) -> UIEffectsPorts:
+def ui_ports_for(host: UIEffectsHost) -> UIEffectsPorts:
     """Adapt the hook host once at the composition boundary."""
     values = getattr(host, "_values", None)
     if values is None and hasattr(host, "__dict__"):

@@ -6,7 +6,9 @@ from .core_context import CacheState
 from .cache_ports import (
     AtomicReplacePort,
     Base64Port,
+    ClockPort,
     CompressionPort,
+    FilesystemPort,
     JsonPort,
     TemporaryFilePort,
 )
@@ -280,13 +282,13 @@ def cache_load(
     enable_anchor_cache: bool,
     cache_path: Callable[[str], str],
     anchor_cache_ttl: int,
-    time_mod: Any,
+    time_mod: ClockPort,
     cache_state: CacheState,
     clone_cache_payload: Callable[[dict], dict],
     normalize_dnf_cached: Callable[[object], object],
     cache_payload_shape_ok: Callable[[dict], bool],
     diag: Callable[[str], None],
-    os_mod: Any,
+    os_mod: FilesystemPort,
     json_mod: JsonPort,
     zlib_mod: CompressionPort,
     base64_mod: Base64Port,
@@ -391,7 +393,7 @@ def cache_save(
     cache_dir: Callable[[], str],
     cache_lock: Callable[[str], ContextManager[bool]],
     diag: Callable[[str], None],
-    os_mod: Any,
+    os_mod: FilesystemPort,
     tempfile_mod: TemporaryFilePort,
     cache_atomic_replace: Callable[[str, str], None],
     cache_state: CacheState,
@@ -473,8 +475,8 @@ def cache_gc(
     stale_lock_age: float = 86400.0,
     cache_lock: Callable[[str], ContextManager[bool]],
     stale_lock_check: Callable[[str, float], bool],
-    time_mod: Any,
-    os_mod: Any,
+    time_mod: ClockPort,
+    os_mod: FilesystemPort,
 ) -> CacheGcResult:
     """Prune expired/temporary cache files without touching active writers."""
     result: CacheGcResult = {

@@ -103,19 +103,33 @@ class CacheApiContractTests(unittest.TestCase):
 
     def test_cache_runtime_clock_and_random_ports_are_narrow(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
-        self.assertIs(hints["clock"], cache_api.CacheClockPort)
-        self.assertIs(hints["random"], cache_api.CacheRandomPort)
+        self.assertIs(hints["clock"], cache_ports.CacheClockPort)
+        self.assertIs(hints["random"], cache_ports.RandomPort)
 
     def test_cache_runtime_filesystem_uses_a_direct_use_capability(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
-        self.assertIs(hints["filesystem"], cache_api.CacheFilesystemPort)
+        self.assertIs(hints["filesystem"], cache_ports.FilesystemPort)
 
     def test_cache_runtime_fcntl_uses_the_locking_capability(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
         self.assertEqual(
             hints["fcntl"],
-            cache_api.CacheFcntlPort | None,
+            cache_ports.FcntlPort | None,
         )
+
+    def test_cache_io_owners_share_filesystem_and_clock_capabilities(self) -> None:
+        for owner in (cache_payload.cache_load, cache_payload.cache_save, cache_payload.cache_gc):
+            hints = get_type_hints(owner)
+            with self.subTest(owner=owner.__name__):
+                self.assertIs(hints["os_mod"], cache_ports.FilesystemPort)
+                if "time_mod" in hints:
+                    self.assertIs(hints["time_mod"], cache_ports.ClockPort)
+
+        lock_hints = get_type_hints(cache_locking.safe_lock)
+        self.assertIs(lock_hints["os_mod"], cache_ports.FilesystemPort)
+        self.assertIs(lock_hints["time_mod"], cache_ports.ClockPort)
+        self.assertIs(lock_hints["random_mod"], cache_ports.RandomPort)
+        self.assertEqual(lock_hints["fcntl_mod"], cache_ports.FcntlPort | None)
 
     def test_cache_runtime_json_uses_its_consumed_operations(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)

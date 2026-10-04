@@ -5,24 +5,8 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any, ContextManager, Iterator, Protocol
 
+from nautical_core.cache_ports import ClockPort, FcntlPort, FilesystemPort, RandomPort
 from nautical_core.cache_support import ValidatedUserDir
-
-
-class TimePort(Protocol):
-    def time(self) -> float: ...
-    def sleep(self, seconds: float) -> None: ...
-
-
-class RandomPort(Protocol):
-    def uniform(self, start: float, end: float) -> float: ...
-
-
-class FcntlPort(Protocol):
-    LOCK_EX: int
-    LOCK_NB: int
-    LOCK_UN: int
-
-    def flock(self, file_descriptor: int, operation: int) -> None: ...
 
 
 class BoundSafeLock(Protocol):
@@ -82,7 +66,7 @@ def safe_lock_sleep_once(
     sleep_base: float,
     jitter: float,
     *,
-    time_mod: TimePort,
+    time_mod: ClockPort,
     random_mod: RandomPort,
 ) -> None:
     try:
@@ -98,7 +82,7 @@ def safe_lock_sleep_once(
         time_mod.sleep(delay)
 
 
-def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: Any) -> None:
+def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: FilesystemPort) -> None:
     if not mkdir:
         return
     try:
@@ -109,7 +93,7 @@ def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: Any) -> None:
         pass
 
 
-def safe_lock_age(path_str: str, *, time_mod: TimePort, os_mod: Any) -> float | None:
+def safe_lock_age(path_str: str, *, time_mod: ClockPort, os_mod: FilesystemPort) -> float | None:
     try:
         with open(path_str, "r", encoding="utf-8") as fh:
             head = fh.read(64)
@@ -129,8 +113,8 @@ def safe_lock_stale_pid(
     path_str: str,
     stale_after: float | None,
     *,
-    time_mod: TimePort,
-    os_mod: Any,
+    time_mod: ClockPort,
+    os_mod: FilesystemPort,
 ) -> bool:
     try:
         with open(path_str, "r", encoding="utf-8") as fh:
@@ -172,7 +156,7 @@ def safe_lock_fcntl_context(
     safe_lock_ensure_parent: Any,
     safe_lock_sleep_once: Any,
     fcntl_mod: FcntlPort,
-    os_mod: Any,
+    os_mod: FilesystemPort,
 ) -> Any:
     lf = None
     fd: int | None = None
@@ -232,8 +216,8 @@ def safe_lock_excl_context(
     safe_lock_stale_pid: Any,
     safe_lock_age: Any,
     safe_lock_sleep_once: Any,
-    os_mod: Any,
-    time_mod: TimePort,
+    os_mod: FilesystemPort,
+    time_mod: ClockPort,
 ) -> Any:
     fd = None
     acquired = False
@@ -298,8 +282,8 @@ def safe_lock(
     mkdir: bool = True,
     stale_after: float | None = 60.0,
     fcntl_mod: FcntlPort | None,
-    os_mod: Any,
-    time_mod: TimePort,
+    os_mod: FilesystemPort,
+    time_mod: ClockPort,
     random_mod: RandomPort,
 ) -> Iterator[bool]:
     path_str = str(path) if path else ""
@@ -392,8 +376,8 @@ def bind_locking(
     jitter: float,
     stale_after: float,
     fcntl_mod: FcntlPort | None,
-    os_mod: Any,
-    time_mod: TimePort,
+    os_mod: FilesystemPort,
+    time_mod: ClockPort,
     random_mod: RandomPort,
 ) -> BoundLocking:
     """Bind lock dependencies once for one core facade instance."""

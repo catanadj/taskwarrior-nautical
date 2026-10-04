@@ -10,62 +10,24 @@ import random
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, ContextManager, Mapping, Protocol
+from typing import Any, Callable, ContextManager
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
-from .cache_ports import Base64Port, CompressionPort, JsonPort, TemporaryFilePort
+from .cache_ports import (
+    Base64Port,
+    CacheClockPort,
+    CompressionPort,
+    FcntlPort,
+    FilesystemPort,
+    JsonPort,
+    RandomPort,
+    TemporaryFilePort,
+)
 from .core_context import CacheDependencies, CacheState, CoreContext
 
 
-class CacheClockPort(Protocol):
-    def time(self) -> float: ...
-
-    def time_ns(self) -> int: ...
-
-    def sleep(self, seconds: float) -> None: ...
-
-
-class CacheRandomPort(Protocol):
-    def uniform(self, start: float, end: float) -> float: ...
-
-
-class CachePathPort(Protocol):
-    def dirname(self, path: str) -> str: ...
-
-    def abspath(self, path: str) -> str: ...
-
-    def join(self, *parts: str) -> str: ...
-
-    def exists(self, path: str) -> bool: ...
-
-
-class CacheStatResultPort(Protocol):
-    st_mtime_ns: int
-    st_size: int
-
-
-class CacheFilesystemPort(Protocol):
-    name: str
-    path: CachePathPort
-    environ: Mapping[str, str]
-
-    def stat(self, path: str) -> CacheStatResultPort: ...
-
-    def getpid(self) -> int: ...
-
-    def replace(self, src: str, dst: str) -> None: ...
-
-
-class CacheFcntlPort(Protocol):
-    LOCK_EX: int
-    LOCK_NB: int
-    LOCK_UN: int
-
-    def flock(self, file_descriptor: int, operation: int) -> None: ...
-
-
-fcntl: CacheFcntlPort | None
+fcntl: FcntlPort | None
 try:
     import fcntl
 except ImportError:
@@ -90,10 +52,10 @@ class _CacheBindingContext:
 class CacheRuntimeDependencies:
     """Explicit runtime collaborators and mutable cache state for one binding."""
 
-    filesystem: CacheFilesystemPort
+    filesystem: FilesystemPort
     clock: CacheClockPort
-    random: CacheRandomPort
-    fcntl: CacheFcntlPort | None
+    random: RandomPort
+    fcntl: FcntlPort | None
     json: JsonPort
     compression: CompressionPort
     base64: Base64Port

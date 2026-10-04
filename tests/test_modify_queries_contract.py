@@ -4,11 +4,28 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import unittest
+from typing import Callable, get_type_hints
 
 from nautical_core.modify_queries import QueryPorts, cached_chain_root_and_age, cached_format_root_and_age, chain_root_and_age
+from nautical_core.task_models import TaskPayload
 
 
 class ModifyQueriesContractTests(unittest.TestCase):
+    def test_query_ports_declare_their_consumed_callable_signatures(self) -> None:
+        annotations = get_type_hints(QueryPorts)
+        self.assertEqual(
+            annotations,
+            {
+                "root_uuid": Callable[[TaskPayload], str],
+                "tw_get_cached": Callable[[str], str],
+                "dtparse": Callable[[object], datetime | None],
+                "tolocal": Callable[[datetime], datetime],
+                "cache_get": Callable[[str, object], object],
+                "cache_set": Callable[[str, object, object], None],
+                "diag_count": Callable[[str], None],
+            },
+        )
+
     def test_chain_root_context_failure_uses_display_fallback(self) -> None:
         result = chain_root_and_age(
             {"chainID": "chain-1"},

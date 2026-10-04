@@ -15,6 +15,7 @@ from nautical_core.modify_chain_summary import (
     SummaryStatsRows,
     SummaryTimelineRows,
     render_chain_summary_with_services,
+    render_chain_summary,
 )
 from nautical_core.task_models import TaskObservation, TaskPayload
 
@@ -57,6 +58,20 @@ class ChainSummaryRendererContractTests(unittest.TestCase):
                 "format_local": Callable[[datetime], str],
             },
         )
+
+    def test_summary_renderers_accept_domain_task_and_time_types(self) -> None:
+        expected = {
+            "current": TaskPayload,
+            "now_utc": datetime,
+            "current_task": TaskPayload | None,
+        }
+        for renderer in (render_chain_summary, render_chain_summary_with_services):
+            with self.subTest(renderer=renderer.__name__):
+                annotations = get_type_hints(renderer)
+                self.assertEqual(
+                    {name: annotations[name] for name in expected},
+                    expected,
+                )
 
     def test_stats_rows_format_lateness_without_an_unused_clock_argument(self) -> None:
         from nautical_core.modify_analytics import LatenessStats
@@ -180,7 +195,13 @@ class ChainSummaryRendererContractTests(unittest.TestCase):
             max_chain_walk=10, panel=lambda *args, **kwargs: calls.append((args, kwargs)), diagnostic=lambda _: None,
         )
         with patch("nautical_core.modify_chain_summary.render_chain_summary") as renderer:
-            render_chain_summary_with_services({"uuid": "u", "chainID": "c"}, "done", None, None, services=services)
+            render_chain_summary_with_services(
+                {"uuid": "u", "chainID": "c"},
+                "done",
+                datetime(2026, 1, 3, tzinfo=timezone.utc),
+                None,
+                services=services,
+            )
         renderer.assert_called_once()
         self.assertIs(renderer.call_args.kwargs["services"], services)
 

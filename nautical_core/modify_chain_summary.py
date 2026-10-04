@@ -129,7 +129,7 @@ def span_fields(
 def kind_rows(
     rows: list[tuple[str, str]],
     kind: str,
-    current: dict,
+    current: TaskPayload,
     *,
     anchor_preset_display: Callable[[str], tuple[str, str] | None],
     validate_anchor: Callable[[str], Any],
@@ -152,7 +152,7 @@ def kind_rows(
         else:
             rows.append(("Pattern", f"{expr}  {tag}"))
         try:
-            rows.append(("Natural", describe_anchor(validate_anchor(expr), current)))
+            rows.append(("Natural", describe_anchor(validate_anchor(expr), dict(current))))
         except Exception:
             pass
         return
@@ -181,7 +181,7 @@ def stats_rows(
 
 def limits_row(
     rows: list[tuple[str, str]],
-    current: dict,
+    current: TaskPayload,
     *,
     coerce_int: Callable[[Any, Any], int | None],
     parse_datetime: Callable[[Any], datetime | None],
@@ -265,9 +265,9 @@ def last_n_timeline(
 
 
 def render_chain_summary(
-    current: dict[str, Any],
+    current: TaskPayload,
     reason: str,
-    now_utc: Any,
+    now_utc: datetime,
     current_task: TaskPayload | None = None,
     *,
     services: ChainSummaryRenderServices,
@@ -337,9 +337,9 @@ def render_chain_summary(
 
 
 def render_chain_summary_with_services(
-    current: dict[str, Any],
+    current: TaskPayload,
     reason: str,
-    now_utc: Any,
+    now_utc: datetime,
     current_task: TaskPayload | None,
     *,
     services: ChainSummaryRenderServices,

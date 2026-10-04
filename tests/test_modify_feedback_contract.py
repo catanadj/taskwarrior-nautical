@@ -200,6 +200,22 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             },
         )
 
+    def test_feedback_local_formatters_accept_datetimes(self) -> None:
+        expected = Callable[[datetime], str]
+        renderers = (
+            modify_feedback.append_next_wait_sched_rows,
+            modify_feedback.render_cp_schedule_adjusted_panel,
+            modify_feedback._recurrence_display_value,
+            modify_feedback._recurrence_change_row,
+            modify_feedback.render_recurrence_updated_panel,
+            modify_feedback.recurrence_enabled_rows,
+        )
+        for renderer in renderers:
+            with self.subTest(renderer=renderer.__name__):
+                self.assertEqual(
+                    get_type_hints(renderer)["format_local"], expected
+                )
+
     def test_completion_feedback_renderers_use_owner_models(self) -> None:
         anchor_annotations = get_type_hints(modify_feedback.render_anchor_completion_feedback)
         cp_annotations = get_type_hints(modify_feedback.render_cp_completion_feedback)

@@ -74,7 +74,7 @@ def append_next_wait_sched_rows(
     next_due_utc: datetime,
     *,
     anchor_field: str = "due",
-    format_local: Callable[[Any], str],
+    format_local: Callable[[datetime], str],
     compare_datetimes: Callable[[datetime, datetime], int],
     format_delta: Callable[[timedelta], str],
 ) -> None:
@@ -129,7 +129,7 @@ def _format_td_short(td: timedelta) -> str:
 def render_cp_schedule_adjusted_panel(
     adjustment: TemporalCarryDecision,
     *,
-    format_local: Callable[[Any], str],
+    format_local: Callable[[datetime], str],
     semantic_diff_value: Callable[[str, str], str],
     format_offset: Callable[[timedelta], str],
     panel: PanelCallback,
@@ -222,7 +222,7 @@ def _recurrence_display_value(
     value: str,
     *,
     parse_datetime: Callable[[Any], Any],
-    format_local: Callable[[Any], str],
+    format_local: Callable[[datetime], str],
 ) -> str:
     if not value:
         return "-"
@@ -239,7 +239,7 @@ def _recurrence_change_row(
     new_value: str,
     *,
     parse_datetime: Callable[[Any], Any],
-    format_local: Callable[[Any], str],
+    format_local: Callable[[datetime], str],
 ) -> tuple[str, str]:
     label = _recurrence_update_label(field)
     old_text = _recurrence_display_value(field, old_value, parse_datetime=parse_datetime, format_local=format_local)
@@ -286,7 +286,7 @@ def render_recurrence_updated_panel(
     new: TaskPayload,
     *,
     parse_datetime: Callable[[Any], Any],
-    format_local: Callable[[Any], str],
+    format_local: Callable[[datetime], str],
     describe_native_until_carry: NativeCarryDescription,
     to_local: Callable[[datetime], datetime],
     coerce_int: Callable[[Any, Any], int | None],
@@ -374,7 +374,7 @@ def recurrence_enabled_rows(
     describe_anchor: Callable[[str], str],
     parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None],
     first_recurrence_target: FirstRecurrenceTargetCallback,
-    format_local: Callable[[Any], str],
+    format_local: Callable[[datetime], str],
 ) -> list[tuple[str, str]]:
     """Describe the recurrence added while promoting a plain task."""
     if source == "anchor":

@@ -371,24 +371,6 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             abc.Callable[[str, str], NoReturn],
         )
 
-    def test_modify_anchor_and_omit_validators_use_callback_contracts(self) -> None:
-        from nautical_core.modify_validation import (
-            validate_anchor_on_modify,
-            validate_omit_on_modify,
-        )
-
-        anchor_annotations = get_type_hints(validate_anchor_on_modify)
-        self.assertEqual(
-            anchor_annotations["parse_anchor_expr"], abc.Callable[[str], object]
-        )
-        self.assertEqual(
-            anchor_annotations["validate_anchor_expr"], abc.Callable[[str], object]
-        )
-        omit_annotations = get_type_hints(validate_omit_on_modify)
-        self.assertEqual(
-            omit_annotations["validate_omit_expr"], abc.Callable[[str], object]
-        )
-
     def test_cp_validation_effect_keeps_raw_task_values_at_object_boundary(self) -> None:
         from nautical_core.modify_validation_effects import CPValidationPorts, validate_cp
 

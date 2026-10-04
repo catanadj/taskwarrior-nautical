@@ -155,38 +155,6 @@ def validate_completion_cp_and_anchor(
     return new_cp, new_anchor, new_anchor_file
 
 
-def validate_anchor_on_modify(
-    expr: str,
-    *,
-    parse_anchor_expr: Callable[[str], object],
-    validate_anchor_expr: Callable[[str], object],
-) -> None:
-    """Mirror strict on-add anchor checks for ordinary modifications."""
-    if not expr or not expr.strip():
-        raise ValueError("anchor is required if chaining by anchor")
-    try:
-        parse_anchor_expr(expr)
-    except Exception as exc:
-        raise ValueError(f"anchor syntax error: {exc}") from exc
-    try:
-        validate_anchor_expr(expr)
-    except Exception as exc:
-        raise ValueError(f"anchor validation failed: {exc}") from exc
-
-
-def validate_omit_on_modify(
-    expr: str,
-    *,
-    validate_omit_expr: Callable[[str], object],
-) -> None:
-    if not expr or not expr.strip():
-        return
-    try:
-        validate_omit_expr(expr)
-    except Exception as exc:
-        raise ValueError(f"omit validation failed: {exc}") from exc
-
-
 def validate_cp_on_modify(
     cp_value: str,
     chain_max_value: object,
@@ -386,10 +354,8 @@ def validate_native_until_anchor_slots_or_fail(
 
 
 __all__ = (
-    "validate_anchor_on_modify",
     "validate_chain_limits_on_modify",
     "validate_cp_on_modify",
     "validate_native_until_after_target_or_fail",
     "validate_native_until_anchor_slots_or_fail",
-    "validate_omit_on_modify",
 )

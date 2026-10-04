@@ -61,6 +61,10 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertEqual(hints["dnf"], object)
         self.assertEqual(hints["is_atom_like"], Callable[[object], bool])
 
+    def test_bounded_decompress_uses_a_typed_zlib_port(self) -> None:
+        hints = get_type_hints(cache_payload._bounded_decompress)
+        self.assertEqual(getattr(hints["zlib_mod"], "__name__", None), "_ZlibDecompressorPort")
+
     def test_cache_load_and_save_callbacks_have_explicit_callable_contracts(self) -> None:
         load_hints = get_type_hints(cache_payload.cache_load)
         self.assertEqual(load_hints["cache_path"], Callable[[str], str])

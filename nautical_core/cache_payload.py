@@ -35,6 +35,20 @@ class _CacheKeyCallback(Protocol):
     ) -> str: ...
 
 
+class _DecompressorPort(Protocol):
+    unconsumed_tail: bytes
+    eof: bool
+    unused_data: bytes
+
+    def decompress(self, data: bytes, max_length: int = 0) -> bytes: ...
+
+    def flush(self, length: int = 16384) -> bytes: ...
+
+
+class _ZlibDecompressorPort(Protocol):
+    def decompressobj(self) -> _DecompressorPort: ...
+
+
 def is_atom_like(atom: object) -> bool:
     if not isinstance(atom, dict):
         return False
@@ -232,7 +246,7 @@ def cache_payload_shape_ok(obj: dict, *, is_dnf_like: Callable[[object], bool]) 
     return True
 
 
-def _bounded_decompress(blob: bytes, zlib_mod: Any, limit: int) -> bytes:
+def _bounded_decompress(blob: bytes, zlib_mod: _ZlibDecompressorPort, limit: int) -> bytes:
     decompressor = zlib_mod.decompressobj()
     data = decompressor.decompress(blob, limit + 1)
     if len(data) > limit:

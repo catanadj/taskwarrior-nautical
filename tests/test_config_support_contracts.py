@@ -19,6 +19,19 @@ import nautical_core.core_config as core_config
 
 
 class ConfigSupportContractTests(unittest.TestCase):
+    def test_integer_configuration_does_not_hide_conversion_defects(self) -> None:
+        class BrokenString:
+            def __str__(self) -> str:
+                raise RuntimeError("configuration conversion invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "conversion invariant"):
+            config_support.conf_int({"limit": BrokenString()}, "limit", 7)
+
+    def test_integer_configuration_defaults_only_for_invalid_values(self) -> None:
+        for value in ("not-an-int", None, object()):
+            with self.subTest(value=type(value).__name__):
+                self.assertEqual(config_support.conf_int({"limit": value}, "limit", 7), 7)
+
     def test_environment_flag_lookup_does_not_hide_mapping_defects(self) -> None:
         class BrokenEnvironment:
             def get(self, _name: str, _default: str) -> str:

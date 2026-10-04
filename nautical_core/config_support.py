@@ -498,7 +498,7 @@ def conf_int(
     value = conf_raw(conf, key)
     try:
         out = int(str(value).strip())
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         out = int(default)
     if min_value is not None and out < min_value:
         out = int(min_value)

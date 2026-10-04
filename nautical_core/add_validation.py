@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from . import astronomy, native_until
+from . import native_until
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_context import RecurrenceContext
 from nautical_core.task_datetime import TaskDatetimeParser
@@ -67,21 +67,16 @@ def collect_anchor_time_slots(
 ) -> tuple[tuple[int, int], ...]:
     """Return every effective clock time that an anchor or anchor_file can produce."""
     out: set[tuple[int, int]] = set()
-    try:
-        for term in dnf or ():
-            term_slots: set[tuple[int, int]] = set()
-            for atom in term or ():
-                mods = atom.get("mods") or {} if isinstance(atom, dict) else {}
-                value = mods.get("t")
-                if resolve_time_slots is not None and target_date is not None:
-                    term_slots.update(resolve_time_slots(mods, target_date))
-                else:
-                    term_slots.update(normalize_time_slots(value))
-            out.update(term_slots or {fallback_hhmm})
-    except Exception as exc:
-        if astronomy.is_astronomy_error(exc):
-            raise
-        pass
+    for term in dnf or ():
+        term_slots: set[tuple[int, int]] = set()
+        for atom in term or ():
+            mods = atom.get("mods") or {} if isinstance(atom, dict) else {}
+            value = mods.get("t")
+            if resolve_time_slots is not None and target_date is not None:
+                term_slots.update(resolve_time_slots(mods, target_date))
+            else:
+                term_slots.update(normalize_time_slots(value))
+        out.update(term_slots or {fallback_hhmm})
 
     if str(anchor_file_value or "").strip():
         from . import anchor_files

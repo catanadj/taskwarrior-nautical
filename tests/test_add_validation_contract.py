@@ -2,10 +2,23 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.add_validation import parse_chain_max
+from nautical_core.add_validation import collect_anchor_time_slots, parse_chain_max
 
 
 class AddValidationContractTests(unittest.TestCase):
+    def test_anchor_slot_collection_does_not_hide_normalizer_defects(self) -> None:
+        def broken_normalizer(_value: object) -> list[tuple[int, int]]:
+            raise RuntimeError("time-slot normalizer failed")
+
+        with self.assertRaisesRegex(RuntimeError, "time-slot normalizer failed"):
+            collect_anchor_time_slots(
+                [[{"mods": {"t": "09:00"}}]],
+                "",
+                (9, 0),
+                normalize_time_slots=broken_normalizer,
+                anchor_file_dir="",
+            )
+
     def test_chain_max_accepts_positive_integral_values_and_rejects_ambiguous_caps(self) -> None:
         for value, expected in ((1, 1), (5, 5), (5.0, 5), ("5", 5), ("5.0", 5)):
             with self.subTest(value=value):

@@ -1630,6 +1630,28 @@ class ModifyIsolationTests(unittest.TestCase):
             },
         )
 
+    def test_spawn_child_ports_type_the_child_uuid_callback(self) -> None:
+        from collections.abc import Callable as AbcCallable
+
+        from nautical_core.lifecycle.models import LifecycleIdentity, LifecyclePlan
+        from nautical_core.modify_spawn_effects import SpawnChildPorts
+        from nautical_core.task_models import TaskPayload
+
+        self.assertEqual(
+            get_type_hints(
+                SpawnChildPorts,
+                localns={
+                    "LifecycleIdentity": LifecycleIdentity,
+                    "LifecyclePlan": LifecyclePlan,
+                    "TaskPayload": TaskPayload,
+                },
+            )["child_uuid"],
+            AbcCallable[
+                [dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]],
+                str,
+            ],
+        )
+
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone
         from nautical_core.chain_generation import CarryFieldError

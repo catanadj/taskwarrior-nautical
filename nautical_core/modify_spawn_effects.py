@@ -72,7 +72,9 @@ class ChildUuidPorts:
 class SpawnChildPorts:
     spawn: Any
     prepare_payload: Any
-    child_uuid: Any
+    child_uuid: Callable[
+        [dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]], str
+    ]
     format_datetime: Callable[[datetime], str]
     now_utc: Callable[[], datetime]
     spawn_identity: Callable[[TaskPayload, TaskPayload], LifecycleIdentity]
@@ -201,7 +203,12 @@ def spawn_child_atomic(
     )
 
 
-def child_uuid_for_spawn(ports: ChildUuidPorts, parent_task: dict | None, child_task: dict | None, env: dict) -> str:
+def child_uuid_for_spawn(
+    ports: ChildUuidPorts,
+    parent_task: dict[str, Any] | None,
+    child_task: dict[str, Any] | None,
+    env: dict[str, Any],
+) -> str:
     return ports.prep.child_uuid_for_spawn(
         parent_task,
         child_task,

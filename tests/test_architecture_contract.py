@@ -617,6 +617,7 @@ facade.__all__
         self.assertIn("operation_for_host", violations[0].rule)
 
     def test_presentation_contexts_exclude_host_and_module_loaders(self) -> None:
+        from datetime import datetime
         from typing import Callable, NoReturn, get_type_hints
         from nautical_core.add_anchor_preview import (
             AnchorDnfPreparationCallback,
@@ -677,6 +678,19 @@ facade.__all__
                     get_type_hints(context)["error_and_exit"],
                     Callable[[list[tuple[str, str]]], NoReturn],
                 )
+                self.assertEqual(
+                    get_type_hints(context)["fmt_local_for_task"],
+                    Callable[[datetime], str],
+                )
+                self.assertEqual(
+                    get_type_hints(context)["format_anchor_rows"],
+                    Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
+                )
+                if context is AnchorExpressionPreviewServices:
+                    self.assertEqual(
+                        get_type_hints(context)["to_local_cached"],
+                        Callable[[datetime], datetime],
+                    )
 
         file_fields = {field.name for field in fields(AnchorFilePreviewServices)}
         self.assertTrue({"validate_anchor_syntax_strict", "validate_native_until_after_target"}.isdisjoint(file_fields))

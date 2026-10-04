@@ -110,9 +110,9 @@ class AnchorExpressionPreviewServices:
     validate_chain_duration_reasonable: AnchorDurationValidator
     append_wait_sched_rows: PreviewWaitScheduleRowsCallback
     anchor_until_summary: Callable[..., Any]
-    to_local_cached: Callable[..., Any]
-    fmt_local_for_task: Callable[..., Any]
-    format_anchor_rows: Callable[..., Any]
+    to_local_cached: Callable[[datetime], datetime]
+    fmt_local_for_task: Callable[[datetime], str]
+    format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]]
     panel: PreviewPanelCallback
     human_delta: HumanDeltaCallback
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn]
@@ -134,9 +134,9 @@ class AnchorFilePreviewServices:
     omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
     append_wait_sched_rows: PreviewWaitScheduleRowsCallback
     validate_chain_duration_reasonable: AnchorDurationValidator
-    format_anchor_rows: Callable[..., Any]
+    format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]]
     panel: PreviewPanelCallback
-    fmt_local_for_task: Callable[..., Any]
+    fmt_local_for_task: Callable[[datetime], str]
     human_delta: HumanDeltaCallback
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn]
 

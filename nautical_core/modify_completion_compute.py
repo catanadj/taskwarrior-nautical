@@ -73,7 +73,7 @@ def completion_compute_child_due(
     panel: PanelCallback,
     print_task: PrintTaskCallback,
     diag: DiagnosticCallback | None = None,
-    on_terminal: Any | None = None,
+    on_terminal: Callable[[OccurrenceSearchExhausted], bool] | None = None,
 ) -> tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None:
     task_row = dict(new)
     try:

@@ -551,8 +551,12 @@ class ModifyIsolationTests(unittest.TestCase):
 
     def test_completion_compute_temporal_inputs_are_explicit(self) -> None:
         import nautical_core.modify_completion_compute as compute
+        from nautical_core.scheduler_models import OccurrenceSearchExhausted
 
         expected = {
+            compute.completion_compute_child_due: {
+                "on_terminal": Callable[[OccurrenceSearchExhausted], bool] | None,
+            },
             compute.completion_until_or_fail: {"now_utc": datetime},
             compute.completion_until_guard_or_stop: {
                 "child_due": datetime | None,

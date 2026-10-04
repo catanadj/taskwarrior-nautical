@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
 import json
 from typing import TYPE_CHECKING, Any, Callable, MutableMapping, Protocol
@@ -25,8 +26,8 @@ class BuildAddContext(Protocol):
     def __call__(
         self,
         task: MutableMapping[str, Any],
-        now_utc: Any,
-        now_local: Any,
+        now_utc: datetime,
+        now_local: datetime,
         *,
         observation: TaskObservation,
         prof: Any,
@@ -194,7 +195,7 @@ class AddWorkflowApplication:
     def record_preview(self, plan: AddWorkflowPlan) -> AddWorkflowPlan:
         return self.record_preview_fn(plan)
 
-    def build_context(self, task: MutableMapping[str, Any], now_utc: Any, now_local: Any, *, observation: TaskObservation, prof: Any) -> OnAddContext:
+    def build_context(self, task: MutableMapping[str, Any], now_utc: datetime, now_local: datetime, *, observation: TaskObservation, prof: Any) -> OnAddContext:
         return self.build_context_fn(task, now_utc, now_local, observation=observation, prof=prof)
 
     def stamp_chain_id(self, task: MutableMapping[str, Any]) -> None:

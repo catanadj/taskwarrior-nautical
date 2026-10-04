@@ -52,6 +52,9 @@ class AddWorkflowTests(unittest.TestCase):
             get_type_hints(BuildAddContext.__call__, localns=localns)["return"],
             OnAddContext,
         )
+        context_callback = get_type_hints(BuildAddContext.__call__, localns=localns)
+        self.assertIs(context_callback["now_utc"], datetime)
+        self.assertIs(context_callback["now_local"], datetime)
         self.assertIs(
             get_type_hints(AddWorkflowApplication.build_context, localns=localns)["return"],
             OnAddContext,

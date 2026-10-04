@@ -62,6 +62,28 @@ class AnalyticsService(Protocol):
     ) -> list[TaskObservation]: ...
 
 
+class _AnalyticsCore(CPSequenceIntervalProvider, Protocol):
+    coerce_int: Callable[[Any, Any], int | None]
+    short_uuid: Callable[[Any], str]
+
+
+class _AnalyticsFormattingEffects(Protocol):
+    format_delta: Callable[[timedelta], str]
+
+
+class AnalyticsHost(Protocol):
+    @property
+    def core(self) -> _AnalyticsCore: ...
+
+    @overload
+    def _module(self, name: Literal["modify_analytics"]) -> AnalyticsService: ...
+
+    @overload
+    def _module(
+        self, name: Literal["modify_value_effects"]
+    ) -> _AnalyticsFormattingEffects: ...
+
+
 @dataclass(frozen=True, slots=True)
 class DatetimeValuePort:
     parser: TaskDatetimeParser
@@ -281,7 +303,7 @@ def chain_integrity_warnings(
     )
 
 
-def analytics_ports_for(host: Any) -> AnalyticsPorts:
+def analytics_ports_for(host: AnalyticsHost) -> AnalyticsPorts:
     return AnalyticsPorts(
         core=host.core,
         service=host._module("modify_analytics"),

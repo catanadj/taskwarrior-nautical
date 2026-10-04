@@ -66,7 +66,10 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertIsNot(get_type_hints(seconds_delta_port_for)["host"], Any)
 
     def test_analytics_ports_match_owner_callback_contracts(self) -> None:
-        from nautical_core.modify_diagnostics_effects import AnalyticsPorts
+        from nautical_core.modify_diagnostics_effects import (
+            AnalyticsPorts,
+            analytics_ports_for,
+        )
 
         self.assertEqual(
             {name: annotation for name, annotation in get_type_hints(AnalyticsPorts).items()
@@ -81,6 +84,7 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         annotations = get_type_hints(AnalyticsPorts)
         self.assertIsNot(annotations["core"], Any)
         self.assertIsNot(annotations["service"], Any)
+        self.assertIsNot(get_type_hints(analytics_ports_for)["host"], Any)
 
     def test_timeline_summary_ports_match_owner_callback_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import TimelineSummaryPorts

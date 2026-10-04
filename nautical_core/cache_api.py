@@ -79,6 +79,24 @@ class CacheJsonPort(Protocol):
     ) -> str: ...
 
 
+class CacheDecompressorPort(Protocol):
+    unconsumed_tail: bytes
+    eof: bool
+    unused_data: bytes
+
+    def decompress(self, data: bytes, max_length: int = 0) -> bytes: ...
+
+    def flush(self, length: int = 16384) -> bytes: ...
+
+
+class CacheCompressionPort(Protocol):
+    error: type[Exception]
+
+    def compress(self, data: bytes, level: int) -> bytes: ...
+
+    def decompressobj(self) -> CacheDecompressorPort: ...
+
+
 fcntl: CacheFcntlPort | None
 try:
     import fcntl
@@ -109,7 +127,7 @@ class CacheRuntimeDependencies:
     random: CacheRandomPort
     fcntl: CacheFcntlPort | None
     json: CacheJsonPort
-    compression: Any
+    compression: CacheCompressionPort
     base64: Any
     tempfile: Any
     cache_state: CacheState

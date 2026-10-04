@@ -40,6 +40,9 @@ WaitScheduleDebug: TypeAlias = Mapping[str, Mapping[str, object]]
 CompletionFinalBoundary: TypeAlias = tuple[Literal["max", "until"], datetime]
 CompletionFinals: TypeAlias = list[CompletionFinalBoundary]
 ShortUuidCallback: TypeAlias = Callable[[Any], str]
+FirstRecurrenceTargetCallback: TypeAlias = Callable[
+    [TaskPayload, str], datetime | None
+]
 ExistingNextLookupCallback: TypeAlias = Callable[
     [TaskPayload, int], TaskRead[TaskObservation] | None
 ]

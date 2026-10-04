@@ -34,6 +34,7 @@ from nautical_core.modify_models import (
     ValidateChainDurationCallback,
     ValidateUntilCallback,
 )
+from nautical_core.modify_generation_effects import ChainGenerationServicePort
 from nautical_core.scheduler_models import (
     OccurrenceSearchExhausted,
     occurrence_exhaustion_message,
@@ -522,10 +523,10 @@ def first_recurrence_target(
     task: Mapping[str, Any],
     source: str,
     *,
-    parse_datetime: Any,
-    format_datetime: Any,
-    generation_service: Any,
-) -> Any:
+    parse_datetime: DatetimeParserCallback,
+    format_datetime: Callable[[datetime], str],
+    generation_service: Callable[[], ChainGenerationServicePort],
+) -> datetime | None:
     """Compute the first projected target used by recurrence-update panels."""
     target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
     if not target_field:
@@ -541,10 +542,11 @@ def first_recurrence_target(
             DEFAULT_TASK_CODEC.decode_row(parent, source_query="completion recurrence target")
         )
         if source in {"anchor", "anchor_file"}:
-            result = generation.compute_anchor_child_due(typed_parent)
+            anchor_result = generation.compute_anchor_child_due(typed_parent)
+            return anchor_result[0] if anchor_result else None
         else:
-            result = generation.compute_cp_child_due(typed_parent)
-        return result[0] if result else None
+            cp_result = generation.compute_cp_child_due(typed_parent)
+            return cp_result[0] if cp_result else None
     except (ValueError, OverflowError, OccurrenceSearchExhausted):
         return None
 

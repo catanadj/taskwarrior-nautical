@@ -21,6 +21,7 @@ from .modify_models import (
     CompletionFinals,
     AnchorDNF,
     NativeCarryDescription,
+    FirstRecurrenceTargetCallback,
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
@@ -291,7 +292,7 @@ def render_recurrence_updated_panel(
     coerce_int: Callable[[Any, Any], int | None],
     describe_anchor: Callable[[str], str],
     resolve_omit_presets: Callable[[str], str],
-    first_recurrence_target: Callable[[TaskPayload, str], Any],
+    first_recurrence_target: FirstRecurrenceTargetCallback,
     panel_mode: str,
     strip_markup: Callable[[str], str],
     panel: PanelCallback,
@@ -372,7 +373,7 @@ def recurrence_enabled_rows(
     *,
     describe_anchor: Callable[[str], str],
     parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None],
-    first_recurrence_target: Callable[[TaskPayload, str], Any],
+    first_recurrence_target: FirstRecurrenceTargetCallback,
     format_local: Callable[[Any], str],
 ) -> list[tuple[str, str]]:
     """Describe the recurrence added while promoting a plain task."""

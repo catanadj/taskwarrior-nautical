@@ -163,3 +163,20 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
         warning_hints = get_type_hints(warn_unreasonable_duration)
         self.assertEqual(warning_hints["child_due"], datetime | None)
         self.assertEqual(warning_hints["until_dt"], datetime | None)
+
+    def test_first_recurrence_target_has_typed_callbacks_and_result(self) -> None:
+        from datetime import datetime
+        from typing import Callable, Mapping
+
+        from nautical_core.modify_completion_compute import first_recurrence_target
+        from nautical_core.modify_generation_effects import ChainGenerationServicePort
+        from nautical_core.modify_models import DatetimeParserCallback
+
+        hints = get_type_hints(first_recurrence_target)
+        self.assertIs(hints["parse_datetime"], DatetimeParserCallback)
+        self.assertEqual(hints["format_datetime"], Callable[[datetime], str])
+        self.assertEqual(
+            hints["generation_service"], Callable[[], ChainGenerationServicePort]
+        )
+        self.assertEqual(hints["return"], datetime | None)
+        self.assertEqual(hints["task"], Mapping[str, Any])

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from .chain_generation import CarryFieldError
@@ -273,7 +274,9 @@ def render_recurrence_updated_panel_for(host: Any, changes: list[tuple[str, str,
     )
 
 
-def first_recurrence_target_for(host: Any, new: TaskPayload, source: str) -> Any:
+def first_recurrence_target_for(
+    host: Any, new: TaskPayload, source: str
+) -> datetime | None:
     task_view = host._module("modify_models").TaskView.from_mapping(new)
     generation = host._module("modify_generation_effects")
     return host._module("modify_completion_compute").first_recurrence_target(

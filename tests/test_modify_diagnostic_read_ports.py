@@ -353,6 +353,24 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             abc.Callable[[object], datetime | None],
         )
 
+    def test_completion_validation_services_use_typed_cp_callbacks(self) -> None:
+        from typing import NoReturn
+        from nautical_core.modify_validation import CompletionValidationServices
+
+        annotations = get_type_hints(CompletionValidationServices)
+        self.assertEqual(
+            annotations["parse_cp_sequence"],
+            abc.Callable[[str], list[timedelta] | None],
+        )
+        self.assertEqual(
+            annotations["validate_cp"],
+            abc.Callable[[str, object, object], None],
+        )
+        self.assertEqual(
+            annotations["fail"],
+            abc.Callable[[str, str], NoReturn],
+        )
+
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:
         from nautical_core.modify_validation import validate_cp_on_modify
 

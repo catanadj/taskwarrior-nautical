@@ -83,13 +83,13 @@ class CompletionValidationServices:
     reject_conflicting_types: Callable[[str, str, str], None]
     validate_omit: Callable[[str, str, str, str], None]
     validate_chain_limits: Callable[[TaskPayload], None]
-    parse_cp_sequence: Callable[[str], Any]
+    parse_cp_sequence: Callable[[str], list[timedelta] | None]
     cp_sequence_parse_error: Callable[[str], str | None]
     field_changed: Callable[[TaskPayload, TaskPayload, str], bool]
     validate_anchor: Callable[[str], None]
-    validate_cp: Callable[[str, Any, Any], None]
+    validate_cp: Callable[[str, object, object], None]
     apply_transition: Callable[[TaskPayload, TaskPayload], None]
-    fail: Callable[[str, str], Any]
+    fail: Callable[[str, str], NoReturn]
     diagnostic: Callable[[str], None]
 
 

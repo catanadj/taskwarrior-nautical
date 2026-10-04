@@ -11,6 +11,14 @@ from tests.support.hook_process import HookSubprocessFixture
 
 
 class HookProtocolTests(HookSubprocessFixture):
+    def test_passthrough_json_does_not_hide_unexpected_flush_failure(self) -> None:
+        class BrokenFlushStream(io.StringIO):
+            def flush(self) -> None:
+                raise RuntimeError("flush adapter defect")
+
+        with self.assertRaisesRegex(RuntimeError, "flush adapter defect"):
+            hook_protocol.emit_passthrough_json({"status": "pending"}, stream=BrokenFlushStream())
+
     def test_modify_json_decoder_translates_excessive_nesting(self) -> None:
         raw = "[" * 2000 + "0" + "]" * 2000
 

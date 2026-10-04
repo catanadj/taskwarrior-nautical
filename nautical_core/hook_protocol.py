@@ -387,7 +387,7 @@ def emit_passthrough_json(task: dict | None, *, stream: Any = None) -> None:
     target.write(json.dumps(task if isinstance(task, dict) else {}, ensure_ascii=False))
     try:
         target.flush()
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 

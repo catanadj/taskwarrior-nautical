@@ -622,6 +622,7 @@ facade.__all__
             AnchorDnfPreparationCallback,
             AnchorDurationValidator,
             AnchorLintCallback,
+            AnchorModeValidator,
             PreviewPanelCallback,
             PreviewWaitScheduleRowsCallback,
         )
@@ -654,6 +655,11 @@ facade.__all__
                     get_type_hints(context)["validate_chain_duration_reasonable"],
                     AnchorDurationValidator,
                 )
+                if context is AnchorExpressionPreviewServices:
+                    self.assertIs(
+                        get_type_hints(context)["validate_anchor_mode"],
+                        AnchorModeValidator,
+                    )
                 self.assertIs(
                     get_type_hints(context)["append_wait_sched_rows"],
                     PreviewWaitScheduleRowsCallback,

@@ -45,6 +45,10 @@ class AnchorDurationValidator(Protocol):
     ) -> tuple[bool, str | None]: ...
 
 
+class AnchorModeValidator(Protocol):
+    def __call__(self, mode_str: Any) -> tuple[str, str | None]: ...
+
+
 class PreviewWaitScheduleRowsCallback(Protocol):
     def __call__(
         self,
@@ -102,7 +106,7 @@ class AnchorExpressionPreviewServices:
     omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
     root_uuid_from: Callable[[TaskPayload], str | None]
     short: Callable[[Any], str]
-    validate_anchor_mode: Callable[..., Any]
+    validate_anchor_mode: AnchorModeValidator
     validate_chain_duration_reasonable: AnchorDurationValidator
     append_wait_sched_rows: PreviewWaitScheduleRowsCallback
     anchor_until_summary: Callable[..., Any]
@@ -203,7 +207,7 @@ def anchor_preview_prepare_dnf(
     *,
     core: Any,
     validate_anchor_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
-    validate_anchor_mode: Callable[[Any], tuple[str, str | None]],
+    validate_anchor_mode: AnchorModeValidator,
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
 ) -> tuple[list[list[dict[str, Any]]], str]:
     _ = due_dt

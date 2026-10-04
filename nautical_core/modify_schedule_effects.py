@@ -170,7 +170,7 @@ class SchedulerServiceForTask(Protocol):
 
 
 class _SchedulerRuntimeState(Protocol):
-    scheduler_services: dict[Any, Any]
+    scheduler_services: dict[tuple[object, ...], SchedulerService]
     diag_stats: dict[str, Any]
     workflow_context: Any
 

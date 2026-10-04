@@ -31,13 +31,16 @@ import nautical_core.timezone_facade as timezone_facade
 if TYPE_CHECKING:
     from nautical_core.hook_workflow_context import WorkflowInvocationContext
     from nautical_core.modify_generation_effects import ChainGenerationServicePort
+    from nautical_core.scheduler_service import SchedulerService
 
 
 @dataclass(slots=True)
 class ModifyRuntimeState:
     workflow_context: WorkflowInvocationContext | None = None
     task_repository: Any = None
-    scheduler_services: dict[Any, Any] = field(default_factory=dict)
+    scheduler_services: dict[tuple[object, ...], SchedulerService] = field(
+        default_factory=dict
+    )
     chain_generation_service: ChainGenerationServicePort | None = None
     query_ctx: dict[str, dict[object, object]] = field(
         default_factory=lambda: {
@@ -108,10 +111,10 @@ def scheduler_service_for_task(
     state: ModifyRuntimeState,
     core: Any,
     recurrence_seed_base: Callable[[dict[str, Any]], str],
-) -> Any:
+) -> SchedulerService:
     """Return one cached scheduler service for the task's scheduling state."""
     identity = str(task.get("uuid") or task.get("chainID") or "").strip()
-    cache_key: tuple[Any, ...]
+    cache_key: tuple[object, ...]
     if identity:
         cache_key = (
             "task",

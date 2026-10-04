@@ -96,6 +96,7 @@ if TYPE_CHECKING:
         HumanizeUntilDelta,
         UntilPorts as UntilPortsModel,
     )
+    from .scheduler_service import SchedulerService
     from .modify_diagnostics_effects import EndChainSummaryPorts
     from .modify_value_effects import DatetimePorts as DatetimePortsModel
     from .cp_parser import CPSequenceToken
@@ -547,7 +548,7 @@ class _CompletionComputeCore(Protocol):
 
 
 class _CompletionComputeRuntimeState(Protocol):
-    scheduler_services: dict[Any, Any]
+    scheduler_services: dict[tuple[object, ...], SchedulerService]
     diag_stats: dict[str, Any]
     workflow_context: WorkflowInvocationContext | None
     chain_generation_service: ChainGenerationServicePort | None

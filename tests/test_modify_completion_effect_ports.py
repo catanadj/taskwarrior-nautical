@@ -103,6 +103,29 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             expected,
         )
 
+    def test_scheduler_runtime_state_uses_scheduler_service_cache_contract(self) -> None:
+        from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
+        from nautical_core.modify_runtime import ModifyRuntimeState, scheduler_service_for_task
+        from nautical_core.modify_schedule_effects import _SchedulerRuntimeState
+
+        expected_cache = "dict[tuple[object, ...], SchedulerService]"
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["scheduler_services"],
+            expected_cache,
+        )
+        self.assertEqual(
+            _SchedulerRuntimeState.__annotations__["scheduler_services"],
+            expected_cache,
+        )
+        self.assertEqual(
+            _CompletionComputeRuntimeState.__annotations__["scheduler_services"],
+            expected_cache,
+        )
+        self.assertEqual(
+            scheduler_service_for_task.__annotations__["return"],
+            "SchedulerService",
+        )
+
     def test_generation_service_contract_includes_completion_draft_builder(self) -> None:
         from nautical_core.modify_generation_effects import ChainGenerationServicePort
 

@@ -51,6 +51,15 @@ class PanelRendererContractTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "conversion defect"):
                 ui._normalized_live_duration_ms(160)
 
+    def test_static_rich_renderer_does_not_hide_unexpected_tty_probe_failures(self) -> None:
+        class BrokenStderr:
+            def isatty(self) -> bool:
+                raise RuntimeError("tty probe defect")
+
+        with patch.object(ui.sys, "stderr", BrokenStderr()):
+            with self.assertRaisesRegex(RuntimeError, "tty probe defect"):
+                ui._render_panel_rich("Title", [], kind="info", themes=None)
+
     def test_live_panel_branding_focus_and_footer_bounds_do_not_change_static_panels(self) -> None:
         from rich.console import Console
 

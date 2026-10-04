@@ -488,10 +488,14 @@ def _render_panel_rich(
     themes: dict | None,
 ) -> bool:
     try:
-        if not sys.stderr.isatty():
-            raise RuntimeError("no tty")
+        is_tty = sys.stderr.isatty()
+    except (OSError, ValueError):
+        return False
+    if not is_tty:
+        return False
+    try:
         from rich.console import Console
-    except Exception:
+    except ImportError:
         return False
 
     try:

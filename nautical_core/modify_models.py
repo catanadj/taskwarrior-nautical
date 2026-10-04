@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol, TypeAlias, Mapping
+from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol, TypeAlias, Mapping, overload
 from types import MappingProxyType
 
 from .integration_models import TaskRead
@@ -347,8 +347,11 @@ class ValidateChainDurationCallback(Protocol):
 
 
 class CoerceIntCallback(Protocol):
-    def __call__(self, value: Any, default: int = 0) -> int:
-        ...
+    @overload
+    def __call__(self, value: Any, default: None = None) -> int | None: ...
+
+    @overload
+    def __call__(self, value: Any, default: int) -> int: ...
 
 
 class DatetimeParserCallback(Protocol):

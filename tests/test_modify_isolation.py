@@ -1652,6 +1652,57 @@ class ModifyIsolationTests(unittest.TestCase):
             ],
         )
 
+    def test_spawn_preparation_functions_type_their_callback_boundaries(self) -> None:
+        from collections.abc import Callable as AbcCallable, Mapping
+        from datetime import datetime
+        from uuid import UUID
+
+        from nautical_core.modify_models import CoerceIntCallback
+        from nautical_core.modify_spawn_prep import (
+            child_uuid_for_spawn,
+            prepare_spawn_child_payload,
+            stable_child_uuid,
+        )
+        from nautical_core.task_models import TaskDraft
+
+        localns = {"CoerceIntCallback": CoerceIntCallback, "TaskDraft": TaskDraft}
+        self.assertEqual(
+            get_type_hints(stable_child_uuid, localns=localns),
+            {
+                "parent_task": Mapping[str, Any] | None,
+                "child_task": Mapping[str, Any] | None,
+                "task_uuid_or_empty": AbcCallable[[dict[str, Any] | None], str],
+                "coerce_int": CoerceIntCallback,
+                "stable_child_uuid_namespace": UUID,
+                "return": str,
+            },
+        )
+        self.assertEqual(
+            get_type_hints(child_uuid_for_spawn),
+            {
+                "parent_task": dict | None,
+                "child_task": dict | None,
+                "env": dict,
+                "stable_child_uuid": AbcCallable[[dict | None, dict | None], str],
+                "generate_child_uuid_candidate": AbcCallable[[Mapping[str, str]], str],
+                "return": str,
+            },
+        )
+        self.assertEqual(
+            get_type_hints(prepare_spawn_child_payload, localns=localns),
+            {
+                "child_task": dict[str, Any],
+                "parent_task": dict[str, Any] | None,
+                "env": dict[str, Any],
+                "child_uuid_for_spawn": AbcCallable[
+                    [dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]], str
+                ],
+                "fmt_isoz": AbcCallable[[datetime], str],
+                "now_utc": AbcCallable[[], datetime],
+                "return": tuple[TaskDraft, str, str],
+            },
+        )
+
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone
         from nautical_core.chain_generation import CarryFieldError

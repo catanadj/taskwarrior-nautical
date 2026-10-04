@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
-from typing import Any, NoReturn, Protocol
+from typing import NoReturn, Protocol
 
 from .modify_models import PanelCallback
 from .recurrence_context import RecurrenceContext
@@ -157,8 +157,8 @@ def validate_completion_cp_and_anchor(
 def validate_anchor_on_modify(
     expr: str,
     *,
-    parse_anchor_expr: Any,
-    validate_anchor_expr: Any,
+    parse_anchor_expr: Callable[[str], object],
+    validate_anchor_expr: Callable[[str], object],
 ) -> None:
     """Mirror strict on-add anchor checks for ordinary modifications."""
     if not expr or not expr.strip():
@@ -173,7 +173,11 @@ def validate_anchor_on_modify(
         raise ValueError(f"anchor validation failed: {exc}") from exc
 
 
-def validate_omit_on_modify(expr: str, *, validate_omit_expr: Any) -> None:
+def validate_omit_on_modify(
+    expr: str,
+    *,
+    validate_omit_expr: Callable[[str], object],
+) -> None:
     if not expr or not expr.strip():
         return
     try:

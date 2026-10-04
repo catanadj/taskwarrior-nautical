@@ -282,7 +282,7 @@ def validate_omit(ports: OmitValidationPorts, anchor_expr: str, anchor_file_expr
             load_anchor_file=ports.load_anchor_file,
             load_omit_file=ports.load_omit_file,
         )
-    except Exception as exc:
+    except ValueError as exc:
         ports.fail("Invalid omit", str(exc))
         return
     if findings:

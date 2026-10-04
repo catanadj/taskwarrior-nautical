@@ -6,6 +6,7 @@ import nautical_core.modify_lifecycle as modify_lifecycle
 import nautical_core.modify_ordinary as modify_ordinary
 
 from nautical_core.modify_validation_effects import AnchorValidationPorts, validate_anchor
+from nautical_core.modify_validation_effects import OmitValidationPorts, validate_omit
 from nautical_core.modify_datetime_effects import (
     DatetimeEffectPorts,
     local_naive_to_utc,
@@ -15,6 +16,46 @@ from nautical_core.modify_datetime_effects import (
 
 
 class ModifyValidationEffectsTests(unittest.TestCase):
+    def test_omit_validation_maps_user_value_errors_but_surfaces_internal_defects(self) -> None:
+        failures = []
+
+        def run_omit_pipeline(expr, *, validate_omit_expr):
+            validate_omit_expr(expr)
+
+        ports = OmitValidationPorts(
+            pipeline=SimpleNamespace(
+                validate_omit_expression=run_omit_pipeline,
+                validate_recurrence_files=lambda *_args, **_kwargs: (),
+            ),
+            parse_anchor=lambda _expr: None,
+            validate_anchor=lambda _expr: None,
+            validate_omit=lambda _expr: (_ for _ in ()).throw(ValueError("bad omit")),
+            validate_files=lambda *_args, **_kwargs: (),
+            load_anchor_file=lambda _name: None,
+            load_omit_file=lambda _name: None,
+            fail=lambda title, message: failures.append((title, message)),
+        )
+        validate_omit(ports, "", "", "bad", "")
+        self.assertEqual(failures, [("Invalid omit", "bad omit")])
+
+        failures.clear()
+        ports = OmitValidationPorts(
+            pipeline=SimpleNamespace(
+                validate_omit_expression=run_omit_pipeline,
+                validate_recurrence_files=lambda *_args, **_kwargs: (),
+            ),
+            parse_anchor=lambda _expr: None,
+            validate_anchor=lambda _expr: None,
+            validate_omit=lambda _expr: (_ for _ in ()).throw(RuntimeError("omit defect")),
+            validate_files=lambda *_args, **_kwargs: (),
+            load_anchor_file=lambda _name: None,
+            load_omit_file=lambda _name: None,
+            fail=lambda title, message: failures.append((title, message)),
+        )
+        with self.assertRaisesRegex(RuntimeError, "omit defect"):
+            validate_omit(ports, "", "", "bad", "")
+        self.assertEqual(failures, [])
+
     def test_datetime_effects_handle_invalid_values_and_truncate_microseconds(self) -> None:
         ports = DatetimeEffectPorts(
             parse_datetime=lambda value: None if value == "bad" else datetime(2026, 1, 1, 9, 0),

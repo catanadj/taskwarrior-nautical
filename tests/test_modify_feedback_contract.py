@@ -216,6 +216,21 @@ class ModifyFeedbackContractTests(unittest.TestCase):
                     get_type_hints(renderer)["format_local"], expected
                 )
 
+    def test_feedback_recurrence_parser_callbacks_return_optional_datetime(self) -> None:
+        from nautical_core.modify_models import DatetimeParserCallback
+
+        helpers = (
+            modify_feedback._recurrence_display_value,
+            modify_feedback._recurrence_change_row,
+            modify_feedback.render_recurrence_updated_panel,
+        )
+        for helper in helpers:
+            with self.subTest(helper=helper.__name__):
+                self.assertIs(
+                    get_type_hints(helper)["parse_datetime"],
+                    DatetimeParserCallback,
+                )
+
     def test_completion_feedback_renderers_use_owner_models(self) -> None:
         anchor_annotations = get_type_hints(modify_feedback.render_anchor_completion_feedback)
         cp_annotations = get_type_hints(modify_feedback.render_cp_completion_feedback)

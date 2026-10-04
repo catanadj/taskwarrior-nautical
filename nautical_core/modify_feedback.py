@@ -22,6 +22,7 @@ from .modify_models import (
     AnchorDNF,
     NativeCarryDescription,
     FirstRecurrenceTargetCallback,
+    DatetimeParserCallback,
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
@@ -221,7 +222,7 @@ def _recurrence_display_value(
     field: str,
     value: str,
     *,
-    parse_datetime: Callable[[Any], Any],
+    parse_datetime: DatetimeParserCallback,
     format_local: Callable[[datetime], str],
 ) -> str:
     if not value:
@@ -238,7 +239,7 @@ def _recurrence_change_row(
     old_value: str,
     new_value: str,
     *,
-    parse_datetime: Callable[[Any], Any],
+    parse_datetime: DatetimeParserCallback,
     format_local: Callable[[datetime], str],
 ) -> tuple[str, str]:
     label = _recurrence_update_label(field)
@@ -285,7 +286,7 @@ def render_recurrence_updated_panel(
     changes: list[tuple[str, str, str]],
     new: TaskPayload,
     *,
-    parse_datetime: Callable[[Any], Any],
+    parse_datetime: DatetimeParserCallback,
     format_local: Callable[[datetime], str],
     describe_native_until_carry: NativeCarryDescription,
     to_local: Callable[[datetime], datetime],

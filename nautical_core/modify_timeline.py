@@ -25,13 +25,13 @@ class TimelineProjectionServices:
 
 @dataclass(frozen=True, slots=True)
 class TimelineFormattingServices:
-    future_style_for_chain: CallbackPort
-    coerce_int: CallbackPort
-    fmt_on_time_delta: CallbackPort
-    fmtlocal: CallbackPort
-    fmt_dt_local: CallbackPort
-    short: CallbackPort
-    format_gap: CallbackPort
+    future_style_for_chain: Callable[[TaskPayload, str], str]
+    coerce_int: Callable[[Any, Any], Any]
+    fmt_on_time_delta: Callable[[Any, Any], str]
+    fmtlocal: Callable[[Any], str]
+    fmt_dt_local: Callable[[Any], str]
+    short: Callable[[Any], str]
+    format_gap: Callable[[Any, Any, str, bool], str]
 
 
 TimelineItem = tuple[object, Any, TaskPayload, str]

@@ -2,10 +2,12 @@
 
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
+from typing import Any, Callable, get_type_hints
 import unittest
 
 import nautical_core as core
 from nautical_core.modify_timeline import (
+    TimelineFormattingServices,
     _timeline_base_line,
     _timeline_future_anchor_items,
     _timeline_omit_label,
@@ -13,11 +15,26 @@ from nautical_core.modify_timeline import (
 from nautical_core.recurrence_context import RecurrenceContext
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
-from nautical_core.task_models import TaskObservation
+from nautical_core.task_models import TaskObservation, TaskPayload
 from nautical_core.timeutil import parse_dt_any
 
 
 class ModifyTimelineContractTests(unittest.TestCase):
+    def test_timeline_formatting_services_expose_exact_callback_shapes(self) -> None:
+        annotations = get_type_hints(TimelineFormattingServices)
+        expected = {
+            "future_style_for_chain": Callable[[TaskPayload, str], str],
+            "coerce_int": Callable[[Any, Any], Any],
+            "fmt_on_time_delta": Callable[[Any, Any], str],
+            "fmtlocal": Callable[[Any], str],
+            "fmt_dt_local": Callable[[Any], str],
+            "short": Callable[[Any], str],
+            "format_gap": Callable[[Any, Any, str, bool], str],
+        }
+        for name, annotation in expected.items():
+            with self.subTest(callback=name):
+                self.assertEqual(annotations[name], annotation)
+
     def test_omit_label_does_not_hide_unexpected_formatter_failure(self) -> None:
         def broken_formatter(_omit_dnf, _omit_date):
             raise RuntimeError("omit description implementation failed")

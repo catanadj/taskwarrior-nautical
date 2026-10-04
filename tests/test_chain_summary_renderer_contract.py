@@ -8,6 +8,11 @@ from typing import get_type_hints
 from nautical_core.modify_chain_summary import (
     ChainSummaryRenderServices,
     SpanFieldsCallback,
+    SummaryKindRows,
+    SummaryLimitsRow,
+    SummaryRowsFormatter,
+    SummaryStatsRows,
+    SummaryTimelineRows,
     render_chain_summary_with_services,
 )
 
@@ -17,6 +22,22 @@ class ChainSummaryRendererContractTests(unittest.TestCase):
         self.assertIs(
             get_type_hints(ChainSummaryRenderServices)["span_fields"],
             SpanFieldsCallback,
+        )
+
+    def test_render_service_row_callbacks_have_explicit_contracts(self) -> None:
+        annotations = get_type_hints(ChainSummaryRenderServices)
+        self.assertEqual(
+            {name: annotations[name] for name in (
+                "kind_rows", "stats_rows", "limits_row",
+                "last_n_timeline_rows", "format_rows",
+            )},
+            {
+                "kind_rows": SummaryKindRows,
+                "stats_rows": SummaryStatsRows,
+                "limits_row": SummaryLimitsRow,
+                "last_n_timeline_rows": SummaryTimelineRows,
+                "format_rows": SummaryRowsFormatter,
+            },
         )
 
     def test_delete_chain_summary_span_uses_stop_time_without_last_end(self) -> None:

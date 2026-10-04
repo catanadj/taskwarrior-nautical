@@ -31,18 +31,59 @@ class SpanFieldsCallback(Protocol):
     ) -> tuple[datetime | None, datetime | None, str]: ...
 
 
+class SummaryKindRows(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        kind: str,
+        current: TaskPayload,
+    ) -> None: ...
+
+
+class SummaryStatsRows(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        chain: list[TaskObservation],
+        now_utc: datetime,
+    ) -> None: ...
+
+
+class SummaryLimitsRow(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        current: TaskPayload,
+    ) -> None: ...
+
+
+class SummaryTimelineRows(Protocol):
+    def __call__(
+        self,
+        chain: list[TaskObservation],
+        n: int = 6,
+    ) -> list[str]: ...
+
+
+class SummaryRowsFormatter(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+    ) -> list[tuple[str | None, str]]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ChainSummaryRenderServices:
     export_sorted_chain: Callable[[str, dict[str, Any]], list[TaskObservation]]
     root_uuid_from: Callable[[dict[str, Any]], Any]
     short_uuid: Callable[[Any], str]
     format_root_and_age: Callable[[dict[str, Any], Any], str]
-    kind_rows: Callable[..., None]
+    kind_rows: SummaryKindRows
     span_fields: SpanFieldsCallback
-    stats_rows: Callable[..., None]
-    limits_row: Callable[..., None]
-    last_n_timeline_rows: Callable[..., list[str]]
-    format_rows: Callable[..., list[tuple[str | None, str]]]
+    stats_rows: SummaryStatsRows
+    limits_row: SummaryLimitsRow
+    last_n_timeline_rows: SummaryTimelineRows
+    format_rows: SummaryRowsFormatter
     coerce_int: Callable[[Any, Any], int | None]
     format_local: Callable[[Any], str]
     max_chain_walk: int

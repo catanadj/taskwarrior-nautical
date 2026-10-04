@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, Literal, Protocol
 
 from .modify_models import MarkupStripper, PreviewLineFormatter
 from .task_models import TaskPayload
@@ -23,7 +23,22 @@ class LinePreviewPorts:
     delta: HumanDeltaPort
 
 
-def line_preview_ports_for(host: Any) -> LinePreviewPorts:
+class _ModifyFeedback(Protocol):
+    format_line_preview: PreviewLineFormatter
+
+
+class _LinePreviewCore(MarkupStripper, Protocol):
+    humanize_delta: Callable[[datetime, datetime, bool], str]
+
+
+class LinePreviewHost(Protocol):
+    core: _LinePreviewCore
+    _fmtlocal: Callable[[Any], str]
+
+    def _module(self, name: Literal["modify_feedback"]) -> _ModifyFeedback: ...
+
+
+def line_preview_ports_for(host: LinePreviewHost) -> LinePreviewPorts:
     return LinePreviewPorts(
         format_line_preview=host._module("modify_feedback").format_line_preview,
         core=host.core,

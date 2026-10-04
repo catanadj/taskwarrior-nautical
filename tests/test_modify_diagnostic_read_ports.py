@@ -421,6 +421,28 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             get_type_hints(datetime_effect_ports_for)["host"], DatetimeEffectsHost
         )
 
+    def test_modify_presentation_factories_use_owner_host_protocols(self) -> None:
+        from nautical_core.modify_format_effects import (
+            LinePreviewHost,
+            line_preview_ports_for,
+        )
+        from nautical_core.modify_presentation_effects import (
+            ChainStyleHost,
+            LifecycleResultHost,
+            chain_style_ports_for,
+            lifecycle_result_port_for,
+        )
+
+        self.assertIs(
+            get_type_hints(chain_style_ports_for)["host"], ChainStyleHost
+        )
+        self.assertIs(
+            get_type_hints(lifecycle_result_port_for)["host"], LifecycleResultHost
+        )
+        self.assertIs(
+            get_type_hints(line_preview_ports_for)["host"], LinePreviewHost
+        )
+
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:
         from nautical_core.modify_validation import validate_cp_on_modify
 

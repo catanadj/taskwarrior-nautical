@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from .panel_colours import chain_colour_root
 from .modify_models import CompletionLifecycleResult, TaskView
@@ -32,14 +32,40 @@ class ChainStylePorts:
     per_chain: bool
 
 
-def chain_style_ports_for(host: Any) -> ChainStylePorts:
+class _ModifyTaskFields(Protocol):
+    root_uuid: Callable[[TaskPayload], str]
+
+
+class ChainStyleHost(Protocol):
+    _CHAIN_COLOR_PER_CHAIN: bool
+
+    def _module(self, name: Literal["modify_task_fields"]) -> _ModifyTaskFields: ...
+
+
+class _ModifyUIEffects(Protocol):
+    def ui_ports_for(self, host: object) -> object: ...
+
+    def panel(
+        self,
+        ports: object,
+        title: str,
+        rows: list[tuple[str, str]],
+        **kwargs: Any,
+    ) -> Any: ...
+
+
+class LifecycleResultHost(Protocol):
+    def _module(self, name: Literal["modify_ui_effects"]) -> _ModifyUIEffects: ...
+
+
+def chain_style_ports_for(host: ChainStyleHost) -> ChainStylePorts:
     return ChainStylePorts(
         root_uuid=host._module("modify_task_fields").root_uuid,
         per_chain=host._CHAIN_COLOR_PER_CHAIN,
     )
 
 
-def lifecycle_result_port_for(host: Any) -> LifecycleResultPort:
+def lifecycle_result_port_for(host: LifecycleResultHost) -> LifecycleResultPort:
     ui = host._module("modify_ui_effects")
     return LifecycleResultPort(
         panel=lambda title, rows, **kwargs: ui.panel(ui.ui_ports_for(host), title, rows, **kwargs)

@@ -474,6 +474,17 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             )
         )
 
+    def test_yearly_satisfiability_does_not_hide_expansion_defects(self) -> None:
+        def broken_expansion(_spec: str, _year: int) -> list[date]:
+            raise RuntimeError("yearly expansion invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "yearly expansion invariant failed"):
+            satisfiability.md_pairs_from_yearly_spec(
+                "01-01",
+                expand_yearly_cached=broken_expansion,
+                leap_year_for_checks=2028,
+            )
+
     def test_quarter_parser_selectors_schedule_in_expected_months(self) -> None:
         from datetime import date
 

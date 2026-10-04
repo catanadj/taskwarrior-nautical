@@ -16,10 +16,7 @@ def weekday_set_from_weekly_atom(atom: dict[str, Any], *, weekly_spec_to_wset: A
 def md_pairs_from_yearly_spec(spec: str, *, expand_yearly_cached: Any, leap_year_for_checks: int) -> set[tuple[int, int]]:
     if not spec:
         return set()
-    try:
-        dates = expand_yearly_cached(spec, leap_year_for_checks)
-    except Exception:
-        return set()
+    dates = expand_yearly_cached(spec, leap_year_for_checks)
     return {(d.month, d.day) for d in dates}
 
 

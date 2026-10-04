@@ -15,6 +15,7 @@ from .api_bindings import ApiBinding, core_namespace
 import zlib
 
 from .cache_ports import (
+    AtomicReplacePort,
     Base64Port,
     CacheClockPort,
     ClockPort,
@@ -166,6 +167,108 @@ class CacheLockingPort(Protocol):
     ) -> BoundLockingPort: ...
 
 
+class CacheKeyBuilderPort(Protocol):
+    def __call__(
+        self,
+        acf: str,
+        anchor_mode: str,
+        *,
+        business_calendar_fingerprint: str = "",
+    ) -> str: ...
+
+
+class CachePayloadPort(Protocol):
+    def is_factor_like(self, value: object) -> bool: ...
+
+    def is_dnf_like(
+        self, dnf: object, *, is_atom_like: Callable[[object], bool]
+    ) -> bool: ...
+
+    def clone_mod_value(self, value: object) -> object: ...
+
+    def clone_mods(self, mods: object) -> dict[str, Any]: ...
+
+    def clone_atom(self, atom: object) -> object: ...
+
+    def clone_dnf(self, dnf: object) -> object: ...
+
+    def clone_cache_payload(self, obj: dict) -> dict: ...
+
+    def normalize_dnf_cached(self, dnf: object) -> object: ...
+
+    def cache_payload_shape_ok(
+        self, obj: object, *, is_dnf_like: Callable[[object], bool]
+    ) -> bool: ...
+
+    def cache_atomic_replace(
+        self, src: str, dst: str, *, os_mod: AtomicReplacePort
+    ) -> None: ...
+
+    def cache_load(
+        self,
+        key: str,
+        *,
+        enable_anchor_cache: bool,
+        cache_path: Callable[[str], str],
+        anchor_cache_ttl: int,
+        time_mod: ClockPort,
+        cache_state: CacheState,
+        clone_cache_payload: Callable[[dict], dict],
+        normalize_dnf_cached: Callable[[object], object],
+        cache_payload_shape_ok: Callable[[object], bool],
+        diag: Callable[[str], None],
+        os_mod: FilesystemPort,
+        json_mod: JsonPort,
+        zlib_mod: CompressionPort,
+        base64_mod: Base64Port,
+        quarantine_cache: Callable[[str, str], object] | None = None,
+    ) -> dict | None: ...
+
+    def cache_save(
+        self,
+        key: str,
+        obj: dict,
+        *,
+        enable_anchor_cache: bool,
+        json_mod: JsonPort,
+        zlib_mod: CompressionPort,
+        base64_mod: Base64Port,
+        cache_path: Callable[[str], str],
+        cache_dir: Callable[[], str],
+        cache_lock: Callable[[str], ContextManager[bool]],
+        diag: Callable[[str], None],
+        os_mod: FilesystemPort,
+        tempfile_mod: TemporaryFilePort,
+        cache_atomic_replace: Callable[[str, str], None],
+        cache_state: CacheState,
+    ) -> bool: ...
+
+    def cache_gc(
+        self,
+        base: str,
+        *,
+        ttl: int = 0,
+        max_entries: int = 512,
+        stale_tmp_age: float = 86400.0,
+        stale_lock_age: float = 86400.0,
+        cache_lock: Callable[[str], ContextManager[bool]],
+        stale_lock_check: Callable[[str, float], bool],
+        time_mod: ClockPort,
+        os_mod: FilesystemPort,
+    ) -> dict: ...
+
+    def cache_key_for_task_cached(
+        self,
+        anchor_expr: str,
+        anchor_mode: str,
+        fmt: str,
+        business_calendar_fingerprint: str = "",
+        *,
+        build_acf: Callable[[str], str],
+        cache_key: CacheKeyBuilderPort,
+    ) -> str: ...
+
+
 fcntl: FcntlPort | None
 try:
     import fcntl
@@ -182,7 +285,7 @@ class _CacheBindingContext:
     import_sibling: Callable[[str], Any]
     cache_support: CacheSupportPort
     cache_locking: CacheLockingPort
-    cache_payload: Any
+    cache_payload: CachePayloadPort
     cache_dir_state: list[str | None]
     source_file: str
 

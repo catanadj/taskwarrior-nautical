@@ -139,6 +139,10 @@ class CacheApiContractTests(unittest.TestCase):
         hints = get_type_hints(cache_api._CacheBindingContext)
         self.assertIs(hints["cache_locking"], cache_api.CacheLockingPort)
 
+    def test_cache_binding_context_uses_a_narrow_payload_owner(self) -> None:
+        hints = get_type_hints(cache_api._CacheBindingContext)
+        self.assertIs(hints["cache_payload"], cache_api.CachePayloadPort)
+
     def test_cache_runtime_clock_and_random_ports_are_narrow(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
         self.assertIs(hints["clock"], cache_ports.CacheClockPort)

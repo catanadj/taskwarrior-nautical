@@ -10,6 +10,7 @@ from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
 from .modify_models import DatetimeParserCallback
 from .task_models import TaskPayload
+from .task_datetime import TaskDatetimeParser
 
 if TYPE_CHECKING:
     from .modify_command_effects import CommandHost, CommandPorts, DiagCounter, RunTaskRecorder
@@ -124,6 +125,63 @@ class ChildUuidHost(Protocol):
     def _module(self, name: Literal["modify_task_fields"]) -> _ModifyTaskFields: ...
 
 
+class _SpawnChildCore(_ChildUuidCore, Protocol):
+    fmt_isoz: Callable[[datetime], str]
+    now_utc: Callable[[], datetime]
+
+
+class _SpawnPreparationWithPayload(SpawnPreparation, Protocol):
+    prepare_spawn_child_payload: _PrepareSpawnChildPayload
+
+
+class _SpawnModule(Protocol):
+    SpawnServices: type[SpawnServiceBundle]
+
+    def spawn_child_atomic(
+        self,
+        child_task: dict[str, Any],
+        parent_task_with_nextlink: dict[str, Any],
+        *,
+        lifecycle_plan: LifecyclePlan | None = None,
+        services: SpawnServiceBundle,
+    ) -> tuple[str, set[str], bool, bool, str | None, str | None]: ...
+
+
+class SpawnChildHost(Protocol):
+    _INTEGRATION_CONTEXT: IntegrationContext | None
+    TW_DATA_DIR: str
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _STABLE_CHILD_UUID_NAMESPACE: UUID
+    _run_task_diag_bucket: Callable[[list[str]], str]
+    _diag_count: DiagCounter
+    _diag_record_run_task: RunTaskRecorder
+    _diag: Callable[[str], None]
+    _task_cmd_prefix: Callable[[], list[str]]
+
+    @property
+    def core(self) -> _SpawnChildCore: ...
+
+    @overload
+    def _module(self, name: Literal["lifecycle_outbox"]) -> _LifecycleOutboxModule: ...
+
+    @overload
+    def _module(
+        self, name: Literal["lifecycle_application"]
+    ) -> _LifecycleApplicationModule: ...
+
+    @overload
+    def _module(self, name: Literal["modify_spawn_prep"]) -> _SpawnPreparationWithPayload: ...
+
+    @overload
+    def _module(self, name: Literal["modify_command_effects"]) -> _ModifyCommandModule: ...
+
+    @overload
+    def _module(self, name: Literal["modify_task_fields"]) -> _ModifyTaskFields: ...
+
+    @overload
+    def _module(self, name: Literal["modify_spawn"]) -> _SpawnModule: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SpawnIntentPorts:
     context: IntegrationContext | None
@@ -177,7 +235,7 @@ def child_uuid_ports_for(host: ChildUuidHost) -> ChildUuidPorts:
     )
 
 
-def spawn_child_ports_for(host: Any) -> SpawnChildPorts:
+def spawn_child_ports_for(host: SpawnChildHost) -> SpawnChildPorts:
     intent_ports = spawn_intent_ports_for(host)
     uuid_ports = child_uuid_ports_for(host)
     return SpawnChildPorts(

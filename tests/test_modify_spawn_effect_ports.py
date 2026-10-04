@@ -16,3 +16,8 @@ class ModifySpawnEffectPortTests(unittest.TestCase):
         from nautical_core.modify_spawn_effects import child_uuid_ports_for
 
         self.assertIsNot(get_type_hints(child_uuid_ports_for)["host"], Any)
+
+    def test_spawn_child_factory_has_typed_host_contract(self) -> None:
+        from nautical_core.modify_spawn_effects import spawn_child_ports_for
+
+        self.assertIsNot(get_type_hints(spawn_child_ports_for)["host"], Any)

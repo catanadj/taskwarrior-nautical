@@ -53,7 +53,7 @@ class ModifyRuntimeState:
             "format_root_age": {},
         }
     )
-    diag_stats: dict[str, Any] = field(
+    diag_stats: dict[str, int | float] = field(
         default_factory=lambda: {
             "run_task_calls": 0,
             "run_task_failures": 0,

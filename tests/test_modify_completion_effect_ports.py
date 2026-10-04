@@ -157,6 +157,18 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             f"dict[str, {TaskObservation.__name__}] | None",
         )
 
+    def test_modify_diagnostic_stats_use_numeric_values(self) -> None:
+        from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
+        from nautical_core.modify_runtime import ModifyRuntimeState
+        from nautical_core.modify_schedule_effects import _SchedulerRuntimeState
+
+        expected = "dict[str, int | float]"
+        self.assertEqual(ModifyRuntimeState.__annotations__["diag_stats"], expected)
+        self.assertEqual(_SchedulerRuntimeState.__annotations__["diag_stats"], expected)
+        self.assertEqual(
+            _CompletionComputeRuntimeState.__annotations__["diag_stats"], expected
+        )
+
     def test_scheduler_runtime_state_uses_scheduler_service_cache_contract(self) -> None:
         from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
         from nautical_core.modify_runtime import ModifyRuntimeState, scheduler_service_for_task

@@ -549,7 +549,7 @@ class _CompletionComputeCore(Protocol):
 
 class _CompletionComputeRuntimeState(Protocol):
     scheduler_services: dict[tuple[object, ...], SchedulerService]
-    diag_stats: dict[str, Any]
+    diag_stats: dict[str, int | float]
     workflow_context: WorkflowInvocationContext | None
     chain_generation_service: ChainGenerationServicePort | None
 

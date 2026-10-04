@@ -773,10 +773,10 @@ def _effective_last_occurrence(finals: CompletionFinals) -> datetime | None:
 def _append_final_rows(
     fb: list[tuple[str, object]],
     finals: CompletionFinals,
-    now_utc: Any,
+    now_utc: datetime,
     *,
-    fmt_dt_local: Callable[[Any], str],
-    human_delta: Callable[[Any, Any, bool], str],
+    fmt_dt_local: Callable[[datetime], str],
+    human_delta: Callable[[datetime, datetime, bool], str],
 ) -> None:
     last = _effective_last_occurrence(finals)
     if last is None:

@@ -200,6 +200,20 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             },
         )
 
+    def test_final_occurrence_feedback_uses_datetime_contracts(self) -> None:
+        hints = get_type_hints(modify_feedback._append_final_rows)
+        self.assertEqual(
+            hints,
+            {
+                "fb": list[tuple[str, object]],
+                "finals": modify_feedback.CompletionFinals,
+                "now_utc": datetime,
+                "fmt_dt_local": Callable[[datetime], str],
+                "human_delta": Callable[[datetime, datetime, bool], str],
+                "return": type(None),
+            },
+        )
+
     def test_feedback_local_formatters_accept_datetimes(self) -> None:
         expected = Callable[[datetime], str]
         renderers = (

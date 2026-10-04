@@ -618,7 +618,11 @@ facade.__all__
 
     def test_presentation_contexts_exclude_host_and_module_loaders(self) -> None:
         from typing import Callable, NoReturn, get_type_hints
-        from nautical_core.add_anchor_preview import AnchorDurationValidator, PreviewPanelCallback
+        from nautical_core.add_anchor_preview import (
+            AnchorDurationValidator,
+            PreviewPanelCallback,
+            PreviewWaitScheduleRowsCallback,
+        )
         from nautical_core.modify_models import CoerceIntCallback, HumanDeltaCallback
 
         for context in (
@@ -647,6 +651,10 @@ facade.__all__
                 self.assertIs(
                     get_type_hints(context)["validate_chain_duration_reasonable"],
                     AnchorDurationValidator,
+                )
+                self.assertIs(
+                    get_type_hints(context)["append_wait_sched_rows"],
+                    PreviewWaitScheduleRowsCallback,
                 )
                 self.assertEqual(
                     get_type_hints(context)["error_and_exit"],

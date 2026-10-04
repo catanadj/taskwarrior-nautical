@@ -44,6 +44,18 @@ class AnchorDurationValidator(Protocol):
     ) -> tuple[bool, str | None]: ...
 
 
+class PreviewWaitScheduleRowsCallback(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        task: TaskPayload,
+        due_utc: datetime,
+        *,
+        auto_due: bool,
+        anchor_field: str = "due",
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorExpressionPreviewServices:
     """Composition-root dependencies for the anchor preview renderer."""
@@ -66,7 +78,7 @@ class AnchorExpressionPreviewServices:
     short: Callable[[Any], str]
     validate_anchor_mode: Callable[..., Any]
     validate_chain_duration_reasonable: AnchorDurationValidator
-    append_wait_sched_rows: Callable[..., Any]
+    append_wait_sched_rows: PreviewWaitScheduleRowsCallback
     anchor_until_summary: Callable[..., Any]
     to_local_cached: Callable[..., Any]
     fmt_local_for_task: Callable[..., Any]
@@ -90,7 +102,7 @@ class AnchorFilePreviewServices:
     coerce_int: CoerceIntCallback
     render_business_calendar_displacement: AddCalendarFeedbackCallback
     omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
-    append_wait_sched_rows: Callable[..., Any]
+    append_wait_sched_rows: PreviewWaitScheduleRowsCallback
     validate_chain_duration_reasonable: AnchorDurationValidator
     format_anchor_rows: Callable[..., Any]
     panel: PreviewPanelCallback

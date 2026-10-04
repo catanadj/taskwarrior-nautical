@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 import unittest
 from unittest.mock import patch
 
@@ -197,6 +197,8 @@ class HookBootstrapTrustTests(unittest.TestCase):
             self.assertIsNone(hook_bootstrap.core_target_from_base(legacy_module))
 
     def test_light_taskdata_resolution_matches_hook_precedence(self) -> None:
+        import nautical_core.config_support as config_support
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             env_dir = root / "env-data"
@@ -204,10 +206,7 @@ class HookBootstrapTrustTests(unittest.TestCase):
             env_dir.mkdir()
             arg_dir.mkdir()
             env = {"TASKDATA": str(env_dir)}
-            path_support = SimpleNamespace(
-                validated_user_dir=lambda value, **_kwargs: str(value),
-                normalized_abspath=lambda value: str(Path(value).resolve()),
-            )
+            path_support = config_support
 
             from_env = hook_bootstrap.resolve_task_data_context_light(
                 path_support=path_support,

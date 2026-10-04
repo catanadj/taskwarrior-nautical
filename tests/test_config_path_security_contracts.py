@@ -12,6 +12,18 @@ import nautical_core.runtime as runtime
 
 
 class ConfigPathSecurityContractTests(unittest.TestCase):
+    def test_config_support_owns_shared_taskdata_resolution_policy(self) -> None:
+        resolver = getattr(config_support, "resolve_task_data_context", None)
+        self.assertTrue(callable(resolver), "Taskdata resolution has no shared owner")
+        self.assertEqual(
+            resolver(
+                argv=["api:2", "data:/tmp/nautical_shared_arg"],
+                env={"TASKDATA": "/tmp/nautical_shared_env", "NAUTICAL_TRUST_TASKDATA_PATH": "1"},
+                tw_dir="/tmp/nautical_shared_fallback",
+            ),
+            ("/tmp/nautical_shared_arg", True, "argv"),
+        )
+
     def test_diagnostic_search_order_is_emitted_once_per_signature(self) -> None:
         with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stderr(io.StringIO()) as stream:
             previous = config_support._LAST_DIAG_SEARCH_ORDER

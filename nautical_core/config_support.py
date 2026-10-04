@@ -151,6 +151,54 @@ def validated_user_dir(
     return ap
 
 
+def hook_arg_value(argv: list[str], keys: tuple[str, ...]) -> str:
+    for token in argv:
+        text = str(token or "").strip()
+        if not text:
+            continue
+        for key in keys:
+            for separator in (":", "="):
+                prefix = f"{key}{separator}"
+                if text.startswith(prefix):
+                    value = text[len(prefix):].strip()
+                    if value:
+                        return value
+    return ""
+
+
+def resolve_task_data_context(
+    *,
+    argv: list[str] | None = None,
+    env: Mapping[str, Any] | None = None,
+    tw_dir: str | None = None,
+) -> tuple[str, bool, str]:
+    """Resolve Taskwarrior's Taskdata path and whether it was explicit."""
+    args = list(argv if argv is not None else sys.argv[1:])
+    env_map = env if env is not None else os.environ
+    taskdata_env = str((env_map.get("TASKDATA") if hasattr(env_map, "get") else "") or "").strip()
+    taskdata_arg = hook_arg_value(args, ("data", "data.location"))
+    explicit = taskdata_arg or taskdata_env
+    if explicit:
+        source = "argv" if taskdata_arg else "env"
+        safe_explicit = validated_user_dir(
+            str(explicit),
+            label=("rc.data.location" if taskdata_arg else "TASKDATA"),
+            trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+            env_map=env_map,
+        )
+        if safe_explicit:
+            return safe_explicit, True, source
+    base = str(tw_dir or "~/.task")
+    safe_fallback = validated_user_dir(
+        base,
+        label="fallback task data dir",
+        trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+        env_map=env_map,
+        warn_on_error=False,
+    )
+    return (safe_fallback or normalized_abspath(base)), False, "fallback"
+
+
 def read_toml_result(
     path: str,
     *,

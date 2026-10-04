@@ -249,7 +249,7 @@ def test_queue_status_warns_on_stale_processing_and_dead_letters():
 
 def test_doctor_reports_healthy_installation():
     """doctor should report ok for a complete installation with clean chain state."""
-    path = DEV_TOOLS / "nautical_doctor.py"
+    path = CORE_TOOLS / "nautical_doctor.py"
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         hooks = td_path / "hooks"
@@ -440,7 +440,7 @@ def test_doctor_reports_retired_queue_state_without_migrating_it():
 
 def test_doctor_discovers_effective_taskdata_directory():
     """Doctor discovers effective taskdata when --taskdata is omitted."""
-    path = str(DEV_TOOLS / "nautical_doctor.py")
+    path = str(CORE_TOOLS / "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         config_dir = td_path / "config"
@@ -510,7 +510,7 @@ def test_operator_doctor_loads_colocated_queue_helper():
 
 def test_doctor_reports_actionable_broken_installation():
     """Doctor identifies installation, queue, and chain failures with stable IDs."""
-    path = str(DEV_TOOLS / "nautical_doctor.py")
+    path = str(CORE_TOOLS / "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         hooks = td_path / "hooks"
@@ -581,7 +581,7 @@ def test_doctor_reports_actionable_broken_installation():
 
 def test_doctor_reports_chain_repair_plan_findings():
     """Doctor surfaces safe chain repairs and unresolved repair reasons."""
-    path = str(DEV_TOOLS / "nautical_doctor.py")
+    path = str(CORE_TOOLS / "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         hooks = td_path / "hooks"

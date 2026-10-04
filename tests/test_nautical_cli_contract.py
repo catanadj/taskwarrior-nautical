@@ -33,6 +33,12 @@ EXPECTED_COMMAND_DESCRIPTIONS = {
 class NauticalCliContractTests(unittest.TestCase):
     """Keep global launcher options usable before and after installation."""
 
+    def test_operator_tools_have_no_obsolete_dev_tool_wrappers(self) -> None:
+        for name in ("nautical_doctor.py", "nautical_reconcile.py"):
+            with self.subTest(name=name):
+                self.assertTrue((ROOT / "nautical_core" / "tools" / name).is_file())
+                self.assertFalse((ROOT / "dev_tools" / name).exists())
+
     def run_launcher(self, launcher: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(launcher), *arguments],

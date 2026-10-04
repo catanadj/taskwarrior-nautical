@@ -54,7 +54,7 @@ def load_core(host: Any) -> None:
         pass
     try:
         host._MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", host._MAX_JSON_BYTES))
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         pass
     host._IMPORT_MS = (host.time.perf_counter() - host._IMPORT_T0) * 1000.0
     host._CORE_READY = True

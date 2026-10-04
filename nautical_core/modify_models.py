@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol, TypeAlias, Mapping
 from types import MappingProxyType
 
 from .integration_models import TaskRead
+from .anchor_omit import OmitState
+from .occurrence_provider import OccurrenceProvider
 from .parsing.parser_models import AnchorDNF
 from .task_models import (
     ChainIdentity,
@@ -339,6 +341,57 @@ class CoerceIntCallback(Protocol):
 
 class DatetimeParserCallback(Protocol):
     def __call__(self, value: Any) -> datetime | None:
+        ...
+
+
+class AnchorOccurrenceEvaluator(Protocol):
+    def _default_next_occurrence_after_local_dt(
+        self,
+        dnf: AnchorDNF | None,
+        after_local_dt: datetime,
+        *,
+        default_seed_date: date | None,
+        seed_base: str,
+        omit_dnf: OmitState | None = None,
+        fallback_hhmm: tuple[int, int] | None = None,
+    ) -> datetime | None:
+        ...
+
+
+AnchorOccurrenceEvaluatorForTask: TypeAlias = Callable[
+    [TaskPayload], AnchorOccurrenceEvaluator
+]
+OmitDNFFromParentCallback: TypeAlias = Callable[
+    [TaskPayload], tuple[str, OmitState | None]
+]
+
+
+class AnchorFileProviderFactory(Protocol):
+    def __call__(
+        self,
+        anchor_file: str,
+        *,
+        fallback_hhmm: tuple[int, int],
+        seed_base: str,
+    ) -> OccurrenceProvider | None:
+        ...
+
+
+class AnchorIncludedOccurrencesCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        after_local_dt: datetime,
+        inclusive: bool,
+        limit: int,
+        fallback_hhmm: tuple[int, int],
+        omit_dnf: OmitState | None,
+        seed_base: str,
+        default_seed_date: date | None,
+        dnf: AnchorDNF | None,
+        anchor_file_provider: OccurrenceProvider | None,
+    ) -> list[datetime]:
         ...
 
 

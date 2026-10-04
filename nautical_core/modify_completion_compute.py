@@ -13,6 +13,10 @@ from nautical_core.modify_models import (
     CompletionComputeResult,
     CompletionFinals,
     AnchorDNF,
+    AnchorOccurrenceEvaluatorForTask,
+    AnchorFileProviderFactory,
+    AnchorIncludedOccurrencesCallback,
+    OmitDNFFromParentCallback,
     CompletionLifecycleDiagnostic,
     CompletionLifecycleResult,
     CompletionComputeServices,
@@ -297,10 +301,10 @@ def cap_from_until_anchor(
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: SafeParseDatetimeCallback,
     anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]],
-    omit_dnf_from_parent: Any,
-    recurrence_evaluator_for_task: Any,
-    anchor_file_provider_for: Any,
-    anchor_included_occurrences: Any,
+    omit_dnf_from_parent: OmitDNFFromParentCallback,
+    recurrence_evaluator_for_task: AnchorOccurrenceEvaluatorForTask,
+    anchor_file_provider_for: AnchorFileProviderFactory,
+    anchor_included_occurrences: AnchorIncludedOccurrencesCallback,
     compare_datetimes: Callable[[datetime, datetime], int],
     max_iterations: int,
 ) -> tuple[int | None, datetime | None]:
@@ -437,10 +441,10 @@ def estimate_anchor_final_by_max(
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: SafeParseDatetimeCallback,
     anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]],
-    omit_dnf_from_parent: Any,
-    recurrence_evaluator_for_task: Any,
-    anchor_file_provider_for: Any,
-    anchor_included_occurrences: Any,
+    omit_dnf_from_parent: OmitDNFFromParentCallback,
+    recurrence_evaluator_for_task: AnchorOccurrenceEvaluatorForTask,
+    anchor_file_provider_for: AnchorFileProviderFactory,
+    anchor_included_occurrences: AnchorIncludedOccurrencesCallback,
     diagnostic: DiagnosticCallback | None = None,
     max_iterations: int,
 ) -> datetime | None:
@@ -473,7 +477,7 @@ def estimate_anchor_final_by_max(
     future_link = current_link + 1
     future_local: datetime | None = next_local
     iterations = 0
-    while future_link < chain_max:
+    while future_link < chain_max and future_local is not None:
         iterations += 1
         if iterations > max_iterations:
             if callable(diagnostic):

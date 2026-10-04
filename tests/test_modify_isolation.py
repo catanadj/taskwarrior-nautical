@@ -675,6 +675,27 @@ class ModifyIsolationTests(unittest.TestCase):
                 for parameter, expected_type in expected_callbacks.items():
                     self.assertEqual(annotations[parameter], expected_type)
 
+    def test_anchor_forecast_provider_ports_are_not_dynamic(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+        from nautical_core.modify_models import (
+            AnchorFileProviderFactory,
+            AnchorIncludedOccurrencesCallback,
+            AnchorOccurrenceEvaluatorForTask,
+            OmitDNFFromParentCallback,
+        )
+
+        expected = {
+            "omit_dnf_from_parent": OmitDNFFromParentCallback,
+            "recurrence_evaluator_for_task": AnchorOccurrenceEvaluatorForTask,
+            "anchor_file_provider_for": AnchorFileProviderFactory,
+            "anchor_included_occurrences": AnchorIncludedOccurrencesCallback,
+        }
+        for function in (compute.cap_from_until_anchor, compute.estimate_anchor_final_by_max):
+            annotations = get_type_hints(function)
+            with self.subTest(function=function.__name__):
+                for parameter, expected_type in expected.items():
+                    self.assertEqual(annotations[parameter], expected_type)
+
     def test_completion_spawn_service_has_explicit_arguments(self) -> None:
         import inspect
 

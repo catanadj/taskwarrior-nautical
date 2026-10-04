@@ -14,6 +14,7 @@ import nautical_core.modify_completion_compute as modify_completion_compute
 import nautical_core.modify_runtime as modify_runtime
 import nautical_core.modify_schedule_effects as modify_schedule_effects
 import nautical_core.modify_models as modify_models
+from nautical_core.modify_models import AnchorFileProviderFactory
 import nautical_core.timezone_facade as timezone_facade
 from nautical_core.add_anchor_compute import anchor_next_occurrence_after_local_dt
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
@@ -120,7 +121,7 @@ class ModifyScheduleContractTests(unittest.TestCase):
         )
         self.assertIs(
             annotations["anchor_file_provider_for"],
-            modify_schedule_effects.AnchorFileProviderFactory,
+            AnchorFileProviderFactory,
         )
 
     def test_schedule_ports_have_concrete_callback_signatures(self) -> None:

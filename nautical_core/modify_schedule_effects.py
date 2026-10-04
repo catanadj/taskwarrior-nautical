@@ -13,9 +13,13 @@ from .modify_models import (
     DatetimeParserCallback,
     DiagnosticCallback,
     SafeParseDatetimeCallback,
+    AnchorFileProviderFactory,
+    AnchorIncludedOccurrencesCallback,
+    AnchorDNF,
+    OmitState,
+    OccurrenceProvider,
 )
 from .scheduler_service import SchedulerService
-from .occurrence_provider import Occurrence
 from .recurrence_evaluator import RecurrenceEvaluator
 from .timeutil import compare_datetimes
 
@@ -74,34 +78,9 @@ class NextOccurrenceAfterLocalDateTime(Protocol):
         fallback_hhmm: tuple[int, int],
         interval_seed: date | None,
         seed_base: str,
-        omit_dnf: Any,
+        omit_dnf: OmitState | None,
         default_seed_date: date | None,
     ) -> datetime | None: ...
-
-
-class AnchorFileOccurrenceSource(Protocol):
-    """Find one next anchor-file occurrence with bound scheduling context."""
-
-    def next_after(
-        self,
-        after_local: datetime,
-        *,
-        build_local_datetime: Callable[[date, tuple[int, int]], datetime],
-        to_local: Callable[[datetime], datetime],
-        inclusive: bool = False,
-    ) -> Occurrence | None: ...
-
-
-class AnchorFileProviderFactory(Protocol):
-    """Create the optional anchor-file occurrence source for one task."""
-
-    def __call__(
-        self,
-        anchor_file: str,
-        *,
-        fallback_hhmm: tuple[int, int],
-        seed_base: str,
-    ) -> AnchorFileOccurrenceSource | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +250,41 @@ def anchor_included_occurrences(
     return service.included_occurrences_after(after_local_dt, inclusive=inclusive, limit=limit)
 
 
+def _anchor_included_occurrences_callback(
+    scheduler: SchedulerPorts,
+) -> AnchorIncludedOccurrencesCallback:
+    ports = AnchorOccurrencePorts(scheduler)
+
+    def include(
+        task: TaskPayload,
+        *,
+        after_local_dt: datetime,
+        inclusive: bool,
+        limit: int,
+        fallback_hhmm: tuple[int, int],
+        omit_dnf: OmitState | None,
+        seed_base: str,
+        default_seed_date: date | None,
+        dnf: AnchorDNF | None,
+        anchor_file_provider: OccurrenceProvider | None,
+    ) -> list[datetime]:
+        return anchor_included_occurrences(
+            ports,
+            task,
+            after_local_dt=after_local_dt,
+            inclusive=inclusive,
+            limit=limit,
+            fallback_hhmm=fallback_hhmm,
+            omit_dnf=omit_dnf,
+            seed_base=seed_base,
+            default_seed_date=default_seed_date,
+            dnf=dnf,
+            anchor_file_provider=anchor_file_provider,
+        )
+
+    return include
+
+
 def estimate_cp_final_by_max(
     ports: CPCompletionPorts,
     task: TaskPayload,
@@ -307,8 +321,8 @@ def estimate_anchor_final_by_max(
         omit_dnf_from_parent=ports.omit_dnf_from_parent,
         recurrence_evaluator_for_task=evaluator_callback,
         anchor_file_provider_for=ports.anchor_file_provider_for,
-        anchor_included_occurrences=lambda *args, **kwargs: anchor_included_occurrences(
-            AnchorOccurrencePorts(ports.scheduler), *args, **kwargs
+        anchor_included_occurrences=_anchor_included_occurrences_callback(
+            ports.scheduler
         ),
         diagnostic=ports.diagnostic,
         max_iterations=ports.max_iterations,
@@ -352,8 +366,8 @@ def cap_from_until_anchor(
         omit_dnf_from_parent=ports.omit_dnf_from_parent,
         recurrence_evaluator_for_task=evaluator_callback,
         anchor_file_provider_for=ports.anchor_file_provider_for,
-        anchor_included_occurrences=lambda *args, **kwargs: anchor_included_occurrences(
-            AnchorOccurrencePorts(ports.scheduler), *args, **kwargs
+        anchor_included_occurrences=_anchor_included_occurrences_callback(
+            ports.scheduler
         ),
         compare_datetimes=ports.compare_datetimes,
         max_iterations=ports.max_iterations,

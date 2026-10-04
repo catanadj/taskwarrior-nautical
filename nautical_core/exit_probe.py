@@ -37,7 +37,7 @@ def _outbox_may_have_work(path: Path) -> bool | None:
             return row is not None
         finally:
             conn.close()
-    except Exception:
+    except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError):
         return None
 
 

@@ -376,6 +376,20 @@ class PerformanceBudgetContractTests(unittest.TestCase):
             self.assertFalse(result.definitely_empty)
             self.assertIn("unavailable", result.reason)
 
+    def test_exit_probe_propagates_unexpected_outbox_inspection_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory) / ".nautical-state"
+            state_dir.mkdir()
+            database = state_dir / ".nautical_lifecycle_outbox.db"
+            database.touch()
+
+            with patch(
+                "sqlite3.connect",
+                side_effect=RuntimeError("unexpected inspection defect"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "inspection defect"):
+                    probe_exit_work(directory)
+
     def test_exit_probe_bypasses_only_known_empty_outboxes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

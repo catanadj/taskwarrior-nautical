@@ -23,6 +23,12 @@ from nautical_core.timeutil import compare_datetimes
 
 
 class ModifyScheduleContractTests(unittest.TestCase):
+    def test_scheduler_factory_uses_narrow_host_protocol(self) -> None:
+        self.assertIs(
+            get_type_hints(modify_schedule_effects.scheduler_ports_for)["host"],
+            modify_schedule_effects.SchedulerHost,
+        )
+
     def test_completion_compute_owners_match_concrete_projection_signatures(self) -> None:
         expected_methods = {
             modify_schedule_effects.CPCompletionCompute: (

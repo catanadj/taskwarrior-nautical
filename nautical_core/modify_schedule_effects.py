@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from .task_models import TaskPayload
 from .cp_parser import CPSequenceToken
@@ -165,6 +165,31 @@ class SchedulerServiceForTask(Protocol):
     def __call__(self, task: TaskPayload) -> SchedulerService: ...
 
 
+class _SchedulerRuntimeState(Protocol):
+    scheduler_services: dict[Any, Any]
+    diag_stats: dict[str, Any]
+    workflow_context: Any
+
+
+class _ModifyRuntimeModule(Protocol):
+    def scheduler_service_for_task(
+        self,
+        task: TaskPayload,
+        *,
+        state: _SchedulerRuntimeState,
+        core: object,
+        recurrence_seed_base: Callable[[TaskPayload], str],
+    ) -> SchedulerService: ...
+
+
+class SchedulerHost(Protocol):
+    core: object
+
+    def _modify_runtime_state(self) -> _SchedulerRuntimeState: ...
+
+    def _module(self, name: Literal["modify_runtime"]) -> _ModifyRuntimeModule: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorOccurrencePorts:
     scheduler: SchedulerPorts
@@ -198,7 +223,7 @@ class AnchorCompletionPorts:
     diagnostic: DiagnosticCallback
 
 
-def scheduler_ports_for(host: Any) -> SchedulerPorts:
+def scheduler_ports_for(host: SchedulerHost) -> SchedulerPorts:
     runtime_module = host._module("modify_runtime")
     state = host._modify_runtime_state()
     core = host.core

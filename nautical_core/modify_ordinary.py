@@ -206,14 +206,10 @@ def handle_non_completion_modify(
             rows.append(("Next", services.fmtlocal(first)))
         services.panel("⚓ Nautical resumed", rows, kind="note")
     else:
-        try:
-            # ``new`` includes validated carry-forward values (notably a
-            # shifted native ``until``).  Build feedback from that mutated
-            # payload so the panel reports both the user's edit and its
-            # derived recurrence changes.
-            changes = lifecycle.recurrence_setting_changes(old, new)
-        except Exception:
-            changes = []
+        # ``new`` includes validated carry-forward values (notably a shifted
+        # native ``until``). Build feedback from that mutated payload so the
+        # panel reports both the user's edit and its derived recurrence changes.
+        changes = lifecycle.recurrence_setting_changes(old, new)
         services.render_recurrence_updated(changes, new)
     services.print_task(new)
 

@@ -163,6 +163,35 @@ class ModifyValidationEffectsTests(unittest.TestCase):
         self.assertNotIn("chain", candidate)
         self.assertNotIn("chainID", candidate)
 
+    def test_recurrence_feedback_calculation_propagates_internal_failures(self) -> None:
+        services = SimpleNamespace(
+            field_changed=lambda old, new, field: old.get(field) != new.get(field),
+            strip_quotes=lambda value: value,
+            validate_anchor=lambda *_args: None,
+            validate_omit=lambda *_args: None,
+            reject_conflicting_types=lambda *_args: None,
+            validate_chain_limits=lambda *_args: None,
+            preserve_cp_offsets=lambda *_args: None,
+            task_has_recurrence=lambda _task: False,
+            apply_transition=lambda *_args: None,
+            render_timing_warning=lambda *_args: None,
+            render_recurrence_updated=lambda *_args: None,
+            print_task=lambda *_args: None,
+        )
+        lifecycle = SimpleNamespace(
+            recurrence_setting_changes=lambda *_args: (_ for _ in ()).throw(
+                RuntimeError("recurrence feedback invariant failed")
+            )
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "recurrence feedback invariant failed"):
+            modify_ordinary.handle_non_completion_modify(
+                {"uuid": "task-1", "status": "pending"},
+                {"uuid": "task-1", "status": "pending"},
+                services=services,
+                lifecycle=lifecycle,
+            )
+
     def test_lifecycle_activation_requires_a_complete_unlinked_root_identity(self) -> None:
         short_uuid = lambda value: str(value or "").split("-")[0]
         invalid = (

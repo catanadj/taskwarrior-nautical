@@ -4,17 +4,50 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
+from uuid import UUID
 from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
 from .modify_models import DatetimeParserCallback
 from .task_models import TaskPayload
 
 if TYPE_CHECKING:
+    from .modify_command_effects import CommandPorts
+    from .modify_models import CoerceIntCallback
     from .integration_context import IntegrationContext
     from .lifecycle.application import LifecycleApplicationService
     from .lifecycle.models import LifecycleIdentity, LifecyclePlan
     from .lifecycle.outbox import LifecycleOutboxRepository
+
+
+class SpawnPreparation(Protocol):
+    def stable_child_uuid(
+        self,
+        parent_task: dict[str, Any] | None,
+        child_task: dict[str, Any] | None,
+        *,
+        task_uuid_or_empty: Callable[[dict[str, Any] | None], str],
+        coerce_int: CoerceIntCallback,
+        stable_child_uuid_namespace: UUID,
+    ) -> str: ...
+
+    def child_uuid_for_spawn(
+        self,
+        parent_task: dict[str, Any] | None,
+        child_task: dict[str, Any] | None,
+        env: dict[str, Any],
+        *,
+        stable_child_uuid: Callable[
+            [dict[str, Any] | None, dict[str, Any] | None], str
+        ],
+        generate_child_uuid_candidate: Callable[[Mapping[str, str]], str],
+    ) -> str: ...
+
+
+class SpawnCommandEffects(Protocol):
+    def generate_child_uuid_candidate(
+        self, ports: CommandPorts, env: Mapping[str, str]
+    ) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,12 +60,12 @@ class SpawnIntentPorts:
 
 @dataclass(frozen=True, slots=True)
 class ChildUuidPorts:
-    prep: Any
-    command: Any
-    command_ports: Any
-    task_uuid_or_empty: Any
-    coerce_int: Any
-    namespace: Any
+    prep: SpawnPreparation
+    command: SpawnCommandEffects
+    command_ports: CommandPorts
+    task_uuid_or_empty: Callable[[dict[str, Any] | None], str]
+    coerce_int: CoerceIntCallback
+    namespace: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +221,7 @@ def child_uuid_for_spawn(ports: ChildUuidPorts, parent_task: dict | None, child_
 
 __all__ = (
     "SpawnIntentPorts", "ChildUuidPorts", "SpawnChildPorts",
+    "SpawnPreparation", "SpawnCommandEffects",
     "spawn_intent_ports_for", "child_uuid_ports_for", "spawn_child_ports_for",
     "enqueue_spawn_intent", "lifecycle_spawn_identity", "spawn_child_atomic",
     "child_uuid_for_spawn",

@@ -1599,6 +1599,37 @@ class ModifyIsolationTests(unittest.TestCase):
             type[LifecycleApplicationService],
         )
 
+    def test_child_uuid_ports_use_module_and_owner_contracts(self) -> None:
+        from collections.abc import Callable as AbcCallable
+        from uuid import UUID
+
+        from nautical_core.modify_command_effects import CommandPorts
+        from nautical_core.modify_models import CoerceIntCallback
+        from nautical_core.modify_spawn_effects import (
+            ChildUuidPorts,
+            SpawnCommandEffects,
+            SpawnPreparation,
+        )
+
+        annotations = get_type_hints(
+            ChildUuidPorts,
+            localns={
+                "CommandPorts": CommandPorts,
+                "CoerceIntCallback": CoerceIntCallback,
+            },
+        )
+        self.assertEqual(
+            annotations,
+            {
+                "prep": SpawnPreparation,
+                "command": SpawnCommandEffects,
+                "command_ports": CommandPorts,
+                "task_uuid_or_empty": AbcCallable[[dict[str, Any] | None], str],
+                "coerce_int": CoerceIntCallback,
+                "namespace": UUID,
+            },
+        )
+
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone
         from nautical_core.chain_generation import CarryFieldError

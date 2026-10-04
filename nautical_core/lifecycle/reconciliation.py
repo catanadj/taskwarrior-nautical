@@ -48,17 +48,17 @@ class LifecycleRecoveryOperations(Protocol):
 
     def apply_parent(self, parent: TaskPayload, *, taskdata: Path, lease_held: bool,
                      verified_children: dict[str, dict[str, Any]], generation: ChainGenerationService | None) -> tuple[RecoveryResult, str]: ...
-    def plan_parent(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
+    def plan_parent(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> RecoveryResult: ...
     def next_child(self, parent: TaskObservation, child_short: str) -> TaskObservation: ...
     def virtual_child(self, plan: LifecyclePlan, *, parent: TaskObservation,
                       recovery_at: Any) -> tuple[VirtualExpiredChild | None, str]: ...
     def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str: ...
     def is_orphan_deleted(self, child: TaskObservation) -> bool: ...
-    def recovery_error(self, parent: TaskPayload, reason: str) -> Any: ...
-    def recovery_partial(self, parent: TaskPayload, reason: str) -> Any: ...
-    def recovery_manual_review(self, parent: TaskPayload, reason: str) -> Any: ...
-    def recovery_terminal(self, parent: TaskPayload, reason: str) -> Any: ...
-    def recovery_from_exception(self, parent: TaskPayload, exc: Exception) -> Any: ...
+    def recovery_error(self, parent: TaskPayload, reason: str) -> RecoveryResult: ...
+    def recovery_partial(self, parent: TaskPayload, reason: str) -> RecoveryResult: ...
+    def recovery_manual_review(self, parent: TaskPayload, reason: str) -> RecoveryResult: ...
+    def recovery_terminal(self, parent: TaskPayload, reason: str) -> RecoveryResult: ...
+    def recovery_from_exception(self, parent: TaskPayload, exc: Exception) -> RecoveryResult: ...
 
 
 class ApplyParentCallback(Protocol):
@@ -147,15 +147,15 @@ class CallbackLifecycleRecoveryOperations:
 
     apply_parent_callback: ApplyParentCallback
     plan_parent_callback: PlanParentCallback
-    next_child_callback: Callable[..., TaskObservation]
+    next_child_callback: Callable[[TaskObservation, str], TaskObservation]
     virtual_child_callback: VirtualChildCallback
-    terminal_error_callback: Callable[..., str]
-    is_orphan_deleted_callback: Callable[..., bool]
-    recovery_error_callback: Callable[..., Any]
-    recovery_partial_callback: Callable[..., Any]
-    recovery_manual_review_callback: Callable[..., Any]
-    recovery_terminal_callback: Callable[..., Any]
-    recovery_exception_callback: Callable[..., Any]
+    terminal_error_callback: Callable[[TaskObservation, Any], str]
+    is_orphan_deleted_callback: Callable[[TaskObservation], bool]
+    recovery_error_callback: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_partial_callback: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_manual_review_callback: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_terminal_callback: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_exception_callback: Callable[[TaskPayload, Exception], RecoveryResult]
 
     def apply_parent(
         self,
@@ -200,19 +200,19 @@ class CallbackLifecycleRecoveryOperations:
     def is_orphan_deleted(self, child: TaskObservation) -> bool:
         return self.is_orphan_deleted_callback(child)
 
-    def recovery_error(self, parent: TaskPayload, reason: str) -> Any:
+    def recovery_error(self, parent: TaskPayload, reason: str) -> RecoveryResult:
         return self.recovery_error_callback(parent, reason)
 
-    def recovery_partial(self, parent: TaskPayload, reason: str) -> Any:
+    def recovery_partial(self, parent: TaskPayload, reason: str) -> RecoveryResult:
         return self.recovery_partial_callback(parent, reason)
 
-    def recovery_manual_review(self, parent: TaskPayload, reason: str) -> Any:
+    def recovery_manual_review(self, parent: TaskPayload, reason: str) -> RecoveryResult:
         return self.recovery_manual_review_callback(parent, reason)
 
-    def recovery_terminal(self, parent: TaskPayload, reason: str) -> Any:
+    def recovery_terminal(self, parent: TaskPayload, reason: str) -> RecoveryResult:
         return self.recovery_terminal_callback(parent, reason)
 
-    def recovery_from_exception(self, parent: TaskPayload, exc: Exception) -> Any:
+    def recovery_from_exception(self, parent: TaskPayload, exc: Exception) -> RecoveryResult:
         return self.recovery_exception_callback(parent, exc)
 
 

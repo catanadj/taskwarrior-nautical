@@ -25,14 +25,14 @@ class ReconcileRecoveryCallbacks:
 
     apply_parent: ApplyParentCallback
     plan_parent: PlanParentCallback
-    next_child: Callable[..., TaskObservation]
+    next_child: Callable[[TaskObservation, str], TaskObservation]
     virtual_child: VirtualChildCallback
-    terminal_error: Callable[..., str]
-    recovery_error: Callable[..., Any]
-    recovery_partial: Callable[..., Any]
-    recovery_manual_review: Callable[..., Any]
-    recovery_terminal: Callable[..., Any]
-    recovery_exception: Callable[..., Any]
+    terminal_error: Callable[[TaskObservation, Any], str]
+    recovery_error: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_partial: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_manual_review: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_terminal: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_exception: Callable[[TaskPayload, Exception], RecoveryResult]
 
 
 @dataclass(frozen=True, slots=True)

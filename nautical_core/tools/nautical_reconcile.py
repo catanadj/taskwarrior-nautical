@@ -1143,7 +1143,7 @@ def _reconcile_candidate(
     generation: ChainGenerationService | None = None,
     reconciliation_service: LifecycleReconciliationService,
 ) -> list[tuple[RecoveryResult, str]]:
-    def recovery_from_exception(candidate: dict[str, Any], exc: Exception) -> Any:
+    def recovery_from_exception(candidate: TaskPayload, exc: Exception) -> RecoveryResult:
         reason = str(exc).strip() or type(exc).__name__
         if isinstance(
             exc,

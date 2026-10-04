@@ -16,9 +16,9 @@ from .task_models import TaskObservation, TaskPayload
 class TimelineProjectionServices:
     max_iterations: int
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]]
-    dtparse: Callable[[Any], datetime | None]
+    dtparse: Callable[[object], datetime | None]
     to_local_cached: Callable[[datetime], datetime]
-    safe_parse_datetime: Callable[[Any], tuple[datetime | None, str | None]]
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]]
     omit_dnf_from_parent: Callable[[TaskPayload], tuple[str, OmitState | None]]
     omit_description_for_date: Callable[[Any, Any], str | None] | None
     recurrence_evaluator_for_task: Callable[[TaskPayload], RecurrenceEvaluator]
@@ -141,7 +141,7 @@ def _timeline_initial_items(
     *,
     coerce_int: Callable[[Any, Any], Any],
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
-    dtparse: Callable[[Any], Any],
+    dtparse: Callable[[object], datetime | None],
 ) -> list[TimelineItem]:
     items: list[TimelineItem] = []
     prevs = collect_prev_two(task)
@@ -209,7 +209,7 @@ def _timeline_future_anchor_items(
     allowed_future: int,
     cap_no: int | None,
     to_local_cached: Callable[[datetime], datetime],
-    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
     scheduler_service: Any,
     omit_dnf: Any,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
@@ -308,9 +308,9 @@ def _timeline_omitted_before_next_anchor_items(
     dnf: Any,
     child_due_utc: datetime,
     *,
-    dtparse: Callable[[Any], Any],
+    dtparse: Callable[[object], datetime | None],
     to_local_cached: Callable[[datetime], datetime],
-    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
     scheduler_service: Any,
     omit_dnf: Any,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
@@ -388,7 +388,7 @@ def _timeline_base_line(
     next_style: str,
     future_style: str,
     fmt_dt_local: Callable[[Any], str],
-    dtparse: Callable[[Any], Any],
+    dtparse: Callable[[object], datetime | None],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
     short: Callable[[Any], str],
@@ -478,7 +478,7 @@ def anchor_file_timeline_lines(
     max_iterations: int,
     future_style_for_chain: Callable[[TaskPayload, str], str],
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
-    dtparse: Callable[[Any], Any],
+    dtparse: Callable[[object], datetime | None],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
     short: Callable[[Any], str],

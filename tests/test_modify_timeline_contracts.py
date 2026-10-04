@@ -60,10 +60,10 @@ class ModifyTimelineContractTests(unittest.TestCase):
         annotations = get_type_hints(TimelineProjectionServices)
         expected = {
             "collect_prev_two": Callable[[TaskPayload], list[TaskObservation]],
-            "dtparse": Callable[[Any], datetime | None],
+            "dtparse": Callable[[object], datetime | None],
             "to_local_cached": Callable[[datetime], datetime],
             "safe_parse_datetime": Callable[
-                [Any], tuple[datetime | None, str | None]
+                [object], tuple[datetime | None, str | None]
             ],
             "omit_dnf_from_parent": Callable[
                 [TaskPayload], tuple[str, OmitState | None]

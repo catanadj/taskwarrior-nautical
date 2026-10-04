@@ -624,10 +624,12 @@ facade.__all__
             AnchorDurationValidator,
             AnchorLintCallback,
             AnchorModeValidator,
+            AppendDstAdjustmentCallback,
             PreviewPanelCallback,
             PreviewWaitScheduleRowsCallback,
         )
         from nautical_core.modify_models import CoerceIntCallback, HumanDeltaCallback
+        from nautical_core.parsing.parser_models import AnchorDNF
 
         for context in (
             AnchorExpressionPreviewServices,
@@ -666,6 +668,14 @@ facade.__all__
                     PreviewWaitScheduleRowsCallback,
                 )
                 if context is AnchorExpressionPreviewServices:
+                    self.assertEqual(
+                        get_type_hints(context)["expr_has_m_or_y"],
+                        Callable[[AnchorDNF], bool],
+                    )
+                    self.assertIs(
+                        get_type_hints(context)["append_dst_adjustment"],
+                        AppendDstAdjustmentCallback,
+                    )
                     self.assertIs(
                         get_type_hints(context)["prepare_anchor_dnf"],
                         AnchorDnfPreparationCallback,

@@ -86,6 +86,15 @@ class AnchorLintCallback(Protocol):
     ) -> None: ...
 
 
+class AppendDstAdjustmentCallback(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        dnf: AnchorDNF | None,
+        occurrence_local: datetime,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorExpressionPreviewServices:
     """Composition-root dependencies for the anchor preview renderer."""
@@ -99,8 +108,8 @@ class AnchorExpressionPreviewServices:
     to_local: Callable[[datetime], datetime]
     fmt_dt_local: Callable[[Any], str]
     coerce_int: CoerceIntCallback
-    expr_has_m_or_y: Callable[[Any], bool]
-    append_dst_adjustment: Callable[[list[tuple[str, str]], Any, datetime], None]
+    expr_has_m_or_y: Callable[[AnchorDNF], bool]
+    append_dst_adjustment: AppendDstAdjustmentCallback
     render_business_calendar_displacement: AddCalendarFeedbackCallback
     lint_and_validate: AnchorLintCallback
     omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
@@ -822,7 +831,7 @@ def _timezone_fallback_warning_needed(anchor_str: str, anchor_file_str: str) -> 
 
 def _append_dst_adjustment_row(
     rows: list[tuple[str, str]],
-    dnf: Any,
+    dnf: AnchorDNF | None,
     occurrence_local: datetime,
     *,
     core: Any,

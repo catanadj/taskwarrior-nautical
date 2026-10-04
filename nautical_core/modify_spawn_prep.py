@@ -55,7 +55,7 @@ def stable_child_uuid(
     parent_task: Mapping[str, Any] | None,
     child_task: Mapping[str, Any] | None,
     *,
-    task_uuid_or_empty: Callable[[dict[str, Any] | None], str],
+    task_uuid_or_empty: Callable[[dict[str, Any]], str],
     coerce_int: CoerceIntCallback,
     stable_child_uuid_namespace: uuid.UUID,
 ) -> str:

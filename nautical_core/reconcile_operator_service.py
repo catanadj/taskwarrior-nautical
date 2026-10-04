@@ -8,7 +8,11 @@ from typing import Any, Callable
 
 from .chain_generation import ChainGenerationService
 from .chain_integrity_lifecycle import is_orphan_deleted_chain_candidate
-from .lifecycle.reconciliation import CallbackLifecycleRecoveryOperations, LifecycleReconciliationService
+from .lifecycle.reconciliation import (
+    ApplyParentCallback,
+    CallbackLifecycleRecoveryOperations,
+    LifecycleReconciliationService,
+)
 from .lifecycle.recovery_models import RecoveryResult
 from .task_models import TaskObservation, TaskPayload
 
@@ -17,7 +21,7 @@ from .task_models import TaskObservation, TaskPayload
 class ReconcileRecoveryCallbacks:
     """Taskwarrior-specific mechanics supplied to the lifecycle owner."""
 
-    apply_parent: Callable[..., tuple[RecoveryResult, str]]
+    apply_parent: ApplyParentCallback
     plan_parent: Callable[..., Any]
     next_child: Callable[..., TaskObservation]
     virtual_child: Callable[..., tuple[Any, str]]

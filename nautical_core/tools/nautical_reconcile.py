@@ -1163,8 +1163,14 @@ def _reconcile_candidate(
     coordinator = ReconcileRecoveryCoordinator(
         reconciliation_service,
         ReconcileRecoveryCallbacks(
-            apply_parent=lambda candidate, **kwargs: _apply_parent_atomic(
-                hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
+            apply_parent=lambda candidate, *, taskdata, lease_held, verified_children, generation: _apply_parent_atomic(
+                hook,
+                candidate,
+                taskdata=taskdata,
+                lease_held=lease_held,
+                verified_children=verified_children,
+                generation=generation,
+                reconciliation_service=reconciliation_service,
             ),
             plan_parent=lambda candidate, **kwargs: _plan_for_parent(
                 hook, candidate, reconciliation_service=reconciliation_service, **kwargs,

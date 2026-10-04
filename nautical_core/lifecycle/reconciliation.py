@@ -61,6 +61,18 @@ class LifecycleRecoveryOperations(Protocol):
     def recovery_from_exception(self, parent: TaskPayload, exc: Exception) -> Any: ...
 
 
+class ApplyParentCallback(Protocol):
+    def __call__(
+        self,
+        parent: TaskPayload,
+        *,
+        taskdata: Path,
+        lease_held: bool,
+        verified_children: dict[str, dict[str, Any]],
+        generation: ChainGenerationService | None,
+    ) -> tuple[RecoveryResult, str]: ...
+
+
 class LifecycleApplyOperations(Protocol):
     def configuration_state(self, hook: Any) -> tuple[str, str]: ...
     def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
@@ -114,7 +126,7 @@ class CallbackLifecycleRecoveryOperations:
     class.
     """
 
-    apply_parent_callback: Callable[..., tuple[RecoveryResult, str]]
+    apply_parent_callback: ApplyParentCallback
     plan_parent_callback: Callable[..., Any]
     next_child_callback: Callable[..., TaskObservation]
     virtual_child_callback: Callable[..., tuple[VirtualExpiredChild | None, str]]
@@ -126,8 +138,22 @@ class CallbackLifecycleRecoveryOperations:
     recovery_terminal_callback: Callable[..., Any]
     recovery_exception_callback: Callable[..., Any]
 
-    def apply_parent(self, parent: TaskPayload, **kwargs: Any) -> tuple[RecoveryResult, str]:
-        return self.apply_parent_callback(parent, **kwargs)
+    def apply_parent(
+        self,
+        parent: TaskPayload,
+        *,
+        taskdata: Path,
+        lease_held: bool,
+        verified_children: dict[str, dict[str, Any]],
+        generation: ChainGenerationService | None,
+    ) -> tuple[RecoveryResult, str]:
+        return self.apply_parent_callback(
+            parent,
+            taskdata=taskdata,
+            lease_held=lease_held,
+            verified_children=verified_children,
+            generation=generation,
+        )
 
     def plan_parent(self, parent: TaskPayload, **kwargs: Any) -> Any:
         return self.plan_parent_callback(parent, **kwargs)

@@ -1,6 +1,7 @@
 """Direct contracts for native-until validation, carry, and descriptions."""
 
 from datetime import datetime, timedelta, timezone, tzinfo
+from typing import Any, get_type_hints
 from zoneinfo import ZoneInfo
 import unittest
 
@@ -9,6 +10,24 @@ import nautical_core.native_until as native_until
 
 
 class NativeUntilContracts(unittest.TestCase):
+    def test_native_until_policy_inputs_have_specific_types(self) -> None:
+        self.assertIs(get_type_hints(native_until.uses_exact_carry)["until_local"], datetime)
+
+        description_hints = get_type_hints(native_until.describe_carry)
+        self.assertEqual(description_hints["until_dt"], datetime | None)
+        self.assertEqual(description_hints["target_dt"], datetime | None)
+        self.assertNotIn(Any, description_hints.values())
+
+        validation_hints = get_type_hints(native_until.validate_after_target)
+        self.assertEqual(validation_hints["until_dt"], datetime | None)
+        self.assertEqual(validation_hints["target_dt"], datetime | None)
+        self.assertIs(validation_hints["target_field"], str)
+
+        slot_hints = get_type_hints(native_until.validate_calendar_slots)
+        self.assertEqual(slot_hints["until_dt"], datetime | None)
+        self.assertEqual(slot_hints["target_dt"], datetime | None)
+        self.assertNotIn(Any, slot_hints.values())
+
     def test_calendar_carry_is_shared_across_recurrence_kinds_and_conflicts(self) -> None:
         parent_target = datetime(2026, 8, 1, 9)
         parent_until = datetime(2026, 8, 1, 23)

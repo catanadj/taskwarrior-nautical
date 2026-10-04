@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from collections.abc import Iterable
+from typing import Callable
 
 from nautical_core.timeutil import compare_datetimes
 
@@ -17,7 +18,7 @@ class NativeUntilCarryError(ValueError):
         self.code = str(code or CARRY_FAILED)
 
 
-def uses_exact_carry(until_local: Any) -> bool:
+def uses_exact_carry(until_local: datetime) -> bool:
     """Return whether the stored +1s expiration marker requests exact carry."""
     try:
         return int(until_local.second) == 1
@@ -41,10 +42,10 @@ def _elapsed_delta(later: datetime, earlier: datetime) -> timedelta:
 
 
 def describe_carry(
-    until_dt: Any,
-    target_dt: Any,
+    until_dt: datetime | None,
+    target_dt: datetime | None,
     *,
-    to_local: Callable[[Any], Any],
+    to_local: Callable[[datetime], datetime],
 ) -> str | None:
     """Describe the expiration carry policy represented by one occurrence."""
     if until_dt is None or target_dt is None:
@@ -83,8 +84,8 @@ def describe_carry(
 
 
 def validate_after_target(
-    until_dt: Any,
-    target_dt: Any,
+    until_dt: datetime | None,
+    target_dt: datetime | None,
     target_field: str,
 ) -> tuple[bool, str | None]:
     if until_dt is None or target_dt is None:
@@ -99,11 +100,11 @@ def validate_after_target(
 
 
 def validate_calendar_slots(
-    until_dt: Any,
-    target_dt: Any,
-    slots: Any,
+    until_dt: datetime | None,
+    target_dt: datetime | None,
+    slots: Iterable[tuple[int, int]] | None,
     *,
-    to_local: Callable[[Any], Any],
+    to_local: Callable[[datetime], datetime],
 ) -> tuple[bool, str | None]:
     """Reject same-day calendar expirations that are not later than every fixed slot."""
     if until_dt is None or target_dt is None:

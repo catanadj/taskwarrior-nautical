@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from types import SimpleNamespace
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any, ContextManager, Protocol
 
 
 class TimePort(Protocol):
@@ -20,6 +20,32 @@ class FcntlPort(Protocol):
     LOCK_UN: int
 
     def flock(self, file_descriptor: int, operation: int) -> None: ...
+
+
+class BoundSafeLock(Protocol):
+    def __call__(
+        self,
+        path: object,
+        *,
+        retries: int = 6,
+        sleep_base: float = 0.05,
+        jitter: float = 0.0,
+        mode: int = 0o600,
+        mkdir: bool = True,
+        stale_after: float | None = 60.0,
+    ) -> ContextManager[bool]: ...
+
+
+class BoundCacheLock(Protocol):
+    def __call__(self, key: str) -> ContextManager[bool]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class BoundLocking:
+    """One cache facade's already-bound lock operations."""
+
+    safe_lock: BoundSafeLock
+    cache_lock: BoundCacheLock
 
 
 def cache_dir(
@@ -347,7 +373,7 @@ def bind_locking(
     os_mod: Any,
     time_mod: TimePort,
     random_mod: RandomPort,
-) -> Any:
+) -> BoundLocking:
     """Bind lock dependencies once for one core facade instance."""
     def bound_safe_lock(path: Any, **kwargs: Any) -> Any:
         return safe_lock(
@@ -370,4 +396,4 @@ def bind_locking(
             cache_lock_stale_after=stale_after,
         )
 
-    return SimpleNamespace(safe_lock=bound_safe_lock, cache_lock=bound_cache_lock)
+    return BoundLocking(safe_lock=bound_safe_lock, cache_lock=bound_cache_lock)

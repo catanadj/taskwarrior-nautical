@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import builtins
+from dataclasses import fields, is_dataclass
 import fcntl
 import importlib
 import io
@@ -48,6 +49,26 @@ class _Clock:
 
 class CacheApiContractTests(unittest.TestCase):
     _namespaces: list[dict] = []
+
+    def test_bound_locking_is_a_named_immutable_dependency_contract(self) -> None:
+        bound = cache_locking.bind_locking(
+            cache_lock_path=lambda _key: "",
+            retries=1,
+            sleep_base=0.0,
+            jitter=0.0,
+            stale_after=60.0,
+            fcntl_mod=fcntl,
+            os_mod=os,
+            time_mod=_Clock(),
+            random_mod=SimpleNamespace(uniform=lambda _start, _end: 0.0),
+        )
+
+        self.assertTrue(is_dataclass(bound))
+        self.assertTrue(type(bound).__dataclass_params__.frozen)
+        self.assertEqual(
+            tuple(field.name for field in fields(bound)),
+            ("safe_lock", "cache_lock"),
+        )
 
     def test_cache_lock_parent_setup_does_not_hide_unexpected_errors(self) -> None:
         class BrokenPath:

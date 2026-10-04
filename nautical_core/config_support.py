@@ -434,9 +434,9 @@ def config_paths(
 def load_config(
     *,
     defaults: dict,
-    config_paths: Any,
-    read_toml_result: Any,
-    normalize_keys: Any,
+    config_paths: Callable[[], list[str]],
+    read_toml_result: Callable[[str], ConfigReadResult],
+    normalize_keys: Callable[[dict], dict],
 ) -> dict:
     cfg = dict(defaults)
     chosen = None
@@ -483,7 +483,11 @@ def load_config(
     return cfg
 
 
-def get_config(conf_cache: Any, *, load_config: Any) -> Any:
+def get_config(
+    conf_cache: dict | None,
+    *,
+    load_config: Callable[[], dict],
+) -> tuple[dict, dict]:
     if conf_cache is None:
         conf_cache = copy.deepcopy(load_config())
     return copy.deepcopy(conf_cache), conf_cache

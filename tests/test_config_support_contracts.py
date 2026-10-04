@@ -41,6 +41,21 @@ class ConfigSupportContractTests(unittest.TestCase):
         )
         self.assertEqual(hints["error_sink"], Callable[[str], None] | None)
 
+    def test_config_loader_uses_typed_source_callbacks(self) -> None:
+        hints = get_type_hints(config_support.load_config)
+        self.assertEqual(hints["config_paths"], Callable[[], list[str]])
+        self.assertEqual(
+            hints["read_toml_result"],
+            Callable[[str], config_support.ConfigReadResult],
+        )
+        self.assertEqual(hints["normalize_keys"], Callable[[dict], dict])
+
+    def test_config_cache_uses_typed_cache_and_loader_contracts(self) -> None:
+        hints = get_type_hints(config_support.get_config)
+        self.assertEqual(hints["conf_cache"], dict | None)
+        self.assertEqual(hints["load_config"], Callable[[], dict])
+        self.assertEqual(hints["return"], tuple[dict, dict])
+
     def test_integer_configuration_does_not_hide_conversion_defects(self) -> None:
         class BrokenString:
             def __str__(self) -> str:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from collections.abc import Iterable
-from typing import Callable
+from typing import Callable, ClassVar, Protocol
 
 from nautical_core.timeutil import compare_datetimes
 
@@ -16,6 +16,14 @@ class NativeUntilCarryError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = str(code or CARRY_FAILED)
+
+
+class NativeUntilPolicy(Protocol):
+    """Stable error vocabulary used by the carry operation."""
+
+    CARRY_INVALID: ClassVar[str]
+    CARRY_FAILED: ClassVar[str]
+    NativeUntilCarryError: ClassVar[type[NativeUntilCarryError]]
 
 
 def uses_exact_carry(until_local: datetime) -> bool:

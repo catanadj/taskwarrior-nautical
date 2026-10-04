@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         TaskView,
     )
     from .modify_runtime import ModifyRuntimeState
+    from .modify_generation_effects import NativeUntilGenerationService
     from .modify_ordinary import (
         OrdinaryModifyServices as OrdinaryModifyServicesContract,
     )
@@ -62,23 +63,10 @@ if TYPE_CHECKING:
     from .taskwarrior_uow import TaskwarriorUnitOfWork
 
 
-class _NativeUntilGenerationService(Protocol):
-    def carry_native_until(
-        self,
-        parent: NauticalTask,
-        child: TaskPayload,
-        child_due_utc: datetime,
-        kind: str,
-        *,
-        parent_anchor_field: str,
-        child_anchor_field: str,
-    ) -> None: ...
-
-
 class _ModifyGenerationEffects(Protocol):
     def generation_ports_for(self, host: Any) -> object: ...
 
-    def chain_generation_service(self, ports: object) -> _NativeUntilGenerationService: ...
+    def chain_generation_service(self, ports: object) -> NativeUntilGenerationService: ...
 
 
 class _DefaultTaskCodec(Protocol):

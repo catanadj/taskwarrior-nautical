@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Callable, TypeAlias
+from typing import Callable, TypeAlias
 
-from .native_until import NativeUntilCarryError
+from .modify_generation_effects import NativeUntilGenerationService
+from .native_until import NativeUntilCarryError, NativeUntilPolicy
 from .task_models import TaskPayload
 
 
@@ -65,8 +66,8 @@ def preserve_native_until_on_target_change(
     field_changed: Callable[[TaskPayload, TaskPayload, str], bool],
     recurrence_anchor_field: Callable[[TaskPayload], str],
     parse_datetime: Callable[[object], datetime | None],
-    native_until: Any,
-    generation_service: Any,
+    native_until: NativeUntilPolicy,
+    generation_service: Callable[[], NativeUntilGenerationService],
     reject_carry: Callable[
         [TaskPayload, TaskPayload, datetime | None, str, NativeUntilCarryError], None
     ],

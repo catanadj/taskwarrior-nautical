@@ -24,10 +24,16 @@ from nautical_core.task_models import TaskTimestamp
 
 class TemporalCarryWorkflowTests(unittest.TestCase):
     def test_native_until_carry_uses_explicit_callback_contracts(self) -> None:
+        import nautical_core.modify_generation_effects as generation_effects
         from nautical_core.modify_carry import preserve_native_until_on_target_change
+        import nautical_core.native_until as native_until
         from nautical_core.native_until import NativeUntilCarryError
         from nautical_core.task_models import TaskPayload
 
+        native_until_policy = getattr(native_until, "NativeUntilPolicy", None)
+        generation_service = getattr(generation_effects, "NativeUntilGenerationService", None)
+        self.assertIsNotNone(native_until_policy)
+        self.assertIsNotNone(generation_service)
         annotations = get_type_hints(preserve_native_until_on_target_change)
         expected = {
             "old": TaskPayload,
@@ -36,6 +42,8 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
             "field_changed": Callable[[TaskPayload, TaskPayload, str], bool],
             "recurrence_anchor_field": Callable[[TaskPayload], str],
             "parse_datetime": Callable[[object], datetime | None],
+            "native_until": native_until_policy,
+            "generation_service": Callable[[], generation_service],
             "reject_carry": Callable[
                 [TaskPayload, TaskPayload, datetime | None, str, NativeUntilCarryError], None
             ],
@@ -135,6 +143,9 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
         self.assertIs(type(caught.exception), RuntimeError)
 
     def test_wait_edit_does_not_carry_native_until(self) -> None:
+        import nautical_core.native_until as native_until
+        from nautical_core.task_models import NauticalTask, TaskPayload
+
         old = {
             "due": "2026-08-25T09:00:00Z",
             "wait": "2026-08-25T08:00:00Z",
@@ -142,11 +153,18 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
         }
         new = {**old, "wait": "2026-08-25T10:00:00Z"}
 
-        class NativeUntil:
-            class NativeUntilCarryError(Exception):
-                pass
-
-            CARRY_FAILED = "carry_failed"
+        class GenerationService:
+            def carry_native_until(
+                self,
+                parent: NauticalTask,
+                child: TaskPayload,
+                child_due_utc: datetime,
+                kind: str,
+                *,
+                parent_anchor_field: str,
+                child_anchor_field: str,
+            ) -> None:
+                raise AssertionError("unchanged wait must not request native-until carry")
 
         carried = preserve_native_until_on_target_change(
             old,
@@ -155,8 +173,8 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
             field_changed=lambda before, after, field: before.get(field) != after.get(field),
             recurrence_anchor_field=lambda _task: "due",
             parse_datetime=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")),
-            native_until=NativeUntil,
-            generation_service=lambda: None,
+            native_until=native_until,
+            generation_service=GenerationService,
             reject_carry=lambda *args: self.fail(f"unexpected rejection: {args!r}"),
             diagnostic=lambda message: self.fail(message),
         )

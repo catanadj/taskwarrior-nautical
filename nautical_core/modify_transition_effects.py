@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable, ClassVar, NoReturn, Protocol
+from typing import Callable, NoReturn, Protocol
 
 from .modify_carry import CpCarryResult
 from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
-from .native_until import NativeUntilCarryError
+from .native_until import NativeUntilCarryError, NativeUntilPolicy
 from .modify_models import NativeCarryDescription
+from .modify_generation_effects import NativeUntilGenerationService
 from .modify_validation import CompletionValidationServices
 from .task_changes import TaskTransition
-from .task_models import NauticalTask, TaskPayload, TaskTimestamp
+from .task_models import TaskPayload, TaskTimestamp
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,25 +97,6 @@ class NativePreservePorts:
     ]
     diagnostic: Callable[[str], None]
     workflow: "NativeUntilWorkflow"
-
-
-class NativeUntilPolicy(Protocol):
-    CARRY_INVALID: ClassVar[str]
-    CARRY_FAILED: ClassVar[str]
-    NativeUntilCarryError: ClassVar[type[NativeUntilCarryError]]
-
-
-class NativeUntilGenerationService(Protocol):
-    def carry_native_until(
-        self,
-        parent: NauticalTask,
-        child: TaskPayload,
-        child_due_utc: datetime,
-        kind: str,
-        *,
-        parent_anchor_field: str,
-        child_anchor_field: str,
-    ) -> None: ...
 
 
 class NativeUntilCarryOperation(Protocol):

@@ -4,10 +4,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import MutableMapping
+from datetime import datetime
 from typing import Any, Protocol
 
+from .task_models import NauticalTask, TaskPayload
 
-class ChainGenerationServicePort(Protocol):
+
+class NativeUntilGenerationService(Protocol):
+    """Generation capability used to carry an occurrence's native expiration."""
+
+    def carry_native_until(
+        self,
+        parent: NauticalTask,
+        child: TaskPayload,
+        child_due_utc: datetime,
+        kind: str,
+        *,
+        parent_anchor_field: str,
+        child_anchor_field: str,
+    ) -> None: ...
+
+class ChainGenerationServicePort(NativeUntilGenerationService, Protocol):
     """Identity needed to reuse one configured generation service."""
 
     core: object

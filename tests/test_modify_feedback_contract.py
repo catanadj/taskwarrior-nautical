@@ -147,6 +147,13 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             )["request"],
             CpCompletionFeedbackModel,
         )
+        self.assertIs(
+            get_type_hints(
+                modify_feedback.orchestrate_cp_completion_feedback,
+                localns={"ModifyRuntimeServices": modify_runtime.ModifyRuntimeServices},
+            )["core"],
+            modify_feedback.CompletionFeedbackCore,
+        )
 
     def test_cp_feedback_orchestration_uses_owner_models_without_module_bag(self) -> None:
         now = datetime(2026, 10, 4, tzinfo=timezone.utc)

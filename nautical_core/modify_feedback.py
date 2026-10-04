@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 from collections.abc import Callable, Mapping
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .callback_ports import CallbackPort
@@ -26,7 +26,26 @@ if TYPE_CHECKING:
 
 
 class _PanelWarningsCallback(Protocol):
-    def __call__(self, core: Any, task: TaskView, *, include_files: bool = True) -> list[str]: ...
+    def __call__(
+        self,
+        core: CompletionFeedbackCore,
+        task: TaskView,
+        *,
+        include_files: bool = True,
+    ) -> list[str]: ...
+
+
+class CompletionFeedbackCore(Protocol):
+    def _import_sibling(self, name: str) -> Any: ...
+
+    def to_local(self, value: Any) -> Any: ...
+
+    def business_calendar_displacement_for_date(
+        self,
+        value: date,
+        *,
+        calendar_name: str,
+    ) -> Any: ...
 
 
 class _BusinessCalendarDisplacementCallback(Protocol):
@@ -35,7 +54,7 @@ class _BusinessCalendarDisplacementCallback(Protocol):
         task: TaskPayload,
         occurrence: datetime | None,
         *,
-        core: Any,
+        core: CompletionFeedbackCore,
         panel: PanelCallback,
     ) -> bool: ...
 
@@ -1391,7 +1410,7 @@ def render_cp_completion_feedback(
 def orchestrate_anchor_completion_feedback(
     *,
     request: AnchorCompletionFeedbackModel,
-    core: Any,
+    core: CompletionFeedbackCore,
     panel: PanelCallback,
     render_business_calendar_displacement: _BusinessCalendarDisplacementCallback,
     panel_warnings: _PanelWarningsCallback,
@@ -1467,7 +1486,7 @@ def orchestrate_anchor_completion_feedback(
 def orchestrate_cp_completion_feedback(
     *,
     request: CpCompletionFeedbackModel,
-    core: Any,
+    core: CompletionFeedbackCore,
     panel_warnings: _PanelWarningsCallback,
     build_feedback_services: Callable[[ModifyRuntimeServices], CpFeedbackServices],
     build_runtime_services: Callable[[], ModifyRuntimeServices],

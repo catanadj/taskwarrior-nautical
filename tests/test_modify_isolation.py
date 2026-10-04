@@ -238,6 +238,69 @@ class ModifyIsolationTests(unittest.TestCase):
             ExistingNextLookupCallback,
         )
 
+    def test_completion_preflight_helpers_use_shared_typed_contracts(self) -> None:
+        from nautical_core.modify_completion_preflight import (
+            completion_chain_id_or_fail,
+            completion_existing_next_or_fail,
+            completion_kind_or_stop,
+            completion_link_numbers_or_fail,
+            completion_preflight_context,
+        )
+        from nautical_core.modify_models import (
+            CoerceIntCallback,
+            CompletionPreflightServices,
+            EndChainSummaryCallback,
+            ExistingNextLookupCallback,
+            PanelCallback,
+            PrintTaskCallback,
+            ShortUuidCallback,
+        )
+        from nautical_core.task_models import TaskPayload
+
+        expected = {
+            completion_link_numbers_or_fail: {
+                "new": TaskPayload,
+                "coerce_int": CoerceIntCallback,
+                "max_link_number": int,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "return": tuple[int, int] | None,
+            },
+            completion_kind_or_stop: {
+                "new": TaskPayload,
+                "now_utc": datetime,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "end_chain_summary": EndChainSummaryCallback,
+                "return": str | None,
+            },
+            completion_chain_id_or_fail: {
+                "new": TaskPayload,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "return": str | None,
+            },
+            completion_existing_next_or_fail: {
+                "new": TaskPayload,
+                "next_no": int,
+                "existing_next_lookup": ExistingNextLookupCallback,
+                "short": ShortUuidCallback,
+                "panel": PanelCallback,
+                "print_task": PrintTaskCallback,
+                "return": bool,
+            },
+            completion_preflight_context: {
+                "new": TaskPayload,
+                "now_utc": datetime,
+                "services": CompletionPreflightServices,
+            },
+        }
+        for function, expected_hints in expected.items():
+            with self.subTest(function=function.__name__):
+                actual = get_type_hints(function)
+                for name, annotation in expected_hints.items():
+                    self.assertEqual(actual[name], annotation)
+
     def test_completion_caps_parser_uses_shared_datetime_contract(self) -> None:
         from nautical_core.modify_completion_effects import CompletionCapsPorts
         from nautical_core.modify_models import (

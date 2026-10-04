@@ -1,19 +1,28 @@
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
 
 from nautical_core.integration_models import Absent, Found, Unavailable
-from nautical_core.modify_models import CompletionPreflightContext, ExistingNextLookupCallback
+from nautical_core.modify_models import (
+    CoerceIntCallback,
+    CompletionPreflightContext,
+    CompletionPreflightServices,
+    EndChainSummaryCallback,
+    ExistingNextLookupCallback,
+    PanelCallback,
+    PrintTaskCallback,
+    ShortUuidCallback,
+)
 from nautical_core.task_models import TaskPayload
 
 
 def completion_link_numbers_or_fail(
     new: TaskPayload,
     *,
-    coerce_int: Any,
+    coerce_int: CoerceIntCallback,
     max_link_number: int,
-    panel: Any,
-    print_task: Any,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
 ) -> tuple[int, int] | None:
     base_no = coerce_int(new.get("link"), 1)
     if base_no < 1 or base_no > max_link_number:
@@ -38,11 +47,11 @@ def completion_link_numbers_or_fail(
 
 def completion_kind_or_stop(
     new: TaskPayload,
-    now_utc: Any,
+    now_utc: datetime,
     *,
-    panel: Any,
-    print_task: Any,
-    end_chain_summary: Any,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
+    end_chain_summary: EndChainSummaryCallback,
 ) -> str | None:
     raw_ch = (new.get("chain") or "").strip().lower()
     has_anchor = bool((new.get("anchor") or "").strip())
@@ -69,7 +78,12 @@ def completion_kind_or_stop(
     return kind
 
 
-def completion_chain_id_or_fail(new: TaskPayload, *, panel: Any, print_task: Any) -> str | None:
+def completion_chain_id_or_fail(
+    new: TaskPayload,
+    *,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
+) -> str | None:
     chain_id = (new.get("chainID") or "").strip()
     if chain_id:
         return chain_id
@@ -90,9 +104,9 @@ def completion_existing_next_or_fail(
     next_no: int,
     *,
     existing_next_lookup: ExistingNextLookupCallback,
-    short: Any,
-    panel: Any,
-    print_task: Any,
+    short: ShortUuidCallback,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
 ) -> bool:
     declared_next = str(new.get("nextLink") or "").strip()
     if declared_next:
@@ -155,9 +169,9 @@ def completion_existing_next_or_fail(
 
 def completion_preflight_context(
     new: TaskPayload,
-    now_utc: Any,
+    now_utc: datetime,
     *,
-    services: Any,
+    services: CompletionPreflightServices,
 ) -> CompletionPreflightContext | None:
     short = services.short
     completion_link_numbers_or_fail = services.completion_link_numbers_or_fail

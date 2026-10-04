@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Any
+from datetime import datetime
+from typing import Callable
 
+from .modify_carry import CpCarryResult
 from .task_changes import TaskPatch, timestamp_equal
 from .task_models import TaskTimestamp
 
@@ -94,7 +96,11 @@ class TemporalCarryDecision:
         )
 
 
-def decision_from_cp_adjustments(result: Any, *, timestamp_factory: Any = TaskTimestamp) -> TemporalCarryDecision:
+def decision_from_cp_adjustments(
+    result: CpCarryResult,
+    *,
+    timestamp_factory: Callable[[datetime], TaskTimestamp] = TaskTimestamp,
+) -> TemporalCarryDecision:
     """Normalize the established CP carry result into the typed decision."""
     if result is None:
         return TemporalCarryDecision("unchanged")
@@ -106,7 +112,7 @@ def decision_from_cp_adjustments(result: Any, *, timestamp_factory: Any = TaskTi
                 field,
                 timestamp_factory(old_value),
                 timestamp_factory(new_value),
-                offset.total_seconds() if hasattr(offset, "total_seconds") else offset,
+                offset.total_seconds(),
             )
         )
     old_target = timestamp_factory(_old_due)
@@ -166,6 +172,7 @@ def verify_native_until_task(task: dict, decision: NativeUntilDecision) -> None:
 
 
 __all__ = (
+    "CpCarryResult",
     "NativeUntilDecision",
     "TemporalCarryAdjustment",
     "TemporalCarryDecision",

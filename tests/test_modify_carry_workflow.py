@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from datetime import timedelta
+from typing import Callable, get_type_hints
 from zoneinfo import ZoneInfo
 
 from nautical_core.modify_carry_workflow import (
@@ -21,6 +23,22 @@ from nautical_core.task_models import TaskTimestamp
 
 
 class TemporalCarryWorkflowTests(unittest.TestCase):
+    def test_cp_carry_normalizer_has_concrete_result_and_factory_types(self) -> None:
+        from nautical_core.modify_carry import CpCarryResult
+        import nautical_core.modify_carry_workflow as modify_carry_workflow
+
+        result_type = getattr(modify_carry_workflow, "CpCarryResult", None)
+        self.assertIs(result_type, CpCarryResult)
+
+        self.assertEqual(
+            get_type_hints(decision_from_cp_adjustments),
+            {
+                "result": result_type,
+                "timestamp_factory": Callable[[datetime], TaskTimestamp],
+                "return": TemporalCarryDecision,
+            },
+        )
+
     def test_cp_carry_does_not_translate_unexpected_due_parser_failures(self) -> None:
         old = {"cp": "P1D", "due": "old"}
         new = {**old, "due": "new"}
@@ -130,7 +148,9 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
     def test_cp_result_is_normalized_to_typed_adjustments(self) -> None:
         old = datetime(2026, 8, 25, 9, tzinfo=timezone.utc)
         new = datetime(2026, 8, 26, 9, tzinfo=timezone.utc)
-        result = decision_from_cp_adjustments((old, new, [("scheduled", old, new, 86400)]))
+        result = decision_from_cp_adjustments(
+            (old, new, [("scheduled", old, new, timedelta(seconds=86400))])
+        )
         self.assertEqual(result.status, "adjusted")
         self.assertEqual(result.adjustments[0].field, "scheduled")
         self.assertTrue(result)

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Any, TypeAlias
 
 from .task_models import TaskPayload
+
+
+CpCarryAdjustment: TypeAlias = tuple[str, datetime, datetime, timedelta]
+CpCarryResult: TypeAlias = tuple[datetime, datetime, list[CpCarryAdjustment]] | None
 
 
 def preserve_cp_relative_offsets_on_due_change(
@@ -18,7 +23,7 @@ def preserve_cp_relative_offsets_on_due_change(
     local_naive_to_utc: Any,
     format_datetime: Any,
     carry_error: Any,
-) -> tuple[Any, Any, list[tuple[str, Any, Any, Any]]] | None:
+) -> CpCarryResult:
     """Keep scheduled/wait relative to due when a CP task's due moves."""
     if not new_cp or not str(old.get("cp") or "").strip():
         return None
@@ -33,7 +38,7 @@ def preserve_cp_relative_offsets_on_due_change(
     except (ValueError, OverflowError) as exc:
         raise carry_error("due", str(exc) or "timestamp conversion failed") from exc
 
-    adjustments: list[tuple[str, Any, Any, Any]] = []
+    adjustments: list[CpCarryAdjustment] = []
     for field in ("scheduled", "wait"):
         if field_changed(old, new, field) or not old.get(field):
             continue

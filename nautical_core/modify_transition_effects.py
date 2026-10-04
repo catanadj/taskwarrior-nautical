@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, ClassVar, NoReturn, Protocol
 
-from .modify_carry_workflow import TemporalCarryDecision
-from .modify_carry_workflow import NativeUntilDecision
+from .modify_carry import CpCarryResult
+from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
 from .native_until import NativeUntilCarryError
 from .modify_models import NativeCarryDescription
 from .modify_validation import CompletionValidationServices
@@ -67,7 +67,7 @@ class CPCarryOperation(Protocol):
 class CPCarryWorkflow(Protocol):
     def decision_from_cp_adjustments(
         self,
-        result: tuple[datetime, datetime, list[tuple[str, datetime, datetime, timedelta]]] | None,
+        result: CpCarryResult,
     ) -> TemporalCarryDecision: ...
 
     def apply_temporal_carry_patch(

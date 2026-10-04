@@ -439,7 +439,9 @@ def _panel_port_for(host: Any) -> PanelCallback:
     return lambda title, rows, **kwargs: ui.panel(ports, title, rows, **kwargs)
 
 
-def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload) -> Any:
+def link_numbers_or_fail(
+    ports: CompletionPreflightPorts, new: TaskPayload
+) -> tuple[int, int] | None:
     return ports.preflight.completion_link_numbers_or_fail(
         new,
         coerce_int=ports.coerce_int, max_link_number=ports.max_link_number,
@@ -447,7 +449,9 @@ def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload) -> A
     )
 
 
-def kind_or_stop(ports: CompletionPreflightPorts, new: TaskPayload, now_utc: datetime) -> Any:
+def kind_or_stop(
+    ports: CompletionPreflightPorts, new: TaskPayload, now_utc: datetime
+) -> str | None:
     return ports.preflight.completion_kind_or_stop(
         new,
         now_utc,

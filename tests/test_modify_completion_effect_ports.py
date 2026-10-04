@@ -7,6 +7,24 @@ from typing import Any, get_type_hints
 
 
 class ModifyCompletionEffectPortTests(unittest.TestCase):
+    def test_preflight_helpers_retain_service_result_types(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            kind_or_stop,
+            link_numbers_or_fail,
+        )
+
+        hints = {
+            link_numbers_or_fail.__name__: get_type_hints(link_numbers_or_fail)["return"],
+            kind_or_stop.__name__: get_type_hints(kind_or_stop)["return"],
+        }
+        self.assertEqual(
+            hints,
+            {
+                "link_numbers_or_fail": tuple[int, int] | None,
+                "kind_or_stop": str | None,
+            },
+        )
+
     def test_completion_snapshot_operations_use_their_result_models(self) -> None:
         from nautical_core.modify_completion_effects import (
             chain_snapshot,

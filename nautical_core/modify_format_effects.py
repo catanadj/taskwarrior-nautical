@@ -19,7 +19,7 @@ class HumanDeltaPort:
 class LinePreviewPorts:
     format_line_preview: PreviewLineFormatter
     core: MarkupStripper
-    format_local: Callable[[Any], str]
+    format_local: Callable[[datetime], str]
     delta: HumanDeltaPort
 
 
@@ -33,7 +33,7 @@ class _LinePreviewCore(MarkupStripper, Protocol):
 
 class LinePreviewHost(Protocol):
     core: _LinePreviewCore
-    _fmtlocal: Callable[[Any], str]
+    _fmtlocal: Callable[[datetime], str]
 
     def _module(self, name: Literal["modify_feedback"]) -> _ModifyFeedback: ...
 

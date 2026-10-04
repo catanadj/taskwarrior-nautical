@@ -231,6 +231,40 @@ class ModifyFeedbackContractTests(unittest.TestCase):
                     DatetimeParserCallback,
                 )
 
+    def test_completion_preview_uses_datetime_callback_contracts(self) -> None:
+        from nautical_core.modify_models import (
+            CompletionPreviewFormatter,
+            PreviewLineFormatter,
+        )
+
+        datetime_or_none = datetime | None
+        expected_arguments = {
+            "child_due": datetime_or_none,
+            "now_utc": datetime,
+            "until_dt": datetime_or_none,
+            "child_until_dt": datetime_or_none,
+        }
+        for formatter in (CompletionPreviewFormatter, PreviewLineFormatter):
+            hints = get_type_hints(formatter.__call__)
+            with self.subTest(formatter=formatter.__name__):
+                for field, annotation in expected_arguments.items():
+                    self.assertEqual(hints[field], annotation)
+        expected_callbacks = {
+            "format_local": Callable[[datetime], str],
+            "on_time_delta": Callable[[datetime_or_none, datetime_or_none], str],
+            "human_delta": Callable[[datetime, datetime_or_none, bool], str],
+        }
+        preview_hints = get_type_hints(PreviewLineFormatter.__call__)
+        for field, annotation in expected_callbacks.items():
+            with self.subTest(formatter=PreviewLineFormatter.__name__, field=field):
+                self.assertEqual(preview_hints[field], annotation)
+        formatter_hints = get_type_hints(modify_feedback.format_line_preview)
+        helper_fields = dict(expected_arguments, **expected_callbacks)
+        helper_fields["child_due_utc"] = helper_fields.pop("child_due")
+        for field, annotation in helper_fields.items():
+            with self.subTest(formatter="format_line_preview", field=field):
+                self.assertEqual(formatter_hints[field], annotation)
+
     def test_completion_feedback_renderers_use_owner_models(self) -> None:
         anchor_annotations = get_type_hints(modify_feedback.render_anchor_completion_feedback)
         cp_annotations = get_type_hints(modify_feedback.render_cp_completion_feedback)

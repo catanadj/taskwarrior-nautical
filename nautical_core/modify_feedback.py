@@ -534,21 +534,21 @@ def format_next_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, s
 def format_line_preview(
     link_no: int,
     task: TaskPayload,
-    child_due_utc: Any,
+    child_due_utc: datetime | None,
     child_short: str,
-    now_utc: Any,
+    now_utc: datetime,
     *,
     child_field: str = "due",
     cap_no: int | None = None,
-    until_dt: Any = None,
+    until_dt: datetime | None = None,
     until_no: int | None = None,
-    child_until_dt: Any = None,
+    child_until_dt: datetime | None = None,
     kind: str = "cp",
     minimal: bool = False,
     core: Any,
-    format_local: Callable[[Any], str],
-    on_time_delta: Callable[[Any, Any], str],
-    human_delta: Callable[[Any, Any, bool], str],
+    format_local: Callable[[datetime], str],
+    on_time_delta: Callable[[datetime | None, datetime | None], str],
+    human_delta: Callable[[datetime, datetime | None, bool], str],
 ) -> str:
     """Render one compact completion preview line."""
     due_local = format_local(child_due_utc) if child_due_utc else "—"

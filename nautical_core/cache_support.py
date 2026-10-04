@@ -4,10 +4,22 @@ import hashlib
 import os
 import stat
 import sys
-from typing import Any
+from typing import Any, Mapping, Protocol
 
 
-def nautical_cache_dir(*, validated_user_dir: Any) -> str:
+class ValidatedUserDir(Protocol):
+    def __call__(
+        self,
+        path_value: str,
+        *,
+        label: str,
+        trust_env: str = "",
+        env_map: Mapping[str, Any] | None = None,
+        warn_on_error: bool = True,
+    ) -> str: ...
+
+
+def nautical_cache_dir(*, validated_user_dir: ValidatedUserDir) -> str:
     base_raw = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
     safe_base = validated_user_dir(
         base_raw,
@@ -55,7 +67,7 @@ def select_cache_dir(
     *,
     anchor_cache_dir_override: str,
     nautical_cache_dir_path: str,
-    validated_user_dir: Any,
+    validated_user_dir: ValidatedUserDir,
 ) -> str:
     candidates = []
     if anchor_cache_dir_override:

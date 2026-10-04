@@ -49,6 +49,12 @@ class _Clock:
 
 
 class CacheApiContractTests(unittest.TestCase):
+    def test_cache_directory_validation_uses_a_shared_callback_contract(self) -> None:
+        for owner in (cache_support.nautical_cache_dir, cache_support.select_cache_dir):
+            with self.subTest(owner=owner.__name__):
+                hints = get_type_hints(owner)
+                self.assertIs(hints["validated_user_dir"], cache_support.ValidatedUserDir)
+
     def test_payload_load_and_save_share_the_cache_state_model(self) -> None:
         load_signature = get_type_hints(cache_payload.cache_load)
         save_signature = get_type_hints(cache_payload.cache_save)

@@ -4,7 +4,7 @@ import copy
 import os
 import re
 import sys
-from typing import Any, Literal, Mapping
+from typing import Any, BinaryIO, Callable, Literal, Mapping, Protocol
 
 
 _UDA_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -40,6 +40,10 @@ class ConfigReadResult:
     @property
     def is_invalid(self) -> bool:
         return self.state == "invalid"
+
+
+class TomlParserPort(Protocol):
+    def load(self, fp: BinaryIO) -> dict: ...
 
 
 def env_flag_true(name: str, env_map: Mapping[str, Any] | None = None) -> bool:
@@ -202,10 +206,10 @@ def resolve_task_data_context(
 def read_toml_result(
     path: str,
     *,
-    tomllib_mod: Any,
-    warn_missing_toml_parser: Any,
-    warn_toml_parse_error: Any,
-    error_sink: Any = None,
+    tomllib_mod: TomlParserPort | None,
+    warn_missing_toml_parser: Callable[[str], None],
+    warn_toml_parse_error: Callable[[str, Exception], None],
+    error_sink: Callable[[str], None] | None = None,
 ) -> ConfigReadResult:
     try:
         if not path or not os.path.exists(path):
@@ -282,10 +286,10 @@ def read_toml_result(
 def read_toml(
     path: str,
     *,
-    tomllib_mod: Any,
-    warn_missing_toml_parser: Any,
-    warn_toml_parse_error: Any,
-    error_sink: Any = None,
+    tomllib_mod: TomlParserPort | None,
+    warn_missing_toml_parser: Callable[[str], None],
+    warn_toml_parse_error: Callable[[str, Exception], None],
+    error_sink: Callable[[str], None] | None = None,
 ) -> dict:
     """Compatibility wrapper returning only the parsed table."""
     return read_toml_result(
@@ -297,7 +301,11 @@ def read_toml(
     ).data
 
 
-def warn_env_config_missing(env_path: str, *, warn_once_per_day_any: Any) -> None:
+def warn_env_config_missing(
+    env_path: str,
+    *,
+    warn_once_per_day_any: Callable[[str, str], None],
+) -> None:
     warn_once_per_day_any(
         "config_missing",
         "[nautical] NAUTICAL_CONFIG path missing; using defaults.",
@@ -337,7 +345,12 @@ def normalize_anchor_presets(value: Any) -> dict[str, str]:
     return normalize_preset_table(value)
 
 
-def config_paths(*, warn_env_config_missing: Any, taskdata: str | None = None, error_sink: Any = None) -> list[str]:
+def config_paths(
+    *,
+    warn_env_config_missing: Callable[[str], None],
+    taskdata: str | None = None,
+    error_sink: Callable[[str], None] | None = None,
+) -> list[str]:
     env_path = os.environ.get("NAUTICAL_CONFIG")
     if env_path:
         raw_env = str(env_path).strip()

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+from typing import Callable, get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +20,27 @@ import nautical_core.core_config as core_config
 
 
 class ConfigSupportContractTests(unittest.TestCase):
+    def test_toml_reader_declares_parser_and_diagnostic_callback_contracts(self) -> None:
+        expected = {
+            "tomllib_mod": config_support.TomlParserPort | None,
+            "warn_missing_toml_parser": Callable[[str], None],
+            "warn_toml_parse_error": Callable[[str, Exception], None],
+            "error_sink": Callable[[str], None] | None,
+        }
+        for owner in (config_support.read_toml_result, config_support.read_toml):
+            hints = get_type_hints(owner)
+            with self.subTest(owner=owner.__name__):
+                for name, contract in expected.items():
+                    self.assertEqual(hints[name], contract)
+
+    def test_config_path_diagnostics_use_callable_contracts(self) -> None:
+        hints = get_type_hints(config_support.config_paths)
+        self.assertEqual(
+            hints["warn_env_config_missing"],
+            Callable[[str], None],
+        )
+        self.assertEqual(hints["error_sink"], Callable[[str], None] | None)
+
     def test_integer_configuration_does_not_hide_conversion_defects(self) -> None:
         class BrokenString:
             def __str__(self) -> str:

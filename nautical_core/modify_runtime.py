@@ -23,6 +23,7 @@ from nautical_core.modify_models import (
     TextLineCallback,
     TimelineLinesCallback,
     WaitScheduleRowsCallback,
+    WaitScheduleDebug,
 )
 from nautical_core.task_models import TaskPayload
 import nautical_core.timezone_facade as timezone_facade
@@ -184,7 +185,7 @@ class ModifyRuntimeServices:
     state: ModifyRuntimeState
     core: Any
     debug_wait_sched: bool
-    last_wait_sched_debug: dict[str, Any]
+    last_wait_sched_debug: WaitScheduleDebug | None
     diag_enabled: bool
     format_root_and_age: RootAgeFormatter
     append_next_wait_sched_rows: WaitScheduleRowsCallback

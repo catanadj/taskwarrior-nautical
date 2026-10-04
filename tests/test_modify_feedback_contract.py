@@ -16,6 +16,7 @@ from nautical_core.modify_models import (
     CpFeedbackServices,
     CpCompletionFeedbackModel,
     CompletionLifecycleResult,
+    WaitScheduleDebug,
 )
 from nautical_core.task_models import TaskPayload
 from nautical_core.parsing.parser_models import ParseError
@@ -133,6 +134,10 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertIs(cp_annotations["services"], CpFeedbackServices)
         self.assertIs(get_type_hints(AnchorCompletionFeedbackModel)["new"], TaskPayload)
         self.assertIs(get_type_hints(CpCompletionFeedbackModel)["child"], TaskPayload)
+        self.assertEqual(
+            get_type_hints(AnchorFeedbackServices)["last_wait_sched_debug"],
+            WaitScheduleDebug | None,
+        )
         self.assertIs(
             get_type_hints(
                 modify_feedback.orchestrate_anchor_completion_feedback,

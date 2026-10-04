@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 # task data and result values.  ``Any`` remains the payload type because hook
 # modules support Taskwarrior's heterogeneous JSON fields.
 TaskRow: TypeAlias = TaskPayload
+WaitScheduleDebug: TypeAlias = Mapping[str, Mapping[str, object]]
 ShortUuidCallback: TypeAlias = Callable[[Any], str]
 ExistingNextLookupCallback: TypeAlias = Callable[
     [TaskPayload, int], TaskRead[TaskObservation] | None
@@ -762,7 +763,7 @@ class CompletionFinalizeCallback(Protocol):
 class AnchorFeedbackServices:
     core: Any
     debug_wait_sched: bool
-    last_wait_sched_debug: Any
+    last_wait_sched_debug: WaitScheduleDebug | None
     diag_enabled: bool
     format_root_and_age: RootAgeFormatter
     append_next_wait_sched_rows: WaitScheduleRowsCallback

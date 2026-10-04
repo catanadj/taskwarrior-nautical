@@ -17,6 +17,7 @@ from .modify_models import (
     CpFeedbackServices,
     TaskView,
     PanelCallback,
+    WaitScheduleDebug,
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
@@ -708,7 +709,12 @@ def _anchor_omit_summary(core: Any, task: TaskPayload) -> tuple[str | None, str 
     return omit_raw, natural, list(warns or []), omit_file
 
 
-def _append_wait_sched_feedback_rows(fb: list[tuple[str, object]], *, debug_wait_sched: bool, last_wait_sched_debug: Any) -> None:
+def _append_wait_sched_feedback_rows(
+    fb: list[tuple[str, object]],
+    *,
+    debug_wait_sched: bool,
+    last_wait_sched_debug: WaitScheduleDebug | None,
+) -> None:
     if not (debug_wait_sched and last_wait_sched_debug):
         return
     for field in ("scheduled", "wait"):

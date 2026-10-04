@@ -381,6 +381,21 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertIs(annotations["chain_until_value"], object)
         self.assertIs(annotations["return"], type(None))
 
+    def test_validation_port_factories_use_owner_host_protocols(self) -> None:
+        from nautical_core.modify_validation_effects import (
+            AnchorValidationHost,
+            OmitValidationHost,
+            anchor_validation_ports_for,
+            omit_validation_ports_for,
+        )
+
+        self.assertIs(
+            get_type_hints(anchor_validation_ports_for)["host"], AnchorValidationHost
+        )
+        self.assertIs(
+            get_type_hints(omit_validation_ports_for)["host"], OmitValidationHost
+        )
+
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:
         from nautical_core.modify_validation import validate_cp_on_modify
 

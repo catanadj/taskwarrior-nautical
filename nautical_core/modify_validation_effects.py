@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from dataclasses import dataclass
-from typing import Any, NoReturn, Protocol
+from typing import Any, Literal, NoReturn, Protocol
 from .hook_validation_pipeline import ValidationFinding
 from .modify_validation import (
     CollectAnchorTimeSlots,
@@ -86,6 +86,68 @@ class OmitValidationPipeline(SharedValidationPipeline, Protocol):
         load_anchor_file: Callable[[str], object],
         load_omit_file: Callable[[str], object],
     ) -> tuple[ValidationFinding, ...]: ...
+
+
+class _AnchorParserAPI(Protocol):
+    def validate_anchor_expr_strict(self, expr: str) -> object: ...
+
+
+class _OmitParserAPI(Protocol):
+    def parse_anchor_expr_to_dnf(self, expr: str) -> object: ...
+
+
+class _AstronomyValidationAPI(Protocol):
+    def is_astronomy_error(self, exc: BaseException) -> bool: ...
+
+    def scheduling_error_message(self, exc: BaseException) -> str: ...
+
+
+class _ValidationUI(Protocol):
+    def ui_ports_for(self, host: object) -> object: ...
+
+    def panel(
+        self,
+        ports: object,
+        title: str,
+        rows: list[tuple[str, str]],
+        *,
+        kind: str,
+    ) -> object: ...
+
+
+class _AnchorValidationCore(Protocol):
+    _parser_api: _AnchorParserAPI
+    lint_anchor_expr: Callable[[str], tuple[str | None, list[str]]]
+
+    def _import_sibling(
+        self,
+        name: Literal["astronomy"],
+    ) -> _AstronomyValidationAPI: ...
+
+
+class _OmitValidationCore(Protocol):
+    _parser_api: _OmitParserAPI
+
+    def _import_sibling(
+        self,
+        name: Literal["hook_validation_pipeline"],
+    ) -> OmitValidationPipeline: ...
+
+
+class AnchorValidationHost(Protocol):
+    core: _AnchorValidationCore
+    _fail_and_exit: Callable[[str, str], NoReturn]
+
+    def _module(self, name: Literal["modify_ui_effects"]) -> _ValidationUI: ...
+
+
+class OmitValidationHost(Protocol):
+    core: _OmitValidationCore
+    _fail_and_exit: Callable[[str, str], NoReturn]
+    _validate_anchor_expr_cached: Callable[[str], object]
+    _validate_omit_expr_cached: Callable[[str], object]
+    _load_anchor_file_dates: Callable[[str], object]
+    _load_omit_file_dates: Callable[[str], object]
 
 
 class ValidateRecurrenceFiles(Protocol):
@@ -296,7 +358,7 @@ def validate_omit(ports: OmitValidationPorts, anchor_expr: str, anchor_file_expr
         ports.fail(f"Invalid {finding.field}", finding.reason)
 
 
-def anchor_validation_ports_for(host: Any) -> AnchorValidationPorts:
+def anchor_validation_ports_for(host: AnchorValidationHost) -> AnchorValidationPorts:
     astronomy = host.core._import_sibling("astronomy")
     ui = host._module("modify_ui_effects")
     ui_ports = ui.ui_ports_for(host)
@@ -310,7 +372,7 @@ def anchor_validation_ports_for(host: Any) -> AnchorValidationPorts:
     )
 
 
-def omit_validation_ports_for(host: Any) -> OmitValidationPorts:
+def omit_validation_ports_for(host: OmitValidationHost) -> OmitValidationPorts:
     pipeline = host.core._import_sibling("hook_validation_pipeline")
     return OmitValidationPorts(
         pipeline=pipeline,

@@ -207,6 +207,25 @@ class CPCompletionPorts:
     diagnostic: DiagnosticCallback
 
 
+class _CPCompletionCore(Protocol):
+    coerce_int: CoerceIntCallback
+    parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None]
+    cp_sequence_interval_for_token: SequenceIntervalForToken
+    build_local_datetime: Callable[[date, tuple[int, int]], datetime]
+
+
+class CPCompletionHost(Protocol):
+    core: _CPCompletionCore
+    _tolocal: Callable[[datetime], datetime]
+    _MAX_ITERATIONS: int
+    _diag: DiagnosticCallback
+
+    def _module(
+        self,
+        name: Literal["modify_completion_compute"],
+    ) -> CPCompletionCompute: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorCompletionPorts:
     compute: AnchorCompletionCompute
@@ -239,7 +258,7 @@ def scheduler_ports_for(host: SchedulerHost) -> SchedulerPorts:
     return SchedulerPorts(service_for_task=service_for_task)
 
 
-def cp_completion_ports_for(host: Any) -> CPCompletionPorts:
+def cp_completion_ports_for(host: CPCompletionHost) -> CPCompletionPorts:
     return CPCompletionPorts(
         compute=host._module("modify_completion_compute"),
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),

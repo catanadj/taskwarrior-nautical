@@ -29,6 +29,12 @@ class ModifyScheduleContractTests(unittest.TestCase):
             modify_schedule_effects.SchedulerHost,
         )
 
+    def test_cp_completion_factory_uses_narrow_host_protocol(self) -> None:
+        self.assertIs(
+            get_type_hints(modify_schedule_effects.cp_completion_ports_for)["host"],
+            modify_schedule_effects.CPCompletionHost,
+        )
+
     def test_completion_compute_owners_match_concrete_projection_signatures(self) -> None:
         expected_methods = {
             modify_schedule_effects.CPCompletionCompute: (

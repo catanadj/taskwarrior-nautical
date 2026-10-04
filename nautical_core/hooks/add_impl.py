@@ -388,11 +388,13 @@ def _human_delta(a: Any, b: Any, use_months_days: bool = True) -> str:
     return core.humanize_delta(a, b, use_months_days=use_months_days)
 
 
-def _short(u: Any) -> str:
+def _short(u: object) -> str:
     try:
         s = str(u)
         return s[:8] if s else "—"
     except Exception:
+        # Preview identity is optional presentation; malformed values must not
+        # prevent the on-add hook from returning its required response.
         return "—"
 
 

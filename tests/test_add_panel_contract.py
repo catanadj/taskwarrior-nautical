@@ -12,6 +12,13 @@ from nautical_core.panel_colours import chain_colour_root
 
 
 class AddPanelContractTests(unittest.TestCase):
+    def test_short_uuid_formatting_failure_keeps_preview_placeholder(self) -> None:
+        class UnprintableUuid:
+            def __str__(self) -> str:
+                raise RuntimeError("formatting failure")
+
+        self.assertEqual(add_impl._short(UnprintableUuid()), "—")
+
     def test_on_add_anchor_file_root_gets_chainid_stamp(self) -> None:
         task = {
             "uuid": "12345678-1234-1234-1234-1234567890ab",

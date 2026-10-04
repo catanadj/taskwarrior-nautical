@@ -411,6 +411,16 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             get_type_hints(native_until_slot_ports_for)["host"], NativeUntilSlotHost
         )
 
+    def test_datetime_effect_factory_uses_core_capability_host(self) -> None:
+        from nautical_core.modify_datetime_effects import (
+            DatetimeEffectsHost,
+            datetime_effect_ports_for,
+        )
+
+        self.assertIs(
+            get_type_hints(datetime_effect_ports_for)["host"], DatetimeEffectsHost
+        )
+
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:
         from nautical_core.modify_validation import validate_cp_on_modify
 

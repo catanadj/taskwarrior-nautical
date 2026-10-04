@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Callable, Protocol
 
 from .task_datetime import datetime_value, parser_for_host
 
@@ -14,6 +14,15 @@ class DatetimeEffectPorts:
     parse_datetime: Callable[[object], datetime | None]
     utc_to_local: Callable[[datetime], datetime]
     local_to_utc: Callable[[datetime], datetime]
+
+
+class _DatetimeEffectsCore(Protocol):
+    utc_to_local_naive: Callable[[datetime], datetime]
+    local_naive_to_utc: Callable[[datetime], datetime]
+
+
+class DatetimeEffectsHost(Protocol):
+    core: _DatetimeEffectsCore
 
 
 def safe_dt(ports: DatetimeEffectPorts, value: object) -> datetime | None:
@@ -35,7 +44,7 @@ def local_naive_to_utc(ports: DatetimeEffectPorts, value: datetime) -> datetime:
     return ports.local_to_utc(value.replace(microsecond=0))
 
 
-def datetime_effect_ports_for(host: Any) -> DatetimeEffectPorts:
+def datetime_effect_ports_for(host: DatetimeEffectsHost) -> DatetimeEffectPorts:
     return DatetimeEffectPorts(
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         utc_to_local=host.core.utc_to_local_naive,

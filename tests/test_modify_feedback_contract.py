@@ -188,6 +188,18 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             expected,
         )
 
+    def test_feedback_timestamp_helper_returns_typed_task_timestamp(self) -> None:
+        from nautical_core.task_models import TaskTimestamp
+
+        self.assertEqual(
+            get_type_hints(modify_feedback._timestamp),
+            {
+                "task": TaskPayload,
+                "field": str,
+                "return": TaskTimestamp | None,
+            },
+        )
+
     def test_completion_feedback_renderers_use_owner_models(self) -> None:
         anchor_annotations = get_type_hints(modify_feedback.render_anchor_completion_feedback)
         cp_annotations = get_type_hints(modify_feedback.render_cp_completion_feedback)

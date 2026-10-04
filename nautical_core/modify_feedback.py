@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from .modify_carry_workflow import TemporalCarryDecision
 from .cp_parser import CPSequenceToken
 from .parsing.parser_models import ParseError
-from .task_models import TaskPayload
+from .task_models import TaskPayload, TaskTimestamp
 from .modify_models import (
     AnchorCompletionFeedbackModel,
     AnchorFeedbackServices,
@@ -64,7 +64,7 @@ class _BusinessCalendarDisplacementCallback(Protocol):
     ) -> bool: ...
 
 
-def _timestamp(task: TaskPayload, field: str) -> Any:
+def _timestamp(task: TaskPayload, field: str) -> TaskTimestamp | None:
     return TaskView.from_mapping(task).timestamp(field)
 
 

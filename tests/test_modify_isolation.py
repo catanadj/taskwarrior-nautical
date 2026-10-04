@@ -644,6 +644,37 @@ class ModifyIsolationTests(unittest.TestCase):
                 for parameter, expected_type in expected_callbacks.items():
                     self.assertEqual(annotations[parameter], expected_type)
 
+    def test_anchor_forecast_helpers_use_shared_temporal_callbacks(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+        from nautical_core.modify_models import (
+            CoerceIntCallback,
+            DatetimeParserCallback,
+            SafeParseDatetimeCallback,
+        )
+        from nautical_core.task_models import TaskPayload
+
+        common_callbacks = {
+            "coerce_int": CoerceIntCallback,
+            "recurrence_seed_base": Callable[[TaskPayload], str],
+            "to_local_cached": Callable[[datetime], datetime],
+            "safe_parse_datetime": SafeParseDatetimeCallback,
+            "anchor_file_fallback_hhmm": Callable[
+                [TaskPayload, datetime], tuple[int, int]
+            ],
+        }
+        expected_by_function = {
+            compute.cap_from_until_anchor: {
+                **common_callbacks,
+                "parse_datetime": DatetimeParserCallback,
+            },
+            compute.estimate_anchor_final_by_max: common_callbacks,
+        }
+        for function, expected_callbacks in expected_by_function.items():
+            annotations = get_type_hints(function)
+            with self.subTest(function=function.__name__):
+                for parameter, expected_type in expected_callbacks.items():
+                    self.assertEqual(annotations[parameter], expected_type)
+
     def test_completion_spawn_service_has_explicit_arguments(self) -> None:
         import inspect
 

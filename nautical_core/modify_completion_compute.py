@@ -291,22 +291,24 @@ def cap_from_until_anchor(
     next_due_utc: datetime | None,
     dnf: AnchorDNF | None,
     *,
-    parse_datetime: Any,
-    coerce_int: Any,
-    recurrence_seed_base: Any,
-    to_local_cached: Any,
-    safe_parse_datetime: Any,
-    anchor_file_fallback_hhmm: Any,
+    parse_datetime: DatetimeParserCallback,
+    coerce_int: CoerceIntCallback,
+    recurrence_seed_base: Callable[[TaskPayload], str],
+    to_local_cached: Callable[[datetime], datetime],
+    safe_parse_datetime: SafeParseDatetimeCallback,
+    anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]],
     omit_dnf_from_parent: Any,
     recurrence_evaluator_for_task: Any,
     anchor_file_provider_for: Any,
     anchor_included_occurrences: Any,
-    compare_datetimes: Any,
+    compare_datetimes: Callable[[datetime, datetime], int],
     max_iterations: int,
 ) -> tuple[int | None, datetime | None]:
     """Return the final anchor link and due date permitted by ``chainUntil``."""
     until_utc = parse_datetime(task.get("chainUntil"))
     if not until_utc:
+        return None, None
+    if next_due_utc is None:
         return None, None
 
     current_link = coerce_int(task.get("link"), 1)
@@ -328,11 +330,15 @@ def cap_from_until_anchor(
         )
 
     count = 0
-    last_hit = None
-    cursor = next_local
+    last_hit: datetime | None = None
+    cursor: datetime | None = next_local
     iterations = 0
 
-    while iterations < max_iterations and compare_datetimes(cursor, until_local) <= 0:
+    while (
+        cursor is not None
+        and iterations < max_iterations
+        and compare_datetimes(cursor, until_local) <= 0
+    ):
         iterations += 1
         count += 1
         last_hit = cursor
@@ -426,21 +432,23 @@ def estimate_anchor_final_by_max(
     next_due_utc: datetime | None,
     dnf: AnchorDNF | None,
     *,
-    coerce_int: Any,
-    recurrence_seed_base: Any,
-    to_local_cached: Any,
-    safe_parse_datetime: Any,
-    anchor_file_fallback_hhmm: Any,
+    coerce_int: CoerceIntCallback,
+    recurrence_seed_base: Callable[[TaskPayload], str],
+    to_local_cached: Callable[[datetime], datetime],
+    safe_parse_datetime: SafeParseDatetimeCallback,
+    anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]],
     omit_dnf_from_parent: Any,
     recurrence_evaluator_for_task: Any,
     anchor_file_provider_for: Any,
     anchor_included_occurrences: Any,
-    diagnostic: Any | None = None,
+    diagnostic: DiagnosticCallback | None = None,
     max_iterations: int,
 ) -> datetime | None:
     """Estimate the final anchor due date permitted by ``chainMax``."""
     chain_max = coerce_int(task.get("chainMax"), 0)
     if not chain_max:
+        return None
+    if next_due_utc is None:
         return None
     current_link = coerce_int(task.get("link"), 1)
     if current_link >= chain_max:
@@ -463,7 +471,7 @@ def estimate_anchor_final_by_max(
         )
 
     future_link = current_link + 1
-    future_local = next_local
+    future_local: datetime | None = next_local
     iterations = 0
     while future_link < chain_max:
         iterations += 1
@@ -500,6 +508,8 @@ def estimate_anchor_final_by_max(
         if future_local is None:
             return None
         future_link += 1
+    if future_local is None:
+        return None
     return future_local.astimezone(timezone.utc)
 
 

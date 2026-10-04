@@ -395,6 +395,50 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_anchor_projections_skip_when_next_due_is_missing(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        until = datetime(2026, 1, 3, tzinfo=timezone.utc)
+
+        def unexpected_call(*_args, **_kwargs):
+            self.fail("anchor projection must stop when its next due is missing")
+
+        cap_result = compute.cap_from_until_anchor(
+            {"chainUntil": "20260103T000000Z"},
+            None,
+            None,
+            parse_datetime=lambda _value: until,
+            coerce_int=unexpected_call,
+            recurrence_seed_base=unexpected_call,
+            to_local_cached=unexpected_call,
+            safe_parse_datetime=unexpected_call,
+            anchor_file_fallback_hhmm=unexpected_call,
+            omit_dnf_from_parent=unexpected_call,
+            recurrence_evaluator_for_task=unexpected_call,
+            anchor_file_provider_for=unexpected_call,
+            anchor_included_occurrences=unexpected_call,
+            compare_datetimes=unexpected_call,
+            max_iterations=5,
+        )
+        estimate_result = compute.estimate_anchor_final_by_max(
+            {"chainMax": 3, "link": 1},
+            None,
+            None,
+            coerce_int=lambda value, default=0: int(value or default),
+            recurrence_seed_base=unexpected_call,
+            to_local_cached=unexpected_call,
+            safe_parse_datetime=unexpected_call,
+            anchor_file_fallback_hhmm=unexpected_call,
+            omit_dnf_from_parent=unexpected_call,
+            recurrence_evaluator_for_task=unexpected_call,
+            anchor_file_provider_for=unexpected_call,
+            anchor_included_occurrences=unexpected_call,
+            max_iterations=5,
+        )
+
+        self.assertEqual(cap_result, (None, None))
+        self.assertIsNone(estimate_result)
+
     def test_optional_recurrence_projection_does_not_hide_unexpected_failures(self) -> None:
         import nautical_core.modify_completion_compute as compute
 

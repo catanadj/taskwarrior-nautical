@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, TypeAlias
 
 from .anchor_omit import OmitState
+from .parsing.parser_models import AnchorDNF
 from .recurrence_evaluator import RecurrenceEvaluator
 from .scheduler_service import SchedulerService
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
@@ -206,7 +207,7 @@ def _timeline_future_cp_items(
 
 def _timeline_future_anchor_items(
     task: TaskPayload,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     child_due_utc: datetime,
     *,
     start_no: int,
@@ -311,7 +312,7 @@ def _timeline_future_anchor_items(
 
 def _timeline_omitted_before_next_anchor_items(
     task: TaskPayload,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     child_due_utc: datetime,
     *,
     dtparse: Callable[[object], datetime | None],
@@ -623,7 +624,7 @@ def timeline_lines(
     task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     *,
     next_count: int = 3,
     cap_no: int | None = None,
@@ -738,7 +739,7 @@ def timeline_lines_for_task(
     task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     *,
     next_count: int = 3,
     cap_no: int | None = None,

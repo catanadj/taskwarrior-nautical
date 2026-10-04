@@ -45,6 +45,27 @@ class ModifyTimelineContractTests(unittest.TestCase):
             tuple[object, datetime | None, TaskPayload, str],
         )
 
+    def test_timeline_recurrence_inputs_use_parser_dnf_model(self) -> None:
+        from nautical_core.parsing.parser_models import AnchorDNF
+        from nautical_core.modify_timeline import (
+            _timeline_future_anchor_items,
+            _timeline_omitted_before_next_anchor_items,
+            timeline_lines,
+            timeline_lines_for_task,
+        )
+
+        for function in (
+            _timeline_future_anchor_items,
+            _timeline_omitted_before_next_anchor_items,
+            timeline_lines,
+            timeline_lines_for_task,
+        ):
+            with self.subTest(function=function.__name__):
+                self.assertEqual(
+                    get_type_hints(function)["dnf"],
+                    AnchorDNF | None,
+                )
+
     def test_timeline_integer_coercion_parameters_have_explicit_call_shapes(self) -> None:
         from nautical_core.modify_timeline import (
             _timeline_initial_items,

@@ -3,6 +3,7 @@ import functools
 import re
 import unittest
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import nautical_core as core
 import nautical_core.anchor_omit as anchor_omit
@@ -289,6 +290,12 @@ class ParserPresetContractTests(unittest.TestCase):
 
 
 class ParserOwnerDNFContractTests(unittest.TestCase):
+    def test_omit_port_factory_uses_narrow_host_protocol(self):
+        self.assertIs(
+            get_type_hints(modify_anchor_effects.omit_ports_for)["host"],
+            modify_anchor_effects.OmitHost,
+        )
+
     def test_dnf_owner_parses_with_explicit_dependencies_and_no_facade(self):
         def parse_atom(expression, index, length):
             self.assertEqual(expression[index:length], "w:mon")

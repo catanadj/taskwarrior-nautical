@@ -123,7 +123,7 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertEqual(hints["atomic_replace_override"], Callable[[str, str], None] | None)
         self.assertEqual(hints["clone_payload_override"], Callable[[dict], dict] | None)
         self.assertEqual(hints["normalize_dnf_override"], Callable[[object], object] | None)
-        self.assertEqual(hints["payload_shape_override"], Callable[[dict], bool] | None)
+        self.assertEqual(hints["payload_shape_override"], Callable[[object], bool] | None)
         self.assertEqual(hints["semantic_fingerprint_override"], Callable[[], str] | None)
         self.assertEqual(
             hints["cache_lock_override"],
@@ -208,6 +208,16 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertEqual(hints["dnf"], object)
         self.assertEqual(hints["is_atom_like"], Callable[[object], bool])
 
+    def test_cache_payload_shape_gate_rejects_non_mapping_json(self) -> None:
+        hints = get_type_hints(cache_payload.cache_payload_shape_ok)
+        self.assertIs(hints["obj"], object)
+        self.assertFalse(
+            cache_payload.cache_payload_shape_ok(
+                ["not", "a", "cache object"],
+                is_dnf_like=lambda _value: True,
+            )
+        )
+
     def test_bounded_decompress_uses_a_typed_zlib_port(self) -> None:
         hints = get_type_hints(cache_payload._bounded_decompress)
         self.assertIs(hints["zlib_mod"], cache_ports.CompressionPort)
@@ -221,7 +231,7 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertEqual(load_hints["cache_path"], Callable[[str], str])
         self.assertEqual(load_hints["clone_cache_payload"], Callable[[dict], dict])
         self.assertEqual(load_hints["normalize_dnf_cached"], Callable[[object], object])
-        self.assertEqual(load_hints["cache_payload_shape_ok"], Callable[[dict], bool])
+        self.assertEqual(load_hints["cache_payload_shape_ok"], Callable[[object], bool])
         self.assertEqual(load_hints["diag"], Callable[[str], None])
 
         save_hints = get_type_hints(cache_payload.cache_save)

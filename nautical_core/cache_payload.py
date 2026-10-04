@@ -217,7 +217,9 @@ def normalize_dnf_cached(dnf: Any) -> Any:
     return dnf
 
 
-def cache_payload_shape_ok(obj: dict, *, is_dnf_like: Callable[[object], bool]) -> bool:
+def cache_payload_shape_ok(obj: object, *, is_dnf_like: Callable[[object], bool]) -> bool:
+    if not isinstance(obj, dict):
+        return False
     if "dnf" in obj and not is_dnf_like(obj.get("dnf")):
         return False
     natural = obj.get("natural")
@@ -286,7 +288,7 @@ def cache_load(
     cache_state: CacheState,
     clone_cache_payload: Callable[[dict], dict],
     normalize_dnf_cached: Callable[[object], object],
-    cache_payload_shape_ok: Callable[[dict], bool],
+    cache_payload_shape_ok: Callable[[object], bool],
     diag: Callable[[str], None],
     os_mod: FilesystemPort,
     json_mod: JsonPort,

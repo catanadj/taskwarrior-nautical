@@ -64,7 +64,7 @@ class CacheRuntimeDependencies:
     atomic_replace_override: Callable[[str, str], None] | None
     clone_payload_override: Callable[[dict], dict] | None
     normalize_dnf_override: Callable[[object], object] | None
-    payload_shape_override: Callable[[dict], bool] | None
+    payload_shape_override: Callable[[object], bool] | None
     semantic_fingerprint_override: Callable[[], str] | None
     cache_lock_override: Callable[[str], ContextManager[bool]] | None
     is_dnf_like_override: Callable[[object], bool] | None
@@ -147,7 +147,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     clone_cache_payload = cache_payload.clone_cache_payload
     normalize_dnf_cached = cache_payload.normalize_dnf_cached
 
-    def cache_payload_shape_ok(obj: dict) -> bool:
+    def cache_payload_shape_ok(obj: object) -> bool:
         return cache_payload.cache_payload_shape_ok(
             obj,
             is_dnf_like=runtime.is_dnf_like_override or is_dnf_like,

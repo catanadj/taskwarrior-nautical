@@ -74,10 +74,10 @@ class SummaryRowsFormatter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ChainSummaryRenderServices:
-    export_sorted_chain: Callable[[str, dict[str, Any]], list[TaskObservation]]
-    root_uuid_from: Callable[[dict[str, Any]], Any]
-    short_uuid: Callable[[Any], str]
-    format_root_and_age: Callable[[dict[str, Any], Any], str]
+    export_sorted_chain: Callable[[str, TaskPayload], list[TaskObservation]]
+    root_uuid_from: Callable[[TaskPayload], str]
+    short_uuid: Callable[[str | None], str]
+    format_root_and_age: Callable[[TaskPayload, datetime], str]
     kind_rows: SummaryKindRows
     span_fields: SpanFieldsCallback
     stats_rows: SummaryStatsRows
@@ -85,7 +85,7 @@ class ChainSummaryRenderServices:
     last_n_timeline_rows: SummaryTimelineRows
     format_rows: SummaryRowsFormatter
     coerce_int: Callable[[Any, Any], int | None]
-    format_local: Callable[[Any], str]
+    format_local: Callable[[datetime], str]
     max_chain_walk: int
     panel: CallbackPort
     diagnostic: Callable[[str], None]

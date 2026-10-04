@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 from datetime import datetime, timezone
+from collections.abc import Callable
 from typing import get_type_hints
 
 from nautical_core.modify_chain_summary import (
@@ -15,6 +16,7 @@ from nautical_core.modify_chain_summary import (
     SummaryTimelineRows,
     render_chain_summary_with_services,
 )
+from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 class ChainSummaryRendererContractTests(unittest.TestCase):
@@ -37,6 +39,22 @@ class ChainSummaryRendererContractTests(unittest.TestCase):
                 "limits_row": SummaryLimitsRow,
                 "last_n_timeline_rows": SummaryTimelineRows,
                 "format_rows": SummaryRowsFormatter,
+            },
+        )
+
+    def test_render_service_task_and_time_ports_use_domain_types(self) -> None:
+        annotations = get_type_hints(ChainSummaryRenderServices)
+        self.assertEqual(
+            {name: annotations[name] for name in (
+                "export_sorted_chain", "root_uuid_from", "short_uuid",
+                "format_root_and_age", "format_local",
+            )},
+            {
+                "export_sorted_chain": Callable[[str, TaskPayload], list[TaskObservation]],
+                "root_uuid_from": Callable[[TaskPayload], str],
+                "short_uuid": Callable[[str | None], str],
+                "format_root_and_age": Callable[[TaskPayload, datetime], str],
+                "format_local": Callable[[datetime], str],
             },
         )
 

@@ -235,6 +235,12 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertIsNot(annotations["core"], Any)
         self.assertEqual(annotations["until_dt"], datetime | None)
 
+    def test_text_feedback_uses_optional_datetime_boundaries(self) -> None:
+        annotations = get_type_hints(modify_feedback._build_text_feedback)
+        for field in ("until_dt", "child_due", "child_expires", "last_occurrence"):
+            with self.subTest(field=field):
+                self.assertEqual(annotations[field], datetime | None)
+
     def test_feedback_local_formatters_accept_datetimes(self) -> None:
         expected = Callable[[datetime], str]
         renderers = (

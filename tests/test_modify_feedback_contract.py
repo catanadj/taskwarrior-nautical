@@ -154,6 +154,20 @@ class ModifyFeedbackContractTests(unittest.TestCase):
                 format_local=lambda value: str(value),
             )
 
+    def test_recurrence_enabled_feedback_surfaces_anchor_description_errors(self) -> None:
+        def broken_description(_value: str) -> str:
+            raise RuntimeError("anchor feedback description failed")
+
+        with self.assertRaisesRegex(RuntimeError, "anchor feedback description failed"):
+            modify_feedback.recurrence_enabled_rows(
+                {"anchor": "w:mon", "anchor_mode": "skip"},
+                "anchor",
+                describe_anchor=broken_description,
+                parse_cp_sequence_tokens=lambda _value: None,
+                first_recurrence_target=lambda _task, _source: None,
+                format_local=lambda value: str(value),
+            )
+
     def test_native_until_feedback_uses_its_named_carry_contract(self) -> None:
         self.assertIs(
             get_type_hints(modify_feedback.render_recurrence_updated_panel)[

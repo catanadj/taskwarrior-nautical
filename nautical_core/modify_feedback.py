@@ -378,10 +378,7 @@ def recurrence_enabled_rows(
     if source == "anchor":
         value = str(task.get("anchor") or "").strip()
         rows = [("Anchor", value)]
-        try:
-            natural = describe_anchor(value)
-        except Exception:
-            natural = None
+        natural: str | None = describe_anchor(value)
         if natural:
             rows.append(("Natural", natural))
         mode = (task.get("anchor_mode") or "skip").strip().lower()

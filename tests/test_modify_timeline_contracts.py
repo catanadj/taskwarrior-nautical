@@ -37,6 +37,14 @@ class ModifyTimelineContractTests(unittest.TestCase):
             },
         )
 
+    def test_timeline_item_carries_nullable_datetime(self) -> None:
+        from nautical_core.modify_timeline import TimelineItem
+
+        self.assertEqual(
+            TimelineItem,
+            tuple[object, datetime | None, TaskPayload, str],
+        )
+
     def test_timeline_integer_coercion_parameters_have_explicit_call_shapes(self) -> None:
         from nautical_core.modify_timeline import (
             _timeline_initial_items,

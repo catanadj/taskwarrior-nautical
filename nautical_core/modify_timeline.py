@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, TypeAlias
 
 from .anchor_omit import OmitState
 from .recurrence_evaluator import RecurrenceEvaluator
@@ -36,7 +36,7 @@ class TimelineFormattingServices:
     format_gap: Callable[[datetime | None, datetime | None, str, bool], str]
 
 
-TimelineItem = tuple[object, Any, TaskPayload, str]
+TimelineItem: TypeAlias = tuple[object, datetime | None, TaskPayload, str]
 
 
 def _build_slot_datetime(day: Any, hhmm: Any) -> datetime:
@@ -447,7 +447,9 @@ def _timeline_with_gap(
     show_gaps: bool,
     kind: str,
     round_anchor_gaps: bool,
-    format_gap: Callable[[Any, Any, str, bool], str],
+    format_gap: Callable[
+        [datetime | None, datetime | None, str, bool], str
+    ],
 ) -> str:
     if not show_gaps or idx >= len(items) - 1:
         return base_line

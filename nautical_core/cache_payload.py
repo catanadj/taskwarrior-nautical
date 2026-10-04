@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, ContextManager
 
 from .season_support import SEASON_NAMES
 from .time_windows import parse_random_time_window_spec, validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
@@ -249,22 +249,22 @@ def cache_load(
     key: str,
     *,
     enable_anchor_cache: bool,
-    cache_path: Any,
+    cache_path: Callable[[str], str],
     anchor_cache_ttl: int,
     time_mod: Any,
     cache_load_mem: Any,
     cache_load_mem_ttl: int,
-    clone_cache_payload: Any,
-    normalize_dnf_cached: Any,
-    cache_payload_shape_ok: Any,
+    clone_cache_payload: Callable[[dict], dict],
+    normalize_dnf_cached: Callable[[object], object],
+    cache_payload_shape_ok: Callable[[dict], bool],
     cache_load_mem_max: int,
-    diag: Any,
+    diag: Callable[[str], None],
     os_mod: Any,
     json_mod: Any,
     zlib_mod: Any,
     base64_mod: Any,
-    quarantine_cache: Any = None,
-) -> Any:
+    quarantine_cache: Callable[[str, str], object] | None = None,
+) -> dict | None:
     if not enable_anchor_cache:
         return None
     path = cache_path(key)
@@ -360,13 +360,13 @@ def cache_save(
     json_mod: Any,
     zlib_mod: Any,
     base64_mod: Any,
-    cache_path: Any,
-    cache_dir: Any,
-    cache_lock: Any,
-    diag: Any,
+    cache_path: Callable[[str], str],
+    cache_dir: Callable[[], str],
+    cache_lock: Callable[[str], ContextManager[bool]],
+    diag: Callable[[str], None],
     os_mod: Any,
     tempfile_mod: Any,
-    cache_atomic_replace: Any,
+    cache_atomic_replace: Callable[[str, str], None],
     cache_load_mem: Any,
 ) -> bool:
     if not enable_anchor_cache:

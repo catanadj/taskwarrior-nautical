@@ -17,7 +17,7 @@ import tempfile
 import time
 import unittest
 from contextlib import nullcontext
-from typing import Any, Callable, get_type_hints
+from typing import Any, Callable, ContextManager, get_type_hints
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -48,6 +48,21 @@ class _Clock:
 
 
 class CacheApiContractTests(unittest.TestCase):
+    def test_cache_load_and_save_callbacks_have_explicit_callable_contracts(self) -> None:
+        load_hints = get_type_hints(cache_payload.cache_load)
+        self.assertEqual(load_hints["cache_path"], Callable[[str], str])
+        self.assertEqual(load_hints["clone_cache_payload"], Callable[[dict], dict])
+        self.assertEqual(load_hints["normalize_dnf_cached"], Callable[[object], object])
+        self.assertEqual(load_hints["cache_payload_shape_ok"], Callable[[dict], bool])
+        self.assertEqual(load_hints["diag"], Callable[[str], None])
+
+        save_hints = get_type_hints(cache_payload.cache_save)
+        self.assertEqual(save_hints["cache_path"], Callable[[str], str])
+        self.assertEqual(save_hints["cache_dir"], Callable[[], str])
+        self.assertEqual(save_hints["cache_lock"], Callable[[str], ContextManager[bool]])
+        self.assertEqual(save_hints["diag"], Callable[[str], None])
+        self.assertEqual(save_hints["cache_atomic_replace"], Callable[[str, str], None])
+
     def test_cache_payload_shape_validator_declares_typed_dnf_callback(self) -> None:
         self.assertEqual(
             get_type_hints(cache_payload.cache_payload_shape_ok)["is_dnf_like"],

@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from dataclasses import dataclass
-from typing import Any, Literal, NoReturn, Protocol
+from typing import Any, Literal, NoReturn, Protocol, overload
 from .hook_validation_pipeline import ValidationFinding
 from .modify_validation import (
     CollectAnchorTimeSlots,
@@ -18,7 +18,7 @@ from .modify_validation import (
 from .parsing.parser_models import ParseError
 from .recurrence_context import RecurrenceContext
 from .task_models import TaskPayload
-from .task_datetime import datetime_value, parser_for_host
+from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from .timeutil import compare_datetimes
 
 
@@ -148,6 +148,44 @@ class OmitValidationHost(Protocol):
     _validate_omit_expr_cached: Callable[[str], object]
     _load_anchor_file_dates: Callable[[str], object]
     _load_omit_file_dates: Callable[[str], object]
+
+
+class _AddValidationLimitsAPI(Protocol):
+    def parse_chain_max(self, value: object) -> tuple[int | None, str | None]: ...
+
+
+class _ModifyChainValidationAPI(Protocol):
+    validate_chain_limits_on_modify: ChainLimitsValidationOperation
+
+
+class _ChainLimitCore(Protocol):
+    parse_cp_sequence: Callable[[str], list[timedelta] | None]
+    cp_sequence_parse_error: Callable[[str], str | None]
+    humanize_delta: HumanizeUntilDelta
+    now_utc: Callable[[], datetime]
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["add_validation"],
+    ) -> _AddValidationLimitsAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["hook_validation_pipeline"],
+    ) -> RecurrenceLimitsPipeline: ...
+
+
+class ChainLimitHost(Protocol):
+    core: _ChainLimitCore
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _fail_and_exit: Callable[[str, str], object]
+
+    def _module(
+        self,
+        name: Literal["modify_validation"],
+    ) -> _ModifyChainValidationAPI: ...
 
 
 class ValidateRecurrenceFiles(Protocol):
@@ -442,7 +480,7 @@ def validate_chain_limits(ports: ChainLimitPorts, task: TaskPayload) -> None:
     )
 
 
-def chain_limit_ports_for(host: Any) -> ChainLimitPorts:
+def chain_limit_ports_for(host: ChainLimitHost) -> ChainLimitPorts:
     add_validation = host.core._import_sibling("add_validation")
     return ChainLimitPorts(
         pipeline=host.core._import_sibling("hook_validation_pipeline"),

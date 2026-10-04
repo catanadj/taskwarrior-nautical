@@ -18,6 +18,7 @@ from .task_models import TaskPayload
 
 
 PreparedOmissionState: TypeAlias = OmitState | dict[str, Any] | AnchorDNF | None
+PreviewEvent: TypeAlias = Occurrence | tuple[datetime, bool] | datetime
 
 
 class PreviewPanelCallback(Protocol):
@@ -241,12 +242,12 @@ class AnchorFilePreviewServices:
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn]
 
 
-def _event_datetime(event: Any) -> datetime | None:
+def _event_datetime(event: PreviewEvent) -> datetime | None:
     value = event.local_datetime if isinstance(event, Occurrence) else (event[0] if isinstance(event, tuple) and event else event)
     return value if isinstance(value, datetime) else None
 
 
-def _event_on_or_before(event: Any, boundary: datetime) -> bool:
+def _event_on_or_before(event: PreviewEvent, boundary: datetime) -> bool:
     value = _event_datetime(event)
     return value is not None and compare_datetimes(value, boundary) <= 0
 

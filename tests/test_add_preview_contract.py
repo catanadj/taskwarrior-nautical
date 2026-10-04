@@ -1,6 +1,7 @@
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 from unittest.mock import patch
 
 import nautical_core.add_anchor_compute as add_anchor_compute
@@ -40,6 +41,19 @@ class _Host:
 
 
 class AddPreviewCompositionTests(unittest.TestCase):
+    def test_preview_event_time_accepts_only_supported_scheduler_shapes(self) -> None:
+        local = datetime(2026, 10, 4, 9, tzinfo=UTC)
+        occurrence = Occurrence(local.date(), 9, 0, local_datetime=local)
+
+        self.assertEqual(add_anchor_preview._event_datetime(occurrence), local)
+        self.assertEqual(add_anchor_preview._event_datetime((local, False)), local)
+        self.assertEqual(add_anchor_preview._event_datetime(local), local)
+        self.assertIsNone(add_anchor_preview._event_datetime(object()))
+
+        hints = get_type_hints(add_anchor_preview._event_datetime)
+        self.assertNotIn(Any, hints.values())
+        self.assertEqual(hints["return"], datetime | None)
+
     def test_add_scheduler_calendar_loader_propagates_unexpected_failures(self) -> None:
         class FailingCalendar:
             @staticmethod

@@ -375,9 +375,11 @@ def render_anchor_completion_feedback_for(
         request=request,
         core=host.core,
         panel=lambda title, rows, **options: ui.panel(ui_ports, title, rows, **options),
-        calendar_feedback=host.importlib.import_module("nautical_core.calendar_feedback"),
-        panel_diagnostics=host._module("panel_diagnostics"),
-        modify_runtime=host._module("modify_runtime"),
+        render_business_calendar_displacement=host.importlib.import_module(
+            "nautical_core.calendar_feedback"
+        ).render_business_calendar_displacement,
+        panel_warnings=host._module("panel_diagnostics").panel_warnings,
+        build_feedback_services=host._module("modify_runtime").build_anchor_feedback_services,
         build_runtime_services=lambda: runtime_services_for(host),
     )
 
@@ -389,8 +391,8 @@ def render_cp_completion_feedback_for(
     feedback.orchestrate_cp_completion_feedback(
         request=request,
         core=host.core,
-        panel_diagnostics=host._module("panel_diagnostics"),
-        modify_runtime=host._module("modify_runtime"),
+        panel_warnings=host._module("panel_diagnostics").panel_warnings,
+        build_feedback_services=host._module("modify_runtime").build_cp_feedback_services,
         build_runtime_services=lambda: runtime_services_for(host),
     )
 

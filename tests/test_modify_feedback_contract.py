@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import nautical_core
 import nautical_core.modify_feedback as modify_feedback
+import nautical_core.modify_runtime as modify_runtime
 from nautical_core.modify_models import (
     AnchorFeedbackServices,
     AnchorCompletionFeedbackModel,
@@ -133,11 +134,17 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertIs(get_type_hints(AnchorCompletionFeedbackModel)["new"], TaskPayload)
         self.assertIs(get_type_hints(CpCompletionFeedbackModel)["child"], TaskPayload)
         self.assertIs(
-            get_type_hints(modify_feedback.orchestrate_anchor_completion_feedback)["request"],
+            get_type_hints(
+                modify_feedback.orchestrate_anchor_completion_feedback,
+                localns={"ModifyRuntimeServices": modify_runtime.ModifyRuntimeServices},
+            )["request"],
             AnchorCompletionFeedbackModel,
         )
         self.assertIs(
-            get_type_hints(modify_feedback.orchestrate_cp_completion_feedback)["request"],
+            get_type_hints(
+                modify_feedback.orchestrate_cp_completion_feedback,
+                localns={"ModifyRuntimeServices": modify_runtime.ModifyRuntimeServices},
+            )["request"],
             CpCompletionFeedbackModel,
         )
 
@@ -172,8 +179,8 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             modify_feedback.orchestrate_cp_completion_feedback(
                 request=request,
                 core=object(),
-                panel_diagnostics=diagnostics,
-                modify_runtime=runtime,
+                panel_warnings=diagnostics.panel_warnings,
+                build_feedback_services=runtime.build_cp_feedback_services,
                 build_runtime_services=lambda: object(),
             )
 

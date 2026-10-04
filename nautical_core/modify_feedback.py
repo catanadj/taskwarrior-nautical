@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .callback_ports import CallbackPort
 from .modify_carry_workflow import TemporalCarryDecision
@@ -16,9 +16,28 @@ from .modify_models import (
     CpCompletionFeedbackModel,
     CpFeedbackServices,
     TaskView,
+    PanelCallback,
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
+
+if TYPE_CHECKING:
+    from .modify_runtime import ModifyRuntimeServices
+
+
+class _PanelWarningsCallback(Protocol):
+    def __call__(self, core: Any, task: TaskView, *, include_files: bool = True) -> list[str]: ...
+
+
+class _BusinessCalendarDisplacementCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        occurrence: datetime | None,
+        *,
+        core: Any,
+        panel: PanelCallback,
+    ) -> bool: ...
 
 
 def _timestamp(task: TaskPayload, field: str) -> Any:
@@ -1373,11 +1392,11 @@ def orchestrate_anchor_completion_feedback(
     *,
     request: AnchorCompletionFeedbackModel,
     core: Any,
-    panel: Any,
-    calendar_feedback: Any,
-    panel_diagnostics: Any,
-    modify_runtime: Any,
-    build_runtime_services: Callable[[], Any],
+    panel: PanelCallback,
+    render_business_calendar_displacement: _BusinessCalendarDisplacementCallback,
+    panel_warnings: _PanelWarningsCallback,
+    build_feedback_services: Callable[[ModifyRuntimeServices], AnchorFeedbackServices],
+    build_runtime_services: Callable[[], ModifyRuntimeServices],
 ) -> None:
     """Assemble anchor feedback state and hand it to the feedback renderer."""
     new = request.new
@@ -1408,16 +1427,16 @@ def orchestrate_anchor_completion_feedback(
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
         )
-    calendar_feedback.render_business_calendar_displacement(
+    render_business_calendar_displacement(
         new,
         child_due,
         core=core,
         panel=panel,
     )
-    panel_warnings = panel_diagnostics.panel_warnings(core, TaskView.from_mapping(new))
-    if panel_warnings:
+    warnings = panel_warnings(core, TaskView.from_mapping(new))
+    if warnings:
         integrity_warnings = list(integrity_warnings or [])
-        integrity_warnings.extend(panel_warnings)
+        integrity_warnings.extend(warnings)
     feedback = AnchorCompletionFeedbackModel(
         new=new,
         child=child,
@@ -1441,7 +1460,7 @@ def orchestrate_anchor_completion_feedback(
         integrity_warnings=integrity_warnings,
         base_no=base_no,
     )
-    services = modify_runtime.build_anchor_feedback_services(build_runtime_services())
+    services = build_feedback_services(build_runtime_services())
     render_anchor_completion_feedback(feedback=feedback, services=services)
 
 
@@ -1449,9 +1468,9 @@ def orchestrate_cp_completion_feedback(
     *,
     request: CpCompletionFeedbackModel,
     core: Any,
-    panel_diagnostics: Any,
-    modify_runtime: Any,
-    build_runtime_services: Callable[[], Any],
+    panel_warnings: _PanelWarningsCallback,
+    build_feedback_services: Callable[[ModifyRuntimeServices], CpFeedbackServices],
+    build_runtime_services: Callable[[], ModifyRuntimeServices],
 ) -> None:
     """Assemble CP feedback state and hand it to the feedback renderer."""
     new = request.new
@@ -1480,14 +1499,14 @@ def orchestrate_cp_completion_feedback(
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
         )
-    panel_warnings = panel_diagnostics.panel_warnings(
+    warnings = panel_warnings(
         core,
         TaskView.from_mapping(new),
         include_files=False,
     )
-    if panel_warnings:
+    if warnings:
         integrity_warnings = list(integrity_warnings or [])
-        integrity_warnings.extend(panel_warnings)
+        integrity_warnings.extend(warnings)
     feedback = CpCompletionFeedbackModel(
         new=new,
         child=child,
@@ -1509,5 +1528,5 @@ def orchestrate_cp_completion_feedback(
         integrity_warnings=integrity_warnings,
         base_no=base_no,
     )
-    services = modify_runtime.build_cp_feedback_services(build_runtime_services())
+    services = build_feedback_services(build_runtime_services())
     render_cp_completion_feedback(feedback=feedback, services=services)

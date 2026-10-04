@@ -14,6 +14,7 @@ from typing import Any, Callable, ContextManager, Mapping, Protocol
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
+from .cache_ports import Base64Port, CompressionPort, JsonPort, TemporaryFilePort
 from .core_context import CacheDependencies, CacheState, CoreContext
 
 
@@ -64,55 +65,6 @@ class CacheFcntlPort(Protocol):
     def flock(self, file_descriptor: int, operation: int) -> None: ...
 
 
-class CacheJsonPort(Protocol):
-    JSONDecodeError: type[ValueError]
-
-    def loads(self, s: str) -> object: ...
-
-    def dumps(
-        self,
-        obj: object,
-        *,
-        ensure_ascii: bool = True,
-        separators: tuple[str, str] | None = None,
-        sort_keys: bool = False,
-    ) -> str: ...
-
-
-class CacheDecompressorPort(Protocol):
-    unconsumed_tail: bytes
-    eof: bool
-    unused_data: bytes
-
-    def decompress(self, data: bytes, max_length: int = 0) -> bytes: ...
-
-    def flush(self, length: int = 16384) -> bytes: ...
-
-
-class CacheCompressionPort(Protocol):
-    error: type[Exception]
-
-    def compress(self, data: bytes, level: int) -> bytes: ...
-
-    def decompressobj(self) -> CacheDecompressorPort: ...
-
-
-class CacheBase64Port(Protocol):
-    def b85decode(self, value: str) -> bytes: ...
-
-    def b85encode(self, value: bytes) -> bytes: ...
-
-
-class CacheTemporaryFilePort(Protocol):
-    def mkstemp(
-        self,
-        *,
-        dir: str,
-        prefix: str,
-        suffix: str,
-    ) -> tuple[int, str]: ...
-
-
 fcntl: CacheFcntlPort | None
 try:
     import fcntl
@@ -142,10 +94,10 @@ class CacheRuntimeDependencies:
     clock: CacheClockPort
     random: CacheRandomPort
     fcntl: CacheFcntlPort | None
-    json: CacheJsonPort
-    compression: CacheCompressionPort
-    base64: CacheBase64Port
-    tempfile: CacheTemporaryFilePort
+    json: JsonPort
+    compression: CompressionPort
+    base64: Base64Port
+    tempfile: TemporaryFilePort
     cache_state: CacheState
     atomic_replace_override: Callable[[str, str], None] | None
     clone_payload_override: Callable[[dict], dict] | None

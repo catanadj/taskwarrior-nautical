@@ -26,6 +26,7 @@ import nautical_core.cache_api as cache_api
 import nautical_core.cache_facade as cache_facade
 import nautical_core.cache_locking as cache_locking
 import nautical_core.cache_payload as cache_payload
+import nautical_core.cache_ports as cache_ports
 import nautical_core.cache_support as cache_support
 from nautical_core.core_context import CacheState
 
@@ -118,16 +119,27 @@ class CacheApiContractTests(unittest.TestCase):
 
     def test_cache_runtime_json_uses_its_consumed_operations(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
-        self.assertIs(hints["json"], cache_api.CacheJsonPort)
+        self.assertIs(hints["json"], cache_ports.JsonPort)
 
     def test_cache_runtime_compression_uses_its_consumed_operations(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
-        self.assertIs(hints["compression"], cache_api.CacheCompressionPort)
+        self.assertIs(hints["compression"], cache_ports.CompressionPort)
 
     def test_cache_runtime_encoding_and_temporary_file_ports_are_narrow(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
-        self.assertIs(hints["base64"], cache_api.CacheBase64Port)
-        self.assertIs(hints["tempfile"], cache_api.CacheTemporaryFilePort)
+        self.assertIs(hints["base64"], cache_ports.Base64Port)
+        self.assertIs(hints["tempfile"], cache_ports.TemporaryFilePort)
+
+    def test_cache_payload_consumes_shared_io_port_contracts(self) -> None:
+        load_hints = get_type_hints(cache_payload.cache_load)
+        save_hints = get_type_hints(cache_payload.cache_save)
+        self.assertIs(load_hints["json_mod"], cache_ports.JsonPort)
+        self.assertIs(load_hints["zlib_mod"], cache_ports.CompressionPort)
+        self.assertIs(load_hints["base64_mod"], cache_ports.Base64Port)
+        self.assertIs(save_hints["json_mod"], cache_ports.JsonPort)
+        self.assertIs(save_hints["zlib_mod"], cache_ports.CompressionPort)
+        self.assertIs(save_hints["base64_mod"], cache_ports.Base64Port)
+        self.assertIs(save_hints["tempfile_mod"], cache_ports.TemporaryFilePort)
 
     def test_payload_load_and_save_share_the_cache_state_model(self) -> None:
         load_signature = get_type_hints(cache_payload.cache_load)
@@ -154,11 +166,11 @@ class CacheApiContractTests(unittest.TestCase):
 
     def test_bounded_decompress_uses_a_typed_zlib_port(self) -> None:
         hints = get_type_hints(cache_payload._bounded_decompress)
-        self.assertEqual(getattr(hints["zlib_mod"], "__name__", None), "_ZlibDecompressorPort")
+        self.assertIs(hints["zlib_mod"], cache_ports.CompressionPort)
 
     def test_atomic_replace_uses_a_typed_filesystem_port(self) -> None:
         hints = get_type_hints(cache_payload.cache_atomic_replace)
-        self.assertEqual(getattr(hints["os_mod"], "__name__", None), "_AtomicReplacePort")
+        self.assertIs(hints["os_mod"], cache_ports.AtomicReplacePort)
 
     def test_cache_load_and_save_callbacks_have_explicit_callable_contracts(self) -> None:
         load_hints = get_type_hints(cache_payload.cache_load)

@@ -3,6 +3,13 @@ from __future__ import annotations
 from typing import Any, Callable, ContextManager, Literal, Protocol, TypedDict
 
 from .core_context import CacheState
+from .cache_ports import (
+    AtomicReplacePort,
+    Base64Port,
+    CompressionPort,
+    JsonPort,
+    TemporaryFilePort,
+)
 from .season_support import SEASON_NAMES
 from .time_windows import parse_random_time_window_spec, validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
 
@@ -34,26 +41,6 @@ class _CacheKeyCallback(Protocol):
         *,
         business_calendar_fingerprint: str = "",
     ) -> str: ...
-
-
-class _DecompressorPort(Protocol):
-    unconsumed_tail: bytes
-    eof: bool
-    unused_data: bytes
-
-    def decompress(self, data: bytes, max_length: int = 0) -> bytes: ...
-
-    def flush(self, length: int = 16384) -> bytes: ...
-
-
-class _ZlibDecompressorPort(Protocol):
-    def decompressobj(self) -> _DecompressorPort: ...
-
-
-class _AtomicReplacePort(Protocol):
-    name: str
-
-    def replace(self, src: str, dst: str) -> None: ...
 
 
 def is_atom_like(atom: object) -> bool:
@@ -253,7 +240,7 @@ def cache_payload_shape_ok(obj: dict, *, is_dnf_like: Callable[[object], bool]) 
     return True
 
 
-def _bounded_decompress(blob: bytes, zlib_mod: _ZlibDecompressorPort, limit: int) -> bytes:
+def _bounded_decompress(blob: bytes, zlib_mod: CompressionPort, limit: int) -> bytes:
     decompressor = zlib_mod.decompressobj()
     data = decompressor.decompress(blob, limit + 1)
     if len(data) > limit:
@@ -266,7 +253,7 @@ def _bounded_decompress(blob: bytes, zlib_mod: _ZlibDecompressorPort, limit: int
     return data
 
 
-def cache_atomic_replace(src: str, dst: str, *, os_mod: _AtomicReplacePort) -> None:
+def cache_atomic_replace(src: str, dst: str, *, os_mod: AtomicReplacePort) -> None:
     try:
         os_mod.replace(src, dst)
         return
@@ -300,9 +287,9 @@ def cache_load(
     cache_payload_shape_ok: Callable[[dict], bool],
     diag: Callable[[str], None],
     os_mod: Any,
-    json_mod: Any,
-    zlib_mod: Any,
-    base64_mod: Any,
+    json_mod: JsonPort,
+    zlib_mod: CompressionPort,
+    base64_mod: Base64Port,
     quarantine_cache: Callable[[str, str], object] | None = None,
 ) -> dict | None:
     if not enable_anchor_cache:
@@ -397,15 +384,15 @@ def cache_save(
     obj: dict,
     *,
     enable_anchor_cache: bool,
-    json_mod: Any,
-    zlib_mod: Any,
-    base64_mod: Any,
+    json_mod: JsonPort,
+    zlib_mod: CompressionPort,
+    base64_mod: Base64Port,
     cache_path: Callable[[str], str],
     cache_dir: Callable[[], str],
     cache_lock: Callable[[str], ContextManager[bool]],
     diag: Callable[[str], None],
     os_mod: Any,
-    tempfile_mod: Any,
+    tempfile_mod: TemporaryFilePort,
     cache_atomic_replace: Callable[[str, str], None],
     cache_state: CacheState,
 ) -> bool:

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import csv
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any, Protocol
+
+from .parsing.parser_models import ParseError
 
 if TYPE_CHECKING:
     from .anchor_omit import OmitState
@@ -55,14 +58,14 @@ def omit_dnf_from_parent(
     if expr_str:
         try:
             omit_dnf = ports.validate_omit(expr_str)
-        except Exception as exc:
+        except (ParseError, ValueError) as exc:
             raise ValueError(f"Invalid omit expression '{expr_str}': {exc}") from exc
     if omit_file:
         try:
             omit_dates, omit_descriptions = ports.load_omit_file_data(
                 omit_file, ports.omit_file_dir
             )
-        except Exception as exc:
+        except (OSError, UnicodeError, ValueError, csv.Error) as exc:
             raise ValueError(f"Invalid omit_file '{omit_file}': {exc}") from exc
     if not omit_dnf and not omit_dates and not omit_descriptions:
         return "", None

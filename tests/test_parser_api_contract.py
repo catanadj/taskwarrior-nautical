@@ -172,6 +172,52 @@ class ParserPresetContractTests(unittest.TestCase):
         }
         return parser_api.for_core(module=core, namespace=namespace)
 
+    def _omit_ports(self, validate_omit, load_omit_file_data):
+        return modify_anchor_effects.OmitPorts(
+            validate_omit=validate_omit,
+            load_omit_file_data=load_omit_file_data,
+            omit_file_dir="/tmp/omit",
+            combine_omit_state=anchor_omit.combine_omit_state,
+        )
+
+    def test_omit_parent_wraps_parse_errors_but_surfaces_validator_defects(self):
+        def reject_expression(_expression):
+            raise core.ParseError("invalid omit syntax")
+
+        with self.assertRaisesRegex(ValueError, "Invalid omit expression 'bad': invalid omit syntax"):
+            modify_anchor_effects.omit_dnf_from_parent(
+                self._omit_ports(reject_expression, lambda *_args: (frozenset(), {})),
+                {"omit": "bad"},
+            )
+
+        def broken_validator(_expression):
+            raise RuntimeError("validator defect")
+
+        with self.assertRaisesRegex(RuntimeError, "validator defect"):
+            modify_anchor_effects.omit_dnf_from_parent(
+                self._omit_ports(broken_validator, lambda *_args: (frozenset(), {})),
+                {"omit": "bad"},
+            )
+
+    def test_omit_parent_wraps_file_read_errors_but_surfaces_loader_defects(self):
+        def missing_file(*_args):
+            raise FileNotFoundError("calendar missing")
+
+        with self.assertRaisesRegex(ValueError, "Invalid omit_file 'dates.csv': calendar missing"):
+            modify_anchor_effects.omit_dnf_from_parent(
+                self._omit_ports(lambda _expression: [], missing_file),
+                {"omit_file": "dates.csv"},
+            )
+
+        def broken_loader(*_args):
+            raise RuntimeError("omit loader defect")
+
+        with self.assertRaisesRegex(RuntimeError, "omit loader defect"):
+            modify_anchor_effects.omit_dnf_from_parent(
+                self._omit_ports(lambda _expression: [], broken_loader),
+                {"omit_file": "dates.csv"},
+            )
+
     def test_unknown_presets_list_available_aliases_and_config_table(self):
         binding = self._binding(
             anchors={"payday": "m:15", "workout": "w:mon,wed,fri"},

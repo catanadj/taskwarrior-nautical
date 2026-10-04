@@ -87,6 +87,19 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertIs(clear_hints["position_selection"], cache_facade.PositionSelectionClearPort)
         self.assertIs(clear_hints["selection_matcher"], cache_facade.CacheClearPort)
 
+    def test_cache_runtime_overrides_have_concrete_callback_contracts(self) -> None:
+        hints = get_type_hints(cache_api.CacheRuntimeDependencies)
+        self.assertEqual(hints["atomic_replace_override"], Callable[[str, str], None] | None)
+        self.assertEqual(hints["clone_payload_override"], Callable[[dict], dict] | None)
+        self.assertEqual(hints["normalize_dnf_override"], Callable[[object], object] | None)
+        self.assertEqual(hints["payload_shape_override"], Callable[[dict], bool] | None)
+        self.assertEqual(hints["semantic_fingerprint_override"], Callable[[], str] | None)
+        self.assertEqual(
+            hints["cache_lock_override"],
+            Callable[[str], ContextManager[bool]] | None,
+        )
+        self.assertEqual(hints["is_dnf_like_override"], Callable[[object], bool] | None)
+
     def test_payload_load_and_save_share_the_cache_state_model(self) -> None:
         load_signature = get_type_hints(cache_payload.cache_load)
         save_signature = get_type_hints(cache_payload.cache_save)

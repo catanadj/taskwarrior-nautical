@@ -10,7 +10,7 @@ import random
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, ContextManager
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
@@ -50,13 +50,13 @@ class CacheRuntimeDependencies:
     base64: Any
     tempfile: Any
     cache_state: CacheState
-    atomic_replace_override: Callable[..., Any] | None
-    clone_payload_override: Callable[..., Any] | None
-    normalize_dnf_override: Callable[..., Any] | None
-    payload_shape_override: Callable[..., Any] | None
-    semantic_fingerprint_override: Callable[..., Any] | None
-    cache_lock_override: Callable[..., Any] | None
-    is_dnf_like_override: Callable[..., Any] | None
+    atomic_replace_override: Callable[[str, str], None] | None
+    clone_payload_override: Callable[[dict], dict] | None
+    normalize_dnf_override: Callable[[object], object] | None
+    payload_shape_override: Callable[[dict], bool] | None
+    semantic_fingerprint_override: Callable[[], str] | None
+    cache_lock_override: Callable[[str], ContextManager[bool]] | None
+    is_dnf_like_override: Callable[[object], bool] | None
 
 
 def _binding_context(

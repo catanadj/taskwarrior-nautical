@@ -624,6 +624,7 @@ facade.__all__
             AnchorDurationValidator,
             AnchorLintCallback,
             AnchorModeValidator,
+            AnchorUntilSummaryCallback,
             AnchorNaturalDescriptionCallback,
             OmitDescriptionCallback,
             AppendDstAdjustmentCallback,
@@ -668,6 +669,10 @@ facade.__all__
                     AnchorDurationValidator,
                 )
                 if context is AnchorExpressionPreviewServices:
+                    self.assertIs(
+                        get_type_hints(context)["anchor_until_summary"],
+                        AnchorUntilSummaryCallback,
+                    )
                     self.assertIs(
                         get_type_hints(context)["describe_anchor_natural"],
                         AnchorNaturalDescriptionCallback,

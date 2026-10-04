@@ -138,6 +138,21 @@ class OmitDescriptionCallback(Protocol):
     def __call__(self, task: TaskPayload, day: date) -> str | None: ...
 
 
+class AnchorUntilSummaryCallback(Protocol):
+    def __call__(
+        self,
+        dnf: AnchorDNF,
+        until_dt: datetime | None,
+        first_date_local: date,
+        first_hhmm: tuple[int, int],
+        interval_seed: date,
+        seed_base: str,
+        *,
+        omit_dnf: Any = None,
+        evaluator: Any | None = None,
+    ) -> tuple[int | None, datetime | None]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorExpressionPreviewServices:
     """Composition-root dependencies for the anchor preview renderer."""
@@ -161,7 +176,7 @@ class AnchorExpressionPreviewServices:
     validate_anchor_mode: AnchorModeValidator
     validate_chain_duration_reasonable: AnchorDurationValidator
     append_wait_sched_rows: PreviewWaitScheduleRowsCallback
-    anchor_until_summary: Callable[..., Any]
+    anchor_until_summary: AnchorUntilSummaryCallback
     to_local_cached: Callable[[datetime], datetime]
     fmt_local_for_task: Callable[[datetime], str]
     format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]]

@@ -34,6 +34,16 @@ class AddCalendarFeedbackCallback(Protocol):
     ) -> bool: ...
 
 
+class AnchorDurationValidator(Protocol):
+    def __call__(
+        self,
+        until_dt: datetime,
+        now_utc: datetime,
+        first_due: datetime,
+        kind: str,
+    ) -> tuple[bool, str | None]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorExpressionPreviewServices:
     """Composition-root dependencies for the anchor preview renderer."""
@@ -55,7 +65,7 @@ class AnchorExpressionPreviewServices:
     root_uuid_from: Callable[[TaskPayload], str | None]
     short: Callable[[Any], str]
     validate_anchor_mode: Callable[..., Any]
-    validate_chain_duration_reasonable: Callable[..., Any]
+    validate_chain_duration_reasonable: AnchorDurationValidator
     append_wait_sched_rows: Callable[..., Any]
     anchor_until_summary: Callable[..., Any]
     to_local_cached: Callable[..., Any]
@@ -81,7 +91,7 @@ class AnchorFilePreviewServices:
     render_business_calendar_displacement: AddCalendarFeedbackCallback
     omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
     append_wait_sched_rows: Callable[..., Any]
-    validate_chain_duration_reasonable: Callable[..., Any]
+    validate_chain_duration_reasonable: AnchorDurationValidator
     format_anchor_rows: Callable[..., Any]
     panel: PreviewPanelCallback
     fmt_local_for_task: Callable[..., Any]

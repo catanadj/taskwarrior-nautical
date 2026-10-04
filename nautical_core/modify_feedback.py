@@ -967,6 +967,7 @@ def _build_text_feedback(
                 to_local=core.to_local,
             )
         except Exception:
+            # The carry caption is optional; retain the primary next-expiry line.
             carry = None
         if carry:
             lines.append(f"[bold magenta]Expiration:[/] [white]{carry}[/]")

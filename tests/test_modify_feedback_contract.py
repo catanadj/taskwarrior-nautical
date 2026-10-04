@@ -569,6 +569,26 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertEqual(rows[0][0], "Next expires")
         self.assertIn("2026-10-05", str(rows[0][1]))
 
+    def test_expiration_carry_caption_failure_keeps_next_expiration_feedback(self) -> None:
+        with patch(
+            "nautical_core.add_validation.describe_native_until_carry",
+            side_effect=RuntimeError("optional carry caption unavailable"),
+        ):
+            _title, rows, text = _render_cp_completion_feedback(
+                "P1D",
+                child_values={"until": "20261005T090000Z"},
+            )
+            _text_title, _text_rows, text = _render_cp_completion_feedback(
+                "P1D",
+                mode="text",
+                child_values={"until": "20261005T090000Z"},
+            )
+
+        self.assertTrue(any(label == "Next expires" for label, _value in rows))
+        self.assertFalse(any(label == "Expiration" for label, _value in rows))
+        self.assertIsNotNone(text)
+        self.assertIn("Next expires", text or "")
+
     def test_anchor_feedback_expands_presets_and_keeps_lifecycle_result_without_analytics(self) -> None:
         now = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
         panels = []

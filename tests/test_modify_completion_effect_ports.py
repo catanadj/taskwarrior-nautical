@@ -112,6 +112,19 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             ModifyRuntimeState.__annotations__["task_repository"], expected
         )
 
+    def test_modify_runtime_state_uses_lifecycle_read_owner_types(self) -> None:
+        from nautical_core.lifecycle.read_service import ChainCacheStore, LifecycleReadService
+        from nautical_core.modify_runtime import ModifyRuntimeState
+
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["lifecycle_read_service"],
+            f"{LifecycleReadService.__name__} | None",
+        )
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["chain_cache_store"],
+            f"{ChainCacheStore.__name__} | None",
+        )
+
     def test_scheduler_runtime_state_uses_scheduler_service_cache_contract(self) -> None:
         from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
         from nautical_core.modify_runtime import ModifyRuntimeState, scheduler_service_for_task

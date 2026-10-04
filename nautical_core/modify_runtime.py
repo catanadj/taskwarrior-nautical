@@ -30,6 +30,7 @@ import nautical_core.timezone_facade as timezone_facade
 
 if TYPE_CHECKING:
     from nautical_core.hook_workflow_context import WorkflowInvocationContext
+    from nautical_core.lifecycle.read_service import ChainCacheStore, LifecycleReadService
     from nautical_core.modify_generation_effects import ChainGenerationServicePort
     from nautical_core.scheduler_service import SchedulerService
     from nautical_core.task_read_repository import TaskReadRepository
@@ -95,8 +96,8 @@ class ModifyRuntimeState:
     panel_chain_by_link: dict[int, list[dict[str, Any]]] | None = None
     panel_chain_by_short: dict[str, dict[str, Any]] | None = None
     panel_chain_snapshot_loaded: bool = False
-    lifecycle_read_service: Any = None
-    chain_cache_store: Any = None
+    lifecycle_read_service: LifecycleReadService | None = None
+    chain_cache_store: ChainCacheStore | None = None
     anchor_file_providers: dict[tuple[str, str, tuple[int, int], str], Any] = field(
         default_factory=dict
     )

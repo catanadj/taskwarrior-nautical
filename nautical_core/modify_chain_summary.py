@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from .callback_ports import CallbackPort
 from .modify_analytics import LatenessStats
-from .parsing.parser_models import ParseError
+from .parsing.parser_models import AnchorDNF, ParseError
 from .task_models import TaskObservation, TaskPayload
 
 
@@ -133,8 +133,8 @@ def kind_rows(
     current: TaskPayload,
     *,
     anchor_preset_display: Callable[[str], tuple[str, str] | None],
-    validate_anchor: Callable[[str], Any],
-    describe_anchor: Callable[[Any, dict], str],
+    validate_anchor: Callable[[str], AnchorDNF],
+    describe_anchor: Callable[[AnchorDNF, dict[str, Any]], str],
 ) -> None:
     mode = (current.get("anchor_mode") or "skip").lower()
     tag = {"skip": "[cyan]SKIP[/]", "all": "[yellow]ALL[/]", "flex": "[magenta]FLEX[/]"}.get(

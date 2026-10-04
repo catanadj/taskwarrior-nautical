@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timezone
 from collections.abc import Callable
-from typing import get_type_hints
+from typing import Any, get_type_hints
 
 from nautical_core.modify_chain_summary import (
     ChainSummaryRenderServices,
@@ -18,7 +18,7 @@ from nautical_core.modify_chain_summary import (
     render_chain_summary_with_services,
     render_chain_summary,
 )
-from nautical_core.parsing.parser_models import ParseError
+from nautical_core.parsing.parser_models import AnchorDNF, ParseError
 from nautical_core.task_models import TaskObservation, TaskPayload
 
 
@@ -143,6 +143,17 @@ class ChainSummaryRendererContractTests(unittest.TestCase):
                 "format_root_and_age": Callable[[TaskPayload, datetime], str],
                 "format_local": Callable[[datetime], str],
             },
+        )
+
+    def test_kind_rows_uses_parsed_anchor_contract(self) -> None:
+        annotations = get_type_hints(kind_rows)
+        self.assertEqual(
+            annotations["validate_anchor"],
+            Callable[[str], AnchorDNF],
+        )
+        self.assertEqual(
+            annotations["describe_anchor"],
+            Callable[[AnchorDNF, dict[str, Any]], str],
         )
 
     def test_summary_renderers_accept_domain_task_and_time_types(self) -> None:

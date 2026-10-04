@@ -71,6 +71,22 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertIs(cache_hints["safe_lock"], cache_locking.BoundSafeLock)
         self.assertEqual(cache_hints["return"], Iterator[bool])
 
+    def test_cache_facade_uses_narrow_cache_capabilities(self) -> None:
+        metrics_hints = get_type_hints(cache_facade.emit_metrics)
+        clear_hints = get_type_hints(cache_facade.clear_all)
+        self.assertEqual(
+            metrics_hints["caches"],
+            cache_facade.Iterable[tuple[str, cache_facade.CacheInfoPort]],
+        )
+        self.assertEqual(metrics_hints["warn_once"], cache_facade.Callable[[str, str], None])
+        self.assertIs(clear_hints["memory_cache"], cache_facade.MemoryCacheClearPort)
+        self.assertEqual(
+            clear_hints["caches"],
+            cache_facade.Iterable[cache_facade.CacheClearPort],
+        )
+        self.assertIs(clear_hints["position_selection"], cache_facade.PositionSelectionClearPort)
+        self.assertIs(clear_hints["selection_matcher"], cache_facade.CacheClearPort)
+
     def test_payload_load_and_save_share_the_cache_state_model(self) -> None:
         load_signature = get_type_hints(cache_payload.cache_load)
         save_signature = get_type_hints(cache_payload.cache_save)

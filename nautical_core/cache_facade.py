@@ -5,12 +5,28 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Iterable
 from functools import partial
-from typing import Any
+from typing import Protocol
+
+
+class CacheInfoPort(Protocol):
+    def cache_info(self) -> object: ...
+
+
+class CacheClearPort(Protocol):
+    def cache_clear(self) -> None: ...
+
+
+class MemoryCacheClearPort(Protocol):
+    def clear(self) -> None: ...
+
+
+class PositionSelectionClearPort(Protocol):
+    def clear_candidate_cache(self) -> None: ...
 
 
 def emit_metrics(
-    caches: Iterable[tuple[str, Any]],
-    warn_once: Callable[[str, str], Any],
+    caches: Iterable[tuple[str, CacheInfoPort]],
+    warn_once: Callable[[str, str], None],
 ) -> None:
     if os.environ.get("NAUTICAL_DIAG_METRICS") != "1":
         return
@@ -26,14 +42,14 @@ def emit_metrics(
 
 
 def clear_all(
-    memory_cache: Any,
-    caches: Iterable[Any],
+    memory_cache: MemoryCacheClearPort,
+    caches: Iterable[CacheClearPort],
     *,
-    position_selection: Any,
-    selection_matcher: Any,
+    position_selection: PositionSelectionClearPort,
+    selection_matcher: CacheClearPort,
 ) -> None:
-    operations: list[Callable[[], Any]] = [lambda: memory_cache.clear()]
-    def clear_cache(cache: Any) -> None:
+    operations: list[Callable[[], None]] = [lambda: memory_cache.clear()]
+    def clear_cache(cache: CacheClearPort) -> None:
         cache.cache_clear()
     for cache in caches:
         operations.append(partial(clear_cache, cache))

@@ -125,7 +125,7 @@ def emit_line(msg: str) -> None:
         return
     try:
         sys.stderr.write(msg + "\n")
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 

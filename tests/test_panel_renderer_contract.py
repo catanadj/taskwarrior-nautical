@@ -11,6 +11,19 @@ import nautical_core.ui as ui
 
 
 class PanelRendererContractTests(unittest.TestCase):
+    def test_emit_line_ignores_expected_stderr_write_failures(self) -> None:
+        with patch.object(ui.sys, "stderr") as stderr:
+            stderr.write.side_effect = OSError("closed stderr")
+            ui.emit_line("diagnostic")
+
+        stderr.write.assert_called_once_with("diagnostic\n")
+
+    def test_emit_line_does_not_hide_unexpected_stderr_failures(self) -> None:
+        with patch.object(ui.sys, "stderr") as stderr:
+            stderr.write.side_effect = RuntimeError("broken stream adapter")
+            with self.assertRaisesRegex(RuntimeError, "broken stream adapter"):
+                ui.emit_line("diagnostic")
+
     def test_terminal_width_uses_default_when_stderr_is_not_a_terminal(self) -> None:
         with patch.object(ui.os, "get_terminal_size", side_effect=OSError("not a tty")):
             self.assertEqual(ui.term_width_stderr(default=60), 60)

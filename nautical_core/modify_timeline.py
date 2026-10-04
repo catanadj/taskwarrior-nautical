@@ -6,6 +6,7 @@ from typing import Any, Callable, TypeAlias
 
 from .anchor_omit import OmitState
 from .parsing.parser_models import AnchorDNF
+from .modify_models import CoerceIntCallback, ShortUuidCallback
 from .recurrence_evaluator import RecurrenceEvaluator
 from .scheduler_service import SchedulerService
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
@@ -31,11 +32,11 @@ class TimelineProjectionServices:
 @dataclass(frozen=True, slots=True)
 class TimelineFormattingServices:
     future_style_for_chain: Callable[[TaskPayload, str], str]
-    coerce_int: Callable[[Any, Any], Any]
-    fmt_on_time_delta: Callable[[Any, Any], str]
-    fmtlocal: Callable[[Any], str]
-    fmt_dt_local: Callable[[Any], str]
-    short: Callable[[Any], str]
+    coerce_int: CoerceIntCallback
+    fmt_on_time_delta: Callable[[datetime | None, datetime | None], str]
+    fmtlocal: Callable[[datetime], str]
+    fmt_dt_local: Callable[[datetime], str]
+    short: ShortUuidCallback
     format_gap: Callable[[datetime | None, datetime | None, str, bool], str]
 
 

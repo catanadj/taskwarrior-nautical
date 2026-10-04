@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Literal, Protocol, Sequence
 from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from dataclasses import dataclass
 from .modify_chain_summary import ChainSummaryRenderServices, SpanHumanDelta
@@ -120,6 +120,21 @@ class ChainExportPorts:
     coerce_int: Callable[[Any, Any], int | None]
 
 
+class _ChainExportCore(Protocol):
+    coerce_int: Callable[[Any, Any], int | None]
+
+
+class _ChainExportComposition(Protocol):
+    lifecycle_read_service_for: Callable[[object], ChainExportReader]
+
+
+class ChainExportHost(Protocol):
+    @property
+    def core(self) -> _ChainExportCore: ...
+
+    def _module(self, name: Literal["modify_composition"]) -> _ChainExportComposition: ...
+
+
 @dataclass(frozen=True, slots=True)
 class TimelineSummaryPorts:
     summary: TimelineSummaryService
@@ -215,7 +230,7 @@ def sort_chain_for_analytics(
     )
 
 
-def chain_export_ports_for(host: Any) -> ChainExportPorts:
+def chain_export_ports_for(host: ChainExportHost) -> ChainExportPorts:
     return ChainExportPorts(
         service=host._module("modify_composition").lifecycle_read_service_for(host),
         coerce_int=host.core.coerce_int,

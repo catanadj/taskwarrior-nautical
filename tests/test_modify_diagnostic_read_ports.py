@@ -453,6 +453,17 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
 
         self.assertIs(get_type_hints(tw_get_ports_for)["host"], TwGetHost)
 
+    def test_chain_export_factory_uses_narrow_host_protocol(self) -> None:
+        from nautical_core.modify_diagnostics_effects import (
+            ChainExportHost,
+            chain_export_ports_for,
+        )
+
+        self.assertIs(
+            get_type_hints(chain_export_ports_for)["host"],
+            ChainExportHost,
+        )
+
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:
         from nautical_core.modify_validation import validate_cp_on_modify
 

@@ -12,7 +12,7 @@ from .modify_models import DatetimeParserCallback
 from .task_models import TaskPayload
 
 if TYPE_CHECKING:
-    from .modify_command_effects import CommandPorts
+    from .modify_command_effects import CommandHost, CommandPorts, DiagCounter, RunTaskRecorder
     from .modify_models import CoerceIntCallback
     from .modify_spawn import SpawnServices as SpawnServiceBundle
     from .modify_spawn import _ChildUUIDForSpawn, _PrepareSpawnChildPayload
@@ -87,6 +87,43 @@ class SpawnIntentHost(Protocol):
     ) -> _LifecycleApplicationModule: ...
 
 
+class _ChildUuidCore(Protocol):
+    coerce_int: CoerceIntCallback
+
+
+class _ModifyCommandModule(Protocol):
+    def command_ports_for(self, host: CommandHost) -> CommandPorts: ...
+
+    def generate_child_uuid_candidate(
+        self, ports: CommandPorts, env: Mapping[str, str]
+    ) -> str: ...
+
+
+class _ModifyTaskFields(Protocol):
+    def task_uuid_or_empty(self, task: dict[str, Any] | None) -> str: ...
+
+
+class ChildUuidHost(Protocol):
+    _STABLE_CHILD_UUID_NAMESPACE: UUID
+    _run_task_diag_bucket: Callable[[list[str]], str]
+    _diag_count: DiagCounter
+    _diag_record_run_task: RunTaskRecorder
+    _diag: Callable[[str], None]
+    _task_cmd_prefix: Callable[[], list[str]]
+
+    @property
+    def core(self) -> _ChildUuidCore: ...
+
+    @overload
+    def _module(self, name: Literal["modify_spawn_prep"]) -> SpawnPreparation: ...
+
+    @overload
+    def _module(self, name: Literal["modify_command_effects"]) -> _ModifyCommandModule: ...
+
+    @overload
+    def _module(self, name: Literal["modify_task_fields"]) -> _ModifyTaskFields: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SpawnIntentPorts:
     context: IntegrationContext | None
@@ -128,7 +165,7 @@ def spawn_intent_ports_for(host: SpawnIntentHost) -> SpawnIntentPorts:
     )
 
 
-def child_uuid_ports_for(host: Any) -> ChildUuidPorts:
+def child_uuid_ports_for(host: ChildUuidHost) -> ChildUuidPorts:
     command = host._module("modify_command_effects")
     return ChildUuidPorts(
         prep=host._module("modify_spawn_prep"),

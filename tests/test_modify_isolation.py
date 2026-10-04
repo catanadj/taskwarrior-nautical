@@ -626,6 +626,24 @@ class ModifyIsolationTests(unittest.TestCase):
             tuple[int | None, datetime | None],
         )
 
+    def test_cp_forecast_helpers_expose_typed_computation_callbacks(self) -> None:
+        from datetime import timedelta
+
+        import nautical_core.modify_completion_compute as compute
+
+        expected_callbacks = {
+            "parse_cp_sequence_tokens": Callable[[str], list[dict[str, Any]] | None],
+            "sequence_period_for_link": Callable[
+                [list[dict[str, Any]], str, int, str], timedelta
+            ],
+            "add_period": Callable[[datetime, timedelta], datetime],
+        }
+        for function in (compute.cap_from_until_cp, compute.estimate_cp_final_by_max):
+            annotations = get_type_hints(function)
+            with self.subTest(function=function.__name__):
+                for parameter, expected_type in expected_callbacks.items():
+                    self.assertEqual(annotations[parameter], expected_type)
+
     def test_completion_spawn_service_has_explicit_arguments(self) -> None:
         import inspect
 

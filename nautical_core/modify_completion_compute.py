@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
 from nautical_core.chain_generation import ChainGenerationService
@@ -252,10 +252,10 @@ def cap_from_until_cp(
     next_due_utc: datetime | None,
     *,
     parse_datetime: DatetimeParserCallback,
-    parse_cp_sequence_tokens: Callable[[str], Any],
+    parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
     coerce_int: CoerceIntCallback,
-    sequence_period_for_link: Callable[[Any, str, int, str], Any],
-    add_period: Callable[[Any, Any], Any],
+    sequence_period_for_link: Callable[[list[dict[str, Any]], str, int, str], timedelta],
+    add_period: Callable[[datetime, timedelta], datetime],
     max_iterations: int,
 ) -> tuple[int | None, datetime | None]:
     """Return the final CP link and due date permitted by chainUntil."""
@@ -377,15 +377,17 @@ def estimate_cp_final_by_max(
     next_due_utc: datetime | None,
     *,
     coerce_int: Any,
-    parse_cp_sequence_tokens: Any,
-    sequence_period_for_link: Any,
-    add_period: Any,
+    parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
+    sequence_period_for_link: Callable[[list[dict[str, Any]], str, int, str], timedelta],
+    add_period: Callable[[datetime, timedelta], datetime],
     max_iterations: int,
     diagnostic: Any | None = None,
 ) -> datetime | None:
     """Estimate the final CP due date permitted by ``chainMax``."""
     chain_max = coerce_int(task.get("chainMax"), 0)
     if not chain_max:
+        return None
+    if next_due_utc is None:
         return None
     current_link = coerce_int(task.get("link"), 1)
     if current_link >= chain_max:

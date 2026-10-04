@@ -378,6 +378,23 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
 
         self.assertEqual(result[2:], (8, [], None))
 
+    def test_cp_final_projection_skips_when_next_due_is_missing(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        result = compute.estimate_cp_final_by_max(
+            {"chainMax": 3, "link": 1, "cp": "1d"},
+            None,
+            coerce_int=lambda value, default=0: int(value or default),
+            parse_cp_sequence_tokens=lambda _cp: [{}],
+            sequence_period_for_link=lambda *_args: timedelta(days=1),
+            add_period=lambda *_args: self.fail(
+                "forecast cannot advance without an initial child due"
+            ),
+            max_iterations=5,
+        )
+
+        self.assertIsNone(result)
+
     def test_optional_recurrence_projection_does_not_hide_unexpected_failures(self) -> None:
         import nautical_core.modify_completion_compute as compute
 

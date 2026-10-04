@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, ContextManager
+from typing import Any, Callable, ContextManager, Protocol
 
 from .season_support import SEASON_NAMES
 from .time_windows import parse_random_time_window_spec, validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
@@ -12,6 +12,16 @@ MAX_CACHE_DECODED_BYTES = 8 * 1024 * 1024
 MAX_CACHE_JSON_BYTES = MAX_CACHE_DECODED_BYTES
 _CACHE_VERSION_KEY = "_nautical_cache_version"
 _SELECTION_SCOPES = frozenset(("week", "month", "quarter", "year", "season", *SEASON_NAMES))
+
+
+class _CacheKeyCallback(Protocol):
+    def __call__(
+        self,
+        acf: str,
+        anchor_mode: str,
+        *,
+        business_calendar_fingerprint: str = "",
+    ) -> str: ...
 
 
 def is_atom_like(atom: Any) -> bool:
@@ -549,8 +559,8 @@ def cache_key_for_task_cached(
     fmt: str,
     business_calendar_fingerprint: str = "",
     *,
-    build_acf: Any,
-    cache_key: Any,
+    build_acf: Callable[[str], str],
+    cache_key: _CacheKeyCallback,
 ) -> str:
     _ = fmt
     acf = build_acf(anchor_expr)

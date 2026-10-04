@@ -68,6 +68,11 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertEqual(hints["cache_lock"], Callable[[str], ContextManager[bool]])
         self.assertEqual(hints["stale_lock_check"], Callable[[str, float], bool])
 
+    def test_cached_task_key_uses_typed_acf_and_cache_key_builders(self) -> None:
+        hints = get_type_hints(cache_payload.cache_key_for_task_cached)
+        self.assertEqual(hints["build_acf"], Callable[[str], str])
+        self.assertIs(hints["cache_key"], cache_payload._CacheKeyCallback)
+
     def test_cache_payload_shape_validator_declares_typed_dnf_callback(self) -> None:
         self.assertEqual(
             get_type_hints(cache_payload.cache_payload_shape_ok)["is_dnf_like"],

@@ -11,6 +11,7 @@ from nautical_core.modify_models import (
     ComputeAnchorChildDueCallback,
     ComputeCpChildDueCallback,
     CompletionComputeResult,
+    CompletionFinals,
     CompletionLifecycleDiagnostic,
     CompletionLifecycleResult,
     CompletionComputeServices,
@@ -210,11 +211,11 @@ def completion_caps(
     estimate_anchor_final_by_max: EstimateAnchorFinalCallback,
     cap_from_until_cp: CapFromUntilCpCallback,
     cap_from_until_anchor: CapFromUntilAnchorCallback,
-) -> tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None]:
+) -> tuple[int, datetime | None, int | None, CompletionFinals, int | None]:
     cpmax = coerce_int(new.get("chainMax"), 0)
     until_dt = dtparse(new.get("chainUntil"))
     cap_no = cpmax if cpmax else None
-    finals = []
+    finals: CompletionFinals = []
 
     if kind == "cp" and cpmax:
         try:

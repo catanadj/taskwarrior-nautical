@@ -34,6 +34,8 @@ if TYPE_CHECKING:
 # modules support Taskwarrior's heterogeneous JSON fields.
 TaskRow: TypeAlias = TaskPayload
 WaitScheduleDebug: TypeAlias = Mapping[str, Mapping[str, object]]
+CompletionFinalBoundary: TypeAlias = tuple[Literal["max", "until"], datetime]
+CompletionFinals: TypeAlias = list[CompletionFinalBoundary]
 ShortUuidCallback: TypeAlias = Callable[[Any], str]
 ExistingNextLookupCallback: TypeAlias = Callable[
     [TaskPayload, int], TaskRead[TaskObservation] | None
@@ -402,7 +404,7 @@ CompletionUntilGuardCallback: TypeAlias = Callable[[TaskRow, datetime | None, da
 CompletionChildRequiredCallback: TypeAlias = Callable[[TaskRow, datetime | None], bool]
 CompletionDurationWarningCallback: TypeAlias = Callable[[TaskRow, datetime | None, datetime | None, datetime], None]
 CompletionCapsCallback: TypeAlias = Callable[
-    [str, TaskRow, datetime | None, Any], tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None]
+    [str, TaskRow, datetime | None, Any], tuple[int, datetime | None, int | None, CompletionFinals, int | None]
 ]
 CompletionCapGuardCallback: TypeAlias = Callable[
     [TaskRow, int, int | None, datetime], bool
@@ -541,7 +543,7 @@ class CompletionComputeResult:
     until_dt: datetime | None
     cpmax: int
     cap_no: int | None
-    finals: list[tuple[str, Any]]
+    finals: CompletionFinals
     until_cap_no: int | None
     lifecycle_plan: "LifecyclePlan | None" = None
 
@@ -578,7 +580,7 @@ class CpCompletionFeedbackModel:
     next_no: int
     parent_short: str
     cap_no: int | None
-    finals: list[tuple[str, Any]]
+    finals: CompletionFinals
     now_utc: datetime
     until_dt: datetime | None
     until_cap_no: int | None
@@ -601,7 +603,7 @@ class AnchorCompletionFeedbackModel:
     next_no: int
     parent_short: str
     cap_no: int | None
-    finals: list[tuple[str, Any]]
+    finals: CompletionFinals
     now_utc: datetime
     until_dt: datetime | None
     until_cap_no: int | None

@@ -455,6 +455,7 @@ class ModifyIsolationTests(unittest.TestCase):
             CoerceIntCallback,
             ComputeAnchorChildDueCallback,
             ComputeCpChildDueCallback,
+            CompletionFinals,
             DatetimeParserCallback,
             DiagnosticCallback,
             EstimateAnchorFinalCallback,
@@ -526,7 +527,7 @@ class ModifyIsolationTests(unittest.TestCase):
                 "estimate_anchor_final_by_max": EstimateAnchorFinalCallback,
                 "cap_from_until_cp": CapFromUntilCpCallback,
                 "cap_from_until_anchor": CapFromUntilAnchorCallback,
-                "return": tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None],
+                "return": tuple[int, datetime | None, int | None, CompletionFinals, int | None],
             },
             "completion_cap_guard_or_stop": {
                 "task": TaskPayload,

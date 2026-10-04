@@ -15,6 +15,7 @@ from nautical_core.modify_models import (
     AnchorCompletionFeedbackModel,
     CpFeedbackServices,
     CpCompletionFeedbackModel,
+    CompletionFinals,
     CompletionLifecycleResult,
     WaitScheduleDebug,
 )
@@ -137,6 +138,10 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertEqual(
             get_type_hints(AnchorFeedbackServices)["last_wait_sched_debug"],
             WaitScheduleDebug | None,
+        )
+        self.assertEqual(
+            get_type_hints(CpCompletionFeedbackModel)["finals"],
+            CompletionFinals,
         )
         self.assertIs(
             get_type_hints(

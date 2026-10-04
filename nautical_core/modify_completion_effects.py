@@ -25,6 +25,7 @@ from .modify_models import (
     CompletionChildRequiredCallback,
     CompletionComputeServices,
     CompletionComputeResult,
+    CompletionFinals,
     CompletionDurationWarningCallback,
     CompletionChainSnapshot,
     CompletionPreflightServices,
@@ -168,7 +169,7 @@ class CompletionComputeService(Protocol):
         estimate_anchor_final_by_max: EstimateAnchorFinalCallback,
         cap_from_until_cp: CapFromUntilCpCallback,
         cap_from_until_anchor: CapFromUntilAnchorCallback,
-    ) -> tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None]: ...
+    ) -> tuple[int, datetime | None, int | None, CompletionFinals, int | None]: ...
     def completion_cap_guard_or_stop(
         self,
         task: TaskPayload,

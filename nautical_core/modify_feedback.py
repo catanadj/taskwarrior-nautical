@@ -18,6 +18,7 @@ from .modify_models import (
     TaskView,
     PanelCallback,
     WaitScheduleDebug,
+    CompletionFinals,
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
@@ -767,14 +768,14 @@ def _append_link_status_rows(
     fb.append(("Links left", str(max(0, cap_no - base_no))))
 
 
-def _effective_last_occurrence(finals: list[tuple[str, Any]]) -> Any:
+def _effective_last_occurrence(finals: CompletionFinals) -> datetime | None:
     candidates = [when for _label, when in finals if when is not None]
     return min(candidates) if candidates else None
 
 
 def _append_final_rows(
     fb: list[tuple[str, object]],
-    finals: list[tuple[str, object]],
+    finals: CompletionFinals,
     now_utc: Any,
     *,
     fmt_dt_local: Callable[[Any], str],

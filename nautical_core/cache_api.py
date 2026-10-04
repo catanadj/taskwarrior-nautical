@@ -64,6 +64,21 @@ class CacheFcntlPort(Protocol):
     def flock(self, file_descriptor: int, operation: int) -> None: ...
 
 
+class CacheJsonPort(Protocol):
+    JSONDecodeError: type[ValueError]
+
+    def loads(self, s: str) -> object: ...
+
+    def dumps(
+        self,
+        obj: object,
+        *,
+        ensure_ascii: bool = True,
+        separators: tuple[str, str] | None = None,
+        sort_keys: bool = False,
+    ) -> str: ...
+
+
 fcntl: CacheFcntlPort | None
 try:
     import fcntl
@@ -93,7 +108,7 @@ class CacheRuntimeDependencies:
     clock: CacheClockPort
     random: CacheRandomPort
     fcntl: CacheFcntlPort | None
-    json: Any
+    json: CacheJsonPort
     compression: Any
     base64: Any
     tempfile: Any

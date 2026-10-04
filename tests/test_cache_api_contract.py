@@ -116,6 +116,10 @@ class CacheApiContractTests(unittest.TestCase):
             cache_api.CacheFcntlPort | None,
         )
 
+    def test_cache_runtime_json_uses_its_consumed_operations(self) -> None:
+        hints = get_type_hints(cache_api.CacheRuntimeDependencies)
+        self.assertIs(hints["json"], cache_api.CacheJsonPort)
+
     def test_payload_load_and_save_share_the_cache_state_model(self) -> None:
         load_signature = get_type_hints(cache_payload.cache_load)
         save_signature = get_type_hints(cache_payload.cache_save)

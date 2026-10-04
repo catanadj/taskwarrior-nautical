@@ -48,6 +48,19 @@ class _Clock:
 
 
 class CacheApiContractTests(unittest.TestCase):
+    def test_cache_shape_predicates_accept_untrusted_objects(self) -> None:
+        for predicate, argument in (
+            (cache_payload.is_atom_like, "atom"),
+            (cache_payload.is_selection_like, "value"),
+            (cache_payload.is_factor_like, "value"),
+        ):
+            with self.subTest(predicate=predicate.__name__):
+                self.assertEqual(get_type_hints(predicate)[argument], object)
+
+        hints = get_type_hints(cache_payload.is_dnf_like)
+        self.assertEqual(hints["dnf"], object)
+        self.assertEqual(hints["is_atom_like"], Callable[[object], bool])
+
     def test_cache_load_and_save_callbacks_have_explicit_callable_contracts(self) -> None:
         load_hints = get_type_hints(cache_payload.cache_load)
         self.assertEqual(load_hints["cache_path"], Callable[[str], str])

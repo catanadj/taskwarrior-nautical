@@ -35,7 +35,7 @@ class _CacheKeyCallback(Protocol):
     ) -> str: ...
 
 
-def is_atom_like(atom: Any) -> bool:
+def is_atom_like(atom: object) -> bool:
     if not isinstance(atom, dict):
         return False
     typ = atom.get("typ") or atom.get("type")
@@ -50,7 +50,7 @@ def is_atom_like(atom: Any) -> bool:
     return True
 
 
-def is_selection_like(value: Any) -> bool:
+def is_selection_like(value: object) -> bool:
     if not isinstance(value, dict) or value.get("kind") != "select":
         return False
     if value.get("scope") not in _SELECTION_SCOPES:
@@ -66,13 +66,13 @@ def is_selection_like(value: Any) -> bool:
     return is_dnf_like(value.get("expr"), is_atom_like=is_factor_like)
 
 
-def is_factor_like(value: Any) -> bool:
+def is_factor_like(value: object) -> bool:
     if isinstance(value, dict) and value.get("kind") == "select":
         return is_selection_like(value)
     return is_atom_like(value)
 
 
-def is_dnf_like(dnf: Any, *, is_atom_like: Any) -> bool:
+def is_dnf_like(dnf: object, *, is_atom_like: Callable[[object], bool]) -> bool:
     if not isinstance(dnf, list):
         return False
     for term in dnf:

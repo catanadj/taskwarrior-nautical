@@ -89,6 +89,20 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             expected,
         )
 
+    def test_modify_runtime_state_uses_generation_service_protocol(self) -> None:
+        from nautical_core.modify_generation_effects import GenerationStatePort
+        from nautical_core.modify_runtime import ModifyRuntimeState
+
+        expected = "ChainGenerationServicePort | None"
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["chain_generation_service"],
+            expected,
+        )
+        self.assertEqual(
+            GenerationStatePort.__annotations__["chain_generation_service"],
+            expected,
+        )
+
     def test_generation_service_contract_includes_completion_draft_builder(self) -> None:
         from nautical_core.modify_generation_effects import ChainGenerationServicePort
 

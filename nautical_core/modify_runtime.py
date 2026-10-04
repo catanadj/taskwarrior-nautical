@@ -30,6 +30,7 @@ import nautical_core.timezone_facade as timezone_facade
 
 if TYPE_CHECKING:
     from nautical_core.hook_workflow_context import WorkflowInvocationContext
+    from nautical_core.modify_generation_effects import ChainGenerationServicePort
 
 
 @dataclass(slots=True)
@@ -37,7 +38,7 @@ class ModifyRuntimeState:
     workflow_context: WorkflowInvocationContext | None = None
     task_repository: Any = None
     scheduler_services: dict[Any, Any] = field(default_factory=dict)
-    chain_generation_service: Any = None
+    chain_generation_service: ChainGenerationServicePort | None = None
     query_ctx: dict[str, dict[object, object]] = field(
         default_factory=lambda: {
             "tw_get": {},

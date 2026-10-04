@@ -8,6 +8,7 @@ import nautical_core.modify_ordinary as modify_ordinary
 from nautical_core.modify_validation_effects import AnchorValidationPorts, validate_anchor
 from nautical_core.modify_validation_effects import OmitValidationPorts, validate_omit
 from nautical_core.parsing.parser_models import ParseError
+from nautical_core.modify_validation import validate_native_until_anchor_slots_or_fail
 from nautical_core.modify_datetime_effects import (
     DatetimeEffectPorts,
     local_naive_to_utc,
@@ -108,6 +109,42 @@ class ModifyValidationEffectsTests(unittest.TestCase):
             validate_anchor(ports, {}, {}, "w:mon")
 
         self.assertEqual(calls, ["strict"])
+
+    def test_native_until_slot_preflight_only_suppresses_anchor_input_errors(self) -> None:
+        task = {
+            "anchor": "w:mon",
+            "due": "20260101T090000Z",
+            "until": "20260102T090000Z",
+        }
+
+        def validate_with(anchor_validator):
+            return validate_native_until_anchor_slots_or_fail(
+                task,
+                safe_parse_datetime=lambda _value: (datetime(2026, 1, 1, 9), None),
+                validate_anchor=anchor_validator,
+                collect_time_slots=lambda *_args, **_kwargs: (),
+                validate_time_slots=lambda *_args, **_kwargs: (True, None),
+                normalize_time_slots=lambda *_args: [],
+                anchor_file_dir="",
+                recurrence_context=lambda _task: None,
+                to_local=lambda value: value,
+                format_local=str,
+                astronomy_is_error=lambda _exc: False,
+                astronomy_error_message=str,
+                panel=lambda *_args, **_kwargs: None,
+                abort=lambda _code: None,
+            )
+
+        def malformed_anchor(_expr):
+            raise ParseError("invalid anchor")
+
+        self.assertIsNone(validate_with(malformed_anchor))
+
+        def broken_validator(_expr):
+            raise RuntimeError("anchor validator defect")
+
+        with self.assertRaisesRegex(RuntimeError, "anchor validator defect"):
+            validate_with(broken_validator)
 
     def test_datetime_effects_handle_invalid_values_and_truncate_microseconds(self) -> None:
         ports = DatetimeEffectPorts(

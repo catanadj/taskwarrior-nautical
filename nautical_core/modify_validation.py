@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from typing import NoReturn, Protocol
 
 from .modify_models import PanelCallback
+from .parsing.parser_models import ParseError
 from .recurrence_context import RecurrenceContext
 from .task_models import TaskPayload
 
@@ -341,7 +342,7 @@ def validate_native_until_anchor_slots_or_fail(
     if anchor_value:
         try:
             dnf = validate_anchor(anchor_value)
-        except Exception:
+        except (ParseError, ValueError):
             return
     target_local = to_local(target_dt)
     try:

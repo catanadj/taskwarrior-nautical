@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from nautical_core.hook_workflow_context import WorkflowInvocationContext
     from nautical_core.lifecycle.read_service import ChainCacheStore, LifecycleReadService
     from nautical_core.modify_generation_effects import ChainGenerationServicePort
+    from nautical_core.occurrence_provider import OccurrenceProvider
     from nautical_core.scheduler_service import SchedulerService
     from nautical_core.task_read_repository import TaskReadRepository
 
@@ -98,9 +99,9 @@ class ModifyRuntimeState:
     panel_chain_snapshot_loaded: bool = False
     lifecycle_read_service: LifecycleReadService | None = None
     chain_cache_store: ChainCacheStore | None = None
-    anchor_file_providers: dict[tuple[str, str, tuple[int, int], str], Any] = field(
-        default_factory=dict
-    )
+    anchor_file_providers: dict[
+        tuple[str, str, tuple[int, int], str], OccurrenceProvider
+    ] = field(default_factory=dict)
 
 
 def new_runtime_state() -> ModifyRuntimeState:
@@ -170,7 +171,7 @@ def anchor_file_provider_for(
     seed_base: str,
     state: ModifyRuntimeState,
     core: Any,
-) -> Any:
+) -> OccurrenceProvider | None:
     """Return one cached anchor-file provider for a projection session."""
     if not anchor_file:
         return None

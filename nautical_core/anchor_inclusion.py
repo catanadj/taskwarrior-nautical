@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from .occurrence_provider import Occurrence, _cursor_before
+from .occurrence_provider import Occurrence, OccurrenceProvider, _cursor_before
 from .recurrence_protocols import NextOccurrenceCallback, PickOccurrenceCallback
 from .timeutil import compare_datetimes
 from .scheduler_models import OccurrenceSearchExhausted
@@ -108,7 +108,7 @@ def _build_anchor_file_provider(
     core: Any,
     recurrence_context: Any | None = None,
     business_calendar: Any | None = None,
-) -> Any:
+) -> OccurrenceProvider:
     """Build one context-bound file provider for a merged occurrence stream."""
     anchor_files = core._import_sibling("anchor_files")
     if business_calendar is None:

@@ -125,6 +125,25 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             f"{ChainCacheStore.__name__} | None",
         )
 
+    def test_anchor_file_provider_cache_uses_provider_contract(self) -> None:
+        from nautical_core.modify_runtime import (
+            ModifyRuntimeState,
+            anchor_file_provider_for,
+        )
+        from nautical_core.occurrence_provider import OccurrenceProvider
+
+        expected_cache = (
+            f"dict[tuple[str, str, tuple[int, int], str], {OccurrenceProvider.__name__}]"
+        )
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["anchor_file_providers"],
+            expected_cache,
+        )
+        self.assertEqual(
+            anchor_file_provider_for.__annotations__["return"],
+            f"{OccurrenceProvider.__name__} | None",
+        )
+
     def test_scheduler_runtime_state_uses_scheduler_service_cache_contract(self) -> None:
         from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
         from nautical_core.modify_runtime import ModifyRuntimeState, scheduler_service_for_task

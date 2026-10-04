@@ -3,13 +3,24 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, NoReturn
+from typing import Any, Callable, NoReturn, Protocol
 
 from . import panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch
 from .scheduler_models import occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
+
+
+class PreviewPanelCallback(Protocol):
+    def __call__(
+        self,
+        title: str,
+        rows: list[tuple[str | None, Any]],
+        *,
+        kind: str = "info",
+        task: TaskPayload | None = None,
+    ) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +50,7 @@ class AnchorExpressionPreviewServices:
     to_local_cached: Callable[..., Any]
     fmt_local_for_task: Callable[..., Any]
     format_anchor_rows: Callable[..., Any]
-    panel: Callable[..., Any]
+    panel: PreviewPanelCallback
     human_delta: Callable[..., Any]
     error_and_exit: Callable[..., Any]
     validate_native_until_after_target: Callable[..., Any]
@@ -61,7 +72,7 @@ class AnchorFilePreviewServices:
     append_wait_sched_rows: Callable[..., Any]
     validate_chain_duration_reasonable: Callable[..., Any]
     format_anchor_rows: Callable[..., Any]
-    panel: Callable[..., Any]
+    panel: PreviewPanelCallback
     fmt_local_for_task: Callable[..., Any]
     human_delta: Callable[..., Any]
     error_and_exit: Callable[..., Any]

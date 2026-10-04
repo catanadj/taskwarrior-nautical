@@ -617,6 +617,9 @@ facade.__all__
         self.assertIn("operation_for_host", violations[0].rule)
 
     def test_presentation_contexts_exclude_host_and_module_loaders(self) -> None:
+        from typing import get_type_hints
+        from nautical_core.add_anchor_preview import PreviewPanelCallback
+
         for context in (
             AnchorExpressionPreviewServices,
             AnchorFilePreviewServices,
@@ -635,6 +638,9 @@ facade.__all__
         self.assertIn("short", formatting_fields)
         self.assertTrue({"scheduler_service_for_task", "omit_description_for_task_date"}.isdisjoint(formatting_fields))
         self.assertTrue({"fmtlocal", "fmt_dt_local", "short"}.isdisjoint(projection_fields))
+        for context in (AnchorExpressionPreviewServices, AnchorFilePreviewServices):
+            with self.subTest(context=context.__name__):
+                self.assertIs(get_type_hints(context)["panel"], PreviewPanelCallback)
 
         file_fields = {field.name for field in fields(AnchorFilePreviewServices)}
         self.assertTrue({"validate_anchor_syntax_strict", "validate_native_until_after_target"}.isdisjoint(file_fields))

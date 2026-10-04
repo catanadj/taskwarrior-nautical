@@ -274,7 +274,7 @@ def fmt_monthly_atom(
                 return ordinal(value) if value > 0 else f"{ordinal(abs(value))} last day"
 
             return f"days {_dword(i_left)}–{_dword(i_right)} of each month"
-        except Exception:
+        except ValueError:
             pass
 
     try:
@@ -284,7 +284,7 @@ def fmt_monthly_atom(
         if nth < 0:
             return f"the {ordinal(abs(nth))} last day of each month"
         return f"the {ordinal(nth)} day of each month"
-    except Exception:
+    except ValueError:
         return f"[unknown monthly token '{spec}']"
 
 

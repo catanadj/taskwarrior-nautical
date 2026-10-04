@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+import re
 
 import nautical_core as core
 import nautical_core.natural_language as natural_language
@@ -60,6 +62,22 @@ class NaturalLanguageContractTests(unittest.TestCase):
                 self.assertEqual(direct, expected)
                 self.assertEqual(public, expected)
                 self.assertEqual(direct, public)
+
+    def test_monthly_integer_conversion_propagates_unexpected_failures(self) -> None:
+        with patch.object(
+            natural_language,
+            "int",
+            side_effect=RuntimeError("integer conversion defect"),
+            create=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "integer conversion defect"):
+                natural_language.fmt_monthly_atom(
+                    "1..2",
+                    monthly_alias={},
+                    safe_match=lambda *_args: None,
+                    nth_wd_re=re.compile(r"$^"),
+                    bd_re=re.compile(r"$^"),
+                )
 
     def test_mode_tails_are_bound_to_direct_dnf_formatter(self) -> None:
         expression = "w:mon"

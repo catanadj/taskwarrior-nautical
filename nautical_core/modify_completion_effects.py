@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from dataclasses import dataclass
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from functools import partial
-from typing import Any, Callable, Literal, Protocol, overload
+from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, overload
+from uuid import UUID
 
 from .chain_generation import ChainGenerationService
 from .task_models import NauticalTask, TaskDraft, TaskObservation, TaskPayload
@@ -57,6 +58,32 @@ from .modify_models import (
 )
 from .modify_ui_effects import UIEffectsPorts
 from .scheduler_models import OccurrenceSearchExhausted
+
+if TYPE_CHECKING:
+    from .modify_generation_effects import (
+        _ChainGenerationModule,
+        ChainGenerationServicePort,
+        GenerationHost,
+        GenerationPorts,
+        GenerationStatePort,
+    )
+    from .modify_spawn_effects import (
+        _LifecycleApplicationModule,
+        _LifecycleOutboxModule,
+        _ModifyTaskFields,
+        _SpawnModule,
+        _SpawnPreparationWithPayload,
+        SpawnChildPorts,
+    )
+    from .modify_command_effects import (
+        CommandHost,
+        CommandPorts,
+        DiagCounter,
+        RunTaskRecorder,
+    )
+    from .integration_context import IntegrationContext
+    from .task_datetime import TaskDatetimeParser
+    from .task_codec import TaskCodec
 
 
 class CompletionPreflightService(Protocol):
@@ -231,6 +258,106 @@ class CompletionSpawnService(Protocol):
     ) -> CompletionSpawnResult | None: ...
 
 
+class _CompletionGenerationEffects(Protocol):
+    def chain_generation_service(self, ports: GenerationPorts) -> ChainGenerationServicePort: ...
+
+    def generation_ports_for(self, host: GenerationHost) -> GenerationPorts: ...
+
+
+class _CompletionSpawnCore(Protocol):
+    coerce_int: CoerceIntCallback
+    fmt_isoz: Callable[[datetime], str]
+    now_utc: Callable[[], datetime]
+
+
+class _CompletionTaskCodecOwner(Protocol):
+    DEFAULT_TASK_CODEC: TaskCodec
+
+
+class _CompletionSpawnModelsOwner(Protocol):
+    CompletionSpawnServices: type[CompletionSpawnServices]
+
+
+class _CompletionSpawnEffectsOwner(Protocol):
+    def spawn_child_ports_for(self, host: CompletionSpawnHost) -> SpawnChildPorts: ...
+
+    def spawn_child_atomic(
+        self,
+        ports: SpawnChildPorts,
+        child_task: TaskDraft | dict[str, Any],
+        parent_task_with_nextlink: dict[str, Any],
+        *,
+        lifecycle_plan: LifecyclePlan | None = None,
+    ) -> tuple[str, set[str], bool, bool, str | None, str | None]: ...
+
+
+class _CompletionSpawnCommandOwner(Protocol):
+    def command_ports_for(self, host: CommandHost) -> CommandPorts: ...
+
+    def generate_child_uuid_candidate(
+        self, ports: CommandPorts, env: Mapping[str, str]
+    ) -> str: ...
+
+
+class CompletionSpawnHost(Protocol):
+    _INTEGRATION_CONTEXT: IntegrationContext | None
+    TW_DATA_DIR: str
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _STABLE_CHILD_UUID_NAMESPACE: UUID
+    _run_task_diag_bucket: Callable[[list[str]], str]
+    _diag_count: DiagCounter
+    _diag_record_run_task: RunTaskRecorder
+    _diag: Callable[[str], None]
+    _task_cmd_prefix: Callable[[], list[str]]
+    _RECURRENCE_UPDATE_UDAS: tuple[str, ...]
+    _DEBUG_WAIT_SCHED: bool
+    _LAST_WAIT_SCHED_DEBUG: MutableMapping[str, dict[str, Any]] | None
+
+    @property
+    def core(self) -> _CompletionSpawnCore: ...
+
+    def _modify_runtime_state(self) -> GenerationStatePort: ...
+
+    @overload
+    def _module(self, name: Literal["modify_completion_spawn"]) -> CompletionSpawnService: ...
+
+    @overload
+    def _module(self, name: Literal["modify_generation_effects"]) -> _CompletionGenerationEffects: ...
+
+    @overload
+    def _module(self, name: Literal["task_codec"]) -> _CompletionTaskCodecOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_models"]) -> _CompletionSpawnModelsOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_spawn_effects"]) -> _CompletionSpawnEffectsOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_ui_effects"]) -> _CompletionUIModule: ...
+
+    @overload
+    def _module(self, name: Literal["modify_spawn_prep"]) -> _SpawnPreparationWithPayload: ...
+
+    @overload
+    def _module(self, name: Literal["modify_command_effects"]) -> _CompletionSpawnCommandOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_task_fields"]) -> _ModifyTaskFields: ...
+
+    @overload
+    def _module(self, name: Literal["modify_spawn"]) -> _SpawnModule: ...
+
+    @overload
+    def _module(self, name: Literal["lifecycle_outbox"]) -> _LifecycleOutboxModule: ...
+
+    @overload
+    def _module(self, name: Literal["lifecycle_application"]) -> _LifecycleApplicationModule: ...
+
+    @overload
+    def _module(self, name: Literal["chain_generation"]) -> _ChainGenerationModule: ...
+
+
 class TaskRowDecoder(Protocol):
     def __call__(self, row: Mapping[str, Any], *, source_query: str) -> TaskObservation: ...
 
@@ -357,7 +484,7 @@ class CompletionSpawnPorts:
     spawn_child_atomic: SpawnChildCallback
     panel: PanelCallback
     print_task: PrintTaskCallback
-    diagnostic: DiagnosticCallback
+    diagnostic: Callable[[str], None]
 
 
 class _CompletionPreflightCore(Protocol):
@@ -848,7 +975,7 @@ def compute_next_and_limits(
     )
 
 
-def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
+def completion_spawn_ports_for(host: CompletionSpawnHost) -> CompletionSpawnPorts:
     spawn = host._module("modify_completion_spawn")
     generation_module = host._module("modify_generation_effects")
     generation = generation_module.chain_generation_service(generation_module.generation_ports_for(host))
@@ -857,7 +984,7 @@ def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
 
     def build_child_draft(
         task: TaskPayload,
-        child_due: datetime | None,
+        child_due: datetime,
         child_field: str,
         next_no: int,
         parent_short: str,
@@ -881,17 +1008,37 @@ def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
 
     spawn_effects = host._module("modify_spawn_effects")
     spawn_ports = spawn_effects.spawn_child_ports_for(host)
+    def spawn_child_atomic(
+        child: TaskDraft | TaskPayload,
+        parent: TaskPayload,
+        *,
+        lifecycle_plan: LifecyclePlan | None = None,
+    ) -> tuple[str, list[str], bool, bool, str | None, str | None]:
+        child_mapping = child.to_mapping() if isinstance(child, TaskDraft) else dict(child)
+        result = spawn_effects.spawn_child_atomic(
+            spawn_ports,
+            child_mapping,
+            dict(parent),
+            lifecycle_plan=lifecycle_plan,
+        )
+        return _normalize_completion_spawn_result(result)
+
     return CompletionSpawnPorts(
         spawn=spawn,
         services_type=models.CompletionSpawnServices,
         build_child_draft=build_child_draft,
-        spawn_child_atomic=lambda child, parent, *, lifecycle_plan=None: spawn_effects.spawn_child_atomic(
-            spawn_ports, child, parent, lifecycle_plan=lifecycle_plan
-        ),
+        spawn_child_atomic=spawn_child_atomic,
         panel=_panel_port_for(host),
         print_task=_print_task_port_for(host),
         diagnostic=host._diag,
     )
+
+
+def _normalize_completion_spawn_result(
+    result: tuple[str, set[str], bool, bool, str | None, str | None],
+) -> tuple[str, list[str], bool, bool, str | None, str | None]:
+    child_short, stripped_attrs, verified, deferred, reason, intent_id = result
+    return child_short, sorted(stripped_attrs), verified, deferred, reason, intent_id
 
 
 def build_and_spawn_child(

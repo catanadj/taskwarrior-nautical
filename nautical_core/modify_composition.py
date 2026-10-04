@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from .modify_completion_effects import (
         CompletionComputePorts,
         CompletionPreflightContextPorts,
+        CompletionSpawnHost,
         CompletionSpawnPorts,
     )
     from .modify_models import (
@@ -286,7 +287,7 @@ class _ModifyCompletionEffects(Protocol):
 
     def completion_compute_ports_for(self, host: Any) -> CompletionComputePorts: ...
 
-    def completion_spawn_ports_for(self, host: Any) -> CompletionSpawnPorts: ...
+    def completion_spawn_ports_for(self, host: CompletionSpawnHost) -> CompletionSpawnPorts: ...
 
     def preflight_context(
         self,

@@ -358,7 +358,6 @@ class ModifyIsolationTests(unittest.TestCase):
         from nautical_core.modify_models import (
             BuildChildDraftCallback,
             CompletionSpawnServices,
-            DiagnosticCallback,
             PanelCallback,
             PrintTaskCallback,
             SpawnChildCallback,
@@ -371,7 +370,7 @@ class ModifyIsolationTests(unittest.TestCase):
             "spawn_child_atomic": SpawnChildCallback,
             "panel": PanelCallback,
             "print_task": PrintTaskCallback,
-            "diagnostic": DiagnosticCallback,
+            "diagnostic": Callable[[str], None],
         }
         for name, contract in expected.items():
             with self.subTest(field=name):
@@ -1265,6 +1264,7 @@ class ModifyIsolationTests(unittest.TestCase):
         from nautical_core.modify_completion_effects import (
             CompletionComputePorts,
             CompletionPreflightContextPorts,
+            CompletionSpawnHost,
             CompletionSpawnPorts,
         )
         from nautical_core.modify_composition import _ModifyCompletionEffects
@@ -1280,6 +1280,7 @@ class ModifyIsolationTests(unittest.TestCase):
             "LifecyclePlan": LifecyclePlan,
             "CompletionComputePorts": CompletionComputePorts,
             "CompletionPreflightContextPorts": CompletionPreflightContextPorts,
+            "CompletionSpawnHost": CompletionSpawnHost,
             "CompletionSpawnPorts": CompletionSpawnPorts,
             "CompletionComputeResult": CompletionComputeResult,
             "CompletionLifecycleResult": CompletionLifecycleResult,

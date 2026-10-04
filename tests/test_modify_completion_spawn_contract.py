@@ -95,7 +95,7 @@ class ModifyCompletionSpawnContractTests(unittest.TestCase):
 
         result = completion_build_and_spawn_child(
             parent,
-            child_due=None,
+            child_due=datetime(2026, 1, 2, 9, tzinfo=timezone.utc),
             next_no=2,
             parent_short="parent01",
             kind="anchor",
@@ -110,6 +110,45 @@ class ModifyCompletionSpawnContractTests(unittest.TestCase):
         self.assertEqual(diagnostics, ["build child failed: invalid recurrence draft"])
         self.assertEqual(spawn_calls, [])
         self.assertNotIn("nextLink", parent)
+
+    def test_missing_due_is_rejected_before_child_builder_runs(self) -> None:
+        builder_calls: list[bool] = []
+        spawn_calls: list[bool] = []
+
+        def build_child_draft(*_args: object) -> TaskDraft:
+            builder_calls.append(True)
+            return _child_draft()
+
+        def spawn_child_atomic(*_args: object, **_kwargs: object) -> tuple[str, list[str], bool, bool, None, str]:
+            spawn_calls.append(True)
+            return "child123", [], True, False, None, "intent-1"
+
+        services = CompletionSpawnServices(
+            build_child_draft=build_child_draft,
+            spawn_child_atomic=spawn_child_atomic,
+            panel=lambda *_args, **_kwargs: None,
+            print_task=lambda _task: None,
+            diag=lambda _message: None,
+        )
+        result = completion_build_and_spawn_child(
+            {"status": "completed"},
+            child_due=None,
+            next_no=2,
+            parent_short="parent01",
+            kind="anchor",
+            cpmax=0,
+            until_dt=None,
+            services=services,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.outcome_state, "retryable")
+        self.assertEqual(
+            result.reason,
+            "completion child due is required before building a child draft",
+        )
+        self.assertEqual(builder_calls, [])
+        self.assertEqual(spawn_calls, [])
 
     def test_spawn_failure_becomes_retryable_result_without_parent_link(self) -> None:
         diagnostics: list[str] = []
@@ -134,7 +173,7 @@ class ModifyCompletionSpawnContractTests(unittest.TestCase):
 
         result = completion_build_and_spawn_child(
             parent,
-            child_due=None,
+            child_due=datetime(2026, 1, 2, 9, tzinfo=timezone.utc),
             next_no=2,
             parent_short="parent01",
             kind="anchor",

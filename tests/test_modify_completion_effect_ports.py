@@ -56,6 +56,28 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             get_type_hints(completion_preflight_context_ports_for)["host"], Any
         )
 
+    def test_completion_spawn_factory_has_typed_host_contract(self) -> None:
+        from nautical_core.modify_completion_effects import completion_spawn_ports_for
+
+        self.assertIsNot(get_type_hints(completion_spawn_ports_for)["host"], Any)
+
+    def test_generation_service_contract_includes_completion_draft_builder(self) -> None:
+        from nautical_core.modify_generation_effects import ChainGenerationServicePort
+
+        self.assertTrue(hasattr(ChainGenerationServicePort, "build_child_draft"))
+
+    def test_completion_spawn_adapter_orders_set_valued_stripped_fields(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            _normalize_completion_spawn_result,
+        )
+
+        self.assertEqual(
+            _normalize_completion_spawn_result(
+                ("child123", {"zeta", "alpha"}, True, False, None, "intent-1")
+            ),
+            ("child123", ["alpha", "zeta"], True, False, None, "intent-1"),
+        )
+
     def test_completion_adapter_helpers_have_concrete_callback_returns(self) -> None:
         from nautical_core.modify_completion_effects import (
             _end_summary_port_for,

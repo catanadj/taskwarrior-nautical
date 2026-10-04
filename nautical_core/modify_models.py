@@ -487,7 +487,7 @@ CompletionCapGuardCallback: TypeAlias = Callable[
     [TaskRow, int, int | None, datetime], bool
 ]
 BuildChildDraftCallback: TypeAlias = Callable[
-    [TaskRow, datetime | None, str, int, str, str, int, datetime | None], TaskDraft
+    [TaskRow, datetime, str, int, str, str, int, datetime | None], TaskDraft
 ]
 class SpawnChildCallback(Protocol):
     def __call__(
@@ -796,7 +796,7 @@ class CompletionSpawnServices:
     spawn_child_atomic: SpawnChildCallback
     panel: PanelCallback
     print_task: PrintTaskCallback
-    diag: DiagnosticCallback
+    diag: Callable[[str], None]
 
 
 @dataclass(slots=True)

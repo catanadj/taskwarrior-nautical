@@ -34,6 +34,10 @@ def completion_build_and_spawn_child(
             if child_draft is None:
                 raise ValueError("completion lifecycle plan has no child draft")
         else:
+            if child_due is None:
+                raise ValueError(
+                    "completion child due is required before building a child draft"
+                )
             child_draft = build_child_draft(
                 task_row, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
             )

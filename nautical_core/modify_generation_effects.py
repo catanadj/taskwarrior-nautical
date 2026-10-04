@@ -7,7 +7,7 @@ from collections.abc import MutableMapping
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
-from .task_models import NauticalTask, TaskPayload
+from .task_models import NauticalTask, TaskDraft, TaskPayload
 
 
 class NativeUntilGenerationService(Protocol):
@@ -29,6 +29,17 @@ class ChainGenerationServicePort(NativeUntilGenerationService, Protocol):
 
     core: object
     recurrence_update_udas: tuple[str, ...]
+    def build_child_draft(
+        self,
+        parent: NauticalTask,
+        child_due_utc: datetime,
+        child_field: str,
+        next_link_no: int,
+        parent_short: str,
+        kind: str,
+        cpmax: int,
+        until_dt: datetime | None,
+    ) -> TaskDraft: ...
 
 
 class GenerationStatePort(Protocol):
@@ -76,10 +87,12 @@ class _ChainGenerationModule(Protocol):
 
 
 class GenerationHost(Protocol):
-    core: object
     _RECURRENCE_UPDATE_UDAS: tuple[str, ...]
     _DEBUG_WAIT_SCHED: bool
     _LAST_WAIT_SCHED_DEBUG: MutableMapping[str, dict[str, Any]] | None
+
+    @property
+    def core(self) -> object: ...
 
     def _modify_runtime_state(self) -> GenerationStatePort: ...
 

@@ -1127,7 +1127,7 @@ def main() -> None:
         )
     try:
         calendar_context = core.use_task_business_calendar(task)
-    except Exception as exc:
+    except core.BusinessCalendarConfigError as exc:
         _error_and_exit([("Invalid business calendar", str(exc))])
         return
     displacement_context = (

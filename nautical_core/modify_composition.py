@@ -1053,7 +1053,7 @@ def run_on_modify(host: Any) -> None:
     )
     try:
         calendar_context = host.core.use_task_business_calendar(new)
-    except Exception as exc:
+    except host.core.BusinessCalendarConfigError as exc:
         host._fail_and_exit("Invalid business calendar", str(exc))
         return
     request_t0 = host._ptime.perf_counter()

@@ -12,6 +12,7 @@ from nautical_core.modify_models import (
     ComputeCpChildDueCallback,
     CompletionComputeResult,
     CompletionFinals,
+    AnchorDNF,
     CompletionLifecycleDiagnostic,
     CompletionLifecycleResult,
     CompletionComputeServices,
@@ -73,7 +74,7 @@ def completion_compute_child_due(
     print_task: PrintTaskCallback,
     diag: DiagnosticCallback | None = None,
     on_terminal: Any | None = None,
-) -> tuple[datetime | None, dict[str, Any] | None, Any] | None:
+) -> tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None:
     task_row = dict(new)
     try:
         if kind in {"anchor", "anchor_file"}:
@@ -203,7 +204,7 @@ def completion_caps(
     kind: str,
     new: dict[str, Any],
     child_due: Any,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     *,
     coerce_int: CoerceIntCallback,
     dtparse: DatetimeParserCallback,
@@ -288,7 +289,7 @@ def cap_from_until_cp(
 def cap_from_until_anchor(
     task: dict[str, Any],
     next_due_utc: Any,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     *,
     parse_datetime: Any,
     coerce_int: Any,
@@ -421,7 +422,7 @@ def estimate_cp_final_by_max(
 def estimate_anchor_final_by_max(
     task: dict[str, Any],
     next_due_utc: Any,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     *,
     coerce_int: Any,
     recurrence_seed_base: Any,

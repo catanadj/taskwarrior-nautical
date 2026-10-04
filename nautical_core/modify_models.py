@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol, TypeAlias, M
 from types import MappingProxyType
 
 from .integration_models import TaskRead
+from .parsing.parser_models import AnchorDNF
 from .task_models import (
     ChainIdentity,
     ChainID,
@@ -181,7 +182,7 @@ class TimelineLinesCallback(Protocol):
         task: TaskRow,
         child_due: Any,
         child_short: str,
-        dnf: Any,
+        dnf: AnchorDNF | None,
         *,
         next_count: int = 3,
         cap_no: int | None = None,
@@ -304,7 +305,10 @@ class HumanDeltaCallback(Protocol):
 
 
 class ComputeAnchorChildDueCallback(Protocol):
-    def __call__(self, task: TaskRow) -> tuple[datetime | None, dict[str, Any] | None, Any]:
+    def __call__(
+        self,
+        task: TaskRow,
+    ) -> tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None]:
         ...
 
 
@@ -344,7 +348,7 @@ class EstimateCpFinalCallback(Protocol):
 
 
 class EstimateAnchorFinalCallback(Protocol):
-    def __call__(self, task: TaskRow, child_due: Any, dnf: Any) -> Any:
+    def __call__(self, task: TaskRow, child_due: datetime | None, dnf: AnchorDNF | None) -> datetime | None:
         ...
 
 
@@ -354,7 +358,12 @@ class CapFromUntilCpCallback(Protocol):
 
 
 class CapFromUntilAnchorCallback(Protocol):
-    def __call__(self, task: TaskRow, child_due: Any, dnf: Any) -> tuple[int | None, Any]:
+    def __call__(
+        self,
+        task: TaskRow,
+        child_due: datetime | None,
+        dnf: AnchorDNF | None,
+    ) -> tuple[int | None, datetime | None]:
         ...
 
 
@@ -395,7 +404,7 @@ CompletionExistingNextCallback: TypeAlias = Callable[
     [TaskRow, int, "CompletionChainSnapshot | None"], bool
 ]
 CompletionChildDueCallback: TypeAlias = Callable[
-    [TaskRow, str], tuple[datetime | None, dict[str, Any] | None, Any] | None
+    [TaskRow, str], tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None
 ]
 CompletionUntilCallback: TypeAlias = Callable[
     [TaskRow, datetime], datetime | None | Literal[False]
@@ -404,7 +413,7 @@ CompletionUntilGuardCallback: TypeAlias = Callable[[TaskRow, datetime | None, da
 CompletionChildRequiredCallback: TypeAlias = Callable[[TaskRow, datetime | None], bool]
 CompletionDurationWarningCallback: TypeAlias = Callable[[TaskRow, datetime | None, datetime | None, datetime], None]
 CompletionCapsCallback: TypeAlias = Callable[
-    [str, TaskRow, datetime | None, Any], tuple[int, datetime | None, int | None, CompletionFinals, int | None]
+    [str, TaskRow, datetime | None, AnchorDNF | None], tuple[int, datetime | None, int | None, CompletionFinals, int | None]
 ]
 CompletionCapGuardCallback: TypeAlias = Callable[
     [TaskRow, int, int | None, datetime], bool
@@ -539,7 +548,7 @@ class CompletionPreflightContext:
 class CompletionComputeResult:
     child_due: datetime | None
     meta: Any
-    dnf: Any
+    dnf: AnchorDNF | None
     until_dt: datetime | None
     cpmax: int
     cap_no: int | None
@@ -607,7 +616,7 @@ class AnchorCompletionFeedbackModel:
     now_utc: datetime
     until_dt: datetime | None
     until_cap_no: int | None
-    dnf: Any
+    dnf: AnchorDNF | None
     meta: dict[str, Any]
     stripped_attrs: list[str]
     deferred_spawn: bool

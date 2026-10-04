@@ -13,12 +13,14 @@ import nautical_core.modify_runtime as modify_runtime
 from nautical_core.modify_models import (
     AnchorFeedbackServices,
     AnchorCompletionFeedbackModel,
+    CompletionComputeResult,
     CpFeedbackServices,
     CpCompletionFeedbackModel,
     CompletionFinals,
     CompletionLifecycleResult,
     WaitScheduleDebug,
 )
+from nautical_core.parsing.parser_models import AnchorDNF
 from nautical_core.task_models import TaskPayload
 from nautical_core.parsing.parser_models import ParseError
 
@@ -143,6 +145,7 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             get_type_hints(CpCompletionFeedbackModel)["finals"],
             CompletionFinals,
         )
+        self.assertEqual(get_type_hints(CompletionComputeResult)["dnf"], AnchorDNF | None)
         self.assertIs(
             get_type_hints(
                 modify_feedback.orchestrate_anchor_completion_feedback,

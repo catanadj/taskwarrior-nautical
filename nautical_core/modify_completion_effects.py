@@ -26,6 +26,7 @@ from .modify_models import (
     CompletionComputeServices,
     CompletionComputeResult,
     CompletionFinals,
+    AnchorDNF,
     CompletionDurationWarningCallback,
     CompletionChainSnapshot,
     CompletionPreflightServices,
@@ -117,7 +118,7 @@ class CompletionComputeService(Protocol):
         print_task: PrintTaskCallback,
         diag: DiagnosticCallback | None = None,
         on_terminal: Callable[[OccurrenceSearchExhausted], bool] | None = None,
-    ) -> tuple[datetime | None, dict[str, Any] | None, Any] | None: ...
+    ) -> tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None: ...
     def completion_until_or_fail(
         self,
         task: TaskPayload,
@@ -161,7 +162,7 @@ class CompletionComputeService(Protocol):
         kind: str,
         task: TaskPayload,
         child_due: datetime | None,
-        dnf: Any,
+        dnf: AnchorDNF | None,
         *,
         coerce_int: CoerceIntCallback,
         dtparse: DatetimeParserCallback,
@@ -577,7 +578,13 @@ def warn_unreasonable_duration(
     )
 
 
-def caps(ports: CompletionCapsPorts, kind: str, new: TaskPayload, child_due: Any, dnf: Any) -> Any:
+def caps(
+    ports: CompletionCapsPorts,
+    kind: str,
+    new: TaskPayload,
+    child_due: Any,
+    dnf: AnchorDNF | None,
+) -> tuple[int, datetime | None, int | None, CompletionFinals, int | None]:
     return ports.compute.completion_caps(
         kind, new, child_due, dnf,
         coerce_int=ports.coerce_int, dtparse=ports.parse_datetime,

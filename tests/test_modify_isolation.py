@@ -469,6 +469,7 @@ class ModifyIsolationTests(unittest.TestCase):
         )
         from nautical_core.task_models import TaskPayload
         from nautical_core.scheduler_models import OccurrenceSearchExhausted
+        from nautical_core.parsing.parser_models import AnchorDNF
 
         contracts = {
             "completion_compute_child_due": {
@@ -480,7 +481,7 @@ class ModifyIsolationTests(unittest.TestCase):
                 "print_task": PrintTaskCallback,
                 "diag": DiagnosticCallback | None,
                 "on_terminal": Callable[[OccurrenceSearchExhausted], bool] | None,
-                "return": tuple[datetime | None, dict[str, Any] | None, Any] | None,
+                "return": tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None,
             },
             "completion_until_or_fail": {
                 "task": TaskPayload,
@@ -520,7 +521,7 @@ class ModifyIsolationTests(unittest.TestCase):
                 "kind": str,
                 "task": TaskPayload,
                 "child_due": datetime | None,
-                "dnf": Any,
+                "dnf": AnchorDNF | None,
                 "coerce_int": CoerceIntCallback,
                 "dtparse": DatetimeParserCallback,
                 "estimate_cp_final_by_max": EstimateCpFinalCallback,

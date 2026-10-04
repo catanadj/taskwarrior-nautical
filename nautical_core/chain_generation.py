@@ -21,6 +21,7 @@ from .task_codec import TaskCodec
 from .task_models import TaskDraft, NauticalTask
 from .task_datetime import TaskDatetimeParser, parser_for_core
 from . import timezone_facade
+from .parsing.parser_models import AnchorDNF
 
 
 _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
@@ -80,7 +81,7 @@ _UDA_CARRY_SKIP_LOWER = frozenset(
 
 ChildMetadata = dict[str, Any]
 CpChildDueResult = tuple[datetime | None, ChildMetadata | None]
-AnchorChildDueResult = tuple[datetime | None, ChildMetadata | None, Any]
+AnchorChildDueResult = tuple[datetime | None, ChildMetadata | None, AnchorDNF | None]
 
 
 class CarryFieldError(RuntimeError):

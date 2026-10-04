@@ -19,6 +19,7 @@ from .modify_models import (
     PanelCallback,
     WaitScheduleDebug,
     CompletionFinals,
+    AnchorDNF,
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
@@ -677,7 +678,7 @@ def _anchor_mode_tag(new: TaskPayload) -> str:
     }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
 
 
-def _anchor_feedback_natural(core: Any, task: TaskPayload, dnf: Any) -> str:
+def _anchor_feedback_natural(core: Any, task: TaskPayload, dnf: AnchorDNF | None) -> str:
     natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
     omit_raw, omit_natural, _omit_warns, omit_file = _anchor_omit_summary(core, task)
     omit_parts = []

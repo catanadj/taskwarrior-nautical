@@ -385,9 +385,11 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         from nautical_core.modify_validation_effects import (
             AnchorValidationHost,
             ChainLimitHost,
+            NativeUntilHost,
             OmitValidationHost,
             anchor_validation_ports_for,
             chain_limit_ports_for,
+            native_until_ports_for,
             omit_validation_ports_for,
         )
 
@@ -399,6 +401,9 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
         self.assertIs(
             get_type_hints(chain_limit_ports_for)["host"], ChainLimitHost
+        )
+        self.assertIs(
+            get_type_hints(native_until_ports_for)["host"], NativeUntilHost
         )
 
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:

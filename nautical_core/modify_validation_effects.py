@@ -188,6 +188,56 @@ class ChainLimitHost(Protocol):
     ) -> _ModifyChainValidationAPI: ...
 
 
+class _AddValidationNativeUntilAPI(Protocol):
+    def validate_native_until_anchor_mode(
+        self,
+        until_value: object,
+        anchor_value: object,
+        anchor_file_value: object,
+        anchor_mode_value: object,
+    ) -> tuple[bool, str | None]: ...
+
+    def validate_native_until_after_target(
+        self,
+        until_dt: datetime | None,
+        target_dt: datetime | None,
+        target_field: str,
+    ) -> tuple[bool, str | None]: ...
+
+
+class _ModifyNativeUntilValidationAPI(Protocol):
+    validate_native_until_after_target_or_fail: NativeUntilValidationOperation
+
+
+class _NativeUntilCore(Protocol):
+    fmt_dt_local: Callable[[datetime], str]
+
+    def _import_sibling(
+        self,
+        name: Literal["add_validation"],
+    ) -> _AddValidationNativeUntilAPI: ...
+
+
+class _SystemExit(Protocol):
+    def exit(self, code: int) -> NoReturn: ...
+
+
+class NativeUntilHost(Protocol):
+    core: _NativeUntilCore
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _fail_and_exit: Callable[[str, str], NoReturn]
+    sys: _SystemExit
+
+    @overload
+    def _module(self, name: Literal["modify_ui_effects"]) -> _ValidationUI: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_validation"],
+    ) -> _ModifyNativeUntilValidationAPI: ...
+
+
 class ValidateRecurrenceFiles(Protocol):
     def __call__(
         self,
@@ -510,7 +560,7 @@ def validate_native_until(ports: NativeUntilPorts, task: TaskPayload) -> None:
     )
 
 
-def native_until_ports_for(host: Any) -> NativeUntilPorts:
+def native_until_ports_for(host: NativeUntilHost) -> NativeUntilPorts:
     add_validation = host.core._import_sibling("add_validation")
     ui = host._module("modify_ui_effects")
     ui_ports = ui.ui_ports_for(host)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import sys
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from .task_models import TaskPayload
 
@@ -39,7 +39,7 @@ class UIEffectsHost(Protocol):
 
     def _load_core(self) -> None: ...
 
-    def _module(self, name: str) -> _HookResults: ...
+    def _module(self, name: Literal["hook_results"]) -> _HookResults: ...
 
 
 @dataclass(frozen=True)

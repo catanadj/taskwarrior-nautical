@@ -55,7 +55,7 @@ from .modify_models import (
     ValidateChainDurationCallback,
     ValidateUntilCallback,
 )
-from .modify_ui_effects import UIEffectsPorts
+from .modify_ui_effects import UIEffectsHost, UIEffectsPorts
 from .scheduler_models import OccurrenceSearchExhausted
 from .modify_generation_effects import ChainGenerationServicePort
 
@@ -285,6 +285,19 @@ class _CompletionTaskCodecOwner(Protocol):
     DEFAULT_TASK_CODEC: TaskCodec
 
 
+class _CompletionHookResultsOwner(Protocol):
+    def emit_passthrough_json(self, task: TaskPayload) -> None: ...
+
+    def emit_task_json(
+        self,
+        task: TaskPayload,
+        *,
+        sanitize: bool = False,
+        core: Any = None,
+        prof: Any = None,
+    ) -> None: ...
+
+
 class _CompletionSpawnModelsOwner(Protocol):
     CompletionSpawnServices: type[CompletionSpawnServices]
 
@@ -323,6 +336,8 @@ class CompletionSpawnHost(Protocol):
     _RECURRENCE_UPDATE_UDAS: tuple[str, ...]
     _DEBUG_WAIT_SCHED: bool
     _LAST_WAIT_SCHED_DEBUG: MutableMapping[str, dict[str, Any]] | None
+
+    def _load_core(self) -> None: ...
 
     @property
     def core(self) -> _CompletionSpawnCore: ...
@@ -367,6 +382,9 @@ class CompletionSpawnHost(Protocol):
 
     @overload
     def _module(self, name: Literal["chain_generation"]) -> _ChainGenerationModule: ...
+
+    @overload
+    def _module(self, name: Literal["hook_results"]) -> _CompletionHookResultsOwner: ...
 
 
 class TaskRowDecoder(Protocol):
@@ -599,7 +617,9 @@ class _CompletionCompositionAdaptersOwner(Protocol):
 
 
 class _CompletionDiagnosticsEffectsOwner(Protocol):
-    def end_chain_summary_ports_for(self, host: CompletionComputeHost) -> EndChainSummaryPorts: ...
+    def end_chain_summary_ports_for(
+        self, host: CompletionComputeHost | CompletionPreflightHost
+    ) -> EndChainSummaryPorts: ...
 
     def end_chain_summary(
         self,
@@ -638,6 +658,8 @@ class CompletionComputeHost(Protocol):
     _MIN_FUTURE_WARN: int
     timedelta: type[Timedelta]
     _diag: DiagnosticCallback
+
+    def _load_core(self) -> None: ...
 
     def _modify_runtime_state(self) -> _CompletionComputeRuntimeState: ...
 
@@ -686,10 +708,15 @@ class CompletionComputeHost(Protocol):
     @overload
     def _module(self, name: Literal["chain_generation"]) -> _ChainGenerationModule: ...
 
+    @overload
+    def _module(self, name: Literal["hook_results"]) -> _CompletionHookResultsOwner: ...
+
 
 class CompletionPreflightHost(Protocol):
     _SHOW_ANALYTICS: bool
     _CHECK_CHAIN_INTEGRITY: bool
+
+    def _load_core(self) -> None: ...
 
     @property
     def core(self) -> _CompletionPreflightCore: ...
@@ -702,9 +729,20 @@ class CompletionPreflightHost(Protocol):
     @overload
     def _module(self, name: Literal["modify_models"]) -> _CompletionModelsOwner: ...
 
+    @overload
+    def _module(self, name: Literal["modify_ui_effects"]) -> _CompletionUIModule: ...
+
+    @overload
+    def _module(self, name: Literal["hook_results"]) -> _CompletionHookResultsOwner: ...
+
+    @overload
+    def _module(
+        self, name: Literal["modify_diagnostics_effects"]
+    ) -> _CompletionDiagnosticsEffectsOwner: ...
+
 
 class _CompletionUIModule(Protocol):
-    def ui_ports_for(self, host: Any) -> UIEffectsPorts: ...
+    def ui_ports_for(self, host: UIEffectsHost) -> UIEffectsPorts: ...
 
     def print_task(self, ports: UIEffectsPorts, task: TaskPayload) -> None: ...
 
@@ -720,17 +758,23 @@ class _CompletionUIModule(Protocol):
     ) -> Any: ...
 
 
-def _ui_ports_for(host: Any) -> tuple[_CompletionUIModule, UIEffectsPorts]:
+def _ui_ports_for(
+    host: CompletionComputeHost | CompletionSpawnHost | CompletionPreflightHost,
+) -> tuple[_CompletionUIModule, UIEffectsPorts]:
     ui = host._module("modify_ui_effects")
     return ui, ui.ui_ports_for(host)
 
 
-def _print_task_port_for(host: Any) -> PrintTaskCallback:
+def _print_task_port_for(
+    host: CompletionComputeHost | CompletionSpawnHost | CompletionPreflightHost,
+) -> PrintTaskCallback:
     ui, ports = _ui_ports_for(host)
     return lambda task: ui.print_task(ports, task)
 
 
-def _end_summary_port_for(host: Any) -> EndChainSummaryCallback:
+def _end_summary_port_for(
+    host: CompletionComputeHost | CompletionPreflightHost,
+) -> EndChainSummaryCallback:
     diagnostics = host._module("modify_diagnostics_effects")
     ports = diagnostics.end_chain_summary_ports_for(host)
     return lambda task, reason, now, current_task=None: diagnostics.end_chain_summary(
@@ -739,7 +783,10 @@ def _end_summary_port_for(host: Any) -> EndChainSummaryCallback:
 
 
 def _feedback_ports_for(
-    host: Any, compute: CompletionComputeService, *, summarize: bool = True
+    host: CompletionComputeHost | CompletionPreflightHost,
+    compute: CompletionComputeService,
+    *,
+    summarize: bool = True,
 ) -> CompletionFeedbackPorts:
     return CompletionFeedbackPorts(
         compute=compute,
@@ -749,7 +796,9 @@ def _feedback_ports_for(
     )
 
 
-def _panel_port_for(host: Any) -> PanelCallback:
+def _panel_port_for(
+    host: CompletionComputeHost | CompletionSpawnHost | CompletionPreflightHost,
+) -> PanelCallback:
     ui, ports = _ui_ports_for(host)
     return lambda title, rows, **kwargs: ui.panel(ports, title, rows, **kwargs)
 

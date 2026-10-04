@@ -100,6 +100,27 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             _ui_ports_for,
         ):
             self.assertIsNot(get_type_hints(adapter)["return"], Any, adapter.__name__)
+        for adapter in (
+            _ui_ports_for,
+            _print_task_port_for,
+            _panel_port_for,
+            _end_summary_port_for,
+            _feedback_ports_for,
+        ):
+            self.assertIsNot(get_type_hints(adapter)["host"], Any, adapter.__name__)
+
+    def test_ui_adapter_accepts_only_completion_host_contracts(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            CompletionComputeHost,
+            CompletionPreflightHost,
+            CompletionSpawnHost,
+            _ui_ports_for,
+        )
+
+        self.assertEqual(
+            get_type_hints(_ui_ports_for)["host"],
+            CompletionComputeHost | CompletionSpawnHost | CompletionPreflightHost,
+        )
 
     def test_completion_compute_adapters_match_service_contracts(self) -> None:
         from datetime import datetime

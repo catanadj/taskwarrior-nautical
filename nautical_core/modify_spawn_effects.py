@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
+from .modify_models import DatetimeParserCallback
+from .task_models import TaskPayload
 
 if TYPE_CHECKING:
     from .integration_context import IntegrationContext
     from .lifecycle.application import LifecycleApplicationService
-    from .lifecycle.models import LifecycleIdentity
+    from .lifecycle.models import LifecycleIdentity, LifecyclePlan
     from .lifecycle.outbox import LifecycleOutboxRepository
 
 
@@ -37,12 +40,12 @@ class SpawnChildPorts:
     spawn: Any
     prepare_payload: Any
     child_uuid: Any
-    format_datetime: Any
-    now_utc: Any
-    spawn_identity: Any
-    enqueue_intent: Any
-    parse_datetime: Any
-    diag_count: Any
+    format_datetime: Callable[[datetime], str]
+    now_utc: Callable[[], datetime]
+    spawn_identity: Callable[[TaskPayload, TaskPayload], LifecycleIdentity]
+    enqueue_intent: Callable[[LifecyclePlan], tuple[bool, str]]
+    parse_datetime: DatetimeParserCallback
+    diag_count: Callable[[str], None]
 
 
 def spawn_intent_ports_for(host: Any) -> SpawnIntentPorts:
@@ -111,7 +114,7 @@ def enqueue_spawn_intent(ports: SpawnIntentPorts, plan: object) -> tuple[bool, s
 
 
 def lifecycle_spawn_identity(
-    parent: dict[str, Any], child: dict[str, Any]
+    parent: Mapping[str, Any], child: Mapping[str, Any]
 ) -> LifecycleIdentity:
     from .lifecycle.models import LifecycleEvent, LifecycleIdentity
 

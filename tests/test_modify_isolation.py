@@ -1543,10 +1543,47 @@ class ModifyIsolationTests(unittest.TestCase):
 
         from nautical_core.integration_context import IntegrationContext
         from nautical_core.lifecycle.application import LifecycleApplicationService
+        from nautical_core.lifecycle.models import LifecycleIdentity, LifecyclePlan
         from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
+        from nautical_core.modify_models import DatetimeParserCallback
+        import nautical_core.modify_spawn_effects as spawn_effects
         from nautical_core.modify_spawn_effects import SpawnChildPorts, SpawnIntentPorts
+        from collections.abc import Callable as AbcCallable
 
-        self.assertNotIn("lifecycle_models", get_type_hints(SpawnChildPorts))
+        self.assertNotIn("LifecycleIdentity", vars(spawn_effects))
+        self.assertNotIn("LifecyclePlan", vars(spawn_effects))
+        from nautical_core.task_models import TaskPayload
+
+        spawn_annotations = get_type_hints(
+            SpawnChildPorts,
+            localns={
+                "datetime": datetime,
+                "LifecycleIdentity": LifecycleIdentity,
+                "LifecyclePlan": LifecyclePlan,
+                "TaskPayload": TaskPayload,
+            },
+        )
+        self.assertEqual(
+            {
+                name: spawn_annotations[name]
+                for name in (
+                    "format_datetime",
+                    "now_utc",
+                    "spawn_identity",
+                    "enqueue_intent",
+                    "parse_datetime",
+                    "diag_count",
+                )
+            },
+            {
+                "format_datetime": AbcCallable[[datetime], str],
+                "now_utc": AbcCallable[[], datetime],
+                "spawn_identity": AbcCallable[[TaskPayload, TaskPayload], LifecycleIdentity],
+                "enqueue_intent": AbcCallable[[LifecyclePlan], tuple[bool, str]],
+                "parse_datetime": DatetimeParserCallback,
+                "diag_count": AbcCallable[[str], None],
+            },
+        )
         intent_annotations = get_type_hints(
             SpawnIntentPorts,
             localns={

@@ -55,6 +55,13 @@ class CacheApiContractTests(unittest.TestCase):
                 hints = get_type_hints(owner)
                 self.assertIs(hints["validated_user_dir"], cache_support.ValidatedUserDir)
 
+    def test_cache_directory_binding_uses_a_typed_selector_contract(self) -> None:
+        hints = get_type_hints(cache_locking.cache_dir)
+        self.assertEqual(hints["current_cache_dir"], str | None)
+        self.assertIs(hints["validated_user_dir"], cache_support.ValidatedUserDir)
+        self.assertIs(hints["select_cache_dir"], cache_locking.CacheDirectorySelector)
+        self.assertEqual(hints["return"], str)
+
     def test_payload_load_and_save_share_the_cache_state_model(self) -> None:
         load_signature = get_type_hints(cache_payload.cache_load)
         save_signature = get_type_hints(cache_payload.cache_save)

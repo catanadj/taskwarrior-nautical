@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, ContextManager, Protocol
 
+from nautical_core.cache_support import ValidatedUserDir
+
 
 class TimePort(Protocol):
     def time(self) -> float: ...
@@ -40,6 +42,16 @@ class BoundCacheLock(Protocol):
     def __call__(self, key: str) -> ContextManager[bool]: ...
 
 
+class CacheDirectorySelector(Protocol):
+    def __call__(
+        self,
+        *,
+        anchor_cache_dir_override: str,
+        nautical_cache_dir_path: str,
+        validated_user_dir: ValidatedUserDir,
+    ) -> str: ...
+
+
 @dataclass(frozen=True, slots=True)
 class BoundLocking:
     """One cache facade's already-bound lock operations."""
@@ -49,13 +61,13 @@ class BoundLocking:
 
 
 def cache_dir(
-    current_cache_dir: Any,
+    current_cache_dir: str | None,
     *,
-    anchor_cache_dir_override: Any,
-    nautical_cache_dir_path: Any,
-    validated_user_dir: Any,
-    select_cache_dir: Any,
-) -> Any:
+    anchor_cache_dir_override: str,
+    nautical_cache_dir_path: str,
+    validated_user_dir: ValidatedUserDir,
+    select_cache_dir: CacheDirectorySelector,
+) -> str:
     if current_cache_dir is not None:
         return current_cache_dir
     return select_cache_dir(

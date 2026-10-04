@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import Any, Callable, Protocol, Sequence
 from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from dataclasses import dataclass
-from .modify_chain_summary import ChainSummaryRenderServices
+from .modify_chain_summary import ChainSummaryRenderServices, SpanHumanDelta
 from .modify_read_effects import ChainExportReader
 from .task_models import TaskObservation, TaskPayload
 
@@ -97,7 +98,7 @@ class SpanSummaryService(Protocol):
         stopped_by_delete: bool = False,
         export_endpoint: Callable[[str, str], TaskObservation | None],
         parse_datetime: Callable[[Any], datetime | None],
-        human_delta: Callable[..., str],
+        human_delta: SpanHumanDelta,
     ) -> tuple[datetime | None, datetime | None, str]: ...
 
 
@@ -134,7 +135,7 @@ class SpanFieldsPorts:
     summary: SpanSummaryService
     export_endpoint: Callable[[str, str], TaskObservation | None]
     parse_datetime: Callable[[object], datetime | None]
-    human_delta: Callable[..., str]
+    human_delta: SpanHumanDelta
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,9 +282,9 @@ def span_fields_ports_for(host: Any) -> SpanFieldsPorts:
         summary=host._module("modify_chain_summary"),
         export_endpoint=lambda chain_id, direction: export_chain_endpoint(export_ports, chain_id, direction),
         parse_datetime=lambda value: _parse_datetime_value(DatetimeValuePort(parser_for_host(host)), value),
-        human_delta=lambda start, end, prefer=True, *, prefer_months=None: formatting.human_delta(
+        human_delta=partial(
+            formatting.human_delta,
             formatting.HumanDeltaPort(host.core.humanize_delta),
-            start, end, prefer if prefer_months is None else prefer_months,
         ),
     )
 

@@ -68,17 +68,26 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
 
     def test_span_fields_ports_type_export_and_datetime_callbacks(self) -> None:
-        from nautical_core.modify_diagnostics_effects import SpanFieldsPorts
+        from nautical_core.modify_diagnostics_effects import (
+            SpanFieldsPorts,
+            SpanSummaryService,
+        )
+        from nautical_core.modify_chain_summary import SpanHumanDelta
         from nautical_core.task_models import TaskObservation
 
         annotations = get_type_hints(SpanFieldsPorts)
         self.assertIsNot(annotations["summary"], Any)
+        self.assertIs(annotations["human_delta"], SpanHumanDelta)
+        self.assertIs(
+            get_type_hints(SpanSummaryService.span_fields)["human_delta"],
+            SpanHumanDelta,
+        )
         self.assertEqual(
             {name: annotations[name] for name in annotations if name != "summary"},
             {
                 "export_endpoint": Callable[[str, str], TaskObservation | None],
                 "parse_datetime": Callable[[object], datetime | None],
-                "human_delta": Callable[..., str],
+                "human_delta": SpanHumanDelta,
             },
         )
 

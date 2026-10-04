@@ -5,10 +5,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from .callback_ports import CallbackPort
 from .task_models import TaskObservation, TaskPayload
+
+
+class SpanHumanDelta(Protocol):
+    def __call__(
+        self,
+        start: datetime,
+        end: datetime,
+        prefer_months: bool = True,
+    ) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +55,7 @@ def span_fields(
     stopped_by_delete: bool = False,
     export_endpoint: Callable[[str, str], TaskObservation | None],
     parse_datetime: Callable[[Any], datetime | None],
-    human_delta: Callable[..., str],
+    human_delta: SpanHumanDelta,
 ) -> tuple[datetime | None, datetime | None, str]:
     first_task = chain[0] if chain else None
     last_task = chain[-1] if chain else None

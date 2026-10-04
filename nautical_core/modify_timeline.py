@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .anchor_omit import OmitState
-from .callback_ports import CallbackPort
 from .recurrence_evaluator import RecurrenceEvaluator
 from .scheduler_service import SchedulerService
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
@@ -135,7 +134,7 @@ def _timeline_initial_items(
     child_due_utc: Any,
     child_short: str,
     *,
-    coerce_int: CallbackPort,
+    coerce_int: Callable[[Any, Any], Any],
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
 ) -> list[TimelineItem]:
@@ -467,7 +466,7 @@ def anchor_file_timeline_lines(
     cur_no: int | None,
     show_gaps: bool,
     round_anchor_gaps: bool,
-    coerce_int: CallbackPort,
+    coerce_int: Callable[[Any, Any], Any],
     fmt_dt_local: Callable[[Any], str],
     max_iterations: int,
     future_style_for_chain: Callable[[TaskPayload, str], str],

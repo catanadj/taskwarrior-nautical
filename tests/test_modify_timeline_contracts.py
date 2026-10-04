@@ -23,6 +23,17 @@ from nautical_core.timeutil import parse_dt_any
 
 
 class ModifyTimelineContractTests(unittest.TestCase):
+    def test_timeline_integer_coercion_parameters_have_explicit_call_shapes(self) -> None:
+        from nautical_core.modify_timeline import (
+            _timeline_initial_items,
+            anchor_file_timeline_lines,
+        )
+
+        expected = Callable[[Any, Any], Any]
+        for function in (_timeline_initial_items, anchor_file_timeline_lines):
+            with self.subTest(function=function.__name__):
+                self.assertEqual(get_type_hints(function)["coerce_int"], expected)
+
     def test_timeline_projection_services_expose_exact_callback_shapes(self) -> None:
         annotations = get_type_hints(TimelineProjectionServices)
         expected = {

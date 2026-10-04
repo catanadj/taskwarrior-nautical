@@ -386,14 +386,13 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
         )
 
     def stats_rows(
-        rows: list[tuple[str, str]], chain: list[TaskObservation], clock: datetime
+        rows: list[tuple[str, str]], chain: list[TaskObservation]
     ) -> None:
         summary.stats_rows(
             rows,
             chain,
-            clock,
             lateness_stats=lambda value: lateness_stats(analytics_ports, value),
-            format_seconds_delta=lambda _now, value: format_seconds_delta(seconds_port, value),
+            format_seconds_delta=lambda value: format_seconds_delta(seconds_port, value),
         )
 
     def limits_row(rows: list[tuple[str, str]], task: TaskPayload) -> None:

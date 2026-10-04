@@ -46,7 +46,6 @@ class SummaryStatsRows(Protocol):
         self,
         rows: list[tuple[str, str]],
         chain: list[TaskObservation],
-        now_utc: datetime,
     ) -> None: ...
 
 
@@ -168,17 +167,16 @@ def kind_rows(
 def stats_rows(
     rows: list[tuple[str, str]],
     chain: list[TaskObservation],
-    now_utc: Any,
     *,
     lateness_stats: Callable[[list[TaskObservation]], LatenessStats],
-    format_seconds_delta: Callable[[Any, float | None], str],
+    format_seconds_delta: Callable[[float | None], str],
 ) -> None:
     stats = lateness_stats(chain)
     rows.append(("Performance", f"early {stats['early']}, on-time {stats['on_time']}, late {stats['late']}"))
-    rows.append(("Avg lateness", format_seconds_delta(now_utc, stats["avg"])))
-    rows.append(("Median lateness", format_seconds_delta(now_utc, stats["median"])))
-    rows.append(("Best early", format_seconds_delta(now_utc, stats["best_early"])))
-    rows.append(("Worst late", format_seconds_delta(now_utc, stats["worst_late"])))
+    rows.append(("Avg lateness", format_seconds_delta(stats["avg"])))
+    rows.append(("Median lateness", format_seconds_delta(stats["median"])))
+    rows.append(("Best early", format_seconds_delta(stats["best_early"])))
+    rows.append(("Worst late", format_seconds_delta(stats["worst_late"])))
 
 
 def limits_row(
@@ -328,7 +326,7 @@ def render_chain_summary(
     if stopped_by_delete:
         rows.append(("Stopped at", services.format_local(now_utc)))
     rows.append(("Span", span))
-    services.stats_rows(rows, chain, now_utc)
+    services.stats_rows(rows, chain)
     services.limits_row(rows, current)
     tail = services.last_n_timeline_rows(chain, 6)
     if tail:

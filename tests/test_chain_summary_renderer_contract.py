@@ -58,6 +58,39 @@ class ChainSummaryRendererContractTests(unittest.TestCase):
             },
         )
 
+    def test_stats_rows_format_lateness_without_an_unused_clock_argument(self) -> None:
+        from nautical_core.modify_analytics import LatenessStats
+        from nautical_core.modify_chain_summary import stats_rows
+
+        rows: list[tuple[str, str]] = []
+        stats: LatenessStats = {
+            "early": 1,
+            "on_time": 2,
+            "late": 3,
+            "avg": 4.0,
+            "median": 5.0,
+            "best_early": -6.0,
+            "worst_late": 7.0,
+            "count": 6,
+        }
+        stats_rows(
+            rows,
+            [],
+            lateness_stats=lambda _chain: stats,
+            format_seconds_delta=lambda seconds: f"{seconds}s",
+        )
+
+        self.assertEqual(
+            rows,
+            [
+                ("Performance", "early 1, on-time 2, late 3"),
+                ("Avg lateness", "4.0s"),
+                ("Median lateness", "5.0s"),
+                ("Best early", "-6.0s"),
+                ("Worst late", "7.0s"),
+            ],
+        )
+
     def test_delete_chain_summary_span_uses_stop_time_without_last_end(self) -> None:
         from nautical_core.modify_chain_summary import span_fields
 

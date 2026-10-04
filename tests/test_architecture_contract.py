@@ -619,7 +619,9 @@ facade.__all__
     def test_presentation_contexts_exclude_host_and_module_loaders(self) -> None:
         from typing import Callable, NoReturn, get_type_hints
         from nautical_core.add_anchor_preview import (
+            AnchorDnfPreparationCallback,
             AnchorDurationValidator,
+            AnchorLintCallback,
             PreviewPanelCallback,
             PreviewWaitScheduleRowsCallback,
         )
@@ -656,6 +658,15 @@ facade.__all__
                     get_type_hints(context)["append_wait_sched_rows"],
                     PreviewWaitScheduleRowsCallback,
                 )
+                if context is AnchorExpressionPreviewServices:
+                    self.assertIs(
+                        get_type_hints(context)["prepare_anchor_dnf"],
+                        AnchorDnfPreparationCallback,
+                    )
+                    self.assertIs(
+                        get_type_hints(context)["lint_and_validate"],
+                        AnchorLintCallback,
+                    )
                 self.assertEqual(
                     get_type_hints(context)["error_and_exit"],
                     Callable[[list[tuple[str, str]]], NoReturn],

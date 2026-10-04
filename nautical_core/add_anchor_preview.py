@@ -8,6 +8,7 @@ from typing import Any, Callable, NoReturn, Protocol
 from . import panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch
 from .modify_models import CoerceIntCallback, HumanDeltaCallback
+from .parsing.parser_models import AnchorDNF
 from .scheduler_models import occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
@@ -56,13 +57,38 @@ class PreviewWaitScheduleRowsCallback(Protocol):
     ) -> None: ...
 
 
+class PreviewProfiler(Protocol):
+    def add_ms(self, name: str, milliseconds: float) -> None: ...
+
+
+class AnchorDnfPreparationCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        anchor_str: str,
+        due_dt: datetime,
+        rows: list[tuple[str, str]],
+        prof: PreviewProfiler,
+    ) -> tuple[AnchorDNF, str]: ...
+
+
+class AnchorLintCallback(Protocol):
+    def __call__(
+        self,
+        anchor_str: str,
+        prof: PreviewProfiler,
+        *,
+        panel: PreviewPanelCallback,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorExpressionPreviewServices:
     """Composition-root dependencies for the anchor preview renderer."""
 
     panel_mode: str
     panel_warnings: Callable[[TaskPayload], list[str]]
-    prepare_anchor_dnf: Callable[..., tuple[Any, str]]
+    prepare_anchor_dnf: AnchorDnfPreparationCallback
     describe_anchor_natural: Callable[[TaskPayload, Any, str], str]
     prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
     scheduler_service_for_task: Callable[[TaskPayload], Any]
@@ -72,7 +98,7 @@ class AnchorExpressionPreviewServices:
     expr_has_m_or_y: Callable[[Any], bool]
     append_dst_adjustment: Callable[[list[tuple[str, str]], Any, datetime], None]
     render_business_calendar_displacement: AddCalendarFeedbackCallback
-    lint_and_validate: Callable[..., None]
+    lint_and_validate: AnchorLintCallback
     omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
     root_uuid_from: Callable[[TaskPayload], str | None]
     short: Callable[[Any], str]

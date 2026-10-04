@@ -6,7 +6,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from collections.abc import Mapping
 from functools import partial
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol, overload
 
 from .chain_generation import ChainGenerationService
 from .task_models import NauticalTask, TaskDraft, TaskObservation, TaskPayload
@@ -355,6 +355,34 @@ class CompletionSpawnPorts:
     diagnostic: DiagnosticCallback
 
 
+class _CompletionPreflightCore(Protocol):
+    PANEL_MODE: str
+    MAX_LINK_NUMBER: int
+    coerce_int: CoerceIntCallback
+    short_uuid: ShortUuidCallback
+
+
+class _CompletionModelsOwner(Protocol):
+    CompletionPreflightServices: type[CompletionPreflightServices]
+    CompletionChainSnapshot: type[CompletionChainSnapshot]
+
+
+class CompletionPreflightHost(Protocol):
+    _SHOW_ANALYTICS: bool
+    _CHECK_CHAIN_INTEGRITY: bool
+
+    @property
+    def core(self) -> _CompletionPreflightCore: ...
+
+    @overload
+    def _module(
+        self, name: Literal["modify_completion_preflight"]
+    ) -> CompletionPreflightService: ...
+
+    @overload
+    def _module(self, name: Literal["modify_models"]) -> _CompletionModelsOwner: ...
+
+
 class _CompletionUIModule(Protocol):
     def ui_ports_for(self, host: Any) -> UIEffectsPorts: ...
 
@@ -473,7 +501,9 @@ def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: i
     )
 
 
-def completion_preflight_context_ports_for(host: Any) -> CompletionPreflightContextPorts:
+def completion_preflight_context_ports_for(
+    host: CompletionPreflightHost,
+) -> CompletionPreflightContextPorts:
     preflight = host._module("modify_completion_preflight")
     models = host._module("modify_models")
     return CompletionPreflightContextPorts(

@@ -67,6 +67,20 @@ class CacheApiContractTests(unittest.TestCase):
         hints = get_type_hints(cache_payload.cache_gc)
         self.assertEqual(hints["cache_lock"], Callable[[str], ContextManager[bool]])
         self.assertEqual(hints["stale_lock_check"], Callable[[str, float], bool])
+        self.assertIs(hints["return"], cache_payload.CacheGcResult)
+        self.assertEqual(
+            get_type_hints(hints["return"]),
+            {
+                "removed": int,
+                "bytes": int,
+                "temporary": int,
+                "expired": int,
+                "overflow": int,
+                "locks_removed": int,
+                "locks_skipped": int,
+                "errors": int,
+            },
+        )
 
     def test_cached_task_key_uses_typed_acf_and_cache_key_builders(self) -> None:
         hints = get_type_hints(cache_payload.cache_key_for_task_cached)

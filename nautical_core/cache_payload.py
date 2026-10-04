@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, ContextManager, Protocol
+from typing import Any, Callable, ContextManager, Literal, Protocol, TypedDict
 
 from .season_support import SEASON_NAMES
 from .time_windows import parse_random_time_window_spec, validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
@@ -12,6 +12,17 @@ MAX_CACHE_DECODED_BYTES = 8 * 1024 * 1024
 MAX_CACHE_JSON_BYTES = MAX_CACHE_DECODED_BYTES
 _CACHE_VERSION_KEY = "_nautical_cache_version"
 _SELECTION_SCOPES = frozenset(("week", "month", "quarter", "year", "season", *SEASON_NAMES))
+
+
+class CacheGcResult(TypedDict):
+    removed: int
+    bytes: int
+    temporary: int
+    expired: int
+    overflow: int
+    locks_removed: int
+    locks_skipped: int
+    errors: int
 
 
 class _CacheKeyCallback(Protocol):
@@ -458,9 +469,9 @@ def cache_gc(
     stale_lock_check: Callable[[str, float], bool],
     time_mod: Any,
     os_mod: Any,
-) -> dict:
+) -> CacheGcResult:
     """Prune expired/temporary cache files without touching active writers."""
-    result = {
+    result: CacheGcResult = {
         "removed": 0,
         "bytes": 0,
         "temporary": 0,
@@ -474,7 +485,12 @@ def cache_gc(
         return result
     now = time_mod.time()
 
-    def remove_path(path: str, *, kind: str, key: str = "") -> bool:
+    def remove_path(
+        path: str,
+        *,
+        kind: Literal["temporary", "expired", "overflow"],
+        key: str = "",
+    ) -> bool:
         try:
             size = int(os_mod.path.getsize(path))
         except OSError:

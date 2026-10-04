@@ -23,6 +23,7 @@ from .modify_models import (
     NativeCarryDescription,
     FirstRecurrenceTargetCallback,
     DatetimeParserCallback,
+    MarkupStripper,
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
@@ -545,7 +546,7 @@ def format_line_preview(
     child_until_dt: datetime | None = None,
     kind: str = "cp",
     minimal: bool = False,
-    core: Any,
+    core: MarkupStripper,
     format_local: Callable[[datetime], str],
     on_time_delta: Callable[[datetime | None, datetime | None], str],
     human_delta: Callable[[datetime, datetime | None, bool], str],

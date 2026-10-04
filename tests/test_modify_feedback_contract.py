@@ -234,6 +234,7 @@ class ModifyFeedbackContractTests(unittest.TestCase):
     def test_completion_preview_uses_datetime_callback_contracts(self) -> None:
         from nautical_core.modify_models import (
             CompletionPreviewFormatter,
+            MarkupStripper,
             PreviewLineFormatter,
         )
 
@@ -259,6 +260,7 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             with self.subTest(formatter=PreviewLineFormatter.__name__, field=field):
                 self.assertEqual(preview_hints[field], annotation)
         formatter_hints = get_type_hints(modify_feedback.format_line_preview)
+        self.assertIs(formatter_hints["core"], MarkupStripper)
         helper_fields = dict(expected_arguments, **expected_callbacks)
         helper_fields["child_due_utc"] = helper_fields.pop("child_due")
         for field, annotation in helper_fields.items():

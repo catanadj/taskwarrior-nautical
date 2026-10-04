@@ -32,12 +32,13 @@ if TYPE_CHECKING:
     from nautical_core.hook_workflow_context import WorkflowInvocationContext
     from nautical_core.modify_generation_effects import ChainGenerationServicePort
     from nautical_core.scheduler_service import SchedulerService
+    from nautical_core.task_read_repository import TaskReadRepository
 
 
 @dataclass(slots=True)
 class ModifyRuntimeState:
     workflow_context: WorkflowInvocationContext | None = None
-    task_repository: Any = None
+    task_repository: TaskReadRepository | None = None
     scheduler_services: dict[tuple[object, ...], SchedulerService] = field(
         default_factory=dict
     )

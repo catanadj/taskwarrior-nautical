@@ -103,6 +103,15 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             expected,
         )
 
+    def test_modify_runtime_state_uses_task_read_repository(self) -> None:
+        from nautical_core.modify_runtime import ModifyRuntimeState
+        from nautical_core.task_read_repository import TaskReadRepository
+
+        expected = f"{TaskReadRepository.__name__} | None"
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["task_repository"], expected
+        )
+
     def test_scheduler_runtime_state_uses_scheduler_service_cache_contract(self) -> None:
         from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
         from nautical_core.modify_runtime import ModifyRuntimeState, scheduler_service_for_task

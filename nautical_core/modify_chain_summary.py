@@ -20,6 +20,17 @@ class SpanHumanDelta(Protocol):
     ) -> str: ...
 
 
+class SpanFieldsCallback(Protocol):
+    def __call__(
+        self,
+        chain_id: str,
+        chain: list[TaskObservation],
+        *,
+        stop_at: datetime | None = None,
+        stopped_by_delete: bool = False,
+    ) -> tuple[datetime | None, datetime | None, str]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ChainSummaryRenderServices:
     export_sorted_chain: Callable[[str, dict[str, Any]], list[TaskObservation]]
@@ -27,7 +38,7 @@ class ChainSummaryRenderServices:
     short_uuid: Callable[[Any], str]
     format_root_and_age: Callable[[dict[str, Any], Any], str]
     kind_rows: Callable[..., None]
-    span_fields: Callable[..., tuple[datetime | None, datetime | None, str]]
+    span_fields: SpanFieldsCallback
     stats_rows: Callable[..., None]
     limits_row: Callable[..., None]
     last_n_timeline_rows: Callable[..., list[str]]

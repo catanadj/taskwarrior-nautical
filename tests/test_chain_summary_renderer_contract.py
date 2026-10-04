@@ -3,11 +3,22 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 from datetime import datetime, timezone
+from typing import get_type_hints
 
-from nautical_core.modify_chain_summary import ChainSummaryRenderServices, render_chain_summary_with_services
+from nautical_core.modify_chain_summary import (
+    ChainSummaryRenderServices,
+    SpanFieldsCallback,
+    render_chain_summary_with_services,
+)
 
 
 class ChainSummaryRendererContractTests(unittest.TestCase):
+    def test_render_service_span_callback_has_explicit_contract(self) -> None:
+        self.assertIs(
+            get_type_hints(ChainSummaryRenderServices)["span_fields"],
+            SpanFieldsCallback,
+        )
+
     def test_delete_chain_summary_span_uses_stop_time_without_last_end(self) -> None:
         from nautical_core.modify_chain_summary import span_fields
 

@@ -14,13 +14,60 @@ from nautical_core.modify_chain_summary import (
     SummaryRowsFormatter,
     SummaryStatsRows,
     SummaryTimelineRows,
+    kind_rows,
     render_chain_summary_with_services,
     render_chain_summary,
 )
+from nautical_core.parsing.parser_models import ParseError
 from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 class ChainSummaryRendererContractTests(unittest.TestCase):
+    def test_kind_rows_keeps_pattern_when_anchor_syntax_is_invalid(self) -> None:
+        rows: list[tuple[str, str]] = []
+
+        def reject_invalid(_expression: str) -> object:
+            raise ParseError("invalid anchor")
+
+        kind_rows(
+            rows,
+            "anchor",
+            {"anchor": "malformed", "anchor_mode": "skip"},
+            anchor_preset_display=lambda _expression: None,
+            validate_anchor=reject_invalid,
+            describe_anchor=lambda _dnf, _task: self.fail("invalid anchors have no natural row"),
+        )
+
+        self.assertEqual(rows, [("Pattern", "malformed  [cyan]SKIP[/]")])
+
+    def test_kind_rows_surfaces_unexpected_preset_display_failure(self) -> None:
+        def broken_preset(_expression: str) -> tuple[str, str] | None:
+            raise RuntimeError("preset renderer defect")
+
+        with self.assertRaisesRegex(RuntimeError, "preset renderer defect"):
+            kind_rows(
+                [],
+                "anchor",
+                {"anchor": "@daily"},
+                anchor_preset_display=broken_preset,
+                validate_anchor=lambda _expression: [],
+                describe_anchor=lambda _dnf, _task: "daily",
+            )
+
+    def test_kind_rows_surfaces_unexpected_natural_description_failure(self) -> None:
+        def broken_description(_dnf: object, _task: dict) -> str:
+            raise RuntimeError("anchor description defect")
+
+        with self.assertRaisesRegex(RuntimeError, "anchor description defect"):
+            kind_rows(
+                [],
+                "anchor",
+                {"anchor": "w:mon"},
+                anchor_preset_display=lambda _expression: None,
+                validate_anchor=lambda _expression: [[{"type": "weekday", "value": "mon"}]],
+                describe_anchor=broken_description,
+            )
+
     def test_render_service_span_callback_has_explicit_contract(self) -> None:
         self.assertIs(
             get_type_hints(ChainSummaryRenderServices)["span_fields"],

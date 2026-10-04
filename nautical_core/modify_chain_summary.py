@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from .callback_ports import CallbackPort
 from .modify_analytics import LatenessStats
+from .parsing.parser_models import ParseError
 from .task_models import TaskObservation, TaskPayload
 
 
@@ -142,19 +143,17 @@ def kind_rows(
     )
     if kind == "anchor":
         expr = (current.get("anchor") or "").strip()
-        try:
-            preset_display = anchor_preset_display(expr)
-        except Exception:
-            preset_display = None
+        preset_display = anchor_preset_display(expr)
         if preset_display:
             label, text = preset_display
             rows.append((label, f"{text}  {tag}"))
         else:
             rows.append(("Pattern", f"{expr}  {tag}"))
         try:
-            rows.append(("Natural", describe_anchor(validate_anchor(expr), dict(current))))
-        except Exception:
-            pass
+            anchor_dnf = validate_anchor(expr)
+        except ParseError:
+            return
+        rows.append(("Natural", describe_anchor(anchor_dnf, dict(current))))
         return
     if kind == "anchor_file":
         expr = (current.get("anchor_file") or "").strip()

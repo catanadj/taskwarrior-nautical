@@ -14,6 +14,7 @@ from typing import Any, Callable
 from .task_changes import TaskTransition
 from .task_models import TaskPayload, TaskTimestamp
 from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
+from .modify_models import PanelCallback
 from .modify_workflow import ChainCompletionDecision, RecurrenceTransitionDecision
 
 
@@ -44,7 +45,7 @@ class OrdinaryModifyServices:
     apply_transition: Callable[[TaskPayload, TaskPayload], RecurrenceTransitionDecision]
     short_uuid: Callable[[str], str]
     recurrence_enabled_rows: Callable[[TaskPayload, str], list[tuple[str, str]]]
-    panel: Callable[..., None]
+    panel: PanelCallback
     render_disabled_summary: Callable[[TaskPayload, TaskPayload, ChainCompletionDecision], None]
     semantic_diff_value: Callable[[str, str], str]
     first_recurrence_target: Callable[[TaskPayload, str], datetime | None]

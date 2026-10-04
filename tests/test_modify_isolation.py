@@ -1272,6 +1272,7 @@ class ModifyIsolationTests(unittest.TestCase):
             _ModifyOrdinaryEffects,
         )
         from nautical_core.modify_composition_adapters import handle_non_completion
+        from nautical_core.modify_models import PanelCallback
         from nautical_core.modify_ordinary import OrdinaryModifyServices
         from nautical_core.task_changes import TaskTransition
         from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
@@ -1306,6 +1307,7 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIs(ordinary["services"], OrdinaryModifyServices)
         self.assertIs(ordinary["lifecycle"], _ModifyLifecycle)
         self.assertEqual(ordinary["transition"], TaskTransition | None)
+        self.assertIs(get_type_hints(OrdinaryModifyServices)["panel"], PanelCallback)
 
     def test_completion_modify_adapter_uses_typed_runtime_and_lifecycle_result(self) -> None:
         from nautical_core.modify_composition import (

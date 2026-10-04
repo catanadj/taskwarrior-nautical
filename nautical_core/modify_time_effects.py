@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 
 class _TimeSlotsOwner(Protocol):
@@ -21,7 +21,7 @@ class _TimeSlotsOwner(Protocol):
 class _TimeSlotCore(Protocol):
     ASTRONOMY_CONFIG: dict[str, Any]
 
-    def _import_sibling(self, name: str) -> _TimeSlotsOwner: ...
+    def _import_sibling(self, name: Literal["time_slots"]) -> _TimeSlotsOwner: ...
 
     def to_local(self, value: Any) -> Any: ...
 

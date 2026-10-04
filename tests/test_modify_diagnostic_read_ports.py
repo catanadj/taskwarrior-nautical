@@ -386,10 +386,12 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             AnchorValidationHost,
             ChainLimitHost,
             NativeUntilHost,
+            NativeUntilSlotHost,
             OmitValidationHost,
             anchor_validation_ports_for,
             chain_limit_ports_for,
             native_until_ports_for,
+            native_until_slot_ports_for,
             omit_validation_ports_for,
         )
 
@@ -404,6 +406,9 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
         self.assertIs(
             get_type_hints(native_until_ports_for)["host"], NativeUntilHost
+        )
+        self.assertIs(
+            get_type_hints(native_until_slot_ports_for)["host"], NativeUntilSlotHost
         )
 
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from dataclasses import dataclass
 from typing import Any, Literal, NoReturn, Protocol, overload
 from .hook_validation_pipeline import ValidationFinding
@@ -236,6 +236,111 @@ class NativeUntilHost(Protocol):
         self,
         name: Literal["modify_validation"],
     ) -> _ModifyNativeUntilValidationAPI: ...
+
+
+class _TimeSlotsOwner(Protocol):
+    def resolve_time_slots(
+        self,
+        value: object,
+        target_date: date | None,
+        *,
+        config: dict[str, Any] | None = None,
+        to_local: Callable[[Any], Any] | None = None,
+    ) -> list[tuple[int, int]]: ...
+
+
+class _AddValidationTimeSlotsAPI(Protocol):
+    collect_anchor_time_slots: CollectAnchorTimeSlots
+
+
+class _NativeUntilTimeSlotsAPI(Protocol):
+    validate_calendar_slots: ValidateCalendarSlots
+
+
+class _RecurrenceContextAPI(Protocol):
+    RecurrenceContext: type[RecurrenceContext]
+
+
+class _ModifyValidationSlotAPI(Protocol):
+    validate_native_until_anchor_slots_or_fail: NativeUntilSlotsValidationOperation
+
+
+class _TimeSlotPorts(Protocol):
+    def resolve_time_slots(
+        self,
+        value: object,
+        target_date: date | None,
+    ) -> list[tuple[int, int]]: ...
+
+
+class _ModifyTimeEffectsAPI(Protocol):
+    def time_slot_ports_for(self, host: "NativeUntilSlotHost") -> _TimeSlotPorts: ...
+
+    def normalize_hhmm_list(
+        self,
+        ports: _TimeSlotPorts,
+        value: object,
+        target_date: date | None = None,
+    ) -> list[tuple[int, int]]: ...
+
+
+class _NativeUntilSlotCore(Protocol):
+    ASTRONOMY_CONFIG: dict[str, Any]
+    fmt_dt_local: Callable[[datetime], str]
+    to_local: Callable[[Any], Any]
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["add_validation"],
+    ) -> _AddValidationTimeSlotsAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["astronomy"],
+    ) -> _AstronomyValidationAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["native_until"],
+    ) -> _NativeUntilTimeSlotsAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["recurrence_context"],
+    ) -> _RecurrenceContextAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["time_slots"],
+    ) -> _TimeSlotsOwner: ...
+
+
+class NativeUntilSlotHost(Protocol):
+    core: _NativeUntilSlotCore
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _validate_anchor_expr_cached: Callable[[str], object]
+    _tolocal: Callable[[datetime], datetime]
+    sys: _SystemExit
+
+    @overload
+    def _module(self, name: Literal["modify_ui_effects"]) -> _ValidationUI: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_validation"],
+    ) -> _ModifyValidationSlotAPI: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_time_effects"],
+    ) -> _ModifyTimeEffectsAPI: ...
 
 
 class ValidateRecurrenceFiles(Protocol):
@@ -595,7 +700,7 @@ def validate_native_until_slots(ports: NativeUntilSlotPorts, task: TaskPayload) 
     )
 
 
-def native_until_slot_ports_for(host: Any) -> NativeUntilSlotPorts:
+def native_until_slot_ports_for(host: NativeUntilSlotHost) -> NativeUntilSlotPorts:
     add_validation = host.core._import_sibling("add_validation")
     astronomy = host.core._import_sibling("astronomy")
     native_until = host.core._import_sibling("native_until")

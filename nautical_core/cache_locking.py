@@ -296,10 +296,19 @@ def safe_lock(
 
     tries = max(1, int(retries or 0))
 
-    _ensure_parent = lambda p, m: safe_lock_ensure_parent(p, m, os_mod=os_mod)
-    _sleep_once = lambda base, jit: safe_lock_sleep_once(base, jit, time_mod=time_mod, random_mod=random_mod)
-    _age = lambda p: safe_lock_age(p, time_mod=time_mod, os_mod=os_mod)
-    _stale_pid = lambda p, s: safe_lock_stale_pid(p, s, time_mod=time_mod, os_mod=os_mod)
+    def _ensure_parent(path_str: str, mkdir: bool) -> None:
+        safe_lock_ensure_parent(path_str, mkdir, os_mod=os_mod)
+
+    def _sleep_once(base: float, jit: float) -> None:
+        safe_lock_sleep_once(base, jit, time_mod=time_mod, random_mod=random_mod)
+
+    def _age(path_str: str) -> float | None:
+        return safe_lock_age(path_str, time_mod=time_mod, os_mod=os_mod)
+
+    def _stale_pid(path_str: str, stale_after: float | None) -> bool:
+        return safe_lock_stale_pid(
+            path_str, stale_after, time_mod=time_mod, os_mod=os_mod
+        )
 
     if fcntl_mod is not None:
         with safe_lock_fcntl_context(

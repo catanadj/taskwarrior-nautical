@@ -72,6 +72,36 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertIs(cache_hints["safe_lock"], cache_locking.BoundSafeLock)
         self.assertEqual(cache_hints["return"], Iterator[bool])
 
+    def test_cache_locking_callbacks_have_concrete_context_contracts(self) -> None:
+        fcntl_hints = get_type_hints(cache_locking.safe_lock_fcntl_context)
+        self.assertEqual(
+            fcntl_hints["safe_lock_ensure_parent"],
+            cache_locking.Callable[[str, bool], None],
+        )
+        self.assertEqual(
+            fcntl_hints["safe_lock_sleep_once"],
+            cache_locking.Callable[[float, float], None],
+        )
+        self.assertEqual(fcntl_hints["return"], Iterator[bool])
+
+        exclusive_hints = get_type_hints(cache_locking.safe_lock_excl_context)
+        self.assertEqual(
+            exclusive_hints["safe_lock_stale_pid"],
+            cache_locking.Callable[[str, float | None], bool],
+        )
+        self.assertEqual(
+            exclusive_hints["safe_lock_age"],
+            cache_locking.Callable[[str], float | None],
+        )
+        self.assertEqual(exclusive_hints["return"], Iterator[bool])
+
+        binding_hints = get_type_hints(cache_locking.bind_locking)
+        self.assertEqual(
+            binding_hints["cache_lock_path"],
+            cache_locking.Callable[[str], str],
+        )
+        self.assertIs(binding_hints["return"], cache_locking.BoundLocking)
+
     def test_cache_facade_uses_narrow_cache_capabilities(self) -> None:
         metrics_hints = get_type_hints(cache_facade.emit_metrics)
         clear_hints = get_type_hints(cache_facade.clear_all)

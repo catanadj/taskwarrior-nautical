@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from collections.abc import Callable
-from typing import Any, ContextManager, Iterator, Protocol
+from typing import ContextManager, Iterator, Protocol
 
 from nautical_core.cache_ports import ClockPort, FcntlPort, FilesystemPort, RandomPort
 from nautical_core.cache_support import ValidatedUserDir
@@ -153,11 +153,11 @@ def safe_lock_fcntl_context(
     jitter: float,
     mode: int,
     mkdir: bool,
-    safe_lock_ensure_parent: Any,
-    safe_lock_sleep_once: Any,
+    safe_lock_ensure_parent: Callable[[str, bool], None],
+    safe_lock_sleep_once: Callable[[float, float], None],
     fcntl_mod: FcntlPort,
     os_mod: FilesystemPort,
-) -> Any:
+) -> Iterator[bool]:
     lf = None
     fd: int | None = None
     acquired = False
@@ -212,13 +212,13 @@ def safe_lock_excl_context(
     mode: int,
     mkdir: bool,
     stale_after: float | None,
-    safe_lock_ensure_parent: Any,
-    safe_lock_stale_pid: Any,
-    safe_lock_age: Any,
-    safe_lock_sleep_once: Any,
+    safe_lock_ensure_parent: Callable[[str, bool], None],
+    safe_lock_stale_pid: Callable[[str, float | None], bool],
+    safe_lock_age: Callable[[str], float | None],
+    safe_lock_sleep_once: Callable[[float, float], None],
     os_mod: FilesystemPort,
     time_mod: ClockPort,
-) -> Any:
+) -> Iterator[bool]:
     fd = None
     acquired = False
     try:
@@ -370,7 +370,7 @@ def cache_lock(
 
 def bind_locking(
     *,
-    cache_lock_path: Any,
+    cache_lock_path: Callable[[str], str],
     retries: int,
     sleep_base: float,
     jitter: float,
@@ -381,17 +381,31 @@ def bind_locking(
     random_mod: RandomPort,
 ) -> BoundLocking:
     """Bind lock dependencies once for one core facade instance."""
-    def bound_safe_lock(path: Any, **kwargs: Any) -> Any:
+    def bound_safe_lock(
+        path: object,
+        *,
+        retries: int = 6,
+        sleep_base: float = 0.05,
+        jitter: float = 0.0,
+        mode: int = 0o600,
+        mkdir: bool = True,
+        stale_after: float | None = 60.0,
+    ) -> ContextManager[bool]:
         return safe_lock(
             path,
             fcntl_mod=fcntl_mod,
             os_mod=os_mod,
             time_mod=time_mod,
             random_mod=random_mod,
-            **kwargs,
+            retries=retries,
+            sleep_base=sleep_base,
+            jitter=jitter,
+            mode=mode,
+            mkdir=mkdir,
+            stale_after=stale_after,
         )
 
-    def bound_cache_lock(key: Any) -> Any:
+    def bound_cache_lock(key: str) -> ContextManager[bool]:
         return cache_lock(
             key,
             cache_lock_path=cache_lock_path,

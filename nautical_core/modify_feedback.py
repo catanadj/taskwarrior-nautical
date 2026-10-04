@@ -309,17 +309,14 @@ def render_recurrence_updated_panel(
     ]
 
     if any(field == "until" for field, _old, _new in changes):
-        try:
-            target_field = "due" if _timestamp(new, "due") else "scheduled" if _timestamp(new, "scheduled") else ""
-            until_value = _timestamp(new, "until")
-            target_value = _timestamp(new, target_field) if target_field else None
-            until_dt = until_value.value if until_value else None
-            target_dt = target_value.value if target_value else None
-            carry = describe_native_until_carry(until_dt, target_dt, to_local=to_local)
-            if carry:
-                rows.append(("Carry", carry))
-        except Exception:
-            pass
+        target_field = "due" if _timestamp(new, "due") else "scheduled" if _timestamp(new, "scheduled") else ""
+        until_value = _timestamp(new, "until")
+        target_value = _timestamp(new, target_field) if target_field else None
+        until_dt = until_value.value if until_value else None
+        target_dt = target_value.value if target_value else None
+        carry = describe_native_until_carry(until_dt, target_dt, to_local=to_local)
+        if carry:
+            rows.append(("Carry", carry))
 
     if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
         max_link = coerce_int(new.get("chainMax"), 0)

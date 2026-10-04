@@ -277,8 +277,34 @@ class ModifyFeedbackContractTests(unittest.TestCase):
                         first_recurrence_target=lambda *_args: None,
                         panel_mode="panel",
                         strip_markup=lambda value: value,
-                        panel=lambda *_args, **_kwargs: None,
-                    )
+                panel=lambda *_args, **_kwargs: None,
+            )
+
+    def test_recurrence_updated_feedback_surfaces_carry_adapter_errors(self) -> None:
+        def broken_carry(*_args, **_kwargs):
+            raise RuntimeError("carry feedback adapter failed")
+
+        with self.assertRaisesRegex(RuntimeError, "carry feedback adapter failed"):
+            modify_feedback.render_recurrence_updated_panel(
+                [("until", "old", "new")],
+                {
+                    "due": "20261004T070000Z",
+                    "until": "20261004T080000Z",
+                },
+                parse_datetime=lambda _value: datetime(
+                    2026, 10, 4, 7, tzinfo=timezone.utc
+                ),
+                format_local=lambda value: value.isoformat(),
+                describe_native_until_carry=broken_carry,
+                to_local=lambda value: value,
+                coerce_int=lambda _value, default: default,
+                describe_anchor=lambda value: value,
+                resolve_omit_presets=lambda value: value,
+                first_recurrence_target=lambda _task, _source: None,
+                panel_mode="panel",
+                strip_markup=lambda value: value,
+                panel=lambda *_args, **_kwargs: None,
+            )
 
     def test_omit_summary_falls_back_to_raw_expression_on_parse_error(self) -> None:
         def invalid_preset(_expression):

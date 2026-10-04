@@ -65,6 +65,10 @@ class CacheApiContractTests(unittest.TestCase):
         hints = get_type_hints(cache_payload._bounded_decompress)
         self.assertEqual(getattr(hints["zlib_mod"], "__name__", None), "_ZlibDecompressorPort")
 
+    def test_atomic_replace_uses_a_typed_filesystem_port(self) -> None:
+        hints = get_type_hints(cache_payload.cache_atomic_replace)
+        self.assertEqual(getattr(hints["os_mod"], "__name__", None), "_AtomicReplacePort")
+
     def test_cache_load_and_save_callbacks_have_explicit_callable_contracts(self) -> None:
         load_hints = get_type_hints(cache_payload.cache_load)
         self.assertEqual(load_hints["cache_path"], Callable[[str], str])

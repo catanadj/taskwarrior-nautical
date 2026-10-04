@@ -49,6 +49,12 @@ class _ZlibDecompressorPort(Protocol):
     def decompressobj(self) -> _DecompressorPort: ...
 
 
+class _AtomicReplacePort(Protocol):
+    name: str
+
+    def replace(self, src: str, dst: str) -> None: ...
+
+
 def is_atom_like(atom: object) -> bool:
     if not isinstance(atom, dict):
         return False
@@ -259,7 +265,7 @@ def _bounded_decompress(blob: bytes, zlib_mod: _ZlibDecompressorPort, limit: int
     return data
 
 
-def cache_atomic_replace(src: str, dst: str, *, os_mod: Any) -> None:
+def cache_atomic_replace(src: str, dst: str, *, os_mod: _AtomicReplacePort) -> None:
     try:
         os_mod.replace(src, dst)
         return

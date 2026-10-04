@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Callable
+from typing import Any
 
+from .modify_models import PanelCallback
 from .task_models import TaskPayload
 
 
@@ -11,7 +12,7 @@ def render_business_calendar_displacement(
     occurrence: date | datetime,
     *,
     core: Any,
-    panel: Callable[..., None],
+    panel: PanelCallback,
 ) -> bool:
     calendar_name = str(task.get("bc") or "").strip().lower()
     if not calendar_name:

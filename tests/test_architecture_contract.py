@@ -624,6 +624,8 @@ facade.__all__
             AnchorDurationValidator,
             AnchorLintCallback,
             AnchorModeValidator,
+            AnchorNaturalDescriptionCallback,
+            OmitDescriptionCallback,
             AppendDstAdjustmentCallback,
             AppendFirstExpirationRowCallback,
             NativeUntilAnchorSlotsValidator,
@@ -655,6 +657,10 @@ facade.__all__
         for context in (AnchorExpressionPreviewServices, AnchorFilePreviewServices):
             with self.subTest(context=context.__name__):
                 self.assertIs(get_type_hints(context)["panel"], PreviewPanelCallback)
+                self.assertIs(
+                    get_type_hints(context)["omit_description_for_task_date"],
+                    OmitDescriptionCallback,
+                )
                 self.assertIs(get_type_hints(context)["coerce_int"], CoerceIntCallback)
                 self.assertIs(get_type_hints(context)["human_delta"], HumanDeltaCallback)
                 self.assertIs(
@@ -662,6 +668,10 @@ facade.__all__
                     AnchorDurationValidator,
                 )
                 if context is AnchorExpressionPreviewServices:
+                    self.assertIs(
+                        get_type_hints(context)["describe_anchor_natural"],
+                        AnchorNaturalDescriptionCallback,
+                    )
                     self.assertIs(
                         get_type_hints(context)["validate_anchor_mode"],
                         AnchorModeValidator,

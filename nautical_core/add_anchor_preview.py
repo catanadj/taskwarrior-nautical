@@ -125,6 +125,19 @@ class AppendFirstExpirationRowCallback(Protocol):
     ) -> None: ...
 
 
+class AnchorNaturalDescriptionCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        dnf: AnchorDNF | None,
+        anchor_file_str: str,
+    ) -> str: ...
+
+
+class OmitDescriptionCallback(Protocol):
+    def __call__(self, task: TaskPayload, day: date) -> str | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorExpressionPreviewServices:
     """Composition-root dependencies for the anchor preview renderer."""
@@ -132,7 +145,7 @@ class AnchorExpressionPreviewServices:
     panel_mode: str
     panel_warnings: Callable[[TaskPayload], list[str]]
     prepare_anchor_dnf: AnchorDnfPreparationCallback
-    describe_anchor_natural: Callable[[TaskPayload, Any, str], str]
+    describe_anchor_natural: AnchorNaturalDescriptionCallback
     prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
     scheduler_service_for_task: Callable[[TaskPayload], Any]
     to_local: Callable[[datetime], datetime]
@@ -142,7 +155,7 @@ class AnchorExpressionPreviewServices:
     append_dst_adjustment: AppendDstAdjustmentCallback
     render_business_calendar_displacement: AddCalendarFeedbackCallback
     lint_and_validate: AnchorLintCallback
-    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
+    omit_description_for_task_date: OmitDescriptionCallback
     root_uuid_from: Callable[[TaskPayload], str | None]
     short: Callable[[Any], str]
     validate_anchor_mode: AnchorModeValidator
@@ -170,7 +183,7 @@ class AnchorFilePreviewServices:
     fmt_dt_local: Callable[[Any], str]
     coerce_int: CoerceIntCallback
     render_business_calendar_displacement: AddCalendarFeedbackCallback
-    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
+    omit_description_for_task_date: OmitDescriptionCallback
     append_wait_sched_rows: PreviewWaitScheduleRowsCallback
     validate_chain_duration_reasonable: AnchorDurationValidator
     format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]]
@@ -222,7 +235,7 @@ def _anchor_omit_natural_text(task: TaskPayload, *, core: Any) -> str:
     return ' and '.join(part for part in parts if part)
 
 
-def _anchor_preview_natural_text(task: TaskPayload, dnf: Any, anchor_file_str: str, *, core: Any) -> str:
+def _anchor_preview_natural_text(task: TaskPayload, dnf: AnchorDNF | None, anchor_file_str: str, *, core: Any) -> str:
     natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
     omit_text = _anchor_omit_natural_text(task, core=core)
     if omit_text and (task.get('anchor_mode') or 'skip').lower() == 'skip':
@@ -559,7 +572,7 @@ def _preview_omit_label(
     task: TaskPayload,
     item_local: datetime,
     *,
-    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None],
+    omit_description_for_task_date: OmitDescriptionCallback,
 ) -> str:
     omit_file = str(task.get("omit_file") or "").strip()
     if not omit_file:
@@ -579,7 +592,7 @@ def _preview_occurrence_lines(
     first_due_local_dt: datetime,
     preview_limit: int,
     fmt_dt_local: Callable[[Any], str],
-    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None],
+    omit_description_for_task_date: OmitDescriptionCallback,
     task: TaskPayload,
 ) -> list[str]:
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]

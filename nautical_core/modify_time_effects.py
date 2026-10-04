@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Callable, Literal, Protocol
 
 
@@ -14,7 +14,7 @@ class _TimeSlotsOwner(Protocol):
         target_date: date | None,
         *,
         config: dict[str, Any] | None = None,
-        to_local: Callable[[Any], Any] | None = None,
+        to_local: Callable[[datetime], datetime] | None = None,
     ) -> list[tuple[int, int]]: ...
 
 
@@ -23,7 +23,7 @@ class _TimeSlotCore(Protocol):
 
     def _import_sibling(self, name: Literal["time_slots"]) -> _TimeSlotsOwner: ...
 
-    def to_local(self, value: Any) -> Any: ...
+    def to_local(self, value: datetime) -> datetime: ...
 
 
 class TimeSlotHost(Protocol):

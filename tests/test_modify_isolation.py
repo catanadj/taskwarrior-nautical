@@ -202,6 +202,19 @@ class ModifyIsolationTests(unittest.TestCase):
         )
         self.assertIsNot(get_type_hints(time_slot_ports_for)["host"], Any)
 
+    def test_time_slot_owner_local_conversion_uses_datetime_contract(self) -> None:
+        from nautical_core.modify_time_effects import _TimeSlotCore, _TimeSlotsOwner
+
+        local_conversion = Callable[[datetime], datetime]
+        self.assertEqual(
+            get_type_hints(_TimeSlotsOwner.resolve_time_slots)["to_local"],
+            local_conversion | None,
+        )
+        self.assertEqual(
+            get_type_hints(_TimeSlotCore.to_local),
+            {"value": datetime, "return": datetime},
+        )
+
     def test_modify_ui_ports_use_typed_process_boundary_contracts(self) -> None:
         from nautical_core.callback_ports import CallbackPort
         from nautical_core.modify_ui_effects import UIEffectsPorts

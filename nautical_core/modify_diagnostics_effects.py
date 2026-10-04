@@ -227,6 +227,15 @@ class SecondsDeltaPort:
     humanize: Callable[[datetime, datetime, bool], str]
 
 
+class _SecondsDeltaCore(Protocol):
+    humanize_delta: Callable[[datetime, datetime, bool], str]
+
+
+class SecondsDeltaHost(Protocol):
+    @property
+    def core(self) -> _SecondsDeltaCore: ...
+
+
 @dataclass(frozen=True, slots=True)
 class EndChainSummaryPorts:
     summary: EndChainSummaryRenderer
@@ -389,7 +398,7 @@ def span_fields(
     )
 
 
-def seconds_delta_port_for(host: Any) -> SecondsDeltaPort:
+def seconds_delta_port_for(host: SecondsDeltaHost) -> SecondsDeltaPort:
     return SecondsDeltaPort(host.core.humanize_delta)
 
 

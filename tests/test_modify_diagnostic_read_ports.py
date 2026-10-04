@@ -54,12 +54,16 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
 
     def test_seconds_delta_port_has_concrete_humanizer_contract(self) -> None:
-        from nautical_core.modify_diagnostics_effects import SecondsDeltaPort
+        from nautical_core.modify_diagnostics_effects import (
+            SecondsDeltaPort,
+            seconds_delta_port_for,
+        )
 
         self.assertEqual(
             get_type_hints(SecondsDeltaPort)["humanize"],
             Callable[[datetime, datetime, bool], str],
         )
+        self.assertIsNot(get_type_hints(seconds_delta_port_for)["host"], Any)
 
     def test_analytics_ports_match_owner_callback_contracts(self) -> None:
         from nautical_core.modify_diagnostics_effects import AnalyticsPorts

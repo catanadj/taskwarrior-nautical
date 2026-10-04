@@ -67,6 +67,14 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
 
         self.assertIsNot(get_type_hints(completion_compute_ports_for)["host"], Any)
 
+    def test_completion_compute_host_uses_existing_human_delta_contract(self) -> None:
+        from nautical_core.modify_completion_effects import _CompletionComputeCore
+
+        self.assertEqual(
+            _CompletionComputeCore.__annotations__["humanize_delta"],
+            "HumanizeUntilDelta",
+        )
+
     def test_generation_service_contract_includes_completion_draft_builder(self) -> None:
         from nautical_core.modify_generation_effects import ChainGenerationServicePort
 

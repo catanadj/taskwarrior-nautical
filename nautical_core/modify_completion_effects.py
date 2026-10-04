@@ -90,7 +90,11 @@ if TYPE_CHECKING:
     from .integration_context import IntegrationContext
     from .task_datetime import TaskDatetimeParser
     from .task_codec import TaskCodec
-    from .modify_validation_effects import DurationPorts as DurationPortsModel, UntilPorts as UntilPortsModel
+    from .modify_validation_effects import (
+        DurationPorts as DurationPortsModel,
+        HumanizeUntilDelta,
+        UntilPorts as UntilPortsModel,
+    )
     from .modify_diagnostics_effects import EndChainSummaryPorts
     from .modify_value_effects import DatetimePorts as DatetimePortsModel
     from .cp_parser import CPSequenceToken
@@ -531,7 +535,7 @@ class _CompletionModelsOwner(Protocol):
 
 class _CompletionComputeCore(Protocol):
     coerce_int: CoerceIntCallback
-    humanize_delta: Callable[..., str]
+    humanize_delta: HumanizeUntilDelta
     fmt_dt_local: Callable[[datetime], str]
     scheduler_config_fingerprint: Callable[[], str] | None
     parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None]

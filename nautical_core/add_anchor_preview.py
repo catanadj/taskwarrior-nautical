@@ -149,7 +149,7 @@ class AnchorExpressionPreviewServices:
     prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
     scheduler_service_for_task: Callable[[TaskPayload], Any]
     to_local: Callable[[datetime], datetime]
-    fmt_dt_local: Callable[[Any], str]
+    fmt_dt_local: Callable[[datetime], str]
     coerce_int: CoerceIntCallback
     expr_has_m_or_y: Callable[[AnchorDNF], bool]
     append_dst_adjustment: AppendDstAdjustmentCallback
@@ -157,7 +157,7 @@ class AnchorExpressionPreviewServices:
     lint_and_validate: AnchorLintCallback
     omit_description_for_task_date: OmitDescriptionCallback
     root_uuid_from: Callable[[TaskPayload], str | None]
-    short: Callable[[Any], str]
+    short: Callable[[str | None], str]
     validate_anchor_mode: AnchorModeValidator
     validate_chain_duration_reasonable: AnchorDurationValidator
     append_wait_sched_rows: PreviewWaitScheduleRowsCallback
@@ -180,7 +180,7 @@ class AnchorFilePreviewServices:
     prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
     scheduler_service_for_task: Callable[[TaskPayload], Any]
     to_local: Callable[[datetime], datetime]
-    fmt_dt_local: Callable[[Any], str]
+    fmt_dt_local: Callable[[datetime], str]
     coerce_int: CoerceIntCallback
     render_business_calendar_displacement: AddCalendarFeedbackCallback
     omit_description_for_task_date: OmitDescriptionCallback

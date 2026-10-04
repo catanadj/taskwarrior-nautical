@@ -718,10 +718,18 @@ facade.__all__
                     Callable[[datetime], str],
                 )
                 self.assertEqual(
+                    get_type_hints(context)["fmt_dt_local"],
+                    Callable[[datetime], str],
+                )
+                self.assertEqual(
                     get_type_hints(context)["format_anchor_rows"],
                     Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
                 )
                 if context is AnchorExpressionPreviewServices:
+                    self.assertEqual(
+                        get_type_hints(context)["short"],
+                        Callable[[str | None], str],
+                    )
                     self.assertEqual(
                         get_type_hints(context)["to_local_cached"],
                         Callable[[datetime], datetime],

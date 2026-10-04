@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Callable, TypeAlias
 
+from .native_until import NativeUntilCarryError
 from .task_models import TaskPayload
 
 
@@ -61,13 +62,15 @@ def preserve_native_until_on_target_change(
     new: TaskPayload,
     kind: str,
     *,
-    field_changed: Any,
-    recurrence_anchor_field: Any,
-    parse_datetime: Any,
+    field_changed: Callable[[TaskPayload, TaskPayload, str], bool],
+    recurrence_anchor_field: Callable[[TaskPayload], str],
+    parse_datetime: Callable[[object], datetime | None],
     native_until: Any,
     generation_service: Any,
-    reject_carry: Any,
-    diagnostic: Any,
+    reject_carry: Callable[
+        [TaskPayload, TaskPayload, datetime | None, str, NativeUntilCarryError], None
+    ],
+    diagnostic: Callable[[str], None],
 ) -> bool:
     """Carry an untouched native until when an existing recurrence target moves."""
     if field_changed(old, new, "until") or not old.get("until"):

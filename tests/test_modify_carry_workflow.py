@@ -23,6 +23,29 @@ from nautical_core.task_models import TaskTimestamp
 
 
 class TemporalCarryWorkflowTests(unittest.TestCase):
+    def test_native_until_carry_uses_explicit_callback_contracts(self) -> None:
+        from nautical_core.modify_carry import preserve_native_until_on_target_change
+        from nautical_core.native_until import NativeUntilCarryError
+        from nautical_core.task_models import TaskPayload
+
+        annotations = get_type_hints(preserve_native_until_on_target_change)
+        expected = {
+            "old": TaskPayload,
+            "new": TaskPayload,
+            "kind": str,
+            "field_changed": Callable[[TaskPayload, TaskPayload, str], bool],
+            "recurrence_anchor_field": Callable[[TaskPayload], str],
+            "parse_datetime": Callable[[object], datetime | None],
+            "reject_carry": Callable[
+                [TaskPayload, TaskPayload, datetime | None, str, NativeUntilCarryError], None
+            ],
+            "diagnostic": Callable[[str], None],
+            "return": bool,
+        }
+        for name, annotation in expected.items():
+            with self.subTest(parameter=name):
+                self.assertEqual(annotations[name], annotation)
+
     def test_cp_carry_calculation_has_explicit_callback_contracts(self) -> None:
         from nautical_core.modify_carry import CpCarryResult
         from nautical_core.task_models import TaskPayload

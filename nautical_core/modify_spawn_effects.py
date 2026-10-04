@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, overload
 from uuid import UUID
 from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
@@ -66,6 +66,27 @@ class SpawnCommandEffects(Protocol):
     ) -> str: ...
 
 
+class _LifecycleOutboxModule(Protocol):
+    LifecycleOutboxRepository: type[LifecycleOutboxRepository]
+
+
+class _LifecycleApplicationModule(Protocol):
+    LifecycleApplicationService: type[LifecycleApplicationService]
+
+
+class SpawnIntentHost(Protocol):
+    _INTEGRATION_CONTEXT: IntegrationContext | None
+    TW_DATA_DIR: str
+
+    @overload
+    def _module(self, name: Literal["lifecycle_outbox"]) -> _LifecycleOutboxModule: ...
+
+    @overload
+    def _module(
+        self, name: Literal["lifecycle_application"]
+    ) -> _LifecycleApplicationModule: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SpawnIntentPorts:
     context: IntegrationContext | None
@@ -97,7 +118,7 @@ class SpawnChildPorts:
     diag_count: Callable[[str], None]
 
 
-def spawn_intent_ports_for(host: Any) -> SpawnIntentPorts:
+def spawn_intent_ports_for(host: SpawnIntentHost) -> SpawnIntentPorts:
     lifecycle_outbox = host._module("lifecycle_outbox")
     return SpawnIntentPorts(
         context=getattr(host, "_INTEGRATION_CONTEXT", None),

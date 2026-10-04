@@ -60,6 +60,29 @@ class PanelRendererContractTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "tty probe defect"):
                 ui._render_panel_rich("Title", [], kind="info", themes=None)
 
+    def test_rich_panel_uses_literal_text_when_markup_is_invalid(self) -> None:
+        from rich.console import Console
+        from rich.errors import MarkupError
+        from rich.text import Text
+
+        output = StringIO()
+        with patch.object(Text, "from_markup", side_effect=MarkupError("bad markup")):
+            panel = ui._build_rich_panel(
+                "Title", [("Key", "[broken] value")], kind="info", themes=None
+            )
+        Console(file=output, width=80, color_system=None).print(panel)
+
+        self.assertIn("[broken] value", output.getvalue())
+
+    def test_rich_panel_does_not_hide_unexpected_markup_failures(self) -> None:
+        from rich.text import Text
+
+        with patch.object(Text, "from_markup", side_effect=RuntimeError("markup defect")):
+            with self.assertRaisesRegex(RuntimeError, "markup defect"):
+                ui._build_rich_panel(
+                    "Title", [("Key", "value")], kind="info", themes=None
+                )
+
     def test_live_panel_branding_focus_and_footer_bounds_do_not_change_static_panels(self) -> None:
         from rich.console import Console
 

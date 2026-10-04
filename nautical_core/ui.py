@@ -399,6 +399,7 @@ def _build_rich_panel(
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+    from rich.errors import MarkupError
 
     theme = _panel_theme(kind, themes)
     border = theme.get("border", "blue")
@@ -429,7 +430,7 @@ def _build_rich_panel(
             value_raw = "" if v is None else str(v)
             try:
                 value_text = Text.from_markup(value_raw)
-            except Exception:
+            except MarkupError:
                 value_text = Text(value_raw)
             marker_text = Text(marker)
             if row_active:
@@ -444,7 +445,7 @@ def _build_rich_panel(
         value_raw = "" if v is None else str(v)
         try:
             value_text = Text.from_markup(value_raw)
-        except Exception:
+        except MarkupError:
             value_text = Text(value_raw)
         lk = str(k).lower()
         if "warning" in lk:

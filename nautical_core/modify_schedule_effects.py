@@ -137,7 +137,7 @@ class NextOccurrenceAfterLocalDateTime(Protocol):
 
     def __call__(
         self,
-        dnf: Any,
+        dnf: AnchorDNF | None,
         after_local_dt: datetime,
         *,
         fallback_hhmm: tuple[int, int],
@@ -297,11 +297,11 @@ def _sequence_period_callback(
 
 def next_occurrence_after_local_dt(
     ports: OccurrencePorts,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     after_local_dt: datetime,
     default_seed_date: date | None,
     seed_base: str,
-    omit_dnf: Any = None,
+    omit_dnf: OmitState | None = None,
     fallback_hhmm: tuple[int, int] | None = None,
 ) -> datetime | None:
     if not dnf:
@@ -320,7 +320,12 @@ def anchor_included_occurrences(
     after_local_dt: datetime,
     inclusive: bool,
     limit: int,
-    **_kwargs: Any,
+    fallback_hhmm: tuple[int, int],
+    omit_dnf: OmitState | None,
+    seed_base: str,
+    default_seed_date: date | None,
+    dnf: AnchorDNF | None,
+    anchor_file_provider: OccurrenceProvider | None,
 ) -> list[datetime]:
     service = scheduler_callbacks(ports.scheduler)[1](parent)
     return service.included_occurrences_after(after_local_dt, inclusive=inclusive, limit=limit)

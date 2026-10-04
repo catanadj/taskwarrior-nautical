@@ -120,6 +120,38 @@ class ModifyScheduleContractTests(unittest.TestCase):
             modify_schedule_effects.NextOccurrenceAfterLocalDateTime,
         )
 
+    def test_occurrence_projection_uses_anchor_domain_types(self) -> None:
+        from nautical_core.parsing.parser_models import AnchorDNF
+
+        annotations = get_type_hints(
+            modify_schedule_effects.NextOccurrenceAfterLocalDateTime.__call__
+        )
+        self.assertEqual(annotations["dnf"], AnchorDNF | None)
+        self.assertEqual(annotations["omit_dnf"], modify_models.OmitState | None)
+
+    def test_anchor_included_projection_has_explicit_inputs(self) -> None:
+        from inspect import signature
+
+        parameters = signature(
+            modify_schedule_effects.anchor_included_occurrences
+        ).parameters
+        self.assertEqual(
+            tuple(parameters),
+            (
+                "ports",
+                "parent",
+                "after_local_dt",
+                "inclusive",
+                "limit",
+                "fallback_hhmm",
+                "omit_dnf",
+                "seed_base",
+                "default_seed_date",
+                "dnf",
+                "anchor_file_provider",
+            ),
+        )
+
     def test_completion_ports_type_shared_runtime_callbacks(self) -> None:
         for ports_type in (
             modify_schedule_effects.CPCompletionPorts,
@@ -433,6 +465,7 @@ class ModifyScheduleContractTests(unittest.TestCase):
                     seed_base="provider-guard-test",
                     default_seed_date=date(2026, 8, 3),
                     dnf=[[{"kind": "w", "value": "mon", "mods": {}}]],
+                    anchor_file_provider=None,
                 )
 
     def test_until_projection_fails_closed_at_iteration_limit(self) -> None:

@@ -20,6 +20,7 @@ from .modify_models import (
     WaitScheduleDebug,
     CompletionFinals,
     AnchorDNF,
+    NativeCarryDescription,
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
@@ -285,7 +286,7 @@ def render_recurrence_updated_panel(
     *,
     parse_datetime: Callable[[Any], Any],
     format_local: Callable[[Any], str],
-    describe_native_until_carry: CallbackPort,
+    describe_native_until_carry: NativeCarryDescription,
     to_local: Callable[[Any], Any],
     coerce_int: Callable[[Any, Any], int | None],
     describe_anchor: Callable[[str], str],

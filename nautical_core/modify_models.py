@@ -160,6 +160,18 @@ class DiagnosticCallback(Protocol):
         ...
 
 
+class NativeCarryDescription(Protocol):
+    """Describe the expiration carry policy for a changed recurrence target."""
+
+    def __call__(
+        self,
+        until_dt: datetime | None,
+        target_dt: datetime | None,
+        *,
+        to_local: Callable[[datetime], datetime],
+    ) -> str | None: ...
+
+
 class RootAgeFormatter(Protocol):
     def __call__(self, task: TaskRow, now_utc: datetime) -> str:
         ...

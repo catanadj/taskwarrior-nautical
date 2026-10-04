@@ -9,6 +9,7 @@ from typing import Callable, ClassVar, NoReturn, Protocol
 from .modify_carry_workflow import TemporalCarryDecision
 from .modify_carry_workflow import NativeUntilDecision
 from .native_until import NativeUntilCarryError
+from .modify_models import NativeCarryDescription
 from .modify_validation import CompletionValidationServices
 from .task_changes import TaskTransition
 from .task_models import NauticalTask, TaskPayload, TaskTimestamp
@@ -23,16 +24,6 @@ class NativeCarryPorts:
     anchor_field: Callable[[TaskPayload], str]
     panel: "NativeCarryPanel"
     abort: Callable[[int], NoReturn]
-
-
-class NativeCarryDescription(Protocol):
-    def __call__(
-        self,
-        until_dt: datetime | None,
-        target_dt: datetime | None,
-        *,
-        to_local: Callable[[datetime], datetime],
-    ) -> str | None: ...
 
 
 class NativeCarryPanel(Protocol):

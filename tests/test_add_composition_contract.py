@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import io
+import os
 from types import SimpleNamespace
 import unittest
+from contextlib import redirect_stderr
+from unittest.mock import patch
 
 import nautical_core.add_composition as add_composition
 
@@ -53,6 +57,30 @@ class AddCompositionContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "injected internal failure"):
             add_composition.load_core(host)
+
+    def test_core_loaded_warning_failure_is_reported_without_leaking_detail(self) -> None:
+        class WarningSink:
+            @staticmethod
+            def warn_once_per_day_any(*_args: object) -> None:
+                raise RuntimeError("sensitive warning detail")
+
+        class Core:
+            MAX_JSON_BYTES = 4096
+
+            @staticmethod
+            def _import_sibling(_name: str) -> WarningSink:
+                return WarningSink()
+
+        host = self._host(Core())
+        stderr = io.StringIO()
+
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stderr(stderr):
+            add_composition.load_core(host)
+
+        self.assertTrue(host._CORE_READY)
+        self.assertIn("on-add core-loaded warning failed", stderr.getvalue())
+        self.assertIn("RuntimeError", stderr.getvalue())
+        self.assertNotIn("sensitive warning detail", stderr.getvalue())
 
 
 if __name__ == "__main__":

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
+import sys
 from typing import Any
 
 from .task_models import TaskPayload
@@ -50,8 +52,14 @@ def load_core(host: Any) -> None:
         core._import_sibling("core_config").warn_once_per_day_any(
             "core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}"
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                sys.stderr.write(
+                    f"[nautical] on-add core-loaded warning failed ({type(exc).__name__})\n"
+                )
+            except (OSError, ValueError):
+                pass
     try:
         host._MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", host._MAX_JSON_BYTES))
     except (TypeError, ValueError, OverflowError):

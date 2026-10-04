@@ -14,12 +14,26 @@ from .task_models import TaskPayload
 if TYPE_CHECKING:
     from .modify_command_effects import CommandPorts
     from .modify_models import CoerceIntCallback
+    from .modify_spawn import SpawnServices as SpawnServiceBundle
     from .modify_spawn import _ChildUUIDForSpawn, _PrepareSpawnChildPayload
     from .integration_context import IntegrationContext
     from .lifecycle.application import LifecycleApplicationService
     from .lifecycle.models import LifecycleIdentity, LifecyclePlan
     from .lifecycle.outbox import LifecycleOutboxRepository
     from .task_models import TaskDraft
+
+
+class SpawnRuntime(Protocol):
+    SpawnServices: type[SpawnServiceBundle]
+
+    def spawn_child_atomic(
+        self,
+        child_task: dict[str, Any],
+        parent_task_with_nextlink: dict[str, Any],
+        *,
+        lifecycle_plan: LifecyclePlan | None = None,
+        services: SpawnServiceBundle,
+    ) -> tuple[str, set[str], bool, bool, str | None, str | None]: ...
 
 
 class SpawnPreparation(Protocol):
@@ -72,7 +86,7 @@ class ChildUuidPorts:
 
 @dataclass(frozen=True, slots=True)
 class SpawnChildPorts:
-    spawn: Any
+    spawn: SpawnRuntime
     prepare_payload: _PrepareSpawnChildPayload
     child_uuid: _ChildUUIDForSpawn
     format_datetime: Callable[[datetime], str]
@@ -180,7 +194,7 @@ def lifecycle_spawn_identity(
 def spawn_child_atomic(
     ports: SpawnChildPorts,
     child_task: TaskDraft | dict[str, Any],
-    parent_task_with_nextlink: TaskPayload,
+    parent_task_with_nextlink: dict[str, Any],
     *,
     lifecycle_plan: LifecyclePlan | None = None,
 ) -> tuple[str, set[str], bool, bool, str | None, str | None]:

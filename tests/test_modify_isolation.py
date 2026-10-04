@@ -1550,6 +1550,7 @@ class ModifyIsolationTests(unittest.TestCase):
         from nautical_core.modify_spawn_effects import SpawnChildPorts, SpawnIntentPorts
         from collections.abc import Callable as AbcCallable
         from nautical_core.modify_spawn import _ChildUUIDForSpawn, _PrepareSpawnChildPayload
+        from nautical_core.modify_spawn_effects import SpawnRuntime
 
         self.assertNotIn("LifecycleIdentity", vars(spawn_effects))
         self.assertNotIn("LifecyclePlan", vars(spawn_effects))
@@ -1561,6 +1562,7 @@ class ModifyIsolationTests(unittest.TestCase):
                 "datetime": datetime,
                 "_ChildUUIDForSpawn": _ChildUUIDForSpawn,
                 "_PrepareSpawnChildPayload": _PrepareSpawnChildPayload,
+                "SpawnRuntime": SpawnRuntime,
                 "LifecycleIdentity": LifecycleIdentity,
                 "LifecyclePlan": LifecyclePlan,
                 "TaskPayload": TaskPayload,
@@ -1572,6 +1574,7 @@ class ModifyIsolationTests(unittest.TestCase):
                 for name in (
                     "child_uuid",
                     "prepare_payload",
+                    "spawn",
                     "format_datetime",
                     "now_utc",
                     "spawn_identity",
@@ -1583,6 +1586,7 @@ class ModifyIsolationTests(unittest.TestCase):
             {
                 "child_uuid": _ChildUUIDForSpawn,
                 "prepare_payload": _PrepareSpawnChildPayload,
+                "spawn": SpawnRuntime,
                 "format_datetime": AbcCallable[[datetime], str],
                 "now_utc": AbcCallable[[], datetime],
                 "spawn_identity": AbcCallable[[TaskPayload, TaskPayload], LifecycleIdentity],
@@ -1711,7 +1715,7 @@ class ModifyIsolationTests(unittest.TestCase):
     def test_spawn_child_atomic_uses_task_and_lifecycle_models(self) -> None:
         from nautical_core.lifecycle.models import LifecyclePlan
         from nautical_core.modify_spawn_effects import SpawnChildPorts, spawn_child_atomic
-        from nautical_core.task_models import TaskDraft, TaskPayload
+        from nautical_core.task_models import TaskDraft
 
         self.assertEqual(
             get_type_hints(
@@ -1721,7 +1725,7 @@ class ModifyIsolationTests(unittest.TestCase):
             {
                 "ports": SpawnChildPorts,
                 "child_task": TaskDraft | dict[str, Any],
-                "parent_task_with_nextlink": TaskPayload,
+                "parent_task_with_nextlink": dict[str, Any],
                 "lifecycle_plan": LifecyclePlan | None,
                 "return": tuple[str, set[str], bool, bool, str | None, str | None],
             },

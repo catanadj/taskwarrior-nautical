@@ -16,6 +16,8 @@ from .modify_models import (
     SafeParseDatetimeCallback,
     AnchorFileProviderFactory,
     AnchorIncludedOccurrencesCallback,
+    AnchorOccurrenceEvaluatorForTask,
+    OmitDNFFromParentCallback,
     OmitState,
     OccurrenceProvider,
 )
@@ -56,15 +58,78 @@ class SequencePorts:
 class CPCompletionCompute(Protocol):
     """CP final-date calculations exposed by the completion compute owner."""
 
-    estimate_cp_final_by_max: Callable[..., datetime | None]
-    cap_from_until_cp: Callable[..., tuple[int | None, datetime | None]]
+    def estimate_cp_final_by_max(
+        self,
+        task: TaskPayload,
+        next_due_utc: datetime | None,
+        *,
+        coerce_int: CoerceIntCallback,
+        parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
+        sequence_period_for_link: Callable[
+            [list[dict[str, Any]], str, int, str], timedelta
+        ],
+        add_period: Callable[[datetime, timedelta], datetime],
+        max_iterations: int,
+        diagnostic: DiagnosticCallback | None = None,
+    ) -> datetime | None: ...
+
+    def cap_from_until_cp(
+        self,
+        task: TaskPayload,
+        next_due_utc: datetime | None,
+        *,
+        parse_datetime: DatetimeParserCallback,
+        parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
+        coerce_int: CoerceIntCallback,
+        sequence_period_for_link: Callable[
+            [list[dict[str, Any]], str, int, str], timedelta
+        ],
+        add_period: Callable[[datetime, timedelta], datetime],
+        max_iterations: int,
+    ) -> tuple[int | None, datetime | None]: ...
 
 
 class AnchorCompletionCompute(Protocol):
     """Anchor final-date calculations exposed by the completion compute owner."""
 
-    estimate_anchor_final_by_max: Callable[..., datetime | None]
-    cap_from_until_anchor: Callable[..., tuple[int | None, datetime | None]]
+    def estimate_anchor_final_by_max(
+        self,
+        task: TaskPayload,
+        next_due_utc: datetime | None,
+        dnf: AnchorDNF | None,
+        *,
+        coerce_int: CoerceIntCallback,
+        recurrence_seed_base: Callable[[TaskPayload], str],
+        to_local_cached: Callable[[datetime], datetime],
+        safe_parse_datetime: SafeParseDatetimeCallback,
+        anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]],
+        omit_dnf_from_parent: OmitDNFFromParentCallback,
+        recurrence_evaluator_for_task: AnchorOccurrenceEvaluatorForTask,
+        anchor_file_provider_for: AnchorFileProviderFactory,
+        anchor_included_occurrences: AnchorIncludedOccurrencesCallback,
+        diagnostic: DiagnosticCallback | None = None,
+        max_iterations: int,
+    ) -> datetime | None: ...
+
+    def cap_from_until_anchor(
+        self,
+        task: TaskPayload,
+        next_due_utc: datetime | None,
+        dnf: AnchorDNF | None,
+        *,
+        parse_datetime: DatetimeParserCallback,
+        coerce_int: CoerceIntCallback,
+        recurrence_seed_base: Callable[[TaskPayload], str],
+        to_local_cached: Callable[[datetime], datetime],
+        safe_parse_datetime: SafeParseDatetimeCallback,
+        anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]],
+        omit_dnf_from_parent: OmitDNFFromParentCallback,
+        recurrence_evaluator_for_task: AnchorOccurrenceEvaluatorForTask,
+        anchor_file_provider_for: AnchorFileProviderFactory,
+        anchor_included_occurrences: AnchorIncludedOccurrencesCallback,
+        compare_datetimes: Callable[[datetime, datetime], int],
+        max_iterations: int,
+    ) -> tuple[int | None, datetime | None]: ...
 
 
 class NextOccurrenceAfterLocalDateTime(Protocol):
@@ -124,8 +189,8 @@ class AnchorCompletionPorts:
     scheduler: SchedulerPorts
     to_local_cached: Callable[[datetime], datetime]
     safe_parse_datetime: SafeParseDatetimeCallback
-    anchor_file_fallback_hhmm: Callable[[dict[str, Any], datetime], tuple[int, int]]
-    omit_dnf_from_parent: Callable[[dict[str, Any]], tuple[str, Any]]
+    anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]]
+    omit_dnf_from_parent: OmitDNFFromParentCallback
     anchor_file_provider_for: AnchorFileProviderFactory
     compare_datetimes: Callable[[datetime, datetime], int]
     max_iterations: int
@@ -219,6 +284,17 @@ def sequence_period_for_link(ports: SequencePorts, tokens: list[dict], cp_str: s
     ) or timedelta()
 
 
+def _sequence_period_callback(
+    ports: SequencePorts,
+) -> Callable[[list[dict[str, Any]], str, int, str], timedelta]:
+    def period_for_link(
+        tokens: list[dict[str, Any]], cp: str, link_no: int, chain_id: str
+    ) -> timedelta:
+        return sequence_period_for_link(ports, tokens, cp, link_no, chain_id)
+
+    return period_for_link
+
+
 def next_occurrence_after_local_dt(
     ports: OccurrencePorts,
     dnf: Any,
@@ -295,7 +371,7 @@ def estimate_cp_final_by_max(
         next_due_utc,
         coerce_int=ports.coerce_int,
         parse_cp_sequence_tokens=ports.parse_cp_sequence_tokens,
-        sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(ports.sequence, tokens, cp, link, chain),
+        sequence_period_for_link=_sequence_period_callback(ports.sequence),
         add_period=lambda dt, td: cp_add_period(ports.schedule, dt, td),
         max_iterations=ports.max_iterations,
         diagnostic=ports.diagnostic,
@@ -340,7 +416,7 @@ def cap_from_until_cp(
         parse_datetime=ports.parse_datetime,
         parse_cp_sequence_tokens=ports.parse_cp_sequence_tokens,
         coerce_int=ports.coerce_int,
-        sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(ports.sequence, tokens, cp, link, chain),
+        sequence_period_for_link=_sequence_period_callback(ports.sequence),
         add_period=lambda dt, td: cp_add_period(ports.schedule, dt, td),
         max_iterations=ports.max_iterations,
     )

@@ -23,6 +23,27 @@ from nautical_core.timeutil import compare_datetimes
 
 
 class ModifyScheduleContractTests(unittest.TestCase):
+    def test_completion_compute_owners_match_concrete_projection_signatures(self) -> None:
+        expected_methods = {
+            modify_schedule_effects.CPCompletionCompute: (
+                "estimate_cp_final_by_max",
+                "cap_from_until_cp",
+            ),
+            modify_schedule_effects.AnchorCompletionCompute: (
+                "estimate_anchor_final_by_max",
+                "cap_from_until_anchor",
+            ),
+        }
+        for owner, method_names in expected_methods.items():
+            for method_name in method_names:
+                with self.subTest(owner=owner.__name__, method=method_name):
+                    declared = getattr(owner, method_name, None)
+                    self.assertTrue(callable(declared), "owner must declare a method Protocol")
+                    self.assertEqual(
+                        get_type_hints(declared),
+                        get_type_hints(getattr(modify_completion_compute, method_name)),
+                    )
+
     def test_completion_projection_adapters_use_typed_temporal_inputs(self) -> None:
         from nautical_core.parsing.parser_models import AnchorDNF
 
@@ -134,11 +155,11 @@ class ModifyScheduleContractTests(unittest.TestCase):
         )
         self.assertEqual(
             annotations["anchor_file_fallback_hhmm"],
-            Callable[[dict[str, Any], datetime], tuple[int, int]],
+            Callable[[modify_models.TaskPayload, datetime], tuple[int, int]],
         )
         self.assertEqual(
             annotations["omit_dnf_from_parent"],
-            Callable[[dict[str, Any]], tuple[str, Any]],
+            modify_models.OmitDNFFromParentCallback,
         )
         self.assertEqual(
             annotations["compare_datetimes"],

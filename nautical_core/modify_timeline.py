@@ -33,7 +33,7 @@ class TimelineFormattingServices:
     fmtlocal: Callable[[Any], str]
     fmt_dt_local: Callable[[Any], str]
     short: Callable[[Any], str]
-    format_gap: Callable[[Any, Any, str, bool], str]
+    format_gap: Callable[[datetime | None, datetime | None, str, bool], str]
 
 
 TimelineItem = tuple[object, Any, TaskPayload, str]
@@ -102,7 +102,12 @@ def _format_td_short(td: timedelta) -> str:
     return "".join(parts) if parts else "0s"
 
 
-def format_gap(prev_dt: Any, next_dt: Any, kind: str = "cp", round_hours: bool = True) -> str:
+def format_gap(
+    prev_dt: datetime | None,
+    next_dt: datetime | None,
+    kind: str = "cp",
+    round_hours: bool = True,
+) -> str:
     """Format the time gap between two timeline items as a compact annotation."""
     if not (prev_dt and next_dt):
         return ""

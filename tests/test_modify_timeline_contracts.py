@@ -23,6 +23,20 @@ from nautical_core.timeutil import parse_dt_any
 
 
 class ModifyTimelineContractTests(unittest.TestCase):
+    def test_timeline_gap_formatter_uses_datetime_values(self) -> None:
+        from nautical_core.modify_timeline import format_gap
+
+        self.assertEqual(
+            get_type_hints(format_gap),
+            {
+                "prev_dt": datetime | None,
+                "next_dt": datetime | None,
+                "kind": str,
+                "round_hours": bool,
+                "return": str,
+            },
+        )
+
     def test_timeline_integer_coercion_parameters_have_explicit_call_shapes(self) -> None:
         from nautical_core.modify_timeline import (
             _timeline_initial_items,
@@ -67,7 +81,9 @@ class ModifyTimelineContractTests(unittest.TestCase):
             "fmtlocal": Callable[[Any], str],
             "fmt_dt_local": Callable[[Any], str],
             "short": Callable[[Any], str],
-            "format_gap": Callable[[Any, Any, str, bool], str],
+            "format_gap": Callable[
+                [datetime | None, datetime | None, str, bool], str
+            ],
         }
         for name, annotation in expected.items():
             with self.subTest(callback=name):

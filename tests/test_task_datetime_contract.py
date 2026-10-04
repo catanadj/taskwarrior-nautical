@@ -63,6 +63,16 @@ class TaskDatetimeContractTests(unittest.TestCase):
         self.assertEqual(parser.parse("value"), (None, "Datetime parser returned an invalid value"))
         self.assertEqual(len(diagnostics), 1)
 
+    def test_broken_diagnostics_do_not_change_datetime_parse_result(self):
+        def diagnostic(_message):
+            raise RuntimeError("diagnostic sink unavailable")
+
+        def parse(_value):
+            raise RuntimeError("parser unavailable")
+
+        parser = ConfiguredTaskDatetimeParser(parse, diagnostic=diagnostic)
+        self.assertEqual(parser.parse("value"), (None, "Datetime parsing failed"))
+
 
 if __name__ == "__main__":
     unittest.main()

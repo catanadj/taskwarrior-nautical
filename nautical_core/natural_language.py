@@ -5,6 +5,7 @@ import re
 from calendar import month_name
 from typing import Any
 
+from .parsing.parser_models import ParseError
 from .time_windows import parse_random_time_window_spec
 
 
@@ -973,7 +974,7 @@ def describe_anchor_expr(anchor_expr: str, default_due_dt: Any = None, *, parse_
         return ""
     try:
         dnf = parse_anchor_expr_to_dnf_cached(anchor_expr)
-    except Exception:
+    except ParseError:
         return ""
     return describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)
 

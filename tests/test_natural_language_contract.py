@@ -100,6 +100,29 @@ class NaturalLanguageContractTests(unittest.TestCase):
                     rand_bucket_signature=lambda _term: (1, "09:30", True, "1–7"),
                 )
 
+    def test_anchor_description_propagates_unexpected_parser_failures(self) -> None:
+        from nautical_core.parsing.parser_models import ParseError
+
+        with self.assertRaisesRegex(RuntimeError, "parser defect"):
+            natural_language.describe_anchor_expr(
+                "w:mon",
+                parse_anchor_expr_to_dnf_cached=lambda _expression: (_ for _ in ()).throw(
+                    RuntimeError("parser defect")
+                ),
+                describe_anchor_expr_from_dnf=lambda _dnf, **_kwargs: "",
+            )
+
+        self.assertEqual(
+            natural_language.describe_anchor_expr(
+                "malformed",
+                parse_anchor_expr_to_dnf_cached=lambda _expression: (_ for _ in ()).throw(
+                    ParseError("bad anchor expression")
+                ),
+                describe_anchor_expr_from_dnf=lambda _dnf, **_kwargs: "unexpected",
+            ),
+            "",
+        )
+
     def test_mode_tails_are_bound_to_direct_dnf_formatter(self) -> None:
         expression = "w:mon"
         expected = {

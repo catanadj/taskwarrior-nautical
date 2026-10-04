@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, overload
+from typing import TYPE_CHECKING, Callable, Literal, Protocol, overload
 
 from .task_models import TaskPayload
 from .cp_parser import CPSequenceToken
@@ -27,6 +27,7 @@ from .recurrence_evaluator import RecurrenceEvaluator
 from .timeutil import compare_datetimes
 
 if TYPE_CHECKING:
+    from .hook_workflow_context import WorkflowInvocationContext
     from .modify_anchor_effects import OmitPorts
     from .modify_value_effects import DatetimePorts
 
@@ -172,7 +173,7 @@ class SchedulerServiceForTask(Protocol):
 class _SchedulerRuntimeState(Protocol):
     scheduler_services: dict[tuple[object, ...], SchedulerService]
     diag_stats: dict[str, int | float]
-    workflow_context: Any
+    workflow_context: WorkflowInvocationContext | None
 
 
 class _ModifyRuntimeModule(Protocol):

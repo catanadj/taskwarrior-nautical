@@ -103,6 +103,15 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             expected,
         )
 
+    def test_scheduler_runtime_state_uses_workflow_context_model(self) -> None:
+        from nautical_core.hook_workflow_context import WorkflowInvocationContext
+        from nautical_core.modify_schedule_effects import _SchedulerRuntimeState
+
+        self.assertEqual(
+            _SchedulerRuntimeState.__annotations__["workflow_context"],
+            f"{WorkflowInvocationContext.__name__} | None",
+        )
+
     def test_modify_runtime_state_uses_task_read_repository(self) -> None:
         from nautical_core.modify_runtime import ModifyRuntimeState
         from nautical_core.task_read_repository import TaskReadRepository

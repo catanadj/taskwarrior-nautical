@@ -295,6 +295,76 @@ class ReconcileErrorContracts(unittest.TestCase):
         self.assertIn("result: partial", rendered)
         self.assertNotIn("spawn:", rendered)
 
+    def test_reconcile_plan_enrichment_propagates_callback_defects(self) -> None:
+        from nautical_core.lifecycle.models import (
+            LifecycleAction,
+            LifecycleEvent,
+            LifecycleIdentity,
+            LifecyclePlan,
+            ParentGuard,
+            recurrence_fingerprint,
+        )
+        from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
+        from nautical_core.reconcile_report import describe_plan
+
+        parent = {
+            "uuid": "11111111-0000-4000-8000-000000000001",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "11111111",
+            "link": 1,
+            "cp": "1d",
+        }
+        observation = TaskObservation.from_mapping(
+            parent, source_query="reconcile report boundary contract"
+        )
+        guard = ParentGuard(
+            status="completed",
+            chain="on",
+            chain_id="11111111",
+            link=1,
+            recurrence_fingerprint=recurrence_fingerprint(parent),
+            modified="",
+        )
+        identity = LifecycleIdentity(
+            chain_id="11111111",
+            parent_uuid=parent["uuid"],
+            source_link=1,
+            target_link=2,
+            event=LifecycleEvent.COMPLETE,
+        )
+        plan = LifecyclePlan(
+            identity=identity,
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=guard,
+            child_payload=(("due", "20261004T090000Z"), ("until", "20261005T090000Z")),
+        )
+        result = RecoveryPlanResult(
+            observation,
+            plan,
+            reason="next occurrence",
+            child_due=datetime(2026, 10, 4, 9, tzinfo=timezone.utc),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "parse callback defect"):
+            describe_plan(
+                result,
+                parse_until=lambda _value: (_ for _ in ()).throw(
+                    RuntimeError("parse callback defect")
+                ),
+            )
+        with self.assertRaisesRegex(RuntimeError, "carry callback defect"):
+            describe_plan(
+                result,
+                parse_until=lambda _value: (
+                    datetime(2026, 10, 5, 9, tzinfo=timezone.utc),
+                    None,
+                ),
+                describe_carry=lambda *_args: (_ for _ in ()).throw(
+                    RuntimeError("carry callback defect")
+                ),
+            )
+
     def test_native_until_manual_review_is_not_a_hard_error(self) -> None:
         import nautical_core as core
 

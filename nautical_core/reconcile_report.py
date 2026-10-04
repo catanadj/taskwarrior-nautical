@@ -93,18 +93,12 @@ def describe_plan(
     child_until = plan.plan.child_dict().get("until")
     if not child_until or not callable(parse_until):
         return evidence
-    try:
-        until_dt, until_err = parse_until(child_until)
-    except Exception:
-        return evidence
+    until_dt, until_err = parse_until(child_until)
     if until_err or until_dt is None:
         return evidence
     evidence["child_expires"] = str(fmt_dt_local(until_dt)) if callable(fmt_dt_local) else str(child_until)
     if plan.child_due is not None and callable(describe_carry):
-        try:
-            carry = describe_carry(until_dt, plan.child_due)
-        except Exception:
-            carry = None
+        carry = describe_carry(until_dt, plan.child_due)
         if carry:
             evidence["expiration"] = carry
     return evidence

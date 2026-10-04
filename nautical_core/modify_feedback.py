@@ -5,7 +5,6 @@ from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .callback_ports import CallbackPort
 from .modify_carry_workflow import TemporalCarryDecision
 from .parsing.parser_models import ParseError
 from .task_models import TaskPayload
@@ -131,7 +130,7 @@ def render_cp_schedule_adjusted_panel(
     format_local: Callable[[Any], str],
     semantic_diff_value: Callable[[str, str], str],
     format_offset: Callable[[timedelta], str],
-    panel: CallbackPort,
+    panel: PanelCallback,
 ) -> None:
     """Render the relative schedule changes applied after a CP due edit."""
     old_due = adjustment.target_old.value if adjustment.target_old is not None else None
@@ -160,7 +159,7 @@ def render_explicit_timing_order_warning(
     changed_fields: tuple[str, ...],
     *,
     format_offset: Callable[[timedelta], str],
-    panel: CallbackPort,
+    panel: PanelCallback,
 ) -> None:
     """Warn when an explicit timing edit leaves an invalid field ordering."""
     if not changed_fields:
@@ -294,7 +293,7 @@ def render_recurrence_updated_panel(
     first_recurrence_target: Callable[[TaskPayload, str], Any],
     panel_mode: str,
     strip_markup: Callable[[str], str],
-    panel: CallbackPort,
+    panel: PanelCallback,
 ) -> None:
     if not changes:
         return

@@ -20,6 +20,7 @@ from nautical_core.modify_models import (
     CompletionLifecycleResult,
     WaitScheduleDebug,
     NativeCarryDescription,
+    PanelCallback,
 )
 from nautical_core.parsing.parser_models import AnchorDNF
 from nautical_core.task_models import TaskPayload
@@ -129,6 +130,16 @@ def _omit_summary_core(
 
 
 class ModifyFeedbackContractTests(unittest.TestCase):
+    def test_feedback_renderers_use_the_shared_panel_callback_contract(self) -> None:
+        renderers = (
+            modify_feedback.render_cp_schedule_adjusted_panel,
+            modify_feedback.render_explicit_timing_order_warning,
+            modify_feedback.render_recurrence_updated_panel,
+        )
+        for renderer in renderers:
+            with self.subTest(renderer=renderer.__name__):
+                self.assertIs(get_type_hints(renderer)["panel"], PanelCallback)
+
     def test_native_until_feedback_uses_its_named_carry_contract(self) -> None:
         self.assertIs(
             get_type_hints(modify_feedback.render_recurrence_updated_panel)[

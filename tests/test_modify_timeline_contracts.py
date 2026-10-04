@@ -68,7 +68,10 @@ class ModifyTimelineContractTests(unittest.TestCase):
             "omit_dnf_from_parent": Callable[
                 [TaskPayload], tuple[str, OmitState | None]
             ],
-            "omit_description_for_date": Callable[[Any, Any], str | None] | None,
+            "omit_description_for_date": Callable[
+                [OmitState | None, date], str | None
+            ]
+            | None,
             "recurrence_evaluator_for_task": Callable[
                 [TaskPayload], RecurrenceEvaluator
             ],

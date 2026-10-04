@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, TypeAlias
 
 from .anchor_omit import OmitState
@@ -20,7 +20,9 @@ class TimelineProjectionServices:
     to_local_cached: Callable[[datetime], datetime]
     safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]]
     omit_dnf_from_parent: Callable[[TaskPayload], tuple[str, OmitState | None]]
-    omit_description_for_date: Callable[[Any, Any], str | None] | None
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None
     recurrence_evaluator_for_task: Callable[[TaskPayload], RecurrenceEvaluator]
     scheduler_service_for_task: Callable[[TaskPayload], SchedulerService]
 
@@ -49,10 +51,12 @@ def _timeline_seed_base(task: TaskPayload) -> str:
 
 
 def _timeline_omit_label(
-    omit_dnf: Any,
-    omit_date: Any,
+    omit_dnf: OmitState | None,
+    omit_date: date,
     *,
-    omit_description_for_date: Callable[[Any, Any], str | None] | None,
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None,
 ) -> str | None:
     if omit_description_for_date is None:
         return None
@@ -211,8 +215,10 @@ def _timeline_future_anchor_items(
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
     scheduler_service: Any,
-    omit_dnf: Any,
-    omit_description_for_date: Callable[[Any, Any], str | None] | None,
+    omit_dnf: OmitState | None,
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None,
     max_iterations: int,
 ) -> list[tuple[object, Any, dict[str, Any], str]]:
     items: list[tuple[object, Any, dict[str, Any], str]] = []
@@ -312,8 +318,10 @@ def _timeline_omitted_before_next_anchor_items(
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
     scheduler_service: Any,
-    omit_dnf: Any,
-    omit_description_for_date: Callable[[Any, Any], str | None] | None,
+    omit_dnf: OmitState | None,
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None,
     max_iterations: int,
 ) -> list[tuple[object, Any, dict[str, Any], str]]:
     if not omit_dnf:
@@ -485,8 +493,10 @@ def anchor_file_timeline_lines(
     to_local_cached: Callable[[datetime], datetime],
     scheduler_service: Any,
     evaluator: Any,
-    omit_dnf: Any,
-    omit_description_for_date: Callable[[Any, Any], str | None] | None,
+    omit_dnf: OmitState | None,
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None,
     format_gap: Callable[[Any, Any, str, bool], str],
 ) -> list[str]:
     """Project anchor-file events and render their timeline rows."""
@@ -623,7 +633,7 @@ def timeline_lines(
     projection: TimelineProjectionServices,
     formatting: TimelineFormattingServices,
     scheduler_service: Any | None,
-    omit_dnf: Any,
+    omit_dnf: OmitState | None,
     evaluator: Any | None,
 ) -> list[str]:
     cur_no = formatting.coerce_int(task.get("link") if cur_no is None else cur_no, 1)

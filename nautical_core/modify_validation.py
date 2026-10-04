@@ -364,7 +364,7 @@ def validate_native_until_anchor_slots_or_fail(
                 kind="error",
             )
             abort(1)
-        return
+        raise
     is_valid, reason = validate_time_slots(
         until_dt,
         target_dt,

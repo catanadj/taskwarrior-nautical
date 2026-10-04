@@ -146,6 +146,34 @@ class ModifyValidationEffectsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "anchor validator defect"):
             validate_with(broken_validator)
 
+    def test_native_until_slot_preflight_surfaces_unclassified_collection_errors(self) -> None:
+        task = {
+            "anchor": "w:mon",
+            "due": "20260101T090000Z",
+            "until": "20260102T090000Z",
+        }
+
+        def collect_broken_slots(*_args, **_kwargs):
+            raise RuntimeError("slot collector defect")
+
+        with self.assertRaisesRegex(RuntimeError, "slot collector defect"):
+            validate_native_until_anchor_slots_or_fail(
+                task,
+                safe_parse_datetime=lambda _value: (datetime(2026, 1, 1, 9), None),
+                validate_anchor=lambda _expr: [],
+                collect_time_slots=collect_broken_slots,
+                validate_time_slots=lambda *_args, **_kwargs: (True, None),
+                normalize_time_slots=lambda *_args: [],
+                anchor_file_dir="",
+                recurrence_context=lambda _task: None,
+                to_local=lambda value: value,
+                format_local=str,
+                astronomy_is_error=lambda _exc: False,
+                astronomy_error_message=str,
+                panel=lambda *_args, **_kwargs: None,
+                abort=lambda _code: None,
+            )
+
     def test_datetime_effects_handle_invalid_values_and_truncate_microseconds(self) -> None:
         ports = DatetimeEffectPorts(
             parse_datetime=lambda value: None if value == "bad" else datetime(2026, 1, 1, 9, 0),

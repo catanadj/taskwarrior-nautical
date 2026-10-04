@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import importlib
 from types import SimpleNamespace
@@ -174,6 +175,17 @@ class ModifyFeedbackContractTests(unittest.TestCase):
                 "describe_native_until_carry"
             ],
             NativeCarryDescription,
+        )
+
+    def test_recurrence_feedback_local_conversion_uses_datetime_contract(self) -> None:
+        expected = Callable[[datetime], datetime]
+        self.assertEqual(
+            get_type_hints(modify_feedback.CompletionFeedbackCore.to_local),
+            {"value": datetime, "return": datetime},
+        )
+        self.assertEqual(
+            get_type_hints(modify_feedback.render_recurrence_updated_panel)["to_local"],
+            expected,
         )
 
     def test_completion_feedback_renderers_use_owner_models(self) -> None:

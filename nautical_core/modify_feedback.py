@@ -43,7 +43,7 @@ class _PanelWarningsCallback(Protocol):
 class CompletionFeedbackCore(Protocol):
     def _import_sibling(self, name: str) -> Any: ...
 
-    def to_local(self, value: Any) -> Any: ...
+    def to_local(self, value: datetime) -> datetime: ...
 
     def business_calendar_displacement_for_date(
         self,
@@ -288,7 +288,7 @@ def render_recurrence_updated_panel(
     parse_datetime: Callable[[Any], Any],
     format_local: Callable[[Any], str],
     describe_native_until_carry: NativeCarryDescription,
-    to_local: Callable[[Any], Any],
+    to_local: Callable[[datetime], datetime],
     coerce_int: Callable[[Any, Any], int | None],
     describe_anchor: Callable[[str], str],
     resolve_omit_presets: Callable[[str], str],

@@ -7,8 +7,8 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .callback_ports import CallbackPort
 from .modify_analytics import LatenessStats
+from .modify_models import FeedbackPanelCallback
 from .parsing.parser_models import AnchorDNF, ParseError
 from .task_models import TaskObservation, TaskPayload
 
@@ -88,7 +88,7 @@ class ChainSummaryRenderServices:
     coerce_int: Callable[[Any, Any], int | None]
     format_local: Callable[[datetime], str]
     max_chain_walk: int
-    panel: CallbackPort
+    panel: FeedbackPanelCallback
     diagnostic: Callable[[str], None]
 
 

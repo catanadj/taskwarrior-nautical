@@ -106,10 +106,13 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
     def test_end_chain_summary_ports_use_renderer_and_service_contracts(self) -> None:
         from nautical_core.modify_chain_summary import ChainSummaryRenderServices
         from nautical_core.modify_diagnostics_effects import EndChainSummaryPorts
+        from nautical_core.modify_models import FeedbackPanelCallback
 
         annotations = get_type_hints(EndChainSummaryPorts)
+        renderer_annotations = get_type_hints(ChainSummaryRenderServices)
         self.assertIsNot(annotations["summary"], Any)
         self.assertIs(annotations["services"], ChainSummaryRenderServices)
+        self.assertIs(renderer_annotations["panel"], FeedbackPanelCallback)
 
     def test_diagnostic_chain_adapters_use_observation_and_datetime_types(self) -> None:
         import nautical_core.modify_diagnostics_effects as diagnostics

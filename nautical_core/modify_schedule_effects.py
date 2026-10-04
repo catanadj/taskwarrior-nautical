@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
+from .parsing.parser_models import AnchorDNF
 from .modify_models import (
     CoerceIntCallback,
     DatetimeParserCallback,
@@ -15,7 +16,6 @@ from .modify_models import (
     SafeParseDatetimeCallback,
     AnchorFileProviderFactory,
     AnchorIncludedOccurrencesCallback,
-    AnchorDNF,
     OmitState,
     OccurrenceProvider,
 )
@@ -288,7 +288,7 @@ def _anchor_included_occurrences_callback(
 def estimate_cp_final_by_max(
     ports: CPCompletionPorts,
     task: TaskPayload,
-    next_due_utc: Any,
+    next_due_utc: datetime | None,
 ) -> datetime | None:
     return ports.compute.estimate_cp_final_by_max(
         task,
@@ -305,8 +305,8 @@ def estimate_cp_final_by_max(
 def estimate_anchor_final_by_max(
     ports: AnchorCompletionPorts,
     task: TaskPayload,
-    next_due_utc: Any,
-    dnf: Any,
+    next_due_utc: datetime | None,
+    dnf: AnchorDNF | None,
 ) -> datetime | None:
     evaluator_callback, _service_callback = scheduler_callbacks(ports.scheduler)
     return ports.compute.estimate_anchor_final_by_max(
@@ -332,7 +332,7 @@ def estimate_anchor_final_by_max(
 def cap_from_until_cp(
     ports: CPCompletionPorts,
     task: TaskPayload,
-    next_due_utc: Any,
+    next_due_utc: datetime | None,
 ) -> tuple[int | None, datetime | None]:
     return ports.compute.cap_from_until_cp(
         task,
@@ -349,8 +349,8 @@ def cap_from_until_cp(
 def cap_from_until_anchor(
     ports: AnchorCompletionPorts,
     task: TaskPayload,
-    next_due_utc: Any,
-    dnf: Any,
+    next_due_utc: datetime | None,
+    dnf: AnchorDNF | None,
 ) -> tuple[int | None, datetime | None]:
     evaluator_callback, _service_callback = scheduler_callbacks(ports.scheduler)
     return ports.compute.cap_from_until_anchor(

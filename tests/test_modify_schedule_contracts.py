@@ -23,6 +23,31 @@ from nautical_core.timeutil import compare_datetimes
 
 
 class ModifyScheduleContractTests(unittest.TestCase):
+    def test_completion_projection_adapters_use_typed_temporal_inputs(self) -> None:
+        from nautical_core.parsing.parser_models import AnchorDNF
+
+        expected = {
+            modify_schedule_effects.estimate_cp_final_by_max: {
+                "next_due_utc": datetime | None,
+            },
+            modify_schedule_effects.cap_from_until_cp: {
+                "next_due_utc": datetime | None,
+            },
+            modify_schedule_effects.estimate_anchor_final_by_max: {
+                "next_due_utc": datetime | None,
+                "dnf": AnchorDNF | None,
+            },
+            modify_schedule_effects.cap_from_until_anchor: {
+                "next_due_utc": datetime | None,
+                "dnf": AnchorDNF | None,
+            },
+        }
+        for function, expected_parameters in expected.items():
+            annotations = get_type_hints(function)
+            with self.subTest(function=function.__name__):
+                for parameter, expected_type in expected_parameters.items():
+                    self.assertEqual(annotations[parameter], expected_type)
+
     def _scheduler_ports(
         self, state: modify_runtime.ModifyRuntimeState
     ) -> modify_schedule_effects.SchedulerPorts:

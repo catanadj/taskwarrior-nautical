@@ -950,10 +950,7 @@ def describe_anchor_term(
 def describe_anchor_expr_from_dnf(dnf: list, default_due_dt: Any = None, *, describe_anchor_term: Any) -> str:
     nat_terms = []
     for term in dnf or []:
-        try:
-            text = describe_anchor_term(term, default_due_dt=default_due_dt)
-        except Exception:
-            text = ""
+        text = describe_anchor_term(term, default_due_dt=default_due_dt)
         if text:
             nat_terms.append(text)
 

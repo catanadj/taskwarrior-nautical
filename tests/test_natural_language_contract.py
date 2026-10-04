@@ -123,6 +123,15 @@ class NaturalLanguageContractTests(unittest.TestCase):
             "",
         )
 
+    def test_anchor_term_description_does_not_silently_drop_failed_branches(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "term formatter defect"):
+            natural_language.describe_anchor_expr_from_dnf(
+                [[{"type": "w", "spec": "mon"}]],
+                describe_anchor_term=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError("term formatter defect")
+                ),
+            )
+
     def test_mode_tails_are_bound_to_direct_dnf_formatter(self) -> None:
         expression = "w:mon"
         expected = {

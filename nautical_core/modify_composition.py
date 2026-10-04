@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
     from .modify_completion_effects import (
         CompletionComputePorts,
+        CompletionComputeHost,
         CompletionPreflightContextPorts,
         CompletionSpawnHost,
         CompletionSpawnPorts,
@@ -285,7 +286,7 @@ class _ModifyCompletionEffects(Protocol):
         self, host: Any
     ) -> CompletionPreflightContextPorts: ...
 
-    def completion_compute_ports_for(self, host: Any) -> CompletionComputePorts: ...
+    def completion_compute_ports_for(self, host: CompletionComputeHost) -> CompletionComputePorts: ...
 
     def completion_spawn_ports_for(self, host: CompletionSpawnHost) -> CompletionSpawnPorts: ...
 

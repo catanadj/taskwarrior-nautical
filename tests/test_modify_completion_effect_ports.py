@@ -61,6 +61,11 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
 
         self.assertIsNot(get_type_hints(completion_spawn_ports_for)["host"], Any)
 
+    def test_completion_compute_factory_has_typed_host_contract(self) -> None:
+        from nautical_core.modify_completion_effects import completion_compute_ports_for
+
+        self.assertIsNot(get_type_hints(completion_compute_ports_for)["host"], Any)
+
     def test_generation_service_contract_includes_completion_draft_builder(self) -> None:
         from nautical_core.modify_generation_effects import ChainGenerationServicePort
 

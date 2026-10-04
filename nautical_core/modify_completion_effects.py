@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta as Timedelta
 from dataclasses import dataclass
 from collections.abc import Mapping, MutableMapping
 from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, overload
 from uuid import UUID
 
-from .chain_generation import ChainGenerationService
 from .task_models import NauticalTask, TaskDraft, TaskObservation, TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from .timeutil import compare_datetimes
@@ -58,14 +57,21 @@ from .modify_models import (
 )
 from .modify_ui_effects import UIEffectsPorts
 from .scheduler_models import OccurrenceSearchExhausted
+from .modify_generation_effects import ChainGenerationServicePort
 
 if TYPE_CHECKING:
     from .modify_generation_effects import (
         _ChainGenerationModule,
-        ChainGenerationServicePort,
         GenerationHost,
         GenerationPorts,
         GenerationStatePort,
+    )
+    from .modify_schedule_effects import (
+        _ModifyAnchorCompletionEffects,
+        _ModifyRuntimeModule,
+        AnchorCompletionPorts,
+        CPCompletionPorts,
+        SequenceIntervalForToken,
     )
     from .modify_spawn_effects import (
         _LifecycleApplicationModule,
@@ -84,6 +90,11 @@ if TYPE_CHECKING:
     from .integration_context import IntegrationContext
     from .task_datetime import TaskDatetimeParser
     from .task_codec import TaskCodec
+    from .modify_validation_effects import DurationPorts as DurationPortsModel, UntilPorts as UntilPortsModel
+    from .modify_diagnostics_effects import EndChainSummaryPorts
+    from .modify_value_effects import DatetimePorts as DatetimePortsModel
+    from .cp_parser import CPSequenceToken
+    from .modify_models import AnchorFileProviderFactory
 
 
 class CompletionPreflightService(Protocol):
@@ -227,7 +238,7 @@ class CompletionComputeService(Protocol):
         now_utc: datetime,
         *,
         preflight: CompletionPreflightContext | None,
-        generation: ChainGenerationService,
+        generation: ChainGenerationServicePort,
         scheduler_fingerprint: str,
         compare_datetimes: Callable[[datetime, datetime], int],
         invalid_relative_carry_reason: InvalidRelativeCarryReasonCallback,
@@ -416,7 +427,7 @@ class CompletionCapsPorts:
 @dataclass(frozen=True, slots=True)
 class ChildDuePorts:
     compute: CompletionComputeService
-    generation: ChainGenerationService
+    generation: ChainGenerationServicePort
     decode_task: TaskRowDecoder
     task_type: type[NauticalTask]
     exhaustion_message: Callable[[OccurrenceSearchExhausted], str]
@@ -437,7 +448,7 @@ class DurationWarningPorts:
 
 @dataclass(frozen=True, slots=True)
 class CompletionLifecyclePlanPorts:
-    generation: ChainGenerationService
+    generation: ChainGenerationServicePort
     scheduler_fingerprint: Callable[[], str]
     compare_datetimes: Callable[[datetime, datetime], int]
     invalid_relative_carry_reason: InvalidRelativeCarryReasonCallback
@@ -497,6 +508,183 @@ class _CompletionPreflightCore(Protocol):
 class _CompletionModelsOwner(Protocol):
     CompletionPreflightServices: type[CompletionPreflightServices]
     CompletionChainSnapshot: type[CompletionChainSnapshot]
+    CompletionComputeServices: type[CompletionComputeServices]
+
+
+class _CompletionComputeCore(Protocol):
+    coerce_int: CoerceIntCallback
+    humanize_delta: Callable[..., str]
+    fmt_dt_local: Callable[[datetime], str]
+    scheduler_config_fingerprint: Callable[[], str] | None
+    parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None]
+    cp_sequence_interval_for_token: SequenceIntervalForToken
+    build_local_datetime: Callable[[date, tuple[int, int]], datetime]
+
+    def _import_sibling(self, name: Literal["scheduler_models"]) -> _CompletionSchedulerModelsOwner: ...
+
+
+class _CompletionComputeRuntimeState(Protocol):
+    scheduler_services: dict[Any, Any]
+    diag_stats: dict[str, Any]
+    workflow_context: Any
+    chain_generation_service: ChainGenerationServicePort | None
+
+
+class _CompletionSchedulerModelsOwner(Protocol):
+    def occurrence_exhaustion_message(self, error: OccurrenceSearchExhausted) -> str: ...
+
+
+class _CompletionTaskModelsOwner(Protocol):
+    NauticalTask: type[NauticalTask]
+
+
+class _CompletionValidationEffectsOwner(Protocol):
+    UntilPorts: type[UntilPortsModel]
+    DurationPorts: type[DurationPortsModel]
+
+    def until_not_past(
+        self, ports: UntilPortsModel, until_dt: datetime | None, now_utc: datetime
+    ) -> tuple[bool, str | None]: ...
+
+    def chain_duration_reasonable(
+        self,
+        ports: DurationPortsModel,
+        child_due: datetime | None,
+        until_dt: datetime | None,
+        now_utc: datetime,
+    ) -> tuple[bool, str | None]: ...
+
+
+class _CompletionScheduleEffectsOwner(Protocol):
+    def cp_completion_ports_for(self, host: CompletionComputeHost) -> CPCompletionPorts: ...
+
+    def anchor_completion_ports_for(self, host: CompletionComputeHost) -> AnchorCompletionPorts: ...
+
+    def estimate_cp_final_by_max(
+        self, ports: CPCompletionPorts, task: TaskPayload, next_due_utc: datetime | None
+    ) -> datetime | None: ...
+
+    def estimate_anchor_final_by_max(
+        self,
+        ports: AnchorCompletionPorts,
+        task: TaskPayload,
+        next_due_utc: datetime | None,
+        dnf: AnchorDNF | None,
+    ) -> datetime | None: ...
+
+    def cap_from_until_cp(
+        self, ports: CPCompletionPorts, task: TaskPayload, next_due_utc: datetime | None
+    ) -> tuple[int | None, datetime | None]: ...
+
+    def cap_from_until_anchor(
+        self,
+        ports: AnchorCompletionPorts,
+        task: TaskPayload,
+        next_due_utc: datetime | None,
+        dnf: AnchorDNF | None,
+    ) -> tuple[int | None, datetime | None]: ...
+
+
+class _EnsureTerminalChainOffAdapter(Protocol):
+    def __call__(
+        self,
+        compute_host: "CompletionComputeHost",
+        task: TaskPayload,
+        event: str | None = None,
+    ) -> bool: ...
+
+
+class _CompletionCompositionAdaptersOwner(Protocol):
+    ensure_terminal_chain_off_for: _EnsureTerminalChainOffAdapter
+
+
+class _CompletionDiagnosticsEffectsOwner(Protocol):
+    def end_chain_summary_ports_for(self, host: CompletionComputeHost) -> EndChainSummaryPorts: ...
+
+    def end_chain_summary(
+        self,
+        ports: EndChainSummaryPorts,
+        task: TaskPayload,
+        reason: str,
+        now_utc: datetime,
+        current_task: TaskPayload | None = None,
+    ) -> None: ...
+
+
+class _CompletionValueEffectsOwner(Protocol):
+    DatetimePorts: type[DatetimePortsModel]
+
+    def compare_datetimes(
+        self, ports: DatetimePortsModel, left: datetime, right: datetime
+    ) -> int: ...
+
+
+class _CompletionChainIntegrityLifecycleOwner(Protocol):
+    invalid_relative_carry_reason: InvalidRelativeCarryReasonCallback
+
+
+class CompletionComputeHost(Protocol):
+    core: _CompletionComputeCore
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _tolocal: Callable[[datetime], datetime]
+    _to_local_cached: Callable[[datetime], datetime]
+    _anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]]
+    _anchor_file_provider_for: AnchorFileProviderFactory
+    _MAX_ITERATIONS: int
+    _RECURRENCE_UPDATE_UDAS: tuple[str, ...]
+    _DEBUG_WAIT_SCHED: bool
+    _LAST_WAIT_SCHED_DEBUG: MutableMapping[str, dict[str, Any]] | None
+    _workflow_now_utc: Callable[[], datetime]
+    _MIN_FUTURE_WARN: int
+    timedelta: type[Timedelta]
+    _diag: DiagnosticCallback
+
+    def _modify_runtime_state(self) -> _CompletionComputeRuntimeState: ...
+
+    @overload
+    def _module(self, name: Literal["modify_completion_compute"]) -> CompletionComputeService: ...
+
+    @overload
+    def _module(self, name: Literal["modify_models"]) -> _CompletionModelsOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_schedule_effects"]) -> _CompletionScheduleEffectsOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_validation_effects"]) -> _CompletionValidationEffectsOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_generation_effects"]) -> _CompletionGenerationEffects: ...
+
+    @overload
+    def _module(self, name: Literal["modify_composition_adapters"]) -> _CompletionCompositionAdaptersOwner: ...
+
+    @overload
+    def _module(self, name: Literal["task_codec"]) -> _CompletionTaskCodecOwner: ...
+
+    @overload
+    def _module(self, name: Literal["task_models"]) -> _CompletionTaskModelsOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_ui_effects"]) -> _CompletionUIModule: ...
+
+    @overload
+    def _module(self, name: Literal["modify_diagnostics_effects"]) -> _CompletionDiagnosticsEffectsOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_value_effects"]) -> _CompletionValueEffectsOwner: ...
+
+    @overload
+    def _module(self, name: Literal["chain_integrity_lifecycle"]) -> _CompletionChainIntegrityLifecycleOwner: ...
+
+    @overload
+    def _module(self, name: Literal["modify_runtime"]) -> _ModifyRuntimeModule: ...
+
+    @overload
+    def _module(self, name: Literal["modify_anchor_effects"]) -> _ModifyAnchorCompletionEffects: ...
+
+    @overload
+    def _module(self, name: Literal["chain_generation"]) -> _ChainGenerationModule: ...
 
 
 class CompletionPreflightHost(Protocol):
@@ -807,7 +995,7 @@ def cap_guard_or_stop(ports: CompletionFeedbackPorts, new: TaskPayload, next_no:
     )
 
 
-def completion_compute_ports_for(host: Any) -> CompletionComputePorts:
+def completion_compute_ports_for(host: CompletionComputeHost) -> CompletionComputePorts:
     compute = host._module("modify_completion_compute")
     models = host._module("modify_models")
     schedule = host._module("modify_schedule_effects")
@@ -877,14 +1065,14 @@ def completion_compute_ports_for(host: Any) -> CompletionComputePorts:
             anchor_schedule_ports, task, due, expression
         ),
     )
-    fingerprint = getattr(host.core, "scheduler_config_fingerprint", None)
+    fingerprint = host.core.scheduler_config_fingerprint
     ensure_terminal_chain_off: Callable[[TaskPayload, str | None], bool] = partial(
         host._module("modify_composition_adapters").ensure_terminal_chain_off_for,
         host,
     )
     plan_ports = CompletionLifecyclePlanPorts(
         generation=generation,
-        scheduler_fingerprint=fingerprint if callable(fingerprint) else (lambda: ""),
+        scheduler_fingerprint=fingerprint if fingerprint is not None else (lambda: ""),
         compare_datetimes=lambda left, right: host._module(
             "modify_value_effects"
         ).compare_datetimes(

@@ -401,18 +401,18 @@ class ModifyIsolationTests(unittest.TestCase):
         )
 
     def test_child_due_ports_use_generation_and_task_contracts(self) -> None:
-        from nautical_core.chain_generation import ChainGenerationService
         from nautical_core.modify_completion_effects import ChildDuePorts, TaskRowDecoder
+        from nautical_core.modify_generation_effects import ChainGenerationServicePort
         from nautical_core.task_models import NauticalTask
 
         annotations = get_type_hints(ChildDuePorts)
-        self.assertIs(annotations["generation"], ChainGenerationService)
+        self.assertIs(annotations["generation"], ChainGenerationServicePort)
         self.assertIs(annotations["decode_task"], TaskRowDecoder)
         self.assertEqual(annotations["task_type"], type[NauticalTask])
 
     def test_completion_lifecycle_plan_ports_do_not_carry_module_bags(self) -> None:
-        from nautical_core.chain_generation import ChainGenerationService
         from nautical_core.modify_completion_effects import CompletionLifecyclePlanPorts
+        from nautical_core.modify_generation_effects import ChainGenerationServicePort
         from nautical_core.modify_models import (
             DiagnosticCallback,
             EndChainSummaryCallback,
@@ -436,7 +436,7 @@ class ModifyIsolationTests(unittest.TestCase):
                 "diagnostic",
             },
         )
-        self.assertIs(annotations["generation"], ChainGenerationService)
+        self.assertIs(annotations["generation"], ChainGenerationServicePort)
         self.assertIs(annotations["invalid_relative_carry_reason"], InvalidRelativeCarryReasonCallback)
         self.assertIs(annotations["end_chain_summary"], EndChainSummaryCallback)
         self.assertIs(annotations["panel"], PanelCallback)
@@ -1263,6 +1263,7 @@ class ModifyIsolationTests(unittest.TestCase):
         from nautical_core.lifecycle.models import LifecyclePlan
         from nautical_core.modify_completion_effects import (
             CompletionComputePorts,
+            CompletionComputeHost,
             CompletionPreflightContextPorts,
             CompletionSpawnHost,
             CompletionSpawnPorts,
@@ -1279,6 +1280,7 @@ class ModifyIsolationTests(unittest.TestCase):
         localns = {
             "LifecyclePlan": LifecyclePlan,
             "CompletionComputePorts": CompletionComputePorts,
+            "CompletionComputeHost": CompletionComputeHost,
             "CompletionPreflightContextPorts": CompletionPreflightContextPorts,
             "CompletionSpawnHost": CompletionSpawnHost,
             "CompletionSpawnPorts": CompletionSpawnPorts,

@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from .task_models import NauticalTask, TaskDraft, TaskPayload
+from .parsing.parser_models import AnchorDNF
 
 
 class NativeUntilGenerationService(Protocol):
@@ -40,6 +41,14 @@ class ChainGenerationServicePort(NativeUntilGenerationService, Protocol):
         cpmax: int,
         until_dt: datetime | None,
     ) -> TaskDraft: ...
+
+    def compute_cp_child_due(
+        self, parent: NauticalTask
+    ) -> tuple[datetime | None, dict[str, Any] | None]: ...
+
+    def compute_anchor_child_due(
+        self, parent: NauticalTask
+    ) -> tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None]: ...
 
 
 class GenerationStatePort(Protocol):

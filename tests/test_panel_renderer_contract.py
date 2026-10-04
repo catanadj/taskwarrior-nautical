@@ -11,6 +11,15 @@ import nautical_core.ui as ui
 
 
 class PanelRendererContractTests(unittest.TestCase):
+    def test_terminal_width_uses_default_when_stderr_is_not_a_terminal(self) -> None:
+        with patch.object(ui.os, "get_terminal_size", side_effect=OSError("not a tty")):
+            self.assertEqual(ui.term_width_stderr(default=60), 60)
+
+    def test_terminal_width_does_not_hide_unexpected_probe_failures(self) -> None:
+        with patch.object(ui.os, "get_terminal_size", side_effect=RuntimeError("broken probe")):
+            with self.assertRaisesRegex(RuntimeError, "broken probe"):
+                ui.term_width_stderr()
+
     def test_live_panel_branding_focus_and_footer_bounds_do_not_change_static_panels(self) -> None:
         from rich.console import Console
 

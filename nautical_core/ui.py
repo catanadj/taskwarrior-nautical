@@ -61,7 +61,7 @@ def _normalize_live_panel_footer(value: object) -> str:
 def term_width_stderr(default: int = 80) -> int:
     try:
         w = os.get_terminal_size(sys.stderr.fileno()).columns
-    except Exception:
+    except (OSError, ValueError):
         w = default
     return max(40, min(70, int(w)))
 

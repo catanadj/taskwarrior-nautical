@@ -3,17 +3,21 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from typing import Any, Callable, NoReturn, Protocol
+from typing import Any, Callable, NoReturn, Protocol, TypeAlias
 
 from . import panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch
 from .modify_models import CoerceIntCallback, HumanDeltaCallback
+from .anchor_omit import OmitState
 from .occurrence_outcomes import OccurrenceCollectionResult, OccurrenceOutcome
 from .parsing.parser_models import AnchorDNF
 from .scheduler_cursor import OccurrenceCursor
 from .scheduler_models import occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
+
+
+PreparedOmissionState: TypeAlias = OmitState | dict[str, Any] | AnchorDNF | None
 
 
 class PreviewPanelCallback(Protocol):
@@ -190,7 +194,7 @@ class AnchorExpressionPreviewServices:
     panel_warnings: Callable[[TaskPayload], list[str]]
     prepare_anchor_dnf: AnchorDnfPreparationCallback
     describe_anchor_natural: AnchorNaturalDescriptionCallback
-    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
+    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], PreparedOmissionState]
     scheduler_service_for_task: Callable[[TaskPayload], AnchorPreviewSchedulerService]
     to_local: Callable[[datetime], datetime]
     fmt_dt_local: Callable[[datetime], str]
@@ -221,7 +225,7 @@ class AnchorExpressionPreviewServices:
 class AnchorFilePreviewServices:
     panel_mode: str
     timezone_fallback_warning: Callable[[str], bool]
-    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
+    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], PreparedOmissionState]
     scheduler_service_for_task: Callable[[TaskPayload], AnchorPreviewSchedulerService]
     to_local: Callable[[datetime], datetime]
     fmt_dt_local: Callable[[datetime], str]
@@ -349,9 +353,9 @@ def anchor_preview_prepare_omit_dnf(
     rows: list[tuple[str, str]],
     *,
     core: Any,
-    validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
+    validate_omit_syntax_strict: Callable[[str | AnchorDNF], tuple[AnchorDNF | None, str | None]],
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
-) -> Any:
+) -> PreparedOmissionState:
     omit_str = str(task.get("omit") or "").strip()
     omit_file = str(task.get("omit_file") or "").strip()
     omit_dnf = None

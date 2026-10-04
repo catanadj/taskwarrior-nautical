@@ -628,6 +628,7 @@ facade.__all__
             AnchorUntilSummaryCallback,
             AnchorNaturalDescriptionCallback,
             OmitDescriptionCallback,
+            PreparedOmissionState,
             AppendDstAdjustmentCallback,
             AppendFirstExpirationRowCallback,
             NativeUntilAnchorSlotsValidator,
@@ -731,6 +732,10 @@ facade.__all__
                 self.assertEqual(
                     get_type_hints(context)["scheduler_service_for_task"],
                     Callable[[TaskPayload], AnchorPreviewSchedulerService],
+                )
+                self.assertEqual(
+                    get_type_hints(context)["prepare_omit_dnf"],
+                    Callable[[TaskPayload, list[tuple[str, str]]], PreparedOmissionState],
                 )
                 self.assertEqual(
                     get_type_hints(context)["format_anchor_rows"],

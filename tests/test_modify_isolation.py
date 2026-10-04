@@ -581,7 +581,12 @@ class ModifyIsolationTests(unittest.TestCase):
 
     def test_cp_final_projection_contracts_use_datetime_results(self) -> None:
         import nautical_core.modify_completion_compute as compute
-        from nautical_core.modify_models import CapFromUntilCpCallback, EstimateCpFinalCallback
+        from nautical_core.modify_models import (
+            CapFromUntilAnchorCallback,
+            CapFromUntilCpCallback,
+            EstimateAnchorFinalCallback,
+            EstimateCpFinalCallback,
+        )
 
         self.assertEqual(
             get_type_hints(EstimateCpFinalCallback.__call__)["child_due"],
@@ -602,6 +607,22 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertEqual(get_type_hints(compute.estimate_cp_final_by_max)["return"], datetime | None)
         self.assertEqual(
             get_type_hints(compute.cap_from_until_cp)["return"],
+            tuple[int | None, datetime | None],
+        )
+        self.assertEqual(
+            get_type_hints(EstimateAnchorFinalCallback.__call__)["return"],
+            datetime | None,
+        )
+        self.assertEqual(
+            get_type_hints(CapFromUntilAnchorCallback.__call__)["return"],
+            tuple[int | None, datetime | None],
+        )
+        self.assertEqual(
+            get_type_hints(compute.estimate_anchor_final_by_max)["return"],
+            datetime | None,
+        )
+        self.assertEqual(
+            get_type_hints(compute.cap_from_until_anchor)["return"],
             tuple[int | None, datetime | None],
         )
 

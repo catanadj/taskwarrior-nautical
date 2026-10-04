@@ -288,7 +288,7 @@ def cap_from_until_cp(
 
 def cap_from_until_anchor(
     task: dict[str, Any],
-    next_due_utc: Any,
+    next_due_utc: datetime | None,
     dnf: AnchorDNF | None,
     *,
     parse_datetime: Any,
@@ -303,7 +303,7 @@ def cap_from_until_anchor(
     anchor_included_occurrences: Any,
     compare_datetimes: Any,
     max_iterations: int,
-) -> tuple[int | None, Any]:
+) -> tuple[int | None, datetime | None]:
     """Return the final anchor link and due date permitted by ``chainUntil``."""
     until_utc = parse_datetime(task.get("chainUntil"))
     if not until_utc:
@@ -421,7 +421,7 @@ def estimate_cp_final_by_max(
 
 def estimate_anchor_final_by_max(
     task: dict[str, Any],
-    next_due_utc: Any,
+    next_due_utc: datetime | None,
     dnf: AnchorDNF | None,
     *,
     coerce_int: Any,
@@ -435,7 +435,7 @@ def estimate_anchor_final_by_max(
     anchor_included_occurrences: Any,
     diagnostic: Any | None = None,
     max_iterations: int,
-) -> Any:
+) -> datetime | None:
     """Estimate the final anchor due date permitted by ``chainMax``."""
     chain_max = coerce_int(task.get("chainMax"), 0)
     if not chain_max:

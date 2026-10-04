@@ -63,7 +63,7 @@ class AnchorExpressionPreviewServices:
     format_anchor_rows: Callable[..., Any]
     panel: PreviewPanelCallback
     human_delta: HumanDeltaCallback
-    error_and_exit: Callable[..., Any]
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn]
     validate_native_until_after_target: Callable[..., Any]
     validate_native_until_anchor_slots: Callable[..., Any]
     append_first_expiration_row: Callable[..., Any]
@@ -86,7 +86,7 @@ class AnchorFilePreviewServices:
     panel: PreviewPanelCallback
     fmt_local_for_task: Callable[..., Any]
     human_delta: HumanDeltaCallback
-    error_and_exit: Callable[..., Any]
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn]
 
 
 def _event_datetime(event: Any) -> datetime | None:

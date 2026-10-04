@@ -617,7 +617,7 @@ facade.__all__
         self.assertIn("operation_for_host", violations[0].rule)
 
     def test_presentation_contexts_exclude_host_and_module_loaders(self) -> None:
-        from typing import get_type_hints
+        from typing import Callable, NoReturn, get_type_hints
         from nautical_core.add_anchor_preview import PreviewPanelCallback
         from nautical_core.modify_models import CoerceIntCallback, HumanDeltaCallback
 
@@ -644,6 +644,10 @@ facade.__all__
                 self.assertIs(get_type_hints(context)["panel"], PreviewPanelCallback)
                 self.assertIs(get_type_hints(context)["coerce_int"], CoerceIntCallback)
                 self.assertIs(get_type_hints(context)["human_delta"], HumanDeltaCallback)
+                self.assertEqual(
+                    get_type_hints(context)["error_and_exit"],
+                    Callable[[list[tuple[str, str]]], NoReturn],
+                )
 
         file_fields = {field.name for field in fields(AnchorFilePreviewServices)}
         self.assertTrue({"validate_anchor_syntax_strict", "validate_native_until_after_target"}.isdisjoint(file_fields))

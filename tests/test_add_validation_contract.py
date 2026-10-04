@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
-from nautical_core.add_validation import collect_anchor_time_slots, parse_chain_max
+from nautical_core.add_validation import collect_anchor_time_slots, parse_chain_max, safe_parse_duration
 
 
 class AddValidationContractTests(unittest.TestCase):
+    def test_duration_parser_does_not_hide_internal_failures(self) -> None:
+        def broken_parser(_value: object) -> None:
+            raise RuntimeError("duration parser invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "parser invariant"):
+            safe_parse_duration(
+                "1d",
+                "cp",
+                core=SimpleNamespace(parse_cp_sequence=broken_parser),
+                diag=lambda _message: None,
+            )
+
     def test_anchor_slot_collection_does_not_hide_normalizer_defects(self) -> None:
         def broken_normalizer(_value: object) -> list[tuple[int, int]]:
             raise RuntimeError("time-slot normalizer failed")

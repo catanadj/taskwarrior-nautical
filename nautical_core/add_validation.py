@@ -225,7 +225,7 @@ def safe_parse_duration(
     except ValueError as e:
         diag(f"{field_name} duration parse value error: {e}")
         return (None, f"{field_name}: Invalid duration value")
-    except Exception as e:
+    except (TypeError, OverflowError) as e:
         diag(f"{field_name} duration parse unexpected error: {e}")
         return (None, f"{field_name}: Unexpected parsing error")
 

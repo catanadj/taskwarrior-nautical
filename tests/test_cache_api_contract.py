@@ -27,6 +27,7 @@ import nautical_core.cache_facade as cache_facade
 import nautical_core.cache_locking as cache_locking
 import nautical_core.cache_payload as cache_payload
 import nautical_core.cache_support as cache_support
+from nautical_core.core_context import CacheState
 
 
 def _import_core_sibling(name: str):
@@ -48,6 +49,16 @@ class _Clock:
 
 
 class CacheApiContractTests(unittest.TestCase):
+    def test_payload_load_and_save_share_the_cache_state_model(self) -> None:
+        load_signature = get_type_hints(cache_payload.cache_load)
+        save_signature = get_type_hints(cache_payload.cache_save)
+        self.assertIs(load_signature.get("cache_state"), CacheState)
+        self.assertNotIn("cache_load_mem", load_signature)
+        self.assertNotIn("cache_load_mem_ttl", load_signature)
+        self.assertNotIn("cache_load_mem_max", load_signature)
+        self.assertIs(save_signature.get("cache_state"), CacheState)
+        self.assertNotIn("cache_load_mem", save_signature)
+
     def test_cache_shape_predicates_accept_untrusted_objects(self) -> None:
         for predicate, argument in (
             (cache_payload.is_atom_like, "atom"),
@@ -662,7 +673,7 @@ class CacheApiContractTests(unittest.TestCase):
                     os_mod=filesystem,
                     tempfile_mod=tempfile,
                     cache_atomic_replace=lambda source, target: os.replace(source, target),
-                    cache_load_mem=OrderedDict(),
+                    cache_state=CacheState(memory=OrderedDict(), max_entries=8, ttl=300),
                 )
 
             self.assertIsNotNone(filesystem.file_descriptor)

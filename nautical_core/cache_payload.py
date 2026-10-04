@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, ContextManager, Literal, Protocol, TypedDict
 
+from .core_context import CacheState
 from .season_support import SEASON_NAMES
 from .time_windows import parse_random_time_window_spec, validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
 
@@ -293,12 +294,10 @@ def cache_load(
     cache_path: Callable[[str], str],
     anchor_cache_ttl: int,
     time_mod: Any,
-    cache_load_mem: Any,
-    cache_load_mem_ttl: int,
+    cache_state: CacheState,
     clone_cache_payload: Callable[[dict], dict],
     normalize_dnf_cached: Callable[[object], object],
     cache_payload_shape_ok: Callable[[dict], bool],
-    cache_load_mem_max: int,
     diag: Callable[[str], None],
     os_mod: Any,
     json_mod: Any,
@@ -328,20 +327,20 @@ def cache_load(
 
         stamp = _stamp(st)
         now = time_mod.time()
-        if cache_load_mem_ttl > 0 and cache_load_mem:
+        if cache_state.ttl > 0 and cache_state.memory:
             expired = [
                 memo_key
-                for memo_key, (_stamp, _obj, loaded_at) in cache_load_mem.items()
-                if (now - loaded_at) > cache_load_mem_ttl
+                for memo_key, (_stamp, _obj, loaded_at) in cache_state.memory.items()
+                if (now - loaded_at) > cache_state.ttl
             ]
             for memo_key in expired:
-                cache_load_mem.pop(memo_key, None)
-        memo = cache_load_mem.get(key)
+                cache_state.memory.pop(memo_key, None)
+        memo = cache_state.memory.get(key)
         if memo and memo[0] == stamp:
-            if cache_load_mem_ttl <= 0 or (now - memo[2]) <= cache_load_mem_ttl:
-                cache_load_mem.move_to_end(key)
+            if cache_state.ttl <= 0 or (now - memo[2]) <= cache_state.ttl:
+                cache_state.memory.move_to_end(key)
                 return clone_cache_payload(memo[1])
-            cache_load_mem.pop(key, None)
+            cache_state.memory.pop(key, None)
         # Atomic replacement protects each individual read, but a reader can
         # still stat one generation and open the next. Confirm the stamp after
         # reading and retry once before treating the cache as unavailable.
@@ -377,10 +376,10 @@ def cache_load(
                 if quarantine_cache is not None:
                     quarantine_cache(key, path)
                 return None
-            cache_load_mem[key] = (stamp, obj, now)
-            cache_load_mem.move_to_end(key)
-            if len(cache_load_mem) > cache_load_mem_max:
-                cache_load_mem.popitem(last=False)
+            cache_state.memory[key] = (stamp, obj, now)
+            cache_state.memory.move_to_end(key)
+            if len(cache_state.memory) > cache_state.max_entries:
+                cache_state.memory.popitem(last=False)
             return clone_cache_payload(obj)
         if quarantine_cache is not None:
             quarantine_cache(key, path)
@@ -408,7 +407,7 @@ def cache_save(
     os_mod: Any,
     tempfile_mod: Any,
     cache_atomic_replace: Callable[[str, str], None],
-    cache_load_mem: Any,
+    cache_state: CacheState,
 ) -> bool:
     if not enable_anchor_cache:
         return False
@@ -469,7 +468,7 @@ def cache_save(
         if os_mod.environ.get("NAUTICAL_DIAG") == "1":
             diag(f"cache_save failed: {exc}")
     finally:
-        cache_load_mem.pop(key, None)
+        cache_state.memory.pop(key, None)
         if tmpf and os_mod.path.exists(tmpf):
             try:
                 os_mod.unlink(tmpf)

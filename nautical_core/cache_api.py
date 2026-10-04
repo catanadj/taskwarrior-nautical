@@ -336,12 +336,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             cache_path=cache_path,
             anchor_cache_ttl=deps["ANCHOR_CACHE_TTL"],
             time_mod=runtime.clock,
-            cache_load_mem=cache_state.memory,
-            cache_load_mem_ttl=cache_state.ttl,
+            cache_state=cache_state,
             clone_cache_payload=runtime.clone_payload_override or clone_cache_payload,
             normalize_dnf_cached=runtime.normalize_dnf_override or normalize_dnf_cached,
             cache_payload_shape_ok=runtime.payload_shape_override or cache_payload_shape_ok,
-            cache_load_mem_max=cache_state.max_entries,
             diag=deps["diag"],
             quarantine_cache=quarantine_cache,
             os_mod=runtime.filesystem,
@@ -365,7 +363,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             os_mod=runtime.filesystem,
             tempfile_mod=runtime.tempfile,
             cache_atomic_replace=runtime.atomic_replace_override or cache_atomic_replace,
-            cache_load_mem=cache_state.memory,
+            cache_state=cache_state,
         )
 
     def cache_gc_impl(

@@ -187,6 +187,41 @@ class SpanFieldsPorts:
     human_delta: SpanHumanDelta
 
 
+class _SpanFieldsCore(Protocol):
+    coerce_int: Callable[[Any, Any], int | None]
+    humanize_delta: Callable[[datetime, datetime, bool], str]
+
+
+class _SpanFormattingEffects(Protocol):
+    HumanDeltaPort: type[HumanDeltaPortType]
+    human_delta: Callable[[HumanDeltaPortType, datetime, datetime, bool], str]
+
+
+class SpanFieldsHost(Protocol):
+    @property
+    def core(self) -> _SpanFieldsCore: ...
+
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_composition"],
+    ) -> _ChainExportComposition: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_chain_summary"],
+    ) -> SpanSummaryService: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_format_effects"],
+    ) -> _SpanFormattingEffects: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SecondsDeltaPort:
     humanize: Callable[[datetime, datetime, bool], str]
@@ -324,7 +359,7 @@ def last_n_timeline(
     )
 
 
-def span_fields_ports_for(host: Any) -> SpanFieldsPorts:
+def span_fields_ports_for(host: SpanFieldsHost) -> SpanFieldsPorts:
     formatting = host._module("modify_format_effects")
     export_ports = chain_export_ports_for(host)
     return SpanFieldsPorts(

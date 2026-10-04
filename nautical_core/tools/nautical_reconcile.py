@@ -194,7 +194,7 @@ def _format_local_until(hook: Any, value: Any) -> str:
     return raw
 
 
-def _parse_datetime(hook: Any, value: Any) -> tuple[Any, Any]:
+def _parse_datetime(hook: Any, value: object) -> tuple[datetime | None, str | None]:
     # Reconcile and hook workflows use the same configured parser port.  The
     # hook object remains an integration carrier, never the parser contract.
     state = _reconcile_runtime_state()

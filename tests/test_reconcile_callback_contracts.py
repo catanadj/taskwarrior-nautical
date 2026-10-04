@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime
 from typing import Any, get_args, get_type_hints
 import unittest
 
@@ -29,6 +30,16 @@ class ReconcileCallbackContractTests(unittest.TestCase):
                     call_hints = get_type_hints(hints[name].__call__)
                     self.assertGreater(len(call_hints), 2)
                     self.assertNotIn(Any, call_hints.values())
+
+    def test_lifecycle_recovery_policy_uses_datetime_boundary_types(self) -> None:
+        hints = get_type_hints(reconciliation.LifecycleRecoveryPolicy)
+        parse_arguments, parse_result = get_args(hints["parse_datetime"])
+        compare_arguments, compare_result = get_args(hints["compare_datetimes"])
+
+        self.assertEqual([object], parse_arguments)
+        self.assertEqual((datetime | None, str | None), get_args(parse_result))
+        self.assertEqual([datetime, datetime], compare_arguments)
+        self.assertIs(int, compare_result)
 
     def test_recovery_outcome_callbacks_have_exact_task_and_result_shapes(self) -> None:
         hints = get_type_hints(ReconcileRecoveryCallbacks)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from contextlib import contextmanager, nullcontext
+from datetime import datetime
 import fcntl
 import os
 import random
@@ -51,8 +52,8 @@ class LifecycleRecoveryOperations(Protocol):
     def plan_parent(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> RecoveryResult: ...
     def next_child(self, parent: TaskObservation, child_short: str) -> TaskObservation: ...
     def virtual_child(self, plan: LifecyclePlan, *, parent: TaskObservation,
-                      recovery_at: Any) -> tuple[VirtualExpiredChild | None, str]: ...
-    def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str: ...
+                      recovery_at: datetime) -> tuple[VirtualExpiredChild | None, str]: ...
+    def terminal_error(self, child: TaskObservation, recovery_at: datetime) -> str: ...
     def is_orphan_deleted(self, child: TaskObservation) -> bool: ...
     def recovery_error(self, parent: TaskPayload, reason: str) -> RecoveryResult: ...
     def recovery_partial(self, parent: TaskPayload, reason: str) -> RecoveryResult: ...
@@ -88,7 +89,7 @@ class VirtualChildCallback(Protocol):
         plan: LifecyclePlan,
         *,
         parent: TaskObservation,
-        recovery_at: Any,
+        recovery_at: datetime,
     ) -> tuple[VirtualExpiredChild | None, str]: ...
 
 
@@ -171,7 +172,7 @@ class CallbackLifecycleRecoveryOperations:
     plan_parent_callback: PlanParentCallback
     next_child_callback: Callable[[TaskObservation, str], TaskObservation]
     virtual_child_callback: VirtualChildCallback
-    terminal_error_callback: Callable[[TaskObservation, Any], str]
+    terminal_error_callback: Callable[[TaskObservation, datetime], str]
     is_orphan_deleted_callback: Callable[[TaskObservation], bool]
     recovery_error_callback: Callable[[TaskPayload, str], RecoveryResult]
     recovery_partial_callback: Callable[[TaskPayload, str], RecoveryResult]
@@ -246,12 +247,12 @@ class LifecycleRecoveryPolicy:
     timing and virtual-expiration policy remain owned by this service module.
     """
 
-    parse_datetime: Callable[[Any], tuple[Any, str | None]]
-    compare_datetimes: Callable[[Any, Any], int]
+    parse_datetime: Callable[[object], tuple[datetime | None, str | None]]
+    compare_datetimes: Callable[[datetime, datetime], int]
     validate_child: Callable[[TaskPayload, TaskPayload], str]
     virtual_uuid: Callable[[LifecyclePlan], str]
 
-    def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str:
+    def terminal_error(self, child: TaskObservation, recovery_at: datetime) -> str:
         if not isinstance(child, TaskObservation):
             raise TypeError("terminal recovery validation requires a TaskObservation")
 
@@ -288,7 +289,7 @@ class LifecycleRecoveryPolicy:
         plan: LifecyclePlan,
         *,
         parent: TaskObservation,
-        recovery_at: Any,
+        recovery_at: datetime,
     ) -> tuple[VirtualExpiredChild | None, str]:
         if plan.action is not LifecycleAction.SPAWN_CHILD:
             return None, "planned child draft is unavailable"

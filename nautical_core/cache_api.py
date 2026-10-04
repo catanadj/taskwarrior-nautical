@@ -97,6 +97,22 @@ class CacheCompressionPort(Protocol):
     def decompressobj(self) -> CacheDecompressorPort: ...
 
 
+class CacheBase64Port(Protocol):
+    def b85decode(self, value: str) -> bytes: ...
+
+    def b85encode(self, value: bytes) -> bytes: ...
+
+
+class CacheTemporaryFilePort(Protocol):
+    def mkstemp(
+        self,
+        *,
+        dir: str,
+        prefix: str,
+        suffix: str,
+    ) -> tuple[int, str]: ...
+
+
 fcntl: CacheFcntlPort | None
 try:
     import fcntl
@@ -128,8 +144,8 @@ class CacheRuntimeDependencies:
     fcntl: CacheFcntlPort | None
     json: CacheJsonPort
     compression: CacheCompressionPort
-    base64: Any
-    tempfile: Any
+    base64: CacheBase64Port
+    tempfile: CacheTemporaryFilePort
     cache_state: CacheState
     atomic_replace_override: Callable[[str, str], None] | None
     clone_payload_override: Callable[[dict], dict] | None

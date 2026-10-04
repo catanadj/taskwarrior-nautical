@@ -124,6 +124,11 @@ class CacheApiContractTests(unittest.TestCase):
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
         self.assertIs(hints["compression"], cache_api.CacheCompressionPort)
 
+    def test_cache_runtime_encoding_and_temporary_file_ports_are_narrow(self) -> None:
+        hints = get_type_hints(cache_api.CacheRuntimeDependencies)
+        self.assertIs(hints["base64"], cache_api.CacheBase64Port)
+        self.assertIs(hints["tempfile"], cache_api.CacheTemporaryFilePort)
+
     def test_payload_load_and_save_share_the_cache_state_model(self) -> None:
         load_signature = get_type_hints(cache_payload.cache_load)
         save_signature = get_type_hints(cache_payload.cache_save)

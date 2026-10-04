@@ -444,8 +444,8 @@ def cache_gc(
     max_entries: int = 512,
     stale_tmp_age: float = 86400.0,
     stale_lock_age: float = 86400.0,
-    cache_lock: Any,
-    stale_lock_check: Any,
+    cache_lock: Callable[[str], ContextManager[bool]],
+    stale_lock_check: Callable[[str, float], bool],
     time_mod: Any,
     os_mod: Any,
 ) -> dict:

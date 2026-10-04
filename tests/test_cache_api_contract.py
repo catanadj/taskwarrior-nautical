@@ -63,6 +63,11 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertEqual(save_hints["diag"], Callable[[str], None])
         self.assertEqual(save_hints["cache_atomic_replace"], Callable[[str, str], None])
 
+    def test_cache_gc_declares_typed_locking_callbacks(self) -> None:
+        hints = get_type_hints(cache_payload.cache_gc)
+        self.assertEqual(hints["cache_lock"], Callable[[str], ContextManager[bool]])
+        self.assertEqual(hints["stale_lock_check"], Callable[[str, float], bool])
+
     def test_cache_payload_shape_validator_declares_typed_dnf_callback(self) -> None:
         self.assertEqual(
             get_type_hints(cache_payload.cache_payload_shape_ok)["is_dnf_like"],

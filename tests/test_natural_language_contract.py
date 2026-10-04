@@ -79,6 +79,27 @@ class NaturalLanguageContractTests(unittest.TestCase):
                     bd_re=re.compile(r"$^"),
                 )
 
+    def test_random_month_bucket_sort_propagates_unexpected_integer_failures(self) -> None:
+        import builtins
+
+        def convert(value, *args, **kwargs):
+            if isinstance(value, str):
+                raise RuntimeError("bucket ordering defect")
+            return builtins.int(value, *args, **kwargs)
+
+        with patch.object(
+            natural_language,
+            "int",
+            side_effect=convert,
+            create=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "bucket ordering defect"):
+                natural_language.try_bucket_rand_monthly(
+                    [[{"type": "m", "spec": "1rand"}]],
+                    {},
+                    rand_bucket_signature=lambda _term: (1, "09:30", True, "1–7"),
+                )
+
     def test_mode_tails_are_bound_to_direct_dnf_formatter(self) -> None:
         expression = "w:mon"
         expected = {

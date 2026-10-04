@@ -1191,7 +1191,7 @@ def try_bucket_rand_monthly(dnf: list[list[dict]], task: dict, *, rand_bucket_si
         left = range_text.split("–", 1)[0]
         try:
             return int(left)
-        except Exception:
+        except ValueError:
             return 0
 
     ranges = sorted(ranges, key=_start_val)

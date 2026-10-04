@@ -54,6 +54,7 @@ from .modify_models import (
     ValidateChainDurationCallback,
     ValidateUntilCallback,
 )
+from .modify_ui_effects import UIEffectsPorts
 from .scheduler_models import OccurrenceSearchExhausted
 
 
@@ -354,17 +355,34 @@ class CompletionSpawnPorts:
     diagnostic: DiagnosticCallback
 
 
-def _ui_ports_for(host: Any) -> Any:
+class _CompletionUIModule(Protocol):
+    def ui_ports_for(self, host: Any) -> UIEffectsPorts: ...
+
+    def print_task(self, ports: UIEffectsPorts, task: TaskPayload) -> None: ...
+
+    def panel(
+        self,
+        ports: UIEffectsPorts,
+        title: Any,
+        rows: Any,
+        kind: str = "info",
+        border_style: Any = None,
+        title_style: Any = None,
+        label_style: Any = None,
+    ) -> Any: ...
+
+
+def _ui_ports_for(host: Any) -> tuple[_CompletionUIModule, UIEffectsPorts]:
     ui = host._module("modify_ui_effects")
     return ui, ui.ui_ports_for(host)
 
 
-def _print_task_port_for(host: Any) -> Any:
+def _print_task_port_for(host: Any) -> PrintTaskCallback:
     ui, ports = _ui_ports_for(host)
     return lambda task: ui.print_task(ports, task)
 
 
-def _end_summary_port_for(host: Any) -> Any:
+def _end_summary_port_for(host: Any) -> EndChainSummaryCallback:
     diagnostics = host._module("modify_diagnostics_effects")
     ports = diagnostics.end_chain_summary_ports_for(host)
     return lambda task, reason, now, current_task=None: diagnostics.end_chain_summary(
@@ -372,7 +390,9 @@ def _end_summary_port_for(host: Any) -> Any:
     )
 
 
-def _feedback_ports_for(host: Any, compute: Any, *, summarize: bool = True) -> CompletionFeedbackPorts:
+def _feedback_ports_for(
+    host: Any, compute: CompletionComputeService, *, summarize: bool = True
+) -> CompletionFeedbackPorts:
     return CompletionFeedbackPorts(
         compute=compute,
         panel=_panel_port_for(host),
@@ -381,7 +401,7 @@ def _feedback_ports_for(host: Any, compute: Any, *, summarize: bool = True) -> C
     )
 
 
-def _panel_port_for(host: Any) -> Any:
+def _panel_port_for(host: Any) -> PanelCallback:
     ui, ports = _ui_ports_for(host)
     return lambda title, rows, **kwargs: ui.panel(ports, title, rows, **kwargs)
 

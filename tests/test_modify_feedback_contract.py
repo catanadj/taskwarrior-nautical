@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import importlib
 from types import SimpleNamespace
-from typing import Any, get_type_hints
+from typing import Any, Literal, get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -268,6 +268,49 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         )
         self.assertEqual(result, "Preserve wall clock (period is multiple of 24h)")
         self.assertEqual(calls, [("P1D, P2D", 2, "chain-1")])
+
+    def test_next_expiration_row_has_explicit_effect_ports(self) -> None:
+        from nautical_core.modify_feedback import _AddValidationOwner, _NextExpirationCore
+
+        hints = get_type_hints(modify_feedback._append_next_expiration_row)
+        self.assertEqual(hints["child_due"], datetime | None)
+        self.assertIs(hints["core"], _NextExpirationCore)
+        self.assertEqual(
+            get_type_hints(_NextExpirationCore),
+            {
+                "fmt_dt_local": Callable[[datetime], str],
+                "humanize_delta": Callable[[datetime, datetime, bool], str],
+                "to_local": Callable[[datetime], datetime],
+            },
+        )
+        import_owner_hints = get_type_hints(_NextExpirationCore._import_sibling)
+        self.assertEqual(import_owner_hints["name"], Literal["add_validation"])
+        self.assertIs(import_owner_hints["return"], _AddValidationOwner)
+        self.assertIs(
+            get_type_hints(_AddValidationOwner)["describe_native_until_carry"],
+            NativeCarryDescription,
+        )
+
+    def test_next_expiration_row_without_child_due_skips_delta_effects(self) -> None:
+        rows: list[tuple[str, object]] = []
+        core = SimpleNamespace(
+            fmt_dt_local=lambda value: value.isoformat(),
+            humanize_delta=lambda *_args: self.fail("delta needs an available due"),
+            to_local=lambda value: value,
+            _import_sibling=lambda _name: self.fail("carry needs an available due"),
+        )
+
+        modify_feedback._append_next_expiration_row(
+            rows,
+            {"until": "20261004T200000Z"},
+            None,
+            core=core,
+        )
+
+        self.assertEqual(
+            rows,
+            [("Next expires", "2026-10-04T20:00:00+00:00")],
+        )
 
     def test_feedback_local_formatters_accept_datetimes(self) -> None:
         expected = Callable[[datetime], str]

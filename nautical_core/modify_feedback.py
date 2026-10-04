@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from .modify_carry_workflow import TemporalCarryDecision
 from .cp_parser import CPSequenceToken
@@ -66,6 +66,21 @@ class _BusinessCalendarDisplacementCallback(Protocol):
         core: CompletionFeedbackCore,
         panel: PanelCallback,
     ) -> bool: ...
+
+
+class _AddValidationOwner(Protocol):
+    describe_native_until_carry: NativeCarryDescription
+
+
+class _NextExpirationCore(Protocol):
+    fmt_dt_local: Callable[[datetime], str]
+    humanize_delta: Callable[[datetime, datetime, bool], str]
+    to_local: Callable[[datetime], datetime]
+
+    def _import_sibling(
+        self,
+        name: Literal["add_validation"],
+    ) -> _AddValidationOwner: ...
 
 
 def _timestamp(task: TaskPayload, field: str) -> TaskTimestamp | None:
@@ -881,27 +896,32 @@ def _child_expiration(child: TaskView | TaskPayload) -> datetime | None:
 def _append_next_expiration_row(
     fb: list[tuple[str, object]],
     child: TaskPayload,
-    child_due: Any,
+    child_due: datetime | None,
     *,
-    core: Any,
+    core: _NextExpirationCore,
     target_field: str = "due",
 ) -> None:
     expires = _child_expiration(child)
     if expires is None:
         return
-    try:
-        add_validation = core._import_sibling("add_validation")
-        carry = add_validation.describe_native_until_carry(
-            expires,
-            child_due,
-            to_local=core.to_local,
-        )
-    except Exception:
-        # Carry policy is optional annotation; retain the primary expiry row.
-        carry = None
+    carry = None
+    if child_due is not None:
+        try:
+            add_validation = core._import_sibling("add_validation")
+            carry = add_validation.describe_native_until_carry(
+                expires,
+                child_due,
+                to_local=core.to_local,
+            )
+        except Exception:
+            # Carry policy is optional annotation; retain the primary expiry row.
+            carry = None
     if carry:
         fb.append(("Expiration", carry))
-    delta = core.humanize_delta(child_due, expires, use_months_days=False)
+    if child_due is None:
+        fb.append(("Next expires", core.fmt_dt_local(expires)))
+        return
+    delta = core.humanize_delta(child_due, expires, False)
     if delta.startswith("in "):
         delta = delta[3:]
     basis = "scheduled" if target_field == "scheduled" else "due"

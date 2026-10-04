@@ -15,6 +15,7 @@ from .modify_validation import (
     ValidationPanel,
     ValidateCalendarSlots,
 )
+from .parsing.parser_models import ParseError
 from .recurrence_context import RecurrenceContext
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
@@ -261,10 +262,13 @@ def validate_anchor(ports: AnchorValidationPorts, old: TaskPayload, new: TaskPay
         ports.validate_strict(anchor_expr)
     except TypeError:
         ports.validate_strict(anchor_expr)
-    except Exception as exc:
+    except (ParseError, ValueError, LookupError, RuntimeError) as exc:
         if ports.is_astronomy_error(exc):
             ports.fail("Invalid anchor", ports.astronomy_error_message(exc))
-        ports.fail("Invalid anchor", anchor_error_message(anchor_expr, str(exc)))
+        elif isinstance(exc, (ParseError, ValueError)):
+            ports.fail("Invalid anchor", anchor_error_message(anchor_expr, str(exc)))
+        else:
+            raise
 
 
 def validate_omit(ports: OmitValidationPorts, anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:

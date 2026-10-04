@@ -7,6 +7,7 @@ import nautical_core.modify_ordinary as modify_ordinary
 
 from nautical_core.modify_validation_effects import AnchorValidationPorts, validate_anchor
 from nautical_core.modify_validation_effects import OmitValidationPorts, validate_omit
+from nautical_core.parsing.parser_models import ParseError
 from nautical_core.modify_datetime_effects import (
     DatetimeEffectPorts,
     local_naive_to_utc,
@@ -54,6 +55,37 @@ class ModifyValidationEffectsTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "omit defect"):
             validate_omit(ports, "", "", "bad", "")
+        self.assertEqual(failures, [])
+
+    def test_anchor_validation_reports_parse_errors_but_surfaces_internal_defects(self) -> None:
+        failures = []
+
+        def make_ports(validate_strict):
+            return AnchorValidationPorts(
+                lint=lambda _expr: (None, []),
+                validate_strict=validate_strict,
+                panel=lambda *_args, **_kwargs: None,
+                is_astronomy_error=lambda _exc: False,
+                astronomy_error_message=str,
+                fail=lambda title, message: failures.append((title, message)),
+            )
+
+        def reject_expression(_expression):
+            raise ParseError("invalid anchor syntax")
+
+        validate_anchor(make_ports(reject_expression), {}, {}, "malformed")
+        self.assertEqual(
+            failures,
+            [("Invalid anchor", "invalid anchor syntax (expected an anchor such as w:mon, m:15, or y:jul)")],
+        )
+
+        failures.clear()
+
+        def broken_validator(_expression):
+            raise RuntimeError("anchor validator defect")
+
+        with self.assertRaisesRegex(RuntimeError, "anchor validator defect"):
+            validate_anchor(make_ports(broken_validator), {}, {}, "w:mon")
         self.assertEqual(failures, [])
 
     def test_datetime_effects_handle_invalid_values_and_truncate_microseconds(self) -> None:

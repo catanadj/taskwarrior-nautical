@@ -78,6 +78,7 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
         from datetime import datetime
 
         from nautical_core.modify_completion_effects import (
+            caps,
             compute_child_due,
             require_child_due_or_fail,
             until_guard_or_stop,
@@ -100,6 +101,7 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
         self.assertEqual(
             get_type_hints(require_child_due_or_fail)["child_due"], datetime | None
         )
+        self.assertEqual(get_type_hints(caps)["child_due"], datetime | None)
         warning_hints = get_type_hints(warn_unreasonable_duration)
         self.assertEqual(warning_hints["child_due"], datetime | None)
         self.assertEqual(warning_hints["until_dt"], datetime | None)

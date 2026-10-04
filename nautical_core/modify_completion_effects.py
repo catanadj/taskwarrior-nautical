@@ -660,7 +660,7 @@ def caps(
     ports: CompletionCapsPorts,
     kind: str,
     new: TaskPayload,
-    child_due: Any,
+    child_due: datetime | None,
     dnf: AnchorDNF | None,
 ) -> tuple[int, datetime | None, int | None, CompletionFinals, int | None]:
     return ports.compute.completion_caps(

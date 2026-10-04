@@ -23,6 +23,26 @@ from nautical_core.task_models import TaskTimestamp
 
 
 class TemporalCarryWorkflowTests(unittest.TestCase):
+    def test_cp_carry_calculation_has_explicit_callback_contracts(self) -> None:
+        from nautical_core.modify_carry import CpCarryResult
+        from nautical_core.task_models import TaskPayload
+
+        self.assertEqual(
+            get_type_hints(preserve_cp_relative_offsets_on_due_change),
+            {
+                "old": TaskPayload,
+                "new": TaskPayload,
+                "new_cp": str,
+                "field_changed": Callable[[TaskPayload, TaskPayload, str], bool],
+                "parse_datetime": Callable[[object], datetime | None],
+                "utc_to_local_naive": Callable[[datetime], datetime],
+                "local_naive_to_utc": Callable[[datetime], datetime],
+                "format_datetime": Callable[[datetime], str],
+                "carry_error": Callable[[str, str], Exception],
+                "return": CpCarryResult,
+            },
+        )
+
     def test_cp_carry_normalizer_has_concrete_result_and_factory_types(self) -> None:
         from nautical_core.modify_carry import CpCarryResult
         import nautical_core.modify_carry_workflow as modify_carry_workflow

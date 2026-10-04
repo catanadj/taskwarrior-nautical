@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, TypeAlias
+from typing import Any, Callable, TypeAlias
 
 from .task_models import TaskPayload
 
@@ -17,12 +17,12 @@ def preserve_cp_relative_offsets_on_due_change(
     new: TaskPayload,
     new_cp: str,
     *,
-    field_changed: Any,
-    parse_datetime: Any,
-    utc_to_local_naive: Any,
-    local_naive_to_utc: Any,
-    format_datetime: Any,
-    carry_error: Any,
+    field_changed: Callable[[TaskPayload, TaskPayload, str], bool],
+    parse_datetime: Callable[[object], datetime | None],
+    utc_to_local_naive: Callable[[datetime], datetime],
+    local_naive_to_utc: Callable[[datetime], datetime],
+    format_datetime: Callable[[datetime], str],
+    carry_error: Callable[[str, str], Exception],
 ) -> CpCarryResult:
     """Keep scheduled/wait relative to due when a CP task's due moves."""
     if not new_cp or not str(old.get("cp") or "").strip():

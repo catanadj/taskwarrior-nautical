@@ -131,6 +131,10 @@ class CacheApiContractTests(unittest.TestCase):
         )
         self.assertEqual(hints["is_dnf_like_override"], Callable[[object], bool] | None)
 
+    def test_cache_binding_context_uses_a_narrow_support_owner(self) -> None:
+        hints = get_type_hints(cache_api._CacheBindingContext)
+        self.assertIs(hints["cache_support"], cache_api.CacheSupportPort)
+
     def test_cache_runtime_clock_and_random_ports_are_narrow(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
         self.assertIs(hints["clock"], cache_ports.CacheClockPort)

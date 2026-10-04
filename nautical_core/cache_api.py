@@ -10,7 +10,7 @@ import random
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, ContextManager
+from typing import Any, Callable, ContextManager, Protocol
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
@@ -25,6 +25,32 @@ from .cache_ports import (
     TemporaryFilePort,
 )
 from .core_context import CacheDependencies, CacheState, CoreContext
+from .cache_support import ValidatedUserDir
+
+
+class CacheSupportPort(Protocol):
+    def select_cache_dir(
+        self,
+        *,
+        anchor_cache_dir_override: str,
+        nautical_cache_dir_path: str,
+        validated_user_dir: ValidatedUserDir,
+    ) -> str: ...
+
+    def cache_key(
+        self,
+        acf: str,
+        anchor_mode: str,
+        *,
+        business_calendar_fingerprint: str = "",
+        anchor_year_fmt: str,
+        wrand_salt: str,
+        local_tz_name: str,
+    ) -> str: ...
+
+    def cache_path(self, base: str, key: str) -> str: ...
+
+    def cache_lock_path(self, base: str, key: str) -> str: ...
 
 
 fcntl: FcntlPort | None
@@ -41,7 +67,7 @@ class _CacheBindingContext:
     deps: CacheDependencies
     runtime: "CacheRuntimeDependencies"
     import_sibling: Callable[[str], Any]
-    cache_support: Any
+    cache_support: CacheSupportPort
     cache_locking: Any
     cache_payload: Any
     cache_dir_state: list[str | None]

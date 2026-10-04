@@ -14,6 +14,7 @@ from .task_models import TaskPayload
 if TYPE_CHECKING:
     from .modify_command_effects import CommandPorts
     from .modify_models import CoerceIntCallback
+    from .modify_spawn import _ChildUUIDForSpawn, _PrepareSpawnChildPayload
     from .integration_context import IntegrationContext
     from .lifecycle.application import LifecycleApplicationService
     from .lifecycle.models import LifecycleIdentity, LifecyclePlan
@@ -72,10 +73,8 @@ class ChildUuidPorts:
 @dataclass(frozen=True, slots=True)
 class SpawnChildPorts:
     spawn: Any
-    prepare_payload: Any
-    child_uuid: Callable[
-        [dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]], str
-    ]
+    prepare_payload: _PrepareSpawnChildPayload
+    child_uuid: _ChildUUIDForSpawn
     format_datetime: Callable[[datetime], str]
     now_utc: Callable[[], datetime]
     spawn_identity: Callable[[TaskPayload, TaskPayload], LifecycleIdentity]

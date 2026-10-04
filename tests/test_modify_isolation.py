@@ -1549,6 +1549,7 @@ class ModifyIsolationTests(unittest.TestCase):
         import nautical_core.modify_spawn_effects as spawn_effects
         from nautical_core.modify_spawn_effects import SpawnChildPorts, SpawnIntentPorts
         from collections.abc import Callable as AbcCallable
+        from nautical_core.modify_spawn import _ChildUUIDForSpawn, _PrepareSpawnChildPayload
 
         self.assertNotIn("LifecycleIdentity", vars(spawn_effects))
         self.assertNotIn("LifecyclePlan", vars(spawn_effects))
@@ -1558,6 +1559,8 @@ class ModifyIsolationTests(unittest.TestCase):
             SpawnChildPorts,
             localns={
                 "datetime": datetime,
+                "_ChildUUIDForSpawn": _ChildUUIDForSpawn,
+                "_PrepareSpawnChildPayload": _PrepareSpawnChildPayload,
                 "LifecycleIdentity": LifecycleIdentity,
                 "LifecyclePlan": LifecyclePlan,
                 "TaskPayload": TaskPayload,
@@ -1567,6 +1570,8 @@ class ModifyIsolationTests(unittest.TestCase):
             {
                 name: spawn_annotations[name]
                 for name in (
+                    "child_uuid",
+                    "prepare_payload",
                     "format_datetime",
                     "now_utc",
                     "spawn_identity",
@@ -1576,6 +1581,8 @@ class ModifyIsolationTests(unittest.TestCase):
                 )
             },
             {
+                "child_uuid": _ChildUUIDForSpawn,
+                "prepare_payload": _PrepareSpawnChildPayload,
                 "format_datetime": AbcCallable[[datetime], str],
                 "now_utc": AbcCallable[[], datetime],
                 "spawn_identity": AbcCallable[[TaskPayload, TaskPayload], LifecycleIdentity],
@@ -1631,9 +1638,8 @@ class ModifyIsolationTests(unittest.TestCase):
         )
 
     def test_spawn_child_ports_type_the_child_uuid_callback(self) -> None:
-        from collections.abc import Callable as AbcCallable
-
         from nautical_core.lifecycle.models import LifecycleIdentity, LifecyclePlan
+        from nautical_core.modify_spawn import _ChildUUIDForSpawn, _PrepareSpawnChildPayload
         from nautical_core.modify_spawn_effects import SpawnChildPorts
         from nautical_core.task_models import TaskPayload
 
@@ -1644,12 +1650,11 @@ class ModifyIsolationTests(unittest.TestCase):
                     "LifecycleIdentity": LifecycleIdentity,
                     "LifecyclePlan": LifecyclePlan,
                     "TaskPayload": TaskPayload,
+                    "_ChildUUIDForSpawn": _ChildUUIDForSpawn,
+                    "_PrepareSpawnChildPayload": _PrepareSpawnChildPayload,
                 },
             )["child_uuid"],
-            AbcCallable[
-                [dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]],
-                str,
-            ],
+            _ChildUUIDForSpawn,
         )
 
     def test_spawn_preparation_functions_type_their_callback_boundaries(self) -> None:

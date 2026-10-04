@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import builtins
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,29 @@ from tests.support.hook_process import HookSubprocessFixture
 
 
 class HookProtocolTests(HookSubprocessFixture):
+    def test_codec_import_fallback_does_not_hide_initialization_defects(self) -> None:
+        real_import = builtins.__import__
+        package_imports = []
+
+        def staged_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if level == 1 and name == "task_codec":
+                raise ImportError("relative codec import unavailable")
+            if name == "nautical_core.task_codec":
+                package_imports.append(name)
+                raise RuntimeError("package initializer must not run on the fast path")
+            if name == "task_codec" and level == 0:
+                raise RuntimeError("codec module initialization failed")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with (
+            patch.object(hook_protocol, "DEFAULT_TASK_CODEC", None),
+            patch.object(hook_protocol, "TaskCodecError", hook_protocol._ProtocolCodecError),
+            patch("builtins.__import__", side_effect=staged_import),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "codec module initialization failed"):
+                hook_protocol._codec()
+        self.assertEqual(package_imports, [])
+
     def test_passthrough_json_does_not_hide_unexpected_flush_failure(self) -> None:
         class BrokenFlushStream(io.StringIO):
             def flush(self) -> None:

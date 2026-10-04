@@ -1000,6 +1000,16 @@ def run_on_modify(host: Any) -> None:
         host._write_bench_stats()
         return
     host._load_core()
+    if host._PARSED_OLD_OBSERVATION is not None and host._PARSED_NEW_OBSERVATION is not None:
+        task_models = host.core._import_sibling("task_models")
+        host._PARSED_OLD_OBSERVATION = task_models.TaskObservation.from_mapping(
+            old,
+            source_query="on-modify typed task transition",
+        )
+        host._PARSED_NEW_OBSERVATION = task_models.TaskObservation.from_mapping(
+            new,
+            source_query="on-modify typed task transition",
+        )
     hook_context = capabilities.hook_context
     hook_engine = capabilities.hook_engine
     host._apply_description_uda_aliases(old, new)

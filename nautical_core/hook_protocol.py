@@ -37,13 +37,11 @@ def _codec() -> Any:
         try:
             from .task_codec import DEFAULT_TASK_CODEC as _codec_a, TaskCodecError as _error_a
             imported_codec, imported_error = _codec_a, _error_a
-        except ImportError:  # dynamically loaded protocol test/hook wrapper
-            try:
-                from nautical_core.task_codec import DEFAULT_TASK_CODEC as _codec_b, TaskCodecError as _error_b
-                imported_codec, imported_error = _codec_b, _error_b
-            except Exception:
-                from task_codec import DEFAULT_TASK_CODEC as _codec_c, TaskCodecError as _error_c  # type: ignore[import-not-found]  # standalone hook fallback
-                imported_codec, imported_error = _codec_c, _error_c
+        except ImportError:  # dynamically loaded protocol hook wrapper
+            # The hook bootstrap adds nautical_core itself to sys.path. Import
+            # the codec directly so the package initializer stays lazy.
+            from task_codec import DEFAULT_TASK_CODEC as _codec_c, TaskCodecError as _error_c  # type: ignore[import-not-found]  # standalone hook fallback
+            imported_codec, imported_error = _codec_c, _error_c
 
         DEFAULT_TASK_CODEC = imported_codec
         TaskCodecError = imported_error

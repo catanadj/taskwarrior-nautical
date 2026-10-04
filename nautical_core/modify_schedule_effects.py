@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, overload
 
 from .task_models import TaskPayload
 from .cp_parser import CPSequenceToken
-from .task_datetime import datetime_value, parser_for_host
+from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from .parsing.parser_models import AnchorDNF
 from .modify_models import (
     CoerceIntCallback,
@@ -25,6 +25,10 @@ from .modify_models import (
 from .scheduler_service import SchedulerService
 from .recurrence_evaluator import RecurrenceEvaluator
 from .timeutil import compare_datetimes
+
+if TYPE_CHECKING:
+    from .modify_anchor_effects import OmitPorts
+    from .modify_value_effects import DatetimePorts
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +187,8 @@ class _ModifyRuntimeModule(Protocol):
 
 
 class SchedulerHost(Protocol):
-    core: object
+    @property
+    def core(self) -> object: ...
 
     def _modify_runtime_state(self) -> _SchedulerRuntimeState: ...
 
@@ -224,6 +229,60 @@ class CPCompletionHost(Protocol):
         self,
         name: Literal["modify_completion_compute"],
     ) -> CPCompletionCompute: ...
+
+
+class _AnchorCompletionCore(Protocol):
+    coerce_int: CoerceIntCallback
+
+
+class _ModifyAnchorCompletionEffects(Protocol):
+    def omit_ports_for(self, host: AnchorCompletionHost) -> OmitPorts: ...
+
+    def omit_dnf_from_parent(
+        self,
+        ports: OmitPorts,
+        task: TaskPayload,
+    ) -> tuple[str, OmitState | None]: ...
+
+
+class _ModifyValueCompletionEffects(Protocol):
+    compare_datetimes: Callable[[DatetimePorts, datetime, datetime], int]
+    DatetimePorts: type[DatetimePorts]
+
+
+class AnchorCompletionHost(Protocol):
+    @property
+    def core(self) -> _AnchorCompletionCore: ...
+
+    _to_local_cached: Callable[[datetime], datetime]
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]]
+    _anchor_file_provider_for: AnchorFileProviderFactory
+    _MAX_ITERATIONS: int
+    _diag: DiagnosticCallback
+
+    def _modify_runtime_state(self) -> _SchedulerRuntimeState: ...
+
+    @overload
+    def _module(self, name: Literal["modify_runtime"]) -> _ModifyRuntimeModule: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_completion_compute"],
+    ) -> AnchorCompletionCompute: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_anchor_effects"],
+    ) -> _ModifyAnchorCompletionEffects: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_value_effects"],
+    ) -> _ModifyValueCompletionEffects: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,7 +330,7 @@ def cp_completion_ports_for(host: CPCompletionHost) -> CPCompletionPorts:
     )
 
 
-def anchor_completion_ports_for(host: Any) -> AnchorCompletionPorts:
+def anchor_completion_ports_for(host: AnchorCompletionHost) -> AnchorCompletionPorts:
     scheduler = scheduler_ports_for(host)
     anchor_effects = host._module("modify_anchor_effects")
     value_effects = host._module("modify_value_effects")

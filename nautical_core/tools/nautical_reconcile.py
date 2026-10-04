@@ -1172,11 +1172,16 @@ def _reconcile_candidate(
                 generation=generation,
                 reconciliation_service=reconciliation_service,
             ),
-            plan_parent=lambda candidate, **kwargs: _plan_for_parent(
-                hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
+            plan_parent=lambda candidate, *, generation: _plan_for_parent(
+                hook,
+                candidate,
+                generation=generation,
+                reconciliation_service=reconciliation_service,
             ),
             next_child=_next_recovery_child,
-            virtual_child=recovery_policy.virtual_expired_child,
+            virtual_child=lambda plan, *, parent, recovery_at: recovery_policy.virtual_expired_child(
+                plan, parent=parent, recovery_at=recovery_at,
+            ),
             terminal_error=recovery_policy.terminal_error,
             recovery_error=_recovery_error,
             recovery_partial=_recovery_partial,

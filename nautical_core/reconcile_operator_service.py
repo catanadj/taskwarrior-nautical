@@ -12,6 +12,8 @@ from .lifecycle.reconciliation import (
     ApplyParentCallback,
     CallbackLifecycleRecoveryOperations,
     LifecycleReconciliationService,
+    PlanParentCallback,
+    VirtualChildCallback,
 )
 from .lifecycle.recovery_models import RecoveryResult
 from .task_models import TaskObservation, TaskPayload
@@ -22,9 +24,9 @@ class ReconcileRecoveryCallbacks:
     """Taskwarrior-specific mechanics supplied to the lifecycle owner."""
 
     apply_parent: ApplyParentCallback
-    plan_parent: Callable[..., Any]
+    plan_parent: PlanParentCallback
     next_child: Callable[..., TaskObservation]
-    virtual_child: Callable[..., tuple[Any, str]]
+    virtual_child: VirtualChildCallback
     terminal_error: Callable[..., str]
     recovery_error: Callable[..., Any]
     recovery_partial: Callable[..., Any]

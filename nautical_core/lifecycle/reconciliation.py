@@ -73,6 +73,25 @@ class ApplyParentCallback(Protocol):
     ) -> tuple[RecoveryResult, str]: ...
 
 
+class PlanParentCallback(Protocol):
+    def __call__(
+        self,
+        parent: TaskPayload,
+        *,
+        generation: ChainGenerationService | None,
+    ) -> RecoveryResult: ...
+
+
+class VirtualChildCallback(Protocol):
+    def __call__(
+        self,
+        plan: LifecyclePlan,
+        *,
+        parent: TaskObservation,
+        recovery_at: Any,
+    ) -> tuple[VirtualExpiredChild | None, str]: ...
+
+
 class LifecycleApplyOperations(Protocol):
     def configuration_state(self, hook: Any) -> tuple[str, str]: ...
     def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
@@ -127,9 +146,9 @@ class CallbackLifecycleRecoveryOperations:
     """
 
     apply_parent_callback: ApplyParentCallback
-    plan_parent_callback: Callable[..., Any]
+    plan_parent_callback: PlanParentCallback
     next_child_callback: Callable[..., TaskObservation]
-    virtual_child_callback: Callable[..., tuple[VirtualExpiredChild | None, str]]
+    virtual_child_callback: VirtualChildCallback
     terminal_error_callback: Callable[..., str]
     is_orphan_deleted_callback: Callable[..., bool]
     recovery_error_callback: Callable[..., Any]
@@ -155,14 +174,25 @@ class CallbackLifecycleRecoveryOperations:
             generation=generation,
         )
 
-    def plan_parent(self, parent: TaskPayload, **kwargs: Any) -> Any:
-        return self.plan_parent_callback(parent, **kwargs)
+    def plan_parent(
+        self,
+        parent: TaskPayload,
+        *,
+        generation: ChainGenerationService | None,
+    ) -> RecoveryResult:
+        return self.plan_parent_callback(parent, generation=generation)
 
     def next_child(self, parent: TaskObservation, child_short: str) -> TaskObservation:
         return self.next_child_callback(parent, child_short)
 
-    def virtual_child(self, plan: LifecyclePlan, **kwargs: Any) -> tuple[VirtualExpiredChild | None, str]:
-        return self.virtual_child_callback(plan, **kwargs)
+    def virtual_child(
+        self,
+        plan: LifecyclePlan,
+        *,
+        parent: TaskObservation,
+        recovery_at: Any,
+    ) -> tuple[VirtualExpiredChild | None, str]:
+        return self.virtual_child_callback(plan, parent=parent, recovery_at=recovery_at)
 
     def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str:
         return self.terminal_error_callback(child, recovery_at)

@@ -26,4 +26,4 @@ class StrictTypingContractTests(unittest.TestCase):
         match = re.search(r"coverage report --fail-under=(\d+)", workflow)
         self.assertIsNotNone(match, "CI must enforce a branch-coverage threshold")
         assert match is not None
-        self.assertGreaterEqual(int(match.group(1)), 70)
+        self.assertGreaterEqual(int(match.group(1)), 75)

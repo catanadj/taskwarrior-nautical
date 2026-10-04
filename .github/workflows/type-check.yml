@@ -129,7 +129,7 @@ jobs:
           COVERAGE_FILE: ${{ runner.temp }}/nautical-coverage-data
         run: |
           test -f "$COVERAGE_FILE" || exit 0
-          python3 -m coverage report --fail-under=70 --show-missing
+          python3 -m coverage report --fail-under=75 --show-missing
           python3 -m coverage xml -o coverage.xml
 
       - name: Upload branch-coverage report

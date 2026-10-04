@@ -53,7 +53,7 @@ class ConfiguredTaskDatetimeParser:
         except (ValueError, TypeError) as exc:
             self._diagnose(f"datetime parser rejected value: {exc}")
             return None, "Invalid datetime value"
-        except Exception as exc:  # pragma: no cover - defensive integration boundary
+        except Exception as exc:
             self._diagnose(f"datetime parser failed: {exc}")
             return None, "Datetime parsing failed"
         if parsed is None:

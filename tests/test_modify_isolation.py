@@ -6,7 +6,7 @@ import importlib
 import sys
 import unittest
 from datetime import date, datetime
-from typing import Any, Callable, get_args, get_origin, get_type_hints
+from typing import Any, Callable, Literal, get_args, get_origin, get_type_hints
 
 
 class ModifyIsolationTests(unittest.TestCase):
@@ -553,7 +553,7 @@ class ModifyIsolationTests(unittest.TestCase):
                 "validate_until_not_past": ValidateUntilCallback,
                 "panel": PanelCallback,
                 "print_task": PrintTaskCallback,
-                "return": datetime | None | bool,
+                "return": datetime | None | Literal[False],
             },
             "completion_until_guard_or_stop": {
                 "task": TaskPayload,

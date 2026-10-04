@@ -130,7 +130,7 @@ class CompletionComputeService(Protocol):
         validate_until_not_past: ValidateUntilCallback,
         panel: PanelCallback,
         print_task: PrintTaskCallback,
-    ) -> datetime | None | bool: ...
+    ) -> datetime | None | Literal[False]: ...
     def completion_until_guard_or_stop(
         self,
         task: TaskPayload,
@@ -575,15 +575,17 @@ def preflight_context(
     return preflight.completion_preflight_context(new, now_utc, services=services)
 
 
-def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str) -> Any:
+def compute_child_due(
+    ports: ChildDuePorts, new: TaskPayload, kind: str
+) -> tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None:
     compute = ports.compute
 
-    def typed_task(task: Any) -> Any:
+    def typed_task(task: TaskPayload) -> NauticalTask:
         return ports.task_type.from_observation(
             ports.decode_task(task, source_query="on-modify completion")
         )
 
-    def handle_terminal(exc: Any) -> bool:
+    def handle_terminal(exc: OccurrenceSearchExhausted) -> bool:
         message = ports.exhaustion_message(exc)
         if exc.is_date_limit:
             ports.ensure_terminal(new, "complete")
@@ -608,7 +610,9 @@ def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str) -> Any:
     )
 
 
-def until_or_fail(ports: UntilCompletionPorts, new: TaskPayload, now_utc: datetime) -> Any:
+def until_or_fail(
+    ports: UntilCompletionPorts, new: TaskPayload, now_utc: datetime
+) -> datetime | None | Literal[False]:
     return ports.compute.completion_until_or_fail(
         new, now_utc,
         safe_parse_datetime=ports.parse_datetime,
@@ -617,14 +621,22 @@ def until_or_fail(ports: UntilCompletionPorts, new: TaskPayload, now_utc: dateti
     )
 
 
-def until_guard_or_stop(ports: CompletionFeedbackPorts, new: TaskPayload, child_due: Any, until_dt: Any, now_utc: datetime) -> bool:
+def until_guard_or_stop(
+    ports: CompletionFeedbackPorts,
+    new: TaskPayload,
+    child_due: datetime | None,
+    until_dt: datetime | None,
+    now_utc: datetime,
+) -> bool:
     return ports.compute.completion_until_guard_or_stop(
         new, child_due, until_dt, now_utc,
         end_chain_summary=ports.end_chain_summary, print_task=ports.print_task,
     )
 
 
-def require_child_due_or_fail(ports: CompletionFeedbackPorts, new: TaskPayload, child_due: Any) -> bool:
+def require_child_due_or_fail(
+    ports: CompletionFeedbackPorts, new: TaskPayload, child_due: datetime | None
+) -> bool:
     return ports.compute.completion_require_child_due_or_fail(
         new, child_due, panel=ports.panel, print_task=ports.print_task
     )
@@ -633,8 +645,8 @@ def require_child_due_or_fail(ports: CompletionFeedbackPorts, new: TaskPayload, 
 def warn_unreasonable_duration(
     ports: DurationWarningPorts,
     new: TaskPayload,
-    child_due: Any,
-    until_dt: Any,
+    child_due: datetime | None,
+    until_dt: datetime | None,
     now_utc: datetime,
 ) -> None:
     ports.compute.completion_warn_unreasonable_duration(

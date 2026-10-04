@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unittest
-from typing import Any, get_type_hints
+from typing import Any, Literal, get_type_hints
 
 
 class ModifyCompletionEffectPortTests(unittest.TestCase):
@@ -73,3 +73,33 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             _ui_ports_for,
         ):
             self.assertIsNot(get_type_hints(adapter)["return"], Any, adapter.__name__)
+
+    def test_completion_compute_adapters_match_service_contracts(self) -> None:
+        from datetime import datetime
+
+        from nautical_core.modify_completion_effects import (
+            compute_child_due,
+            require_child_due_or_fail,
+            until_guard_or_stop,
+            until_or_fail,
+            warn_unreasonable_duration,
+        )
+        from nautical_core.modify_models import AnchorDNF
+
+        due_result = tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None
+        self.assertEqual(get_type_hints(compute_child_due)["return"], due_result)
+        self.assertEqual(
+            get_type_hints(until_or_fail)["return"], datetime | None | Literal[False]
+        )
+        self.assertEqual(
+            get_type_hints(until_guard_or_stop)["child_due"], datetime | None
+        )
+        self.assertEqual(
+            get_type_hints(until_guard_or_stop)["until_dt"], datetime | None
+        )
+        self.assertEqual(
+            get_type_hints(require_child_due_or_fail)["child_due"], datetime | None
+        )
+        warning_hints = get_type_hints(warn_unreasonable_duration)
+        self.assertEqual(warning_hints["child_due"], datetime | None)
+        self.assertEqual(warning_hints["until_dt"], datetime | None)

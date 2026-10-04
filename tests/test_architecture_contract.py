@@ -624,6 +624,7 @@ facade.__all__
             AnchorDurationValidator,
             AnchorLintCallback,
             AnchorModeValidator,
+            AnchorPreviewSchedulerService,
             AnchorUntilSummaryCallback,
             AnchorNaturalDescriptionCallback,
             OmitDescriptionCallback,
@@ -636,6 +637,7 @@ facade.__all__
         )
         from nautical_core.modify_models import CoerceIntCallback, HumanDeltaCallback
         from nautical_core.parsing.parser_models import AnchorDNF
+        from nautical_core.task_models import TaskPayload
 
         for context in (
             AnchorExpressionPreviewServices,
@@ -725,6 +727,10 @@ facade.__all__
                 self.assertEqual(
                     get_type_hints(context)["fmt_dt_local"],
                     Callable[[datetime], str],
+                )
+                self.assertEqual(
+                    get_type_hints(context)["scheduler_service_for_task"],
+                    Callable[[TaskPayload], AnchorPreviewSchedulerService],
                 )
                 self.assertEqual(
                     get_type_hints(context)["format_anchor_rows"],

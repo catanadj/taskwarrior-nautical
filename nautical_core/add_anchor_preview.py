@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Callable, NoReturn, Protocol
 
 from . import panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch
 from .modify_models import CoerceIntCallback, HumanDeltaCallback
+from .occurrence_outcomes import OccurrenceCollectionResult, OccurrenceOutcome
 from .parsing.parser_models import AnchorDNF
+from .scheduler_cursor import OccurrenceCursor
 from .scheduler_models import occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
@@ -153,6 +155,33 @@ class AnchorUntilSummaryCallback(Protocol):
     ) -> tuple[int | None, datetime | None]: ...
 
 
+class PreviewSchedulerContext(Protocol):
+    timezone: tzinfo | None
+
+
+class PreviewSchedulerEvaluator(Protocol):
+    context: PreviewSchedulerContext
+
+
+class PreviewSchedulerSession(Protocol):
+    evaluator: PreviewSchedulerEvaluator
+
+
+class AnchorPreviewSchedulerService(Protocol):
+    session: PreviewSchedulerSession
+
+    def next(self, cursor: OccurrenceCursor, **kwargs: Any) -> OccurrenceOutcome: ...
+
+    def collect(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        limit: int,
+        count_omitted: bool | None = None,
+        **kwargs: Any,
+    ) -> OccurrenceCollectionResult: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorExpressionPreviewServices:
     """Composition-root dependencies for the anchor preview renderer."""
@@ -162,7 +191,7 @@ class AnchorExpressionPreviewServices:
     prepare_anchor_dnf: AnchorDnfPreparationCallback
     describe_anchor_natural: AnchorNaturalDescriptionCallback
     prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
-    scheduler_service_for_task: Callable[[TaskPayload], Any]
+    scheduler_service_for_task: Callable[[TaskPayload], AnchorPreviewSchedulerService]
     to_local: Callable[[datetime], datetime]
     fmt_dt_local: Callable[[datetime], str]
     coerce_int: CoerceIntCallback
@@ -193,7 +222,7 @@ class AnchorFilePreviewServices:
     panel_mode: str
     timezone_fallback_warning: Callable[[str], bool]
     prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
-    scheduler_service_for_task: Callable[[TaskPayload], Any]
+    scheduler_service_for_task: Callable[[TaskPayload], AnchorPreviewSchedulerService]
     to_local: Callable[[datetime], datetime]
     fmt_dt_local: Callable[[datetime], str]
     coerce_int: CoerceIntCallback
@@ -433,7 +462,7 @@ def anchor_preview_first_due(
     prof: Any,
     fmt_dt_local: Callable[[Any], str],
     to_local_cached: Callable[[datetime], datetime],
-    scheduler_service: Any,
+    scheduler_service: AnchorPreviewSchedulerService,
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
     fmt_local_for_task: Callable[[datetime], str],
 ) -> tuple[Any, datetime, datetime, Any, tuple[int, int]]:
@@ -648,7 +677,7 @@ def _collect_included_with_provider(
     default_seed_date: Any,
     max_iterations: int = 512,
     return_occurrences: bool = False,
-    scheduler_service: Any,
+    scheduler_service: AnchorPreviewSchedulerService,
 ) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
     stream = _collect_events_with_provider(
@@ -680,7 +709,7 @@ def _collect_events_with_provider(
     default_seed_date: Any,
     max_iterations: int = 512,
     return_occurrences: bool = False,
-    scheduler_service: Any,
+    scheduler_service: AnchorPreviewSchedulerService,
     ) -> list[Any]:
     from .scheduler_cursor import OccurrenceCursor
 

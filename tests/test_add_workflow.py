@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from typing import get_type_hints
 
 from datetime import datetime, timezone
 
@@ -34,6 +35,28 @@ def observation(values: dict[str, object]) -> TaskObservation:
 
 
 class AddWorkflowTests(unittest.TestCase):
+    def test_application_context_and_preview_ports_use_named_contracts(self) -> None:
+        from nautical_core.add_workflow import (
+            AddWorkflowApplication,
+            BuildAddContext,
+            RenderAddPreview,
+        )
+        from nautical_core.hook_context import OnAddContext
+
+        localns = {"OnAddContext": OnAddContext}
+        annotations = get_type_hints(AddWorkflowApplication, localns=localns)
+        self.assertIs(annotations["build_context_fn"], BuildAddContext)
+        self.assertIs(annotations["render_anchor_preview_fn"], RenderAddPreview)
+        self.assertIs(annotations["render_cp_preview_fn"], RenderAddPreview)
+        self.assertIs(
+            get_type_hints(BuildAddContext.__call__, localns=localns)["return"],
+            OnAddContext,
+        )
+        self.assertIs(
+            get_type_hints(AddWorkflowApplication.build_context, localns=localns)["return"],
+            OnAddContext,
+        )
+
     def test_application_prepares_and_attaches_typed_plan(self) -> None:
         application = AddWorkflowApplication(
             record_schedule_fn=lambda plan, _task, _field: plan,

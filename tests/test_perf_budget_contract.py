@@ -376,6 +376,18 @@ class PerformanceBudgetContractTests(unittest.TestCase):
             self.assertFalse(result.definitely_empty)
             self.assertIn("unavailable", result.reason)
 
+    def test_exit_probe_propagates_unexpected_taskdata_inspection_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(Path, "is_dir", side_effect=RuntimeError("inspection defect")):
+                with self.assertRaisesRegex(RuntimeError, "inspection defect"):
+                    probe_exit_work(directory)
+
+    def test_exit_probe_propagates_unexpected_outbox_path_inspection_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(Path, "exists", side_effect=RuntimeError("path inspection defect")):
+                with self.assertRaisesRegex(RuntimeError, "path inspection defect"):
+                    probe_exit_work(directory)
+
     def test_exit_probe_propagates_unexpected_outbox_inspection_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_dir = Path(directory) / ".nautical-state"

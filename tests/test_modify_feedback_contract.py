@@ -241,6 +241,12 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertEqual(annotations[field], datetime | None)
 
+    def test_anchor_basis_formatter_accepts_datetime(self) -> None:
+        self.assertEqual(
+            get_type_hints(modify_feedback._pretty_basis_anchor)["fmt_dt_local"],
+            Callable[[datetime], str],
+        )
+
     def test_feedback_local_formatters_accept_datetimes(self) -> None:
         expected = Callable[[datetime], str]
         renderers = (

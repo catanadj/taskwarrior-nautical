@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import MutableMapping
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from .task_models import NauticalTask, TaskPayload
 
@@ -60,6 +60,32 @@ class GenerationPorts:
     wait_sched_debug: MutableMapping[str, dict[str, Any]] | None
 
 
+class _ChainGenerationServiceFactory(Protocol):
+    @staticmethod
+    def from_core(
+        core: object,
+        *,
+        recurrence_update_udas: tuple[str, ...],
+        debug_wait_sched: bool,
+        wait_sched_debug: MutableMapping[str, dict[str, Any]] | None,
+    ) -> ChainGenerationServicePort: ...
+
+
+class _ChainGenerationModule(Protocol):
+    ChainGenerationService: _ChainGenerationServiceFactory
+
+
+class GenerationHost(Protocol):
+    core: object
+    _RECURRENCE_UPDATE_UDAS: tuple[str, ...]
+    _DEBUG_WAIT_SCHED: bool
+    _LAST_WAIT_SCHED_DEBUG: MutableMapping[str, dict[str, Any]] | None
+
+    def _modify_runtime_state(self) -> GenerationStatePort: ...
+
+    def _module(self, name: Literal["chain_generation"]) -> _ChainGenerationModule: ...
+
+
 def chain_generation_service(ports: GenerationPorts) -> ChainGenerationServicePort:
     service = ports.state.chain_generation_service
     if (
@@ -77,7 +103,7 @@ def chain_generation_service(ports: GenerationPorts) -> ChainGenerationServicePo
     return service
 
 
-def generation_ports_for(host: Any) -> GenerationPorts:
+def generation_ports_for(host: GenerationHost) -> GenerationPorts:
     state = host._modify_runtime_state()
     module = host._module("chain_generation")
 

@@ -11,6 +11,12 @@ modify_generation_effects = importlib.import_module(
 
 
 class ModifyGenerationEffectsContractTests(unittest.TestCase):
+    def test_generation_factory_uses_narrow_host_protocol(self) -> None:
+        self.assertIs(
+            get_type_hints(modify_generation_effects.generation_ports_for)["host"],
+            modify_generation_effects.GenerationHost,
+        )
+
     def test_generation_ports_use_typed_service_state_and_factory(self) -> None:
         annotations = get_type_hints(modify_generation_effects.GenerationPorts)
         self.assertIs(

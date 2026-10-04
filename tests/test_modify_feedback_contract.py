@@ -247,6 +247,28 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             Callable[[datetime], str],
         )
 
+    def test_cp_feedback_basis_uses_canonical_link_interval_port(self) -> None:
+        from nautical_core.modify_feedback import _pretty_basis_cp
+
+        self.assertEqual(
+            get_type_hints(_pretty_basis_cp)["cp_sequence_interval_for_link"],
+            Callable[[str, int, str | None], timedelta | None],
+        )
+        calls: list[tuple[str, int, str | None]] = []
+
+        def interval_for_link(
+            cp: str, link_no: int, chain_id: str | None
+        ) -> timedelta:
+            calls.append((cp, link_no, chain_id))
+            return timedelta(days=2)
+
+        result = _pretty_basis_cp(
+            {"cp": "P1D, P2D", "link": 2, "chainID": " chain-1 "},
+            cp_sequence_interval_for_link=interval_for_link,
+        )
+        self.assertEqual(result, "Preserve wall clock (period is multiple of 24h)")
+        self.assertEqual(calls, [("P1D, P2D", 2, "chain-1")])
+
     def test_feedback_local_formatters_accept_datetimes(self) -> None:
         expected = Callable[[datetime], str]
         renderers = (

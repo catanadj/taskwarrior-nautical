@@ -591,22 +591,16 @@ def format_line_preview(
     return line.strip()
 
 
-def _pretty_basis_cp(task: TaskPayload, meta: dict, *, parse_cp_duration: Any, parse_cp_sequence: Any = None, cp_sequence_interval_for_link: Any = None) -> str:
-    if callable(cp_sequence_interval_for_link):
-        td = cp_sequence_interval_for_link(
-            task.get("cp") or "",
-            int(task.get("link") or 1),
-            str(task.get("chainID") or "").strip(),
-        )
-    elif callable(parse_cp_sequence):
-        seq = parse_cp_sequence(task.get("cp") or "")
-        step = int(meta.get("cp_sequence_step") or 1)
-        if seq:
-            td = seq[(max(1, step) - 1) % len(seq)]
-        else:
-            td = None
-    else:
-        td = parse_cp_duration(task.get("cp") or "")
+def _pretty_basis_cp(
+    task: TaskPayload,
+    *,
+    cp_sequence_interval_for_link: Callable[[str, int, str | None], timedelta | None],
+) -> str:
+    td = cp_sequence_interval_for_link(
+        str(task.get("cp") or ""),
+        int(task.get("link") or 1),
+        str(task.get("chainID") or "").strip(),
+    )
     if not td:
         return "end + cp"
     secs = int(td.total_seconds())
@@ -1366,10 +1360,7 @@ def render_cp_completion_feedback(
     )
     basis_text = _pretty_basis_cp(
         new,
-        feedback.meta,
-        parse_cp_duration=core.parse_cp_duration,
-        parse_cp_sequence=getattr(core, "parse_cp_sequence", None),
-        cp_sequence_interval_for_link=getattr(core, "cp_sequence_interval_for_link", None),
+        cp_sequence_interval_for_link=core.cp_sequence_interval_for_link,
     )
     if basis_text != "Preserve wall clock (period is multiple of 24h)":
         fb.append(("Basis", basis_text))

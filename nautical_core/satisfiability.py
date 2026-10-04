@@ -155,7 +155,9 @@ def validate_and_terms_satisfiable(
                 if typ in ("w", "m"):
                     try:
                         spec = normalize_spec_for_acf(typ, spec) or spec
-                    except Exception:
+                    except (TypeError, ValueError):
+                        # Normalization only decorates the error hint; retain
+                        # the raw spec when a malformed value cannot normalize.
                         pass
                 if typ == "m" and spec:
                     m = re.fullmatch(r"([a-z]{3,9}|\d{2})(\.\.([a-z]{3,9}|\d{2}))?", spec.lower())

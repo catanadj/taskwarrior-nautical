@@ -474,6 +474,26 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             )
         )
 
+    def test_satisfiability_hint_does_not_hide_normalization_defects(self) -> None:
+        def broken_normalization(_typ: str, _spec: str) -> str:
+            raise RuntimeError("normalization invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "normalization invariant failed"):
+            satisfiability.validate_and_terms_satisfiable(
+                [[
+                    {"typ": "w", "spec": "mon", "ival": 1},
+                    {"typ": "m", "spec": "1", "ival": 1},
+                ]],
+                date(2026, 1, 1),
+                quick_weekly_and_check=lambda _term: None,
+                quick_yearly_and_check=lambda _term: None,
+                quick_moon_and_check=lambda _term: None,
+                term_has_any_match_within=lambda *_args, **_kwargs: False,
+                normalize_spec_for_acf=broken_normalization,
+                month_from_alias=lambda _month: None,
+                and_term_unsatisfiable_cls=core.AndTermUnsatisfiable,
+            )
+
     def test_yearly_satisfiability_does_not_hide_expansion_defects(self) -> None:
         def broken_expansion(_spec: str, _year: int) -> list[date]:
             raise RuntimeError("yearly expansion invariant failed")

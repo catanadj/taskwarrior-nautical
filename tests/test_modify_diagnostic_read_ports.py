@@ -448,6 +448,11 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
 
         self.assertIs(get_type_hints(command_ports_for)["host"], CommandHost)
 
+    def test_tw_get_ports_factory_uses_owner_host_protocol(self) -> None:
+        from nautical_core.modify_read_effects import TwGetHost, tw_get_ports_for
+
+        self.assertIs(get_type_hints(tw_get_ports_for)["host"], TwGetHost)
+
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:
         from nautical_core.modify_validation import validate_cp_on_modify
 

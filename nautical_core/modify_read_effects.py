@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, overload
 
 from .lifecycle.read_service import (
     ChainCacheStore,
@@ -18,6 +18,7 @@ from .lifecycle.read_service import (
     TokenParser,
 )
 from .integration_models import TaskCommandResult
+from .modify_command_effects import CommandHost, CommandPorts
 from .task_models import TaskObservation
 
 
@@ -99,6 +100,47 @@ class TwGetTaskCommand(Protocol):
         retry_delay: float = 0.15,
         use_tempfiles: bool = False,
     ) -> TaskCommandResult: ...
+
+
+class _TwGetCommandEffects(Protocol):
+    def command_ports_for(self, host: CommandHost) -> CommandPorts: ...
+
+    def run_task_result(
+        self,
+        ports: CommandPorts,
+        cmd: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        input_text: str | None = None,
+        timeout: float = 3.0,
+        retries: int = 2,
+        retry_delay: float = 0.15,
+        use_tempfiles: bool = False,
+    ) -> TaskCommandResult: ...
+
+
+class _TwGetCompositionEffects(Protocol):
+    lifecycle_read_service_for: Callable[[object], LifecycleReadService]
+
+
+class _Environment(Protocol):
+    def copy(self) -> dict[str, str]: ...
+
+
+class _OperatingSystem(Protocol):
+    environ: _Environment
+
+
+class TwGetHost(CommandHost, Protocol):
+    os: _OperatingSystem
+    _query_ctx_get: Callable[[str, str], object]
+    _query_ctx_set: Callable[[str, str, object], None]
+
+    @overload
+    def _module(self, name: Literal["modify_command_effects"]) -> _TwGetCommandEffects: ...
+
+    @overload
+    def _module(self, name: Literal["modify_composition"]) -> _TwGetCompositionEffects: ...
 
 
 def _token_match(coerce_int: CoerceInt, task: TaskFieldReader, token: str) -> bool:
@@ -191,7 +233,7 @@ def export_chain_required(
     return rows
 
 
-def tw_get_ports_for(host: Any) -> TwGetPorts:
+def tw_get_ports_for(host: TwGetHost) -> TwGetPorts:
     command = host._module("modify_command_effects")
     composition = host._module("modify_composition")
 

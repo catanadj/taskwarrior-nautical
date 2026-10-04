@@ -443,6 +443,11 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             get_type_hints(line_preview_ports_for)["host"], LinePreviewHost
         )
 
+    def test_command_ports_factory_uses_owner_host_protocol(self) -> None:
+        from nautical_core.modify_command_effects import CommandHost, command_ports_for
+
+        self.assertIs(get_type_hints(command_ports_for)["host"], CommandHost)
+
     def test_cp_on_modify_reports_non_string_chain_until_as_invalid(self) -> None:
         from nautical_core.modify_validation import validate_cp_on_modify
 

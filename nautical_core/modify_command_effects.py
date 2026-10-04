@@ -6,7 +6,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from .integration_models import TaskCommandResult
 
@@ -44,7 +44,15 @@ class CommandPorts:
     task_cmd_prefix: Callable[[], list[str]]
 
 
-def command_ports_for(host: Any) -> CommandPorts:
+class CommandHost(Protocol):
+    _run_task_diag_bucket: Callable[[list[str]], str]
+    _diag_count: DiagCounter
+    _diag_record_run_task: RunTaskRecorder
+    _diag: Callable[[str], None]
+    _task_cmd_prefix: Callable[[], list[str]]
+
+
+def command_ports_for(host: CommandHost) -> CommandPorts:
     from .runtime_command import run_task_result as execute
     return CommandPorts(
         execute=execute,

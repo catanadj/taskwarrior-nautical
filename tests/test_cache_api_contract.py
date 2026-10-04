@@ -135,6 +135,10 @@ class CacheApiContractTests(unittest.TestCase):
         hints = get_type_hints(cache_api._CacheBindingContext)
         self.assertIs(hints["cache_support"], cache_api.CacheSupportPort)
 
+    def test_cache_binding_context_uses_a_narrow_locking_owner(self) -> None:
+        hints = get_type_hints(cache_api._CacheBindingContext)
+        self.assertIs(hints["cache_locking"], cache_api.CacheLockingPort)
+
     def test_cache_runtime_clock_and_random_ports_are_narrow(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)
         self.assertIs(hints["clock"], cache_ports.CacheClockPort)
@@ -1053,6 +1057,24 @@ class CacheApiContractTests(unittest.TestCase):
             assert filesystem.file_descriptor is not None
             with self.assertRaises(OSError):
                 os.fstat(filesystem.file_descriptor)
+
+    def test_fcntl_lock_context_is_not_acquired_when_fcntl_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "fcntl.lock"
+            with cache_locking.safe_lock_fcntl_context(
+                str(lock_path),
+                tries=1,
+                sleep_base=0,
+                jitter=0,
+                mode=0o600,
+                mkdir=False,
+                safe_lock_ensure_parent=lambda _path, _mkdir: None,
+                safe_lock_sleep_once=lambda _base, _jitter: None,
+                fcntl_mod=None,
+                os_mod=os,
+            ) as acquired:
+                self.assertFalse(acquired)
+            self.assertFalse(lock_path.exists())
 
     def test_exclusive_lock_cleans_partial_file_after_unexpected_fchmod_error(self) -> None:
         class BrokenFilesystem:

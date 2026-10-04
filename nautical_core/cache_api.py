@@ -17,6 +17,7 @@ import zlib
 from .cache_ports import (
     Base64Port,
     CacheClockPort,
+    ClockPort,
     CompressionPort,
     FcntlPort,
     FilesystemPort,
@@ -53,6 +54,118 @@ class CacheSupportPort(Protocol):
     def cache_lock_path(self, base: str, key: str) -> str: ...
 
 
+class BoundSafeLockPort(Protocol):
+    def __call__(
+        self,
+        path: object,
+        *,
+        retries: int = 6,
+        sleep_base: float = 0.05,
+        jitter: float = 0.0,
+        mode: int = 0o600,
+        mkdir: bool = True,
+        stale_after: float | None = 60.0,
+    ) -> ContextManager[bool]: ...
+
+
+class BoundCacheLockPort(Protocol):
+    def __call__(self, key: str) -> ContextManager[bool]: ...
+
+
+class BoundLockingPort(Protocol):
+    safe_lock: BoundSafeLockPort
+    cache_lock: BoundCacheLockPort
+
+
+class CacheLockingPort(Protocol):
+    def cache_dir(
+        self,
+        current_cache_dir: str | None,
+        *,
+        anchor_cache_dir_override: str,
+        nautical_cache_dir_path: str,
+        validated_user_dir: ValidatedUserDir,
+        select_cache_dir: Callable[..., str],
+    ) -> str: ...
+
+    def safe_lock_sleep_once(
+        self,
+        sleep_base: float,
+        jitter: float,
+        *,
+        time_mod: CacheClockPort,
+        random_mod: RandomPort,
+    ) -> None: ...
+
+    def safe_lock_ensure_parent(
+        self, path_str: str, mkdir: bool, *, os_mod: FilesystemPort
+    ) -> None: ...
+
+    def safe_lock_age(
+        self,
+        path_str: str,
+        *,
+        time_mod: ClockPort,
+        os_mod: FilesystemPort,
+    ) -> float | None: ...
+
+    def safe_lock_stale_pid(
+        self,
+        path_str: str,
+        stale_after: float | None,
+        *,
+        time_mod: ClockPort,
+        os_mod: FilesystemPort,
+    ) -> bool: ...
+
+    def safe_lock_fcntl_context(
+        self,
+        path_str: str,
+        *,
+        tries: int,
+        sleep_base: float,
+        jitter: float,
+        mode: int,
+        mkdir: bool,
+        safe_lock_ensure_parent: Callable[[str, bool], None],
+        safe_lock_sleep_once: Callable[[float, float], None],
+        fcntl_mod: FcntlPort | None,
+        os_mod: FilesystemPort,
+    ) -> ContextManager[bool]: ...
+
+    def safe_lock_excl_context(
+        self,
+        path_str: str,
+        *,
+        tries: int,
+        sleep_base: float,
+        jitter: float,
+        mode: int,
+        mkdir: bool,
+        stale_after: float | None,
+        safe_lock_ensure_parent: Callable[[str, bool], None],
+        safe_lock_stale_pid: Callable[[str, float | None], bool],
+        safe_lock_age: Callable[[str], float | None],
+        safe_lock_sleep_once: Callable[[float, float], None],
+        os_mod: FilesystemPort,
+        time_mod: ClockPort,
+    ) -> ContextManager[bool]: ...
+
+    def bind_locking(
+        self,
+        *,
+        cache_lock_path: Callable[[str], str],
+        retries: int,
+        sleep_base: float,
+        jitter: float,
+        stale_after: float,
+        fcntl_mod: FcntlPort | None,
+        os_mod: FilesystemPort,
+        time_mod: ClockPort,
+        random_mod: RandomPort,
+    ) -> BoundLockingPort: ...
+
+
 fcntl: FcntlPort | None
 try:
     import fcntl
@@ -68,7 +181,7 @@ class _CacheBindingContext:
     runtime: "CacheRuntimeDependencies"
     import_sibling: Callable[[str], Any]
     cache_support: CacheSupportPort
-    cache_locking: Any
+    cache_locking: CacheLockingPort
     cache_payload: Any
     cache_dir_state: list[str | None]
     source_file: str

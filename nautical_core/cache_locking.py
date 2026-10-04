@@ -155,9 +155,13 @@ def safe_lock_fcntl_context(
     mkdir: bool,
     safe_lock_ensure_parent: Callable[[str, bool], None],
     safe_lock_sleep_once: Callable[[float, float], None],
-    fcntl_mod: FcntlPort,
+    fcntl_mod: FcntlPort | None,
     os_mod: FilesystemPort,
 ) -> Iterator[bool]:
+    if fcntl_mod is None:
+        yield False
+        return
+
     lf = None
     fd: int | None = None
     acquired = False

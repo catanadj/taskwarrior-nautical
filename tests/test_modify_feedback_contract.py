@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import importlib
 from types import SimpleNamespace
-from typing import get_type_hints
+from typing import Any, get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -220,6 +220,20 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             .business_calendar_displacement_for_date.__annotations__["return"],
             "CalendarDisplacement | None",
         )
+
+    def test_chain_boundary_feedback_uses_narrow_core_capability(self) -> None:
+        from nautical_core.modify_feedback import _ChainBoundaryCore
+
+        self.assertEqual(
+            get_type_hints(_ChainBoundaryCore),
+            {
+                "coerce_int": modify_feedback.CoerceIntCallback,
+                "fmt_dt_local": Callable[[datetime], str],
+            },
+        )
+        annotations = get_type_hints(modify_feedback._append_chain_boundary_rows)
+        self.assertIsNot(annotations["core"], Any)
+        self.assertEqual(annotations["until_dt"], datetime | None)
 
     def test_feedback_local_formatters_accept_datetimes(self) -> None:
         expected = Callable[[datetime], str]

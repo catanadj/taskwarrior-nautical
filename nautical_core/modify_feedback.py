@@ -771,6 +771,11 @@ def _effective_last_occurrence(finals: CompletionFinals) -> datetime | None:
     return min(candidates) if candidates else None
 
 
+class _ChainBoundaryCore(Protocol):
+    coerce_int: CoerceIntCallback
+    fmt_dt_local: Callable[[datetime], str]
+
+
 def _append_final_rows(
     fb: list[tuple[str, object]],
     finals: CompletionFinals,
@@ -785,7 +790,13 @@ def _append_final_rows(
     fb.append(("Last occurrence", f"{fmt_dt_local(last)}  ({human_delta(now_utc, last, True)})"))
 
 
-def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: TaskPayload, until_dt: Any, *, core: Any) -> None:
+def _append_chain_boundary_rows(
+    fb: list[tuple[str, object]],
+    task: TaskPayload,
+    until_dt: datetime | None,
+    *,
+    core: _ChainBoundaryCore,
+) -> None:
     chain_max = core.coerce_int(task.get("chainMax"), 0)
     if chain_max:
         fb.append(("Chain cap", f"#{chain_max}"))

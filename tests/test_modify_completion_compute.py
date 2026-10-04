@@ -385,7 +385,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
             {"chainMax": 3, "link": 1, "cp": "1d"},
             None,
             coerce_int=lambda value, default=0: int(value or default),
-            parse_cp_sequence_tokens=lambda _cp: [{}],
+            parse_cp_sequence_tokens=lambda _cp: None,
             sequence_period_for_link=lambda *_args: timedelta(days=1),
             add_period=lambda *_args: self.fail(
                 "forecast cannot advance without an initial child due"

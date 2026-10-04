@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from .task_models import TaskPayload
+from .cp_parser import CPSequenceToken
 from .task_datetime import datetime_value, parser_for_host
 from .parsing.parser_models import AnchorDNF
 from .modify_models import (
@@ -39,7 +40,7 @@ class SequenceIntervalForToken(Protocol):
 
     def __call__(
         self,
-        token: dict[str, Any],
+        token: CPSequenceToken,
         *,
         cp: str,
         link_no: int,
@@ -64,9 +65,9 @@ class CPCompletionCompute(Protocol):
         next_due_utc: datetime | None,
         *,
         coerce_int: CoerceIntCallback,
-        parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
+        parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None],
         sequence_period_for_link: Callable[
-            [list[dict[str, Any]], str, int, str], timedelta
+            [list[CPSequenceToken], str, int, str], timedelta
         ],
         add_period: Callable[[datetime, timedelta], datetime],
         max_iterations: int,
@@ -79,10 +80,10 @@ class CPCompletionCompute(Protocol):
         next_due_utc: datetime | None,
         *,
         parse_datetime: DatetimeParserCallback,
-        parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
+        parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None],
         coerce_int: CoerceIntCallback,
         sequence_period_for_link: Callable[
-            [list[dict[str, Any]], str, int, str], timedelta
+            [list[CPSequenceToken], str, int, str], timedelta
         ],
         add_period: Callable[[datetime, timedelta], datetime],
         max_iterations: int,
@@ -174,7 +175,7 @@ class CPCompletionPorts:
     compute: CPCompletionCompute
     parse_datetime: DatetimeParserCallback
     coerce_int: CoerceIntCallback
-    parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None]
+    parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None]
     sequence: SequencePorts
     schedule: SchedulePorts
     max_iterations: int
@@ -279,7 +280,7 @@ def cp_add_period(ports: SchedulePorts, dt: datetime, td: timedelta) -> datetime
 
 def sequence_period_for_link(
     ports: SequencePorts,
-    tokens: list[dict[str, Any]],
+    tokens: list[CPSequenceToken],
     cp_str: str,
     link_no: int,
     chain_id: str | None = None,
@@ -292,9 +293,9 @@ def sequence_period_for_link(
 
 def _sequence_period_callback(
     ports: SequencePorts,
-) -> Callable[[list[dict[str, Any]], str, int, str], timedelta]:
+) -> Callable[[list[CPSequenceToken], str, int, str], timedelta]:
     def period_for_link(
-        tokens: list[dict[str, Any]], cp: str, link_no: int, chain_id: str
+        tokens: list[CPSequenceToken], cp: str, link_no: int, chain_id: str
     ) -> timedelta:
         return sequence_period_for_link(ports, tokens, cp, link_no, chain_id)
 

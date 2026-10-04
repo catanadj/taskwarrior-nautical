@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
 from nautical_core.chain_generation import ChainGenerationService
+from nautical_core.cp_parser import CPSequenceToken
 from nautical_core.modify_models import (
     CapFromUntilAnchorCallback,
     CapFromUntilCpCallback,
@@ -256,9 +257,9 @@ def cap_from_until_cp(
     next_due_utc: datetime | None,
     *,
     parse_datetime: DatetimeParserCallback,
-    parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
+    parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None],
     coerce_int: CoerceIntCallback,
-    sequence_period_for_link: Callable[[list[dict[str, Any]], str, int, str], timedelta],
+    sequence_period_for_link: Callable[[list[CPSequenceToken], str, int, str], timedelta],
     add_period: Callable[[datetime, timedelta], datetime],
     max_iterations: int,
 ) -> tuple[int | None, datetime | None]:
@@ -387,8 +388,8 @@ def estimate_cp_final_by_max(
     next_due_utc: datetime | None,
     *,
     coerce_int: CoerceIntCallback,
-    parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
-    sequence_period_for_link: Callable[[list[dict[str, Any]], str, int, str], timedelta],
+    parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None],
+    sequence_period_for_link: Callable[[list[CPSequenceToken], str, int, str], timedelta],
     add_period: Callable[[datetime, timedelta], datetime],
     max_iterations: int,
     diagnostic: DiagnosticCallback | None = None,

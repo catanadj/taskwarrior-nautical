@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .modify_carry_workflow import TemporalCarryDecision
+from .cp_parser import CPSequenceToken
 from .parsing.parser_models import ParseError
 from .task_models import TaskPayload
 from .modify_models import (
@@ -370,7 +371,7 @@ def recurrence_enabled_rows(
     source: str,
     *,
     describe_anchor: Callable[[str], str],
-    parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
+    parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None],
     first_recurrence_target: Callable[[TaskPayload, str], Any],
     format_local: Callable[[Any], str],
 ) -> list[tuple[str, str]]:

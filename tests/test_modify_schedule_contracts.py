@@ -109,17 +109,27 @@ class ModifyScheduleContractTests(unittest.TestCase):
         )
 
     def test_sequence_interval_port_uses_named_protocol(self) -> None:
+        from nautical_core.cp_parser import CPSequenceToken
+
         self.assertIs(
             get_type_hints(modify_schedule_effects.SequencePorts)["sequence_interval"],
             modify_schedule_effects.SequenceIntervalForToken,
         )
+        self.assertIs(
+            get_type_hints(modify_schedule_effects.SequenceIntervalForToken.__call__)[
+                "token"
+            ],
+            CPSequenceToken,
+        )
 
-    def test_sequence_projection_tokens_use_string_keyed_mapping_contract(self) -> None:
+    def test_sequence_projection_tokens_use_shared_cp_token_contract(self) -> None:
+        from nautical_core.cp_parser import CPSequenceToken
+
         self.assertEqual(
             get_type_hints(modify_schedule_effects.sequence_period_for_link)[
                 "tokens"
             ],
-            list[dict[str, Any]],
+            list[CPSequenceToken],
         )
 
     def test_occurrence_port_uses_named_protocol(self) -> None:
@@ -161,6 +171,8 @@ class ModifyScheduleContractTests(unittest.TestCase):
         )
 
     def test_completion_ports_type_shared_runtime_callbacks(self) -> None:
+        from nautical_core.cp_parser import CPSequenceToken
+
         for ports_type in (
             modify_schedule_effects.CPCompletionPorts,
             modify_schedule_effects.AnchorCompletionPorts,
@@ -183,7 +195,7 @@ class ModifyScheduleContractTests(unittest.TestCase):
             get_type_hints(modify_schedule_effects.CPCompletionPorts)[
                 "parse_cp_sequence_tokens"
             ],
-            Callable[[str], list[dict[str, Any]] | None],
+            Callable[[str], list[CPSequenceToken] | None],
         )
 
     def test_anchor_completion_ports_type_projection_callbacks(self) -> None:

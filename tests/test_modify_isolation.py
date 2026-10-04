@@ -693,13 +693,14 @@ class ModifyIsolationTests(unittest.TestCase):
         from datetime import timedelta
 
         import nautical_core.modify_completion_compute as compute
+        from nautical_core.cp_parser import CPSequenceToken
         from nautical_core.modify_models import CoerceIntCallback
 
         expected_callbacks = {
             "coerce_int": CoerceIntCallback,
-            "parse_cp_sequence_tokens": Callable[[str], list[dict[str, Any]] | None],
+            "parse_cp_sequence_tokens": Callable[[str], list[CPSequenceToken] | None],
             "sequence_period_for_link": Callable[
-                [list[dict[str, Any]], str, int, str], timedelta
+                [list[CPSequenceToken], str, int, str], timedelta
             ],
             "add_period": Callable[[datetime, timedelta], datetime],
         }

@@ -2,6 +2,7 @@
 
 import unittest
 from datetime import date, timedelta, timezone
+from typing import get_type_hints
 import zoneinfo
 
 import nautical_core as core
@@ -10,6 +11,18 @@ import nautical_core.timezone_facade as timezone_facade
 
 
 class CpSequenceContractTests(unittest.TestCase):
+    def test_cp_sequence_parser_exposes_one_typed_token_model(self) -> None:
+        token_type = getattr(cp_parser, "CPSequenceToken", None)
+        self.assertIsNotNone(token_type)
+        self.assertEqual(
+            get_type_hints(cp_parser.parse_cp_sequence_tokens),
+            {"cp": str, "return": list[token_type] | None},
+        )
+        self.assertEqual(
+            get_type_hints(cp_parser.cp_sequence_interval_for_token)["token"],
+            token_type,
+        )
+
     def test_interval_selection_defaults_missing_link_to_first_step(self) -> None:
         self.assertEqual(
             cp_parser.cp_sequence_interval_for_link("3d,7d", None),
@@ -87,6 +100,20 @@ class CpSequenceContractTests(unittest.TestCase):
             "invalid duration bound",
             cp_parser.cp_sequence_parse_error("14d~abc") or "",
         )
+
+    def test_sequence_token_shapes_distinguish_fixed_and_random_periods(self) -> None:
+        fixed, randomized, jittered = cp_parser.parse_cp_sequence_tokens(
+            "3d,rand(4d..8d),10d~2d"
+        ) or []
+
+        self.assertEqual(fixed["kind"], "fixed")
+        self.assertEqual(fixed["duration"], timedelta(days=3))
+        self.assertEqual(randomized["kind"], "rand")
+        self.assertEqual(randomized["lo"], timedelta(days=4))
+        self.assertEqual(randomized["hi"], timedelta(days=8))
+        self.assertEqual(jittered["kind"], "rand")
+        self.assertEqual(jittered["base_raw"], "10d")
+        self.assertEqual(jittered["spread_raw"], "2d")
 
     def test_link_selection_cycles_and_clamps_boundary_links(self) -> None:
         cp = "3d,20d,7d"

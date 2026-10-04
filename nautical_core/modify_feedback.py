@@ -412,31 +412,28 @@ def recurrence_enabled_rows(
     value = str(task.get("cp") or "").strip()
     rows = [("Period", value)]
     natural = None
-    try:
-        def duration_label(duration: Any) -> str:
-            seconds = int(duration.total_seconds())
-            if seconds % 86400 == 0:
-                return f"{seconds // 86400}d"
-            if seconds % 3600 == 0:
-                return f"{seconds // 3600}h"
-            if seconds % 60 == 0:
-                return f"{seconds // 60}m"
-            return f"{seconds}s"
+    def duration_label(duration: Any) -> str:
+        seconds = int(duration.total_seconds())
+        if seconds % 86400 == 0:
+            return f"{seconds // 86400}d"
+        if seconds % 3600 == 0:
+            return f"{seconds // 3600}h"
+        if seconds % 60 == 0:
+            return f"{seconds // 60}m"
+        return f"{seconds}s"
 
-        tokens = parse_cp_sequence_tokens(value) or []
-        descriptions = []
-        for token in tokens:
-            if token.get("kind") == "rand":
-                descriptions.append(f"random interval {token.get('raw') or value}")
-            else:
-                duration = token.get("duration")
-                descriptions.append(duration_label(duration) if duration else str(token.get("raw") or value))
-        if len(descriptions) == 1:
-            natural = f"Every {descriptions[0]}"
-        elif descriptions:
-            natural = "Cycle through " + ", then ".join(descriptions)
-    except Exception:
-        natural = None
+    tokens = parse_cp_sequence_tokens(value) or []
+    descriptions = []
+    for token in tokens:
+        if token.get("kind") == "rand":
+            descriptions.append(f"random interval {token.get('raw') or value}")
+        else:
+            duration = token.get("duration")
+            descriptions.append(duration_label(duration) if duration else str(token.get("raw") or value))
+    if len(descriptions) == 1:
+        natural = f"Every {descriptions[0]}"
+    elif descriptions:
+        natural = "Cycle through " + ", then ".join(descriptions)
     if natural:
         rows.append(("Natural", natural))
     first = first_recurrence_target(task, source)

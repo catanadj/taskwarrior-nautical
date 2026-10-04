@@ -140,6 +140,20 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             with self.subTest(renderer=renderer.__name__):
                 self.assertIs(get_type_hints(renderer)["panel"], PanelCallback)
 
+    def test_recurrence_enabled_feedback_surfaces_unexpected_cp_parser_errors(self) -> None:
+        def broken_parser(_value: str) -> None:
+            raise RuntimeError("CP feedback parser invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "CP feedback parser invariant failed"):
+            modify_feedback.recurrence_enabled_rows(
+                {"cp": "1d"},
+                "cp",
+                describe_anchor=lambda value: value,
+                parse_cp_sequence_tokens=broken_parser,
+                first_recurrence_target=lambda _task, _source: None,
+                format_local=lambda value: str(value),
+            )
+
     def test_native_until_feedback_uses_its_named_carry_contract(self) -> None:
         self.assertIs(
             get_type_hints(modify_feedback.render_recurrence_updated_panel)[

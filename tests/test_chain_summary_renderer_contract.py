@@ -68,6 +68,45 @@ class ChainSummaryRendererContractTests(unittest.TestCase):
                 describe_anchor=broken_description,
             )
 
+    def test_summary_retains_primary_rows_when_optional_chain_read_fails(self) -> None:
+        rendered: list[tuple[str, str]] = []
+        diagnostics: list[str] = []
+
+        def fail_chain_export(_chain_id: str, _task: TaskPayload) -> list[TaskObservation]:
+            raise RuntimeError("repository offline")
+
+        services = ChainSummaryRenderServices(
+            export_sorted_chain=fail_chain_export,
+            root_uuid_from=lambda task: str(task.get("chainID") or ""),
+            short_uuid=lambda value: str(value or "")[:8],
+            format_root_and_age=lambda _task, _now: "root",
+            kind_rows=lambda _rows, _kind, _task: None,
+            span_fields=lambda _chain_id, _chain, **_options: (None, None, "–"),
+            stats_rows=lambda _rows, _chain: None,
+            limits_row=lambda _rows, _task: None,
+            last_n_timeline_rows=lambda _chain, _count=6: [],
+            format_rows=lambda rows: rows,
+            coerce_int=lambda value, default: int(value) if value is not None else default,
+            format_local=lambda value: value.isoformat(),
+            max_chain_walk=10,
+            panel=lambda _title, rows, **_options: rendered.extend(rows),
+            diagnostic=diagnostics.append,
+        )
+
+        render_chain_summary(
+            {"uuid": "task-1234", "chainID": "chain-1234", "link": 1},
+            "Task completed.",
+            datetime(2026, 10, 4, tzinfo=timezone.utc),
+            services=services,
+        )
+
+        self.assertIn(("Reason", "Task completed."), rendered)
+        self.assertIn(("Chain read", "Unavailable: repository offline"), rendered)
+        self.assertEqual(
+            diagnostics,
+            ["chain summary export unavailable (chainID=chain-1234): repository offline"],
+        )
+
     def test_render_service_span_callback_has_explicit_contract(self) -> None:
         self.assertIs(
             get_type_hints(ChainSummaryRenderServices)["span_fields"],

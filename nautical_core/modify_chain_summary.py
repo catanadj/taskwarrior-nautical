@@ -292,6 +292,8 @@ def render_chain_summary(
     try:
         chain = services.export_sorted_chain(chain_id, dict(actual_current))
     except Exception as exc:
+        # Chain history is supplemental context; preserve the primary summary
+        # while showing that this optional read was unavailable.
         chain = []
         chain_read_error = str(exc) or "chain export unavailable"
         services.diagnostic(f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}")

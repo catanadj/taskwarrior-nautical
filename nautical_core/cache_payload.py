@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from .season_support import SEASON_NAMES
 from .time_windows import parse_random_time_window_spec, validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
@@ -186,7 +186,7 @@ def normalize_dnf_cached(dnf: Any) -> Any:
     return dnf
 
 
-def cache_payload_shape_ok(obj: dict, *, is_dnf_like: Any) -> bool:
+def cache_payload_shape_ok(obj: dict, *, is_dnf_like: Callable[[object], bool]) -> bool:
     if "dnf" in obj and not is_dnf_like(obj.get("dnf")):
         return False
     natural = obj.get("natural")

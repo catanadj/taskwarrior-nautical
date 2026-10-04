@@ -17,7 +17,7 @@ import tempfile
 import time
 import unittest
 from contextlib import nullcontext
-from typing import Any
+from typing import Any, Callable, get_type_hints
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -48,6 +48,12 @@ class _Clock:
 
 
 class CacheApiContractTests(unittest.TestCase):
+    def test_cache_payload_shape_validator_declares_typed_dnf_callback(self) -> None:
+        self.assertEqual(
+            get_type_hints(cache_payload.cache_payload_shape_ok)["is_dnf_like"],
+            Callable[[object], bool],
+        )
+
     _namespaces: list[dict] = []
 
     def test_bound_locking_is_a_named_immutable_dependency_contract(self) -> None:

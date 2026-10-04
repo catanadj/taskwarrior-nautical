@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Any, Callable, Literal, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, Sequence, overload
 from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from dataclasses import dataclass
 from .modify_chain_summary import ChainSummaryRenderServices, SpanHumanDelta
 from .modify_read_effects import ChainExportReader
 from .task_models import TaskObservation, TaskPayload
+
+if TYPE_CHECKING:
+    from .modify_format_effects import HumanDeltaPort as HumanDeltaPortType
 
 
 class CPSequenceIntervalProvider(Protocol):
@@ -145,6 +148,37 @@ class TimelineSummaryPorts:
     short_uuid: Callable[[Any], str]
 
 
+class _TimelineSummaryCore(Protocol):
+    coerce_int: Callable[[Any, Any], int | None]
+    humanize_delta: Callable[[datetime, datetime, bool], str]
+    short_uuid: Callable[[Any], str]
+
+
+class _TimelineFormattingEffects(Protocol):
+    HumanDeltaPort: type[HumanDeltaPortType]
+    on_time_delta: Callable[[HumanDeltaPortType, datetime, datetime], str]
+
+
+class TimelineSummaryHost(Protocol):
+    @property
+    def core(self) -> _TimelineSummaryCore: ...
+
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _fmtlocal: Callable[[Any], str]
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_format_effects"],
+    ) -> _TimelineFormattingEffects: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_chain_summary"],
+    ) -> TimelineSummaryService: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SpanFieldsPorts:
     summary: SpanSummaryService
@@ -255,7 +289,7 @@ def export_chain_endpoint(
     return with_links[0 if direction == "first" else -1][1]
 
 
-def timeline_summary_ports_for(host: Any) -> TimelineSummaryPorts:
+def timeline_summary_ports_for(host: TimelineSummaryHost) -> TimelineSummaryPorts:
     formatting = host._module("modify_format_effects")
     humanize_delta = host.core.humanize_delta
 

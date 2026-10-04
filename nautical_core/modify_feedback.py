@@ -30,6 +30,7 @@ from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
 
 if TYPE_CHECKING:
+    from .business_calendar import CalendarDisplacement
     from .modify_runtime import ModifyRuntimeServices
 
 
@@ -53,7 +54,7 @@ class CompletionFeedbackCore(Protocol):
         value: date,
         *,
         calendar_name: str,
-    ) -> Any: ...
+    ) -> CalendarDisplacement | None: ...
 
 
 class _BusinessCalendarDisplacementCallback(Protocol):

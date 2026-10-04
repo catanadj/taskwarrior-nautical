@@ -214,6 +214,13 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             },
         )
 
+    def test_feedback_core_calendar_displacement_uses_domain_model(self) -> None:
+        self.assertEqual(
+            modify_feedback.CompletionFeedbackCore
+            .business_calendar_displacement_for_date.__annotations__["return"],
+            "CalendarDisplacement | None",
+        )
+
     def test_feedback_local_formatters_accept_datetimes(self) -> None:
         expected = Callable[[datetime], str]
         renderers = (

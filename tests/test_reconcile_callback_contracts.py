@@ -11,6 +11,25 @@ from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 class ReconcileCallbackContractTests(unittest.TestCase):
+    def test_lifecycle_apply_callbacks_do_not_accept_untyped_signatures(self) -> None:
+        hints = get_type_hints(reconciliation.CallbackLifecycleApplyOperations)
+
+        for name in (
+            "configuration_callback",
+            "refresh_callback",
+            "execute_callback",
+            "terminal_callback",
+            "lock_callback",
+        ):
+            with self.subTest(callback=name):
+                callback_types = get_args(hints[name])
+                if callback_types:
+                    self.assertIsNot(callback_types[0], Ellipsis)
+                else:
+                    call_hints = get_type_hints(hints[name].__call__)
+                    self.assertGreater(len(call_hints), 2)
+                    self.assertNotIn(Any, call_hints.values())
+
     def test_recovery_outcome_callbacks_have_exact_task_and_result_shapes(self) -> None:
         hints = get_type_hints(ReconcileRecoveryCallbacks)
         expected = {

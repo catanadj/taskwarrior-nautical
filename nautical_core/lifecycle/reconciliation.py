@@ -94,7 +94,7 @@ class VirtualChildCallback(Protocol):
 
 class LifecycleApplyOperations(Protocol):
     def configuration_state(self, hook: Any) -> tuple[str, str]: ...
-    def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
+    def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> RecoveryResult: ...
     def execute_plan(self, plan: LifecyclePlan, *, parent: TaskObservation,
                      child_observation: TaskObservation | None,
                      verified_children: dict[str, dict[str, Any]] | None,
@@ -103,20 +103,42 @@ class LifecycleApplyOperations(Protocol):
     def lock_busy(self, kind: str) -> None: ...
 
 
+class RefreshPlanCallback(Protocol):
+    def __call__(
+        self,
+        parent: TaskPayload,
+        *,
+        generation: ChainGenerationService | None,
+    ) -> RecoveryResult: ...
+
+
+class ExecuteLifecyclePlanCallback(Protocol):
+    def __call__(
+        self,
+        plan: LifecyclePlan,
+        *,
+        parent: TaskObservation,
+        child_observation: TaskObservation | None,
+        verified_children: dict[str, dict[str, Any]] | None,
+        label: str,
+        strict_uuid: bool,
+    ) -> str: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CallbackLifecycleApplyOperations:
     """Taskwarrior-specific callbacks used by the service-owned dispatcher."""
 
-    configuration_callback: Callable[..., tuple[str, str]]
-    refresh_callback: Callable[..., Any]
-    execute_callback: Callable[..., str]
-    terminal_callback: Callable[..., str]
-    lock_callback: Callable[..., None]
+    configuration_callback: Callable[[Any], tuple[str, str]]
+    refresh_callback: RefreshPlanCallback
+    execute_callback: ExecuteLifecyclePlanCallback
+    terminal_callback: Callable[[LifecyclePlan], str]
+    lock_callback: Callable[[str], None]
 
     def configuration_state(self, hook: Any) -> tuple[str, str]:
         return self.configuration_callback(hook)
 
-    def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any:
+    def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> RecoveryResult:
         return self.refresh_callback(parent, generation=generation)
 
     def execute_plan(self, plan: LifecyclePlan, *, parent: TaskObservation, child_observation: TaskObservation | None, verified_children: dict[str, dict[str, Any]] | None, label: str, strict_uuid: bool) -> str:

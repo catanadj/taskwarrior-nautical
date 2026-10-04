@@ -7,7 +7,7 @@ from typing import Any, Callable, NoReturn, Protocol
 
 from . import panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch
-from .modify_models import CoerceIntCallback
+from .modify_models import CoerceIntCallback, HumanDeltaCallback
 from .scheduler_models import occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
@@ -62,7 +62,7 @@ class AnchorExpressionPreviewServices:
     fmt_local_for_task: Callable[..., Any]
     format_anchor_rows: Callable[..., Any]
     panel: PreviewPanelCallback
-    human_delta: Callable[..., Any]
+    human_delta: HumanDeltaCallback
     error_and_exit: Callable[..., Any]
     validate_native_until_after_target: Callable[..., Any]
     validate_native_until_anchor_slots: Callable[..., Any]
@@ -85,7 +85,7 @@ class AnchorFilePreviewServices:
     format_anchor_rows: Callable[..., Any]
     panel: PreviewPanelCallback
     fmt_local_for_task: Callable[..., Any]
-    human_delta: Callable[..., Any]
+    human_delta: HumanDeltaCallback
     error_and_exit: Callable[..., Any]
 
 

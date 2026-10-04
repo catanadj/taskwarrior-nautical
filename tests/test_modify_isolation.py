@@ -549,6 +549,32 @@ class ModifyIsolationTests(unittest.TestCase):
                     (parameter.kind for parameter in inspect.signature(method).parameters.values()),
                 )
 
+    def test_completion_compute_temporal_inputs_are_explicit(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        expected = {
+            compute.completion_until_or_fail: {"now_utc": datetime},
+            compute.completion_until_guard_or_stop: {
+                "child_due": datetime | None,
+                "until_dt": datetime | None,
+                "now_utc": datetime,
+            },
+            compute.completion_require_child_due_or_fail: {
+                "child_due": datetime | None,
+            },
+            compute.completion_warn_unreasonable_duration: {
+                "child_due": datetime | None,
+                "until_dt": datetime | None,
+                "now_utc": datetime,
+            },
+            compute.completion_caps: {"child_due": datetime | None},
+        }
+        for function, expected_parameters in expected.items():
+            annotations = get_type_hints(function)
+            with self.subTest(function=function.__name__):
+                for parameter, expected_type in expected_parameters.items():
+                    self.assertEqual(annotations[parameter], expected_type)
+
     def test_completion_spawn_service_has_explicit_arguments(self) -> None:
         import inspect
 

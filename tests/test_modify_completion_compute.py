@@ -278,6 +278,24 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
             )
         )
 
+    def test_until_guard_defers_missing_child_due_to_required_due_check(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        until = now + timedelta(days=2)
+        self.assertTrue(
+            compute.completion_until_guard_or_stop(
+                {},
+                None,
+                until,
+                now,
+                end_chain_summary=lambda *_args, **_kwargs: self.fail(
+                    "a missing child due must not be compared against chainUntil"
+                ),
+                print_task=lambda _value: None,
+            )
+        )
+
     def test_completion_caps_choose_earliest_limit_without_dropping_estimates(self) -> None:
         import nautical_core.modify_completion_compute as compute
 

@@ -123,7 +123,7 @@ def completion_compute_child_due(
 
 def completion_until_or_fail(
     new: dict[str, Any],
-    now_utc: Any,
+    now_utc: datetime,
     *,
     safe_parse_datetime: SafeParseDatetimeCallback,
     validate_until_not_past: ValidateUntilCallback,
@@ -151,14 +151,14 @@ def completion_until_or_fail(
 
 def completion_until_guard_or_stop(
     new: dict[str, Any],
-    child_due: Any,
-    until_dt: Any,
-    now_utc: Any,
+    child_due: datetime | None,
+    until_dt: datetime | None,
+    now_utc: datetime,
     *,
     end_chain_summary: EndChainSummaryCallback,
     print_task: PrintTaskCallback,
 ) -> bool:
-    if until_dt and compare_datetimes(child_due, until_dt) > 0:
+    if child_due is not None and until_dt and compare_datetimes(child_due, until_dt) > 0:
         end_chain_summary(new, "Reached 'until' limit", now_utc)
         apply_terminal_transition(new, LifecycleEvent.CHAIN_UNTIL)
         print_task(new)
@@ -168,7 +168,7 @@ def completion_until_guard_or_stop(
 
 def completion_require_child_due_or_fail(
     new: dict[str, Any],
-    child_due: Any,
+    child_due: datetime | None,
     *,
     panel: PanelCallback,
     print_task: PrintTaskCallback,
@@ -186,9 +186,9 @@ def completion_require_child_due_or_fail(
 
 def completion_warn_unreasonable_duration(
     new: dict[str, Any],
-    child_due: Any,
-    until_dt: Any,
-    now_utc: Any,
+    child_due: datetime | None,
+    until_dt: datetime | None,
+    now_utc: datetime,
     *,
     validate_chain_duration_reasonable: ValidateChainDurationCallback,
     panel: PanelCallback,
@@ -203,7 +203,7 @@ def completion_warn_unreasonable_duration(
 def completion_caps(
     kind: str,
     new: dict[str, Any],
-    child_due: Any,
+    child_due: datetime | None,
     dnf: AnchorDNF | None,
     *,
     coerce_int: CoerceIntCallback,

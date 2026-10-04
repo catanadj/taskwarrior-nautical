@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta as Timedelta
 from dataclasses import dataclass
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, overload
 from uuid import UUID
@@ -749,12 +749,12 @@ class _CompletionUIModule(Protocol):
     def panel(
         self,
         ports: UIEffectsPorts,
-        title: Any,
-        rows: Any,
+        title: str,
+        rows: Sequence[tuple[str | None, Any]],
         kind: str = "info",
-        border_style: Any = None,
-        title_style: Any = None,
-        label_style: Any = None,
+        border_style: str | None = None,
+        title_style: str | None = None,
+        label_style: str | None = None,
     ) -> Any: ...
 
 

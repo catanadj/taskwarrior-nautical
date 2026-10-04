@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from collections.abc import Sequence
 from typing import Any, Literal, get_type_hints
 
 
@@ -121,6 +122,15 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             get_type_hints(_ui_ports_for)["host"],
             CompletionComputeHost | CompletionSpawnHost | CompletionPreflightHost,
         )
+
+    def test_completion_ui_panel_owner_has_narrow_render_arguments(self) -> None:
+        from nautical_core.modify_completion_effects import _CompletionUIModule
+
+        hints = get_type_hints(_CompletionUIModule.panel)
+        self.assertIs(hints["title"], str)
+        self.assertEqual(hints["rows"], Sequence[tuple[str | None, Any]])
+        for style in ("border_style", "title_style", "label_style"):
+            self.assertEqual(hints[style], str | None)
 
     def test_completion_compute_adapters_match_service_contracts(self) -> None:
         from datetime import datetime

@@ -137,6 +137,7 @@ def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None
             try:
                 evidence["child_local"] = str(fmt_dt_local(result.child_due))
             except Exception:
+                # Keep the authoritative UTC value; local time is optional display enrichment.
                 pass
     if result.child_short:
         evidence["existing_child"] = result.child_short

@@ -305,7 +305,7 @@ class ReconcileErrorContracts(unittest.TestCase):
             recurrence_fingerprint,
         )
         from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
-        from nautical_core.reconcile_report import describe_plan
+        from nautical_core.reconcile_report import describe_plan, describe_recovery_result
 
         parent = {
             "uuid": "11111111-0000-4000-8000-000000000001",
@@ -345,6 +345,15 @@ class ReconcileErrorContracts(unittest.TestCase):
             reason="next occurrence",
             child_due=datetime(2026, 10, 4, 9, tzinfo=timezone.utc),
         )
+
+        evidence = describe_recovery_result(
+            result,
+            fmt_dt_local=lambda _value: (_ for _ in ()).throw(
+                RuntimeError("local display unavailable")
+            ),
+        )
+        self.assertEqual(evidence["child_due"], "2026-10-04 09:00:00+00:00")
+        self.assertNotIn("child_local", evidence)
 
         with self.assertRaisesRegex(RuntimeError, "parse callback defect"):
             describe_plan(

@@ -88,6 +88,27 @@ class ModifyValidationEffectsTests(unittest.TestCase):
             validate_anchor(make_ports(broken_validator), {}, {}, "w:mon")
         self.assertEqual(failures, [])
 
+    def test_anchor_validation_does_not_retry_strict_validation_type_errors(self) -> None:
+        calls = []
+
+        def broken_validator(_expression):
+            calls.append("strict")
+            raise TypeError("anchor validator contract defect")
+
+        ports = AnchorValidationPorts(
+            lint=lambda _expr: (None, []),
+            validate_strict=broken_validator,
+            panel=lambda *_args, **_kwargs: None,
+            is_astronomy_error=lambda _exc: False,
+            astronomy_error_message=str,
+            fail=lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected failure")),
+        )
+
+        with self.assertRaisesRegex(TypeError, "anchor validator contract defect"):
+            validate_anchor(ports, {}, {}, "w:mon")
+
+        self.assertEqual(calls, ["strict"])
+
     def test_datetime_effects_handle_invalid_values_and_truncate_microseconds(self) -> None:
         ports = DatetimeEffectPorts(
             parse_datetime=lambda value: None if value == "bad" else datetime(2026, 1, 1, 9, 0),

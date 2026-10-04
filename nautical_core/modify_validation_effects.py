@@ -253,14 +253,16 @@ def anchor_mode(ports: AnchorModePorts, old: TaskPayload, new: TaskPayload) -> s
 
 def validate_anchor(ports: AnchorValidationPorts, old: TaskPayload, new: TaskPayload, anchor_expr: str) -> None:
     try:
-        _, warns = ports.lint(anchor_expr)
+        try:
+            _, warns = ports.lint(anchor_expr)
+        except TypeError:
+            ports.validate_strict(anchor_expr)
+            return
         if warns:
             ports.panel("ℹ️  Lint", [("Hint", warning) for warning in warns], kind="note")
         anchor_mode(AnchorModePorts(ports.panel), old, new)
         # Validation must remain decision-only. Hint persistence has no
         # synchronous consumer and would repeat scheduler work on every edit.
-        ports.validate_strict(anchor_expr)
-    except TypeError:
         ports.validate_strict(anchor_expr)
     except (ParseError, ValueError, LookupError, RuntimeError) as exc:
         if ports.is_astronomy_error(exc):

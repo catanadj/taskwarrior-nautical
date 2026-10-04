@@ -579,6 +579,32 @@ class ModifyIsolationTests(unittest.TestCase):
                 for parameter, expected_type in expected_parameters.items():
                     self.assertEqual(annotations[parameter], expected_type)
 
+    def test_cp_final_projection_contracts_use_datetime_results(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+        from nautical_core.modify_models import CapFromUntilCpCallback, EstimateCpFinalCallback
+
+        self.assertEqual(
+            get_type_hints(EstimateCpFinalCallback.__call__)["child_due"],
+            datetime | None,
+        )
+        self.assertEqual(
+            get_type_hints(EstimateCpFinalCallback.__call__)["return"],
+            datetime | None,
+        )
+        self.assertEqual(
+            get_type_hints(CapFromUntilCpCallback.__call__)["child_due"],
+            datetime | None,
+        )
+        self.assertEqual(
+            get_type_hints(CapFromUntilCpCallback.__call__)["return"],
+            tuple[int | None, datetime | None],
+        )
+        self.assertEqual(get_type_hints(compute.estimate_cp_final_by_max)["return"], datetime | None)
+        self.assertEqual(
+            get_type_hints(compute.cap_from_until_cp)["return"],
+            tuple[int | None, datetime | None],
+        )
+
     def test_completion_spawn_service_has_explicit_arguments(self) -> None:
         import inspect
 

@@ -249,7 +249,7 @@ def completion_caps(
 
 def cap_from_until_cp(
     task: dict[str, Any],
-    next_due_utc: Any,
+    next_due_utc: datetime | None,
     *,
     parse_datetime: DatetimeParserCallback,
     parse_cp_sequence_tokens: Callable[[str], Any],
@@ -257,7 +257,7 @@ def cap_from_until_cp(
     sequence_period_for_link: Callable[[Any, str, int, str], Any],
     add_period: Callable[[Any, Any], Any],
     max_iterations: int,
-) -> tuple[int | None, Any]:
+) -> tuple[int | None, datetime | None]:
     """Return the final CP link and due date permitted by chainUntil."""
     until = parse_datetime(task.get("chainUntil"))
     if not until:
@@ -374,7 +374,7 @@ def cap_from_until_anchor(
 
 def estimate_cp_final_by_max(
     task: dict[str, Any],
-    next_due_utc: Any,
+    next_due_utc: datetime | None,
     *,
     coerce_int: Any,
     parse_cp_sequence_tokens: Any,
@@ -382,7 +382,7 @@ def estimate_cp_final_by_max(
     add_period: Any,
     max_iterations: int,
     diagnostic: Any | None = None,
-) -> Any:
+) -> datetime | None:
     """Estimate the final CP due date permitted by ``chainMax``."""
     chain_max = coerce_int(task.get("chainMax"), 0)
     if not chain_max:

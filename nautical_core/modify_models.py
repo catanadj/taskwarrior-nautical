@@ -343,7 +343,7 @@ class DatetimeParserCallback(Protocol):
 
 
 class EstimateCpFinalCallback(Protocol):
-    def __call__(self, task: TaskRow, child_due: Any) -> Any:
+    def __call__(self, task: TaskRow, child_due: datetime | None) -> datetime | None:
         ...
 
 
@@ -353,7 +353,7 @@ class EstimateAnchorFinalCallback(Protocol):
 
 
 class CapFromUntilCpCallback(Protocol):
-    def __call__(self, task: TaskRow, child_due: Any) -> tuple[int | None, Any]:
+    def __call__(self, task: TaskRow, child_due: datetime | None) -> tuple[int | None, datetime | None]:
         ...
 
 

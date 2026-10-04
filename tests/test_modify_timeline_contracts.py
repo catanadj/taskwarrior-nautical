@@ -8,11 +8,14 @@ import unittest
 import nautical_core as core
 from nautical_core.modify_timeline import (
     TimelineFormattingServices,
+    TimelineProjectionServices,
     _timeline_base_line,
     _timeline_future_anchor_items,
     _timeline_omit_label,
 )
+from nautical_core.anchor_omit import OmitState
 from nautical_core.recurrence_context import RecurrenceContext
+from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.task_models import TaskObservation, TaskPayload
@@ -20,6 +23,30 @@ from nautical_core.timeutil import parse_dt_any
 
 
 class ModifyTimelineContractTests(unittest.TestCase):
+    def test_timeline_projection_services_expose_exact_callback_shapes(self) -> None:
+        annotations = get_type_hints(TimelineProjectionServices)
+        expected = {
+            "collect_prev_two": Callable[[TaskPayload], list[TaskObservation]],
+            "dtparse": Callable[[Any], datetime | None],
+            "to_local_cached": Callable[[datetime], datetime],
+            "safe_parse_datetime": Callable[
+                [Any], tuple[datetime | None, str | None]
+            ],
+            "omit_dnf_from_parent": Callable[
+                [TaskPayload], tuple[str, OmitState | None]
+            ],
+            "omit_description_for_date": Callable[[Any, Any], str | None] | None,
+            "recurrence_evaluator_for_task": Callable[
+                [TaskPayload], RecurrenceEvaluator
+            ],
+            "scheduler_service_for_task": Callable[
+                [TaskPayload], SchedulerService
+            ],
+        }
+        for name, annotation in expected.items():
+            with self.subTest(callback=name):
+                self.assertEqual(annotations[name], annotation)
+
     def test_timeline_formatting_services_expose_exact_callback_shapes(self) -> None:
         annotations = get_type_hints(TimelineFormattingServices)
         expected = {

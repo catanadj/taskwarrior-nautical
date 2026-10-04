@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from .anchor_omit import OmitState
 from .callback_ports import CallbackPort
+from .recurrence_evaluator import RecurrenceEvaluator
+from .scheduler_service import SchedulerService
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskObservation, TaskPayload
@@ -13,14 +16,14 @@ from .task_models import TaskObservation, TaskPayload
 @dataclass(frozen=True, slots=True)
 class TimelineProjectionServices:
     max_iterations: int
-    collect_prev_two: CallbackPort
-    dtparse: CallbackPort
-    to_local_cached: CallbackPort
-    safe_parse_datetime: CallbackPort
-    omit_dnf_from_parent: CallbackPort
+    collect_prev_two: Callable[[TaskPayload], list[TaskObservation]]
+    dtparse: Callable[[Any], datetime | None]
+    to_local_cached: Callable[[datetime], datetime]
+    safe_parse_datetime: Callable[[Any], tuple[datetime | None, str | None]]
+    omit_dnf_from_parent: Callable[[TaskPayload], tuple[str, OmitState | None]]
     omit_description_for_date: Callable[[Any, Any], str | None] | None
-    recurrence_evaluator_for_task: CallbackPort
-    scheduler_service_for_task: CallbackPort
+    recurrence_evaluator_for_task: Callable[[TaskPayload], RecurrenceEvaluator]
+    scheduler_service_for_task: Callable[[TaskPayload], SchedulerService]
 
 
 @dataclass(frozen=True, slots=True)
@@ -732,8 +735,8 @@ def timeline_lines_for_task(
     """Resolve recurrence projection independently from rendering services."""
     if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):
         _omit_expr, omit_dnf = projection.omit_dnf_from_parent(task)
-        scheduler_service = projection.scheduler_service_for_task(task)
-        evaluator = scheduler_service.session.evaluator
+        anchor_scheduler_service = projection.scheduler_service_for_task(task)
+        anchor_evaluator = anchor_scheduler_service.session.evaluator
         return anchor_file_timeline_lines(
             task,
             child_due_utc,
@@ -753,8 +756,8 @@ def timeline_lines_for_task(
             fmtlocal=formatting.fmtlocal,
             short=formatting.short,
             to_local_cached=projection.to_local_cached,
-            scheduler_service=scheduler_service,
-            evaluator=evaluator,
+            scheduler_service=anchor_scheduler_service,
+            evaluator=anchor_evaluator,
             omit_dnf=omit_dnf,
             omit_description_for_date=projection.omit_description_for_date if omit_dnf else None,
             format_gap=formatting.format_gap,

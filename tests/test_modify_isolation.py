@@ -1703,6 +1703,25 @@ class ModifyIsolationTests(unittest.TestCase):
             },
         )
 
+    def test_spawn_child_atomic_uses_task_and_lifecycle_models(self) -> None:
+        from nautical_core.lifecycle.models import LifecyclePlan
+        from nautical_core.modify_spawn_effects import SpawnChildPorts, spawn_child_atomic
+        from nautical_core.task_models import TaskDraft, TaskPayload
+
+        self.assertEqual(
+            get_type_hints(
+                spawn_child_atomic,
+                localns={"LifecyclePlan": LifecyclePlan, "TaskDraft": TaskDraft},
+            ),
+            {
+                "ports": SpawnChildPorts,
+                "child_task": TaskDraft | dict[str, Any],
+                "parent_task_with_nextlink": TaskPayload,
+                "lifecycle_plan": LifecyclePlan | None,
+                "return": tuple[str, set[str], bool, bool, str | None, str | None],
+            },
+        )
+
     def test_cp_carry_applies_typed_temporal_decision(self) -> None:
         from datetime import datetime, timezone
         from nautical_core.chain_generation import CarryFieldError

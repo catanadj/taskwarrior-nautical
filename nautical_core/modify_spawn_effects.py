@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .lifecycle.application import LifecycleApplicationService
     from .lifecycle.models import LifecycleIdentity, LifecyclePlan
     from .lifecycle.outbox import LifecycleOutboxRepository
+    from .task_models import TaskDraft
 
 
 class SpawnPreparation(Protocol):
@@ -179,12 +180,14 @@ def lifecycle_spawn_identity(
 
 def spawn_child_atomic(
     ports: SpawnChildPorts,
-    child_task: Any,
-    parent_task_with_nextlink: dict[str, Any],
+    child_task: TaskDraft | dict[str, Any],
+    parent_task_with_nextlink: TaskPayload,
     *,
-    lifecycle_plan: Any = None,
-) -> Any:
-    if hasattr(child_task, "to_mapping"):
+    lifecycle_plan: LifecyclePlan | None = None,
+) -> tuple[str, set[str], bool, bool, str | None, str | None]:
+    from .task_models import TaskDraft
+
+    if isinstance(child_task, TaskDraft):
         child_task = child_task.to_mapping()
     return ports.spawn.spawn_child_atomic(
         child_task,

@@ -49,6 +49,18 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         task.update(fields)
         return task
 
+    def _next_monday_due_utc(self) -> datetime:
+        now = datetime.now(timezone.utc)
+        days_to_monday = (0 - now.weekday()) % 7
+        first_due = datetime.combine(
+            now.date() + timedelta(days=days_to_monday),
+            time(9, 0),
+            tzinfo=timezone.utc,
+        )
+        if first_due <= now:
+            first_due += timedelta(days=7)
+        return first_due
+
     def _run(self, task: dict[str, object], *, diagnostics: bool = False):
         return self.run_hook(
             "on-add.nautical",
@@ -571,11 +583,7 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         )
 
     def test_native_until_validation_runs_after_generated_anchor_due(self) -> None:
-        today = date.today()
-        days_to_monday = (0 - today.weekday()) % 7 or 7
-        first_due = datetime.combine(
-            today + timedelta(days=days_to_monday), time(9, 0), tzinfo=timezone.utc
-        )
+        first_due = self._next_monday_due_utc()
         now = datetime.now(timezone.utc)
         task = self._task(
             entry=now.strftime("%Y%m%dT%H%M%SZ"),
@@ -642,11 +650,7 @@ class OnAddHookRouteTests(HookSubprocessFixture):
                 self.assertNotIn("Final (until)", process.stderr)
 
     def test_chain_endpoint_before_first_anchor_slot_is_rejected(self) -> None:
-        today = date.today()
-        days_to_monday = (0 - today.weekday()) % 7 or 7
-        first_due = datetime.combine(
-            today + timedelta(days=days_to_monday), time(9, 0), tzinfo=timezone.utc
-        )
+        first_due = self._next_monday_due_utc()
         now = datetime.now(timezone.utc)
         self._assert_invalid(
             self._task(

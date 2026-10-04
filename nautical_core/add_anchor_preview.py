@@ -95,6 +95,36 @@ class AppendDstAdjustmentCallback(Protocol):
     ) -> None: ...
 
 
+class NativeUntilTargetValidator(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        target_dt: datetime,
+        target_field: str,
+    ) -> None: ...
+
+
+class NativeUntilAnchorSlotsValidator(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        target_dt: datetime,
+        dnf: AnchorDNF | None,
+        anchor_file_value: str,
+        fallback_hhmm: tuple[int, int],
+    ) -> None: ...
+
+
+class AppendFirstExpirationRowCallback(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        task: TaskPayload,
+        target_dt: datetime,
+        target_field: str,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorExpressionPreviewServices:
     """Composition-root dependencies for the anchor preview renderer."""
@@ -125,9 +155,9 @@ class AnchorExpressionPreviewServices:
     panel: PreviewPanelCallback
     human_delta: HumanDeltaCallback
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn]
-    validate_native_until_after_target: Callable[..., Any]
-    validate_native_until_anchor_slots: Callable[..., Any]
-    append_first_expiration_row: Callable[..., Any]
+    validate_native_until_after_target: NativeUntilTargetValidator
+    validate_native_until_anchor_slots: NativeUntilAnchorSlotsValidator
+    append_first_expiration_row: AppendFirstExpirationRowCallback
 
 
 @dataclass(frozen=True, slots=True)

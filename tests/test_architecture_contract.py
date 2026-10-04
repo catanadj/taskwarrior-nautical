@@ -625,6 +625,9 @@ facade.__all__
             AnchorLintCallback,
             AnchorModeValidator,
             AppendDstAdjustmentCallback,
+            AppendFirstExpirationRowCallback,
+            NativeUntilAnchorSlotsValidator,
+            NativeUntilTargetValidator,
             PreviewPanelCallback,
             PreviewWaitScheduleRowsCallback,
         )
@@ -675,6 +678,18 @@ facade.__all__
                     self.assertIs(
                         get_type_hints(context)["append_dst_adjustment"],
                         AppendDstAdjustmentCallback,
+                    )
+                    self.assertIs(
+                        get_type_hints(context)["validate_native_until_after_target"],
+                        NativeUntilTargetValidator,
+                    )
+                    self.assertIs(
+                        get_type_hints(context)["validate_native_until_anchor_slots"],
+                        NativeUntilAnchorSlotsValidator,
+                    )
+                    self.assertIs(
+                        get_type_hints(context)["append_first_expiration_row"],
+                        AppendFirstExpirationRowCallback,
                     )
                     self.assertIs(
                         get_type_hints(context)["prepare_anchor_dnf"],

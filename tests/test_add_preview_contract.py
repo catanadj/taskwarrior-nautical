@@ -41,6 +41,21 @@ class _Host:
 
 
 class AddPreviewCompositionTests(unittest.TestCase):
+    def test_dst_preview_propagates_unexpected_timezone_failures(self) -> None:
+        local = datetime(2026, 10, 4, 9, tzinfo=UTC)
+        dnf = [[{"mods": {"t": [(0, 9, 0)]}}]]
+        core = SimpleNamespace(
+            build_local_datetime=lambda *_args: local,
+            to_local=lambda _value: (_ for _ in ()).throw(
+                RuntimeError("unexpected timezone failure")
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected timezone failure"):
+            add_anchor_preview._append_dst_adjustment_row(
+                [], dnf, local, core=core
+            )
+
     def test_preview_event_time_accepts_only_supported_scheduler_shapes(self) -> None:
         local = datetime(2026, 10, 4, 9, tzinfo=UTC)
         occurrence = Occurrence(local.date(), 9, 0, local_datetime=local)

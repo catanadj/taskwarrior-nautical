@@ -951,7 +951,7 @@ def _append_dst_adjustment_row(
                     resolved_local = core.to_local(
                         core.build_local_datetime(requested_day, (int(hour), int(minute)))
                     )
-                except Exception:
+                except (TypeError, ValueError, OverflowError):
                     continue
                 if compare_datetimes(resolved_local, occurrence_local) != 0:
                     continue

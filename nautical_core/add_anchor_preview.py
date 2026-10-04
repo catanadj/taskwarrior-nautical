@@ -7,6 +7,7 @@ from typing import Any, Callable, NoReturn, Protocol
 
 from . import panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch
+from .modify_models import CoerceIntCallback
 from .scheduler_models import occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
@@ -45,7 +46,7 @@ class AnchorExpressionPreviewServices:
     scheduler_service_for_task: Callable[[TaskPayload], Any]
     to_local: Callable[[datetime], datetime]
     fmt_dt_local: Callable[[Any], str]
-    coerce_int: Callable[..., Any]
+    coerce_int: CoerceIntCallback
     expr_has_m_or_y: Callable[[Any], bool]
     append_dst_adjustment: Callable[[list[tuple[str, str]], Any, datetime], None]
     render_business_calendar_displacement: AddCalendarFeedbackCallback
@@ -76,7 +77,7 @@ class AnchorFilePreviewServices:
     scheduler_service_for_task: Callable[[TaskPayload], Any]
     to_local: Callable[[datetime], datetime]
     fmt_dt_local: Callable[[Any], str]
-    coerce_int: Callable[..., Any]
+    coerce_int: CoerceIntCallback
     render_business_calendar_displacement: AddCalendarFeedbackCallback
     omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
     append_wait_sched_rows: Callable[..., Any]

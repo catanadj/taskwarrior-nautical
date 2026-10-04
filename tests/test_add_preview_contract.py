@@ -134,6 +134,27 @@ class AddPreviewCompositionTests(unittest.TestCase):
                 error_and_exit=lambda _rows: None,
             )
 
+    def test_omit_file_loader_propagates_unexpected_runtime_failures(self) -> None:
+        def fail_loading(*_args):
+            raise RuntimeError("omit file loader failed internally")
+
+        core = SimpleNamespace(
+            _import_sibling=lambda _name: SimpleNamespace(
+                load_omit_file_data=fail_loading
+            )
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "omit file loader failed internally"):
+            add_anchor_preview.anchor_preview_prepare_omit_dnf(
+                {"omit_file": "dates.csv"},
+                [],
+                core=core,
+                validate_omit_syntax_strict=lambda _value: (None, None),
+                error_and_exit=lambda _rows: self.fail(
+                    "unexpected loader failures are not invalid user files"
+                ),
+            )
+
     def test_compact_anchor_preview_requests_only_its_first_occurrence(self):
         self.assertEqual(add_anchor_preview._initial_occurrence_limit(200, True), 1)
         self.assertEqual(add_anchor_preview._initial_occurrence_limit(3, False), 19)

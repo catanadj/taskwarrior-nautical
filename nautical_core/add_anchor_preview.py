@@ -395,7 +395,7 @@ def anchor_preview_prepare_omit_dnf(
                 omit_file,
                 getattr(core, "OMIT_FILE_DIR", ""),
             )
-        except Exception as e:
+        except (OSError, UnicodeError, ValueError) as e:
             error_and_exit([("Invalid omit_file", str(e))])
         rows.append(("Omit file", f"[white]{omit_file}[/]"))
     if not omit_dnf and not omit_dates:

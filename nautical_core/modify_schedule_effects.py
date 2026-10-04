@@ -277,7 +277,13 @@ def cp_add_period(ports: SchedulePorts, dt: datetime, td: timedelta) -> datetime
     return (dt + td).replace(microsecond=0)
 
 
-def sequence_period_for_link(ports: SequencePorts, tokens: list[dict], cp_str: str, link_no: int, chain_id: str | None = None) -> timedelta:
+def sequence_period_for_link(
+    ports: SequencePorts,
+    tokens: list[dict[str, Any]],
+    cp_str: str,
+    link_no: int,
+    chain_id: str | None = None,
+) -> timedelta:
     index = (max(1, int(link_no)) - 1) % len(tokens)
     return ports.sequence_interval(
         tokens[index], cp=cp_str, link_no=link_no, token_index=index, chain_id=chain_id

@@ -114,6 +114,14 @@ class ModifyScheduleContractTests(unittest.TestCase):
             modify_schedule_effects.SequenceIntervalForToken,
         )
 
+    def test_sequence_projection_tokens_use_string_keyed_mapping_contract(self) -> None:
+        self.assertEqual(
+            get_type_hints(modify_schedule_effects.sequence_period_for_link)[
+                "tokens"
+            ],
+            list[dict[str, Any]],
+        )
+
     def test_occurrence_port_uses_named_protocol(self) -> None:
         self.assertIs(
             get_type_hints(modify_schedule_effects.OccurrencePorts)["next_occurrence"],

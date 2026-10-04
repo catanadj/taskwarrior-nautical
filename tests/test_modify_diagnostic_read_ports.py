@@ -26,6 +26,18 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
             get_type_hints(_parse_datetime_value)["return"], datetime | None
         )
 
+    def test_lateness_statistics_use_the_owner_result_model(self) -> None:
+        import nautical_core.modify_analytics as analytics
+        from nautical_core.modify_chain_summary import stats_rows
+        from nautical_core.modify_analytics import LatenessStats
+        from nautical_core.task_models import TaskObservation
+
+        self.assertIs(get_type_hints(analytics.lateness_stats)["return"], LatenessStats)
+        self.assertEqual(
+            get_type_hints(stats_rows)["lateness_stats"],
+            abc.Callable[[list[TaskObservation]], LatenessStats],
+        )
+
     def test_seconds_delta_port_has_concrete_humanizer_contract(self) -> None:
         from nautical_core.modify_diagnostics_effects import SecondsDeltaPort
 

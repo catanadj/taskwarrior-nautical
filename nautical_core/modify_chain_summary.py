@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .callback_ports import CallbackPort
+from .modify_analytics import LatenessStats
 from .task_models import TaskObservation, TaskPayload
 
 
@@ -169,7 +170,7 @@ def stats_rows(
     chain: list[TaskObservation],
     now_utc: Any,
     *,
-    lateness_stats: Callable[..., dict[str, Any]],
+    lateness_stats: Callable[[list[TaskObservation]], LatenessStats],
     format_seconds_delta: Callable[[Any, float | None], str],
 ) -> None:
     stats = lateness_stats(chain)

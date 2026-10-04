@@ -10,7 +10,7 @@ import random
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, ContextManager, Protocol
+from typing import Any, Callable, ContextManager, Mapping, Protocol
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
@@ -27,6 +27,33 @@ class CacheClockPort(Protocol):
 
 class CacheRandomPort(Protocol):
     def uniform(self, start: float, end: float) -> float: ...
+
+
+class CachePathPort(Protocol):
+    def dirname(self, path: str) -> str: ...
+
+    def abspath(self, path: str) -> str: ...
+
+    def join(self, *parts: str) -> str: ...
+
+    def exists(self, path: str) -> bool: ...
+
+
+class CacheStatResultPort(Protocol):
+    st_mtime_ns: int
+    st_size: int
+
+
+class CacheFilesystemPort(Protocol):
+    name: str
+    path: CachePathPort
+    environ: Mapping[str, str]
+
+    def stat(self, path: str) -> CacheStatResultPort: ...
+
+    def getpid(self) -> int: ...
+
+    def replace(self, src: str, dst: str) -> None: ...
 
 
 fcntl: Any
@@ -54,7 +81,7 @@ class _CacheBindingContext:
 class CacheRuntimeDependencies:
     """Explicit runtime collaborators and mutable cache state for one binding."""
 
-    filesystem: Any
+    filesystem: CacheFilesystemPort
     clock: CacheClockPort
     random: CacheRandomPort
     fcntl: Any

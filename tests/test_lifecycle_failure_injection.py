@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import unittest
 import json
+import io
 import os
 import sqlite3
 import subprocess
@@ -17,6 +18,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
+from contextlib import redirect_stderr
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -705,7 +707,24 @@ print(json.dumps(payload, sort_keys=True))
 
         # Progress is presentation-only and must never interrupt lifecycle
         # application or turn a successful drain into an error.
-        LifecycleApplicationService._report_drain_progress(failing_observer, event)
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": ""}), redirect_stderr(stderr):
+            LifecycleApplicationService._report_drain_progress(failing_observer, event)
+        self.assertEqual("", stderr.getvalue())
+
+    def test_progress_observer_failure_is_redacted_and_diagnostic_only(self) -> None:
+        event = LifecycleDrainProgress(LifecycleDrainStage.PROCESSING, 1, 2, intent_id="intent-1")
+
+        def failing_observer(_event):
+            raise RuntimeError("task description must not leak")
+
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stderr(stderr):
+            LifecycleApplicationService._report_drain_progress(failing_observer, event)
+
+        self.assertIn("lifecycle progress observer failed", stderr.getvalue())
+        self.assertIn("RuntimeError", stderr.getvalue())
+        self.assertNotIn("task description must not leak", stderr.getvalue())
 
     def test_budget_interrupt_after_child_import_resumes_at_parent_link(self) -> None:
         class Uow:

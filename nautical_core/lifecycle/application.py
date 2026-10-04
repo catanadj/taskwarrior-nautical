@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import sqlite3
+import sys
 import time
 from typing import Any, Callable, Protocol, Sequence, cast
 
@@ -1164,7 +1165,12 @@ class LifecycleApplicationService:
             return
         try:
             progress(event)
-        except Exception:
+        except Exception as exc:
+            if os.environ.get("NAUTICAL_DIAG") == "1":
+                print(
+                    f"[nautical] lifecycle progress observer failed ({type(exc).__name__})",
+                    file=sys.stderr,
+                )
             return
 
     def execute_staged(

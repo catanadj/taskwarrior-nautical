@@ -7,6 +7,28 @@ from typing import Any, get_type_hints
 
 
 class ModifyCompletionEffectPortTests(unittest.TestCase):
+    def test_completion_snapshot_operations_use_their_result_models(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            chain_snapshot,
+            existing_next_or_fail,
+            preflight_context,
+        )
+        from nautical_core.modify_completion_effects import CompletionPreflightRepository
+        from nautical_core.modify_models import CompletionChainSnapshot, CompletionPreflightContext
+
+        self.assertIs(
+            get_type_hints(chain_snapshot)["return"], CompletionChainSnapshot
+        )
+        self.assertEqual(
+            get_type_hints(existing_next_or_fail)["chain_snapshot"],
+            CompletionChainSnapshot | None,
+        )
+        preflight_hints = get_type_hints(preflight_context)
+        self.assertIs(preflight_hints["repository"], CompletionPreflightRepository)
+        self.assertEqual(
+            preflight_hints["return"], CompletionPreflightContext | None
+        )
+
     def test_completion_preflight_factory_has_typed_host_contract(self) -> None:
         from nautical_core.modify_completion_effects import (
             completion_preflight_context_ports_for,

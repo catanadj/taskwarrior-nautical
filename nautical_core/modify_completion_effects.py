@@ -15,6 +15,7 @@ from .timeutil import compare_datetimes
 from .lifecycle.read_service import ChainSnapshotRepository
 from .lifecycle.models import LifecyclePlan
 from .task_read_repository import AuthoritativeTaskSnapshot
+from .integration_models import TaskRead
 from .modify_models import (
     DiagnosticCallback,
     CapFromUntilAnchorCallback,
@@ -232,6 +233,10 @@ class CompletionSpawnService(Protocol):
 
 class TaskRowDecoder(Protocol):
     def __call__(self, row: Mapping[str, Any], *, source_query: str) -> TaskObservation: ...
+
+
+class CompletionPreflightRepository(ChainSnapshotRepository, Protocol):
+    def exact_child_slot(self, chain_id: str, link: int) -> TaskRead[TaskObservation]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,7 +464,12 @@ def chain_id_or_fail(ports: CompletionPreflightPorts, new: TaskPayload) -> str |
     )
 
 
-def existing_next_or_fail(ports: CompletionPreflightPorts, new: TaskPayload, next_no: int, chain_snapshot: Any) -> bool:
+def existing_next_or_fail(
+    ports: CompletionPreflightPorts,
+    new: TaskPayload,
+    next_no: int,
+    chain_snapshot: CompletionChainSnapshot | None,
+) -> bool:
     return ports.preflight.completion_existing_next_or_fail(
         new,
         next_no,
@@ -472,7 +482,9 @@ def _snapshot_mode(ports: SnapshotPorts) -> str:
     return ports.mode()
 
 
-def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: int) -> Any:
+def chain_snapshot(
+    ports: SnapshotPorts, chain_id: str, base_no: int, next_no: int
+) -> CompletionChainSnapshot:
     del base_no, next_no
     from .integration_models import Absent, Found, Unavailable
 
@@ -528,8 +540,8 @@ def preflight_context(
     ports: CompletionPreflightContextPorts,
     new: TaskPayload,
     now_utc: datetime,
-    repository: Any,
-) -> Any:
+    repository: CompletionPreflightRepository,
+) -> CompletionPreflightContext | None:
     preflight = ports.preflight
     snapshot_ports = SnapshotPorts(
         repository=repository,

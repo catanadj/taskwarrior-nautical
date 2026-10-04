@@ -312,6 +312,37 @@ class ModifyFeedbackContractTests(unittest.TestCase):
             [("Next expires", "2026-10-04T20:00:00+00:00")],
         )
 
+    def test_next_expiration_row_keeps_primary_row_if_optional_carry_fails(self) -> None:
+        rows: list[tuple[str, object]] = []
+
+        def fail_carry(*_args, **_kwargs):
+            raise RuntimeError("optional carry description failed")
+
+        core = SimpleNamespace(
+            fmt_dt_local=lambda value: value.isoformat(),
+            humanize_delta=lambda *_args: "in 3 days",
+            to_local=lambda value: value,
+            _import_sibling=lambda _name: SimpleNamespace(
+                describe_native_until_carry=fail_carry
+            ),
+        )
+        modify_feedback._append_next_expiration_row(
+            rows,
+            {"until": "20261004T200000Z"},
+            datetime(2026, 10, 4, 7, tzinfo=timezone.utc),
+            core=core,
+        )
+
+        self.assertEqual(
+            rows,
+            [
+                (
+                    "Next expires",
+                    "2026-10-04T20:00:00+00:00  (3 days after due)",
+                )
+            ],
+        )
+
     def test_feedback_local_formatters_accept_datetimes(self) -> None:
         expected = Callable[[datetime], str]
         renderers = (

@@ -914,7 +914,7 @@ def _append_next_expiration_row(
                 to_local=core.to_local,
             )
         except Exception:
-            # Carry policy is optional annotation; retain the primary expiry row.
+            # Carry text is optional; lookup/summary failure must not hide expiry.
             carry = None
     if carry:
         fb.append(("Expiration", carry))

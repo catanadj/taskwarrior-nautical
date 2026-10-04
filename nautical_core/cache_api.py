@@ -10,11 +10,24 @@ import random
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, ContextManager
+from typing import Any, Callable, ContextManager, Protocol
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
 from .core_context import CacheDependencies, CacheState, CoreContext
+
+
+class CacheClockPort(Protocol):
+    def time(self) -> float: ...
+
+    def time_ns(self) -> int: ...
+
+    def sleep(self, seconds: float) -> None: ...
+
+
+class CacheRandomPort(Protocol):
+    def uniform(self, start: float, end: float) -> float: ...
+
 
 fcntl: Any
 try:
@@ -42,8 +55,8 @@ class CacheRuntimeDependencies:
     """Explicit runtime collaborators and mutable cache state for one binding."""
 
     filesystem: Any
-    clock: Any
-    random: Any
+    clock: CacheClockPort
+    random: CacheRandomPort
     fcntl: Any
     json: Any
     compression: Any

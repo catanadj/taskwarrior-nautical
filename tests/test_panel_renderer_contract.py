@@ -1,5 +1,6 @@
 """Direct contracts for panel mode routing in the public renderer."""
 
+import builtins
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -32,6 +33,23 @@ class PanelRendererContractTests(unittest.TestCase):
         with patch.object(ui.os, "get_terminal_size", side_effect=RuntimeError("broken probe")):
             with self.assertRaisesRegex(RuntimeError, "broken probe"):
                 ui.term_width_stderr()
+
+    def test_live_duration_defaults_for_invalid_values(self) -> None:
+        self.assertEqual(ui._normalized_live_duration_ms("invalid"), 160)
+
+    def test_live_duration_does_not_hide_unexpected_conversion_failures(self) -> None:
+        calls = 0
+
+        def converter(value: object) -> float:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("conversion defect")
+            return builtins.float(value)
+
+        with patch.dict(ui.__dict__, {"float": converter}):
+            with self.assertRaisesRegex(RuntimeError, "conversion defect"):
+                ui._normalized_live_duration_ms(160)
 
     def test_live_panel_branding_focus_and_footer_bounds_do_not_change_static_panels(self) -> None:
         from rich.console import Console

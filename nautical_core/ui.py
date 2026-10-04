@@ -607,7 +607,7 @@ def _render_panel_live(
 def _normalized_live_duration_ms(duration_ms: int | float) -> float:
     try:
         duration = float(duration_ms)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         duration = float(_DEFAULT_LIVE_PANEL_DURATION_MS)
     return max(0.0, min(float(_MAX_LIVE_PANEL_DURATION_MS), duration))
 

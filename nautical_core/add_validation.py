@@ -3,12 +3,18 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from . import native_until
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_context import RecurrenceContext
 from nautical_core.task_datetime import TaskDatetimeParser
+
+
+class DurationParserPort(Protocol):
+    def parse_cp_sequence(self, value: str) -> list[timedelta] | None: ...
+
+    def cp_sequence_parse_error(self, value: str) -> str | None: ...
 
 
 def validate_until_not_past(until_dt: Any, now_utc: datetime, *, core: Any) -> tuple[bool, str | None]:
@@ -208,7 +214,7 @@ def safe_parse_duration(
     s: Any,
     field_name: str,
     *,
-    core: Any,
+    core: DurationParserPort,
     diag: Callable[[str], None],
 ) -> tuple[timedelta | None, str | None]:
     if not s:
@@ -228,44 +234,6 @@ def safe_parse_duration(
     except (TypeError, OverflowError) as e:
         diag(f"{field_name} duration parse unexpected error: {e}")
         return (None, f"{field_name}: Unexpected parsing error")
-
-
-def validate_anchor_syntax_strict(
-    expr: str | list[list[dict[str, Any]]],
-    *,
-    validate_anchor_expr_cached: Callable[[str | list[list[dict[str, Any]]]], list[list[dict[str, Any]]]],
-    core: Any,
-    diag: Callable[[str], None],
-) -> tuple[list[list[dict[str, Any]]] | None, str | None]:
-    try:
-        dnf = validate_anchor_expr_cached(expr)
-        return dnf, None
-    except Exception as e:
-        parse_err_t = getattr(core, "ParseError", None)
-        if parse_err_t is not None and isinstance(e, parse_err_t):
-            return None, str(e)
-        diag(f"anchor validation unexpected error: {e}")
-        return None, "anchor syntax error"
-
-
-def validate_omit_syntax_strict(
-    expr: str | list[list[dict[str, Any]]],
-    *,
-    validate_omit_expr_cached: Callable[[str | list[list[dict[str, Any]]]], list[list[dict[str, Any]]]],
-    core: Any,
-    diag: Callable[[str], None],
-) -> tuple[list[list[dict[str, Any]]] | None, str | None]:
-    try:
-        dnf = validate_omit_expr_cached(expr)
-        return dnf, None
-    except ValueError as e:
-        return None, str(e)
-    except Exception as e:
-        parse_err_t = getattr(core, "ParseError", None)
-        if parse_err_t is not None and isinstance(e, parse_err_t):
-            return None, str(e)
-        diag(f"omit validation unexpected error: {e}")
-        return None, "omit syntax error"
 
 
 def validate_anchor_mode(mode_str: Any) -> tuple[str, str | None]:

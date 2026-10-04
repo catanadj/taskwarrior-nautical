@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from typing import get_type_hints
 
 from nautical_core.add_validation import collect_anchor_time_slots, parse_chain_max, safe_parse_duration
+import nautical_core.add_validation as add_validation
 
 
 class AddValidationContractTests(unittest.TestCase):
+    def test_duration_parser_uses_a_narrow_parser_port(self) -> None:
+        self.assertIs(
+            get_type_hints(add_validation.safe_parse_duration)["core"],
+            add_validation.DurationParserPort,
+        )
+
     def test_duration_parser_does_not_hide_internal_failures(self) -> None:
         def broken_parser(_value: object) -> None:
             raise RuntimeError("duration parser invariant failed")

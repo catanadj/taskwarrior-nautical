@@ -17,7 +17,7 @@ import tempfile
 import time
 import unittest
 from contextlib import nullcontext
-from typing import Any, Callable, ContextManager, get_type_hints
+from typing import Any, Callable, ContextManager, Iterator, get_type_hints
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -61,6 +61,15 @@ class CacheApiContractTests(unittest.TestCase):
         self.assertIs(hints["validated_user_dir"], cache_support.ValidatedUserDir)
         self.assertIs(hints["select_cache_dir"], cache_locking.CacheDirectorySelector)
         self.assertEqual(hints["return"], str)
+
+    def test_cache_lock_contexts_have_typed_inputs_and_yields(self) -> None:
+        safe_hints = get_type_hints(cache_locking.safe_lock)
+        self.assertIs(safe_hints["path"], object)
+        self.assertEqual(safe_hints["return"], Iterator[bool])
+        cache_hints = get_type_hints(cache_locking.cache_lock)
+        self.assertEqual(cache_hints["cache_lock_path"], cache_locking.Callable[[str], str])
+        self.assertIs(cache_hints["safe_lock"], cache_locking.BoundSafeLock)
+        self.assertEqual(cache_hints["return"], Iterator[bool])
 
     def test_payload_load_and_save_share_the_cache_state_model(self) -> None:
         load_signature = get_type_hints(cache_payload.cache_load)

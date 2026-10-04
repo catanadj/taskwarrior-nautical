@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, ContextManager, Protocol
+from collections.abc import Callable
+from typing import Any, ContextManager, Iterator, Protocol
 
 from nautical_core.cache_support import ValidatedUserDir
 
@@ -288,7 +289,7 @@ def safe_lock_excl_context(
 
 @contextmanager
 def safe_lock(
-    path: Any,
+    path: object,
     *,
     retries: int = 6,
     sleep_base: float = 0.05,
@@ -300,7 +301,7 @@ def safe_lock(
     os_mod: Any,
     time_mod: TimePort,
     random_mod: RandomPort,
-) -> Any:
+) -> Iterator[bool]:
     path_str = str(path) if path else ""
     if not path_str:
         yield False
@@ -360,13 +361,13 @@ def safe_lock(
 def cache_lock(
     key: str,
     *,
-    cache_lock_path: Any,
-    safe_lock: Any,
+    cache_lock_path: Callable[[str], str],
+    safe_lock: BoundSafeLock,
     cache_lock_retries: int,
     cache_lock_sleep_base: float,
     cache_lock_jitter: float,
     cache_lock_stale_after: float,
-) -> Any:
+) -> Iterator[bool]:
     lock_path = cache_lock_path(key)
     if not lock_path:
         yield False

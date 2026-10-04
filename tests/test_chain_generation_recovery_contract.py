@@ -73,6 +73,10 @@ class _Core:
             import nautical_core.task_codec as task_codec
 
             return task_codec
+        if name == "native_until":
+            import nautical_core.native_until as native_until
+
+            return native_until
         raise AssertionError(name)
 
 
@@ -173,6 +177,25 @@ class ChainGenerationContractTests(unittest.TestCase):
             scheduled_child_due, datetime(2026, 7, 27, 9, tzinfo=timezone.utc)
         )
         self.assertEqual(scheduled_metadata.get("target_field"), "scheduled")
+
+    def test_native_until_carry_does_not_relabel_parser_defects_as_invalid_input(self):
+        class BrokenParser:
+            def parse(self, _value):
+                raise RuntimeError("datetime parser defect")
+
+        service = ChainGenerationService.from_core(
+            _Core(), datetime_parser=BrokenParser()
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "datetime parser defect"):
+            service.carry_native_until(
+                _task(until="2026-01-03T09:00:00Z"),
+                {},
+                datetime(2026, 1, 3, 9, tzinfo=timezone.utc),
+                "cp",
+                parent_anchor_field="due",
+                child_anchor_field="due",
+            )
 
     def test_cp_generation_uses_link_sequence_and_durable_metadata(self):
         parent = _task(link=1)

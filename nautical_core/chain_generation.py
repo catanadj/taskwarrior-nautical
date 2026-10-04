@@ -459,16 +459,13 @@ class ChainGenerationService:
         if not parent.get("until") or not parent.get(parent_anchor_field):
             return
         native_until = self.core._import_sibling("native_until")
-        try:
-            parent_target, target_error = self.parse_datetime(parent.get(parent_anchor_field))
-            parent_until, until_error = self.parse_datetime(parent.get("until"))
-            if target_error or until_error:
-                raise ValueError(target_error or until_error or "invalid recurrence timestamp")
-        except Exception as exc:
+        parent_target, target_error = self.parse_datetime(parent.get(parent_anchor_field))
+        parent_until, until_error = self.parse_datetime(parent.get("until"))
+        if target_error or until_error:
             raise native_until.NativeUntilCarryError(
                 native_until.CARRY_INVALID,
                 "native until carry requires valid recurrence timestamps",
-            ) from exc
+            )
         if not (parent_target and parent_until and isinstance(child_due_utc, datetime)):
             raise native_until.NativeUntilCarryError(
                 native_until.CARRY_INVALID,

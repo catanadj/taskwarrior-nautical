@@ -25,7 +25,7 @@ from nautical_core.modify_models import (
     WaitScheduleRowsCallback,
     WaitScheduleDebug,
 )
-from nautical_core.task_models import TaskPayload
+from nautical_core.task_models import TaskObservation, TaskPayload
 import nautical_core.timezone_facade as timezone_facade
 
 if TYPE_CHECKING:
@@ -94,8 +94,8 @@ class ModifyRuntimeState:
         }
     )
     diag_start_ts: float = field(default_factory=_time.perf_counter)
-    panel_chain_by_link: dict[int, list[dict[str, Any]]] | None = None
-    panel_chain_by_short: dict[str, dict[str, Any]] | None = None
+    panel_chain_by_link: dict[int, list[TaskObservation]] | None = None
+    panel_chain_by_short: dict[str, TaskObservation] | None = None
     panel_chain_snapshot_loaded: bool = False
     lifecycle_read_service: LifecycleReadService | None = None
     chain_cache_store: ChainCacheStore | None = None

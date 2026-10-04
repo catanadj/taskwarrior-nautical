@@ -144,6 +144,19 @@ class ModifyCompletionEffectPortTests(unittest.TestCase):
             f"{OccurrenceProvider.__name__} | None",
         )
 
+    def test_modify_runtime_chain_indexes_use_task_observations(self) -> None:
+        from nautical_core.modify_runtime import ModifyRuntimeState
+        from nautical_core.task_models import TaskObservation
+
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["panel_chain_by_link"],
+            f"dict[int, list[{TaskObservation.__name__}]] | None",
+        )
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["panel_chain_by_short"],
+            f"dict[str, {TaskObservation.__name__}] | None",
+        )
+
     def test_scheduler_runtime_state_uses_scheduler_service_cache_contract(self) -> None:
         from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
         from nautical_core.modify_runtime import ModifyRuntimeState, scheduler_service_for_task

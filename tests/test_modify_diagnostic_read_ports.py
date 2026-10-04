@@ -12,6 +12,21 @@ from unittest.mock import patch
 
 
 class ModifyDiagnosticReadPortTests(unittest.TestCase):
+    def test_tw_get_command_port_exposes_named_retry_and_execution_inputs(self) -> None:
+        from nautical_core.modify_read_effects import TwGetPorts
+
+        callback = get_type_hints(TwGetPorts)["run_task"]
+        signature = inspect.signature(callback.__call__)
+
+        self.assertEqual(
+            list(signature.parameters),
+            ["self", "argv", "env", "input_text", "timeout", "retries", "retry_delay", "use_tempfiles"],
+        )
+        self.assertEqual(
+            signature.parameters["env"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+
     def test_diagnostic_datetime_parser_port_has_typed_owner_contract(self) -> None:
         from nautical_core.modify_diagnostics_effects import (
             DatetimeValuePort,
@@ -180,9 +195,8 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertIs(annotations["panel_chain_snapshot_loaded"], bool)
 
     def test_tw_get_ports_use_typed_runner_and_cache_callbacks(self) -> None:
-        from nautical_core.integration_models import TaskCommandResult
         from nautical_core.lifecycle.read_service import LifecycleReadService
-        from nautical_core.modify_read_effects import TwGetPorts
+        from nautical_core.modify_read_effects import TwGetPorts, TwGetTaskCommand
 
         annotations = get_type_hints(TwGetPorts)
         self.assertIs(annotations["service"], LifecycleReadService)
@@ -190,9 +204,7 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         self.assertEqual(
             annotations["cache_set"], abc.Callable[[str, str, object], None]
         )
-        self.assertEqual(
-            annotations["run_task"], abc.Callable[..., TaskCommandResult]
-        )
+        self.assertIs(annotations["run_task"], TwGetTaskCommand)
         self.assertEqual(annotations["command_prefix"], abc.Callable[[], list[str]])
         self.assertEqual(annotations["environment"], abc.Callable[[], dict[str, str]])
 

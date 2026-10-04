@@ -82,9 +82,23 @@ class TwGetPorts:
     cache_set: Callable[[str, str, object], None]
     count: Callable[[str], None]
     diagnostic: Callable[[str], None]
-    run_task: Callable[..., TaskCommandResult]
+    run_task: "TwGetTaskCommand"
     command_prefix: Callable[[], list[str]]
     environment: Callable[[], dict[str, str]]
+
+
+class TwGetTaskCommand(Protocol):
+    def __call__(
+        self,
+        argv: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        input_text: str | None = None,
+        timeout: float = 3.0,
+        retries: int = 2,
+        retry_delay: float = 0.15,
+        use_tempfiles: bool = False,
+    ) -> TaskCommandResult: ...
 
 
 def _token_match(coerce_int: CoerceInt, task: TaskFieldReader, token: str) -> bool:

@@ -2,7 +2,7 @@
 
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Callable, get_type_hints
+from typing import Callable, get_type_hints
 import unittest
 
 import nautical_core as core
@@ -72,7 +72,9 @@ class ModifyTimelineContractTests(unittest.TestCase):
             anchor_file_timeline_lines,
         )
 
-        expected = Callable[[Any, Any], Any]
+        from nautical_core.modify_models import CoerceIntCallback
+
+        expected = CoerceIntCallback
         for function in (_timeline_initial_items, anchor_file_timeline_lines):
             with self.subTest(function=function.__name__):
                 self.assertEqual(get_type_hints(function)["coerce_int"], expected)
@@ -103,6 +105,48 @@ class ModifyTimelineContractTests(unittest.TestCase):
         for name, annotation in expected.items():
             with self.subTest(callback=name):
                 self.assertEqual(annotations[name], annotation)
+
+    def test_missing_projection_dependencies_render_unavailable_warnings(self) -> None:
+        from nautical_core.modify_timeline import timeline_lines
+
+        formatting = SimpleNamespace(
+            coerce_int=lambda value, default=None: int(value) if value is not None else default,
+            future_style_for_chain=lambda _task, _kind: "yellow",
+            fmt_dt_local=lambda _value: "local time",
+            fmtlocal=lambda _value: "local time",
+            fmt_on_time_delta=lambda _start, _end: "",
+            short=lambda value: str(value or "–"),
+            format_gap=lambda *_args: "",
+        )
+        projection = SimpleNamespace(
+            max_iterations=4,
+            collect_prev_two=lambda _task: [],
+            dtparse=lambda _value: None,
+        )
+
+        cases = (
+            ("cp", "recurrence evaluator"),
+            ("anchor", "scheduler service"),
+        )
+        for kind, missing_dependency in cases:
+            with self.subTest(kind=kind):
+                lines = timeline_lines(
+                    kind,
+                    {"uuid": "parent-uuid", "chainID": "timeline-test", "link": 1, "cp": "1d"},
+                    datetime(2026, 10, 6, 9, tzinfo=timezone.utc),
+                    "child-uuid",
+                    None,
+                    next_count=1,
+                    projection=projection,
+                    formatting=formatting,
+                    scheduler_service=None,
+                    omit_dnf=None,
+                    evaluator=None,
+                )
+
+                self.assertEqual(len(lines), 3)
+                self.assertIn("Projection unavailable", lines[-1])
+                self.assertIn(missing_dependency, lines[-1])
 
     def test_timeline_formatting_services_expose_exact_callback_shapes(self) -> None:
         from nautical_core.modify_models import CoerceIntCallback, ShortUuidCallback

@@ -142,10 +142,10 @@ def _timeline_initial_items(
     task: TaskPayload,
     cur_no: int,
     nxt_no: int,
-    child_due_utc: Any,
+    child_due_utc: datetime,
     child_short: str,
     *,
-    coerce_int: Callable[[Any, Any], Any],
+    coerce_int: CoerceIntCallback,
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
     dtparse: Callable[[object], datetime | None],
 ) -> list[TimelineItem]:
@@ -171,7 +171,7 @@ def _timeline_future_cp_items(
     allowed_future: int,
     cap_no: int | None,
     max_iterations: int,
-    evaluator: Any,
+    evaluator: RecurrenceEvaluator,
 ) -> list[tuple[int, datetime, dict[str, Any], str]]:
     cp_str = str(task.get("cp") or "")
     tokens = evaluator.cp_tokens
@@ -216,7 +216,7 @@ def _timeline_future_anchor_items(
     cap_no: int | None,
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
-    scheduler_service: Any,
+    scheduler_service: SchedulerService,
     omit_dnf: OmitState | None,
     omit_description_for_date: Callable[
         [OmitState | None, date], str | None
@@ -319,7 +319,7 @@ def _timeline_omitted_before_next_anchor_items(
     dtparse: Callable[[object], datetime | None],
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
-    scheduler_service: Any,
+    scheduler_service: SchedulerService,
     omit_dnf: OmitState | None,
     omit_description_for_date: Callable[
         [OmitState | None, date], str | None
@@ -483,7 +483,7 @@ def anchor_file_timeline_lines(
     cur_no: int | None,
     show_gaps: bool,
     round_anchor_gaps: bool,
-    coerce_int: Callable[[Any, Any], Any],
+    coerce_int: CoerceIntCallback,
     fmt_dt_local: Callable[[Any], str],
     max_iterations: int,
     future_style_for_chain: Callable[[TaskPayload, str], str],
@@ -493,8 +493,8 @@ def anchor_file_timeline_lines(
     fmtlocal: Callable[[Any], str],
     short: Callable[[Any], str],
     to_local_cached: Callable[[datetime], datetime],
-    scheduler_service: Any,
-    evaluator: Any,
+    scheduler_service: SchedulerService,
+    evaluator: RecurrenceEvaluator,
     omit_dnf: OmitState | None,
     omit_description_for_date: Callable[
         [OmitState | None, date], str | None
@@ -634,9 +634,9 @@ def timeline_lines(
     round_anchor_gaps: bool = True,
     projection: TimelineProjectionServices,
     formatting: TimelineFormattingServices,
-    scheduler_service: Any | None,
+    scheduler_service: SchedulerService | None,
     omit_dnf: OmitState | None,
-    evaluator: Any | None,
+    evaluator: RecurrenceEvaluator | None,
 ) -> list[str]:
     cur_no = formatting.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
     nxt_no = cur_no + 1
@@ -656,23 +656,47 @@ def timeline_lines(
         collect_prev_two=projection.collect_prev_two,
         dtparse=projection.dtparse,
     )
+    projection_available = True
     if kind == "anchor":
-        omitted_before_next = _timeline_omitted_before_next_anchor_items(
-            task,
-            dnf,
-            child_due_utc,
-            dtparse=projection.dtparse,
-            to_local_cached=projection.to_local_cached,
-            safe_parse_datetime=projection.safe_parse_datetime,
-            scheduler_service=scheduler_service,
-            omit_dnf=omit_dnf,
-            omit_description_for_date=projection.omit_description_for_date,
-            max_iterations=projection.max_iterations,
+        if scheduler_service is None:
+            items.append(
+                _timeline_warning(
+                    "Projection unavailable: scheduler service is not available"
+                )
+            )
+            projection_available = False
+        else:
+            omitted_before_next = _timeline_omitted_before_next_anchor_items(
+                task,
+                dnf,
+                child_due_utc,
+                dtparse=projection.dtparse,
+                to_local_cached=projection.to_local_cached,
+                safe_parse_datetime=projection.safe_parse_datetime,
+                scheduler_service=scheduler_service,
+                omit_dnf=omit_dnf,
+                omit_description_for_date=projection.omit_description_for_date,
+                max_iterations=projection.max_iterations,
+            )
+            if omitted_before_next:
+                items = items[:-1] + omitted_before_next + items[-1:]
+    elif kind == "cp" and evaluator is None:
+        items.append(
+            _timeline_warning(
+                "Projection unavailable: recurrence evaluator is not available"
+            )
         )
-        if omitted_before_next:
-            items = items[:-1] + omitted_before_next + items[-1:]
-    if allowed_future > 0:
+        projection_available = False
+    elif kind != "cp" and scheduler_service is None:
+        items.append(
+            _timeline_warning(
+                "Projection unavailable: scheduler service is not available"
+            )
+        )
+        projection_available = False
+    if allowed_future > 0 and projection_available:
         if kind == "cp":
+            assert evaluator is not None
             items.extend(
                 _timeline_future_cp_items(
                     task,
@@ -685,6 +709,7 @@ def timeline_lines(
                 )
             )
         else:
+            assert scheduler_service is not None
             items.extend(
                 _timeline_future_anchor_items(
                     task,

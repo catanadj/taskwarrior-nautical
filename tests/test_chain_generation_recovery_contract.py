@@ -4,6 +4,7 @@ import unittest
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 from unittest.mock import patch
 
 import nautical_core as core
@@ -122,6 +123,22 @@ class ChainGenerationContractTests(unittest.TestCase):
         timezone_override.start()
         self.addCleanup(timezone_override.stop)
         self.service = ChainGenerationService.from_core(_Core())
+
+    def test_expiration_recovery_helpers_expose_typed_child_timestamps(self):
+        from nautical_core.chain_integrity_lifecycle import (
+            _build_expiration_child_with_day_end,
+            compute_expiration_child_due,
+        )
+
+        compute_hints = get_type_hints(compute_expiration_child_due)
+        self.assertEqual(
+            compute_hints["return"], tuple[datetime | None, dict[str, Any]]
+        )
+
+        fallback_hints = get_type_hints(_build_expiration_child_with_day_end)
+        self.assertIs(fallback_hints["child_due"], datetime)
+        self.assertEqual(fallback_hints["until_dt"], datetime | None)
+        self.assertIs(fallback_hints["hook"], object)
 
     def test_reconcile_expiration_anchor_advances_from_recurrence_target(self):
         from nautical_core.chain_integrity_lifecycle import compute_expiration_child_due

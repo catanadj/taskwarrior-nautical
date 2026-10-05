@@ -237,8 +237,8 @@ def is_orphan_expiration_candidate(
 
 
 def compute_expiration_child_due(
-    parent: TaskPayload, *, hook: Any = None, generation: ChainGenerationService | None = None
-) -> tuple[Any, dict[str, Any]]:
+    parent: TaskPayload, *, hook: object | None = None, generation: ChainGenerationService | None = None
+) -> tuple[datetime | None, dict[str, Any]]:
     """Compute the next recurrence target after an expired link without mutating it."""
     generation = generation or _generation_service(hook)
     candidate = expiration_candidate(
@@ -460,14 +460,14 @@ def recurrence_kind(task: TaskObservation | NauticalTask) -> str:
 def _build_expiration_child_with_day_end(
     parent: TaskPayload,
     *,
-    child_due: Any,
+    child_due: datetime,
     child_field: str,
     next_link: int,
     parent_short: str,
     kind: str,
     cpmax: int,
-    until_dt: Any,
-    hook: Any,
+    until_dt: datetime | None,
+    hook: object,
     generation: ChainGenerationService | None = None,
 ) -> dict[str, Any]:
     generation = generation or _generation_service(hook)

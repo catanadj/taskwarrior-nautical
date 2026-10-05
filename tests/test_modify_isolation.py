@@ -1090,6 +1090,28 @@ class ModifyIsolationTests(unittest.TestCase):
         annotations = get_type_hints(NativeCarryPorts)
         self.assertTrue(all(annotation is not Any for annotation in annotations.values()))
 
+    def test_modify_composition_port_factories_return_concrete_contracts(self) -> None:
+        import nautical_core.modify_composition as composition
+        from nautical_core.modify_transition_effects import (
+            CPCarryPorts,
+            CompletionValidationPorts,
+            NativePreservePorts,
+        )
+
+        localns = {
+            "CPCarryPortsContract": CPCarryPorts,
+            "CompletionValidationPortsContract": CompletionValidationPorts,
+            "NativePreservePortsContract": NativePreservePorts,
+        }
+        expected = (
+            (composition._cp_carry_ports, CPCarryPorts),
+            (composition._native_preserve_ports, NativePreservePorts),
+            (composition._completion_validation_ports, CompletionValidationPorts),
+        )
+        for factory, port_type in expected:
+            with self.subTest(factory=factory.__name__):
+                self.assertIs(get_type_hints(factory, localns=localns)["return"], port_type)
+
     def test_native_preserve_ports_have_concrete_dependencies(self) -> None:
         from nautical_core.modify_transition_effects import NativePreservePorts
 

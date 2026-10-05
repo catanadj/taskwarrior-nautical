@@ -638,7 +638,10 @@ class DeletionRouteCapabilities:
     modify_queries: _ModifyQueries
 
 
-def _cp_carry_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
+def _cp_carry_ports(
+    host: Any,
+    capabilities: ModifyHookCapabilities,
+) -> CPCarryPortsContract:
     transition_effects = capabilities.modify_transition_effects
     return transition_effects.CPCarryPorts(
         carry=host._module("modify_carry").preserve_cp_relative_offsets_on_due_change,
@@ -652,7 +655,10 @@ def _cp_carry_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
     )
 
 
-def _native_preserve_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
+def _native_preserve_ports(
+    host: Any,
+    capabilities: ModifyHookCapabilities,
+) -> NativePreservePortsContract:
     transition_effects = capabilities.modify_transition_effects
     generation = capabilities.modify_generation_effects
     task_fields = capabilities.modify_task_fields
@@ -685,7 +691,10 @@ def _native_preserve_ports(host: Any, capabilities: ModifyHookCapabilities) -> A
     )
 
 
-def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
+def _completion_validation_ports(
+    host: Any,
+    capabilities: ModifyHookCapabilities,
+) -> CompletionValidationPortsContract:
     transition_effects = capabilities.modify_transition_effects
     validation_effects = capabilities.modify_validation_effects
     modify_validation = host._module("modify_validation")

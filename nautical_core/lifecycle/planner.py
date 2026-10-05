@@ -258,8 +258,8 @@ def plan_candidate_successor(
     candidate: RecurrenceCandidate,
     *,
     generation: ChainGenerationService,
-    validated_configuration: Any,
-    compare_datetimes: Callable[[Any, Any], int],
+    validated_configuration: object,
+    compare_datetimes: Callable[[datetime, datetime], int],
     preflight: LifecyclePreflight | None = None,
     carry_validator: CarryValidator | None = None,
 ) -> LifecyclePlan:
@@ -321,8 +321,8 @@ def plan_expiration_successor(
     snapshot: TaskSnapshot,
     *,
     generation: ChainGenerationService,
-    validated_configuration: Any,
-    compare_datetimes: Callable[[Any, Any], int],
+    validated_configuration: object,
+    compare_datetimes: Callable[[datetime, datetime], int],
     preflight: LifecyclePreflight | None = None,
     carry_validator: CarryValidator | None = None,
 ) -> LifecyclePlan:
@@ -344,7 +344,7 @@ def plan_expiration_successor(
 class ChainGenerationLimitPolicy:
     """Default numeric and datetime limit policy for generation candidates."""
 
-    compare_datetimes: Callable[[Any, Any], int]
+    compare_datetimes: Callable[[datetime, datetime], int]
 
     def __call__(
         self,
@@ -362,8 +362,11 @@ class ChainGenerationLimitPolicy:
                 raise LifecyclePlanningError(f"invalid chainMax: {raw_max!r}") from exc
             if max_link > 0 and next_link > max_link:
                 return f"chainMax reached at link {max_link}"
-        if candidate.until is not None and self.compare_datetimes(candidate.child_due, candidate.until) > 0:
-            return "chainUntil reached"
+        if candidate.until is not None:
+            if candidate.child_due is None:
+                raise LifecyclePlanningError("recurrence candidate has an until date but no child due date")
+            if self.compare_datetimes(candidate.child_due, candidate.until) > 0:
+                return "chainUntil reached"
         return None
 
 
@@ -464,7 +467,7 @@ def terminal_plan_for_snapshot(
 class LifecyclePlanner:
     """Construct side-effect-free lifecycle plans from immutable snapshots."""
 
-    validated_configuration: Any
+    validated_configuration: object
     recurrence_service: RecurrencePlanningService | None = None
     successor_limit_policy: SuccessorLimitPolicy | None = None
 

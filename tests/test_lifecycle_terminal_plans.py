@@ -89,6 +89,8 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
         from nautical_core.chain_generation import ChainGenerationService
         from nautical_core.lifecycle import planner
+        from datetime import datetime
+        from typing import Callable
 
         self.assertIs(
             get_type_hints(planner.ChainGenerationPlanningService)["generation"],
@@ -106,6 +108,14 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             get_type_hints(planner.plan_expiration_successor)["generation"],
             ChainGenerationService,
         )
+        self.assertIs(get_type_hints(planner.LifecyclePlanner)["validated_configuration"], object)
+        self.assertEqual(
+            get_type_hints(planner.ChainGenerationLimitPolicy)["compare_datetimes"],
+            Callable[[datetime, datetime], int],
+        )
+        candidate_hints = get_type_hints(planner.plan_candidate_successor)
+        self.assertIs(candidate_hints["validated_configuration"], object)
+        self.assertEqual(candidate_hints["compare_datetimes"], Callable[[datetime, datetime], int])
 
     def test_recurrence_candidate_requires_datetime_values(self) -> None:
         from datetime import datetime
@@ -233,6 +243,22 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         ).plan(source, LifecycleEvent.COMPLETE)
 
         self.assertIs(plan.action, LifecycleAction.FINALIZE_CHAIN)
+
+    def test_limit_policy_rejects_until_without_candidate_due(self) -> None:
+        from datetime import datetime, timezone
+        from nautical_core.lifecycle.planner import ChainGenerationLimitPolicy, LifecyclePlanningError
+
+        policy = ChainGenerationLimitPolicy(lambda left, right: (left > right) - (left < right))
+        with self.assertRaisesRegex(LifecyclePlanningError, "until date but no child due date"):
+            policy(
+                snapshot(),
+                LifecycleEvent.COMPLETE,
+                RecurrenceCandidate(
+                    child_due=None,
+                    until=datetime(2026, 8, 25, 9, tzinfo=timezone.utc),
+                ),
+                5,
+            )
 
     def test_parent_mutation_guard_uses_stable_terminal_timestamp(self) -> None:
         guard = MutationGuard(

@@ -426,10 +426,8 @@ class ChainGenerationService:
                     "delta": str(parent_delta),
                 },
             )
-        except Exception as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             self._record_carry_debug(field, {"ok": False, "reason": "conversion-failed"})
-            if isinstance(exc, CarryFieldError):
-                raise
             raise CarryFieldError(field, str(exc) or "timezone conversion failed") from exc
 
     def carry_relative_datetime(

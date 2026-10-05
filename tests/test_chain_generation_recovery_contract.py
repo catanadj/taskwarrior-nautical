@@ -214,6 +214,27 @@ class ChainGenerationContractTests(unittest.TestCase):
                 child_anchor_field="due",
             )
 
+    def test_relative_datetime_carry_does_not_relabel_timezone_defects(self):
+        class BrokenTimezoneCore(_Core):
+            @staticmethod
+            def utc_to_local_naive(_value):
+                raise RuntimeError("timezone adapter defect")
+
+        service = ChainGenerationService.from_core(BrokenTimezoneCore())
+        parent = _task(until="2026-01-03T09:00:00Z")
+
+        with self.assertRaises(RuntimeError) as raised:
+            service.carry_relative_datetime(
+                parent,
+                {},
+                datetime(2026, 1, 3, 9, tzinfo=timezone.utc),
+                "until",
+                parent_anchor_field="due",
+                child_anchor_field="due",
+            )
+        self.assertIs(type(raised.exception), RuntimeError)
+        self.assertEqual(str(raised.exception), "timezone adapter defect")
+
     def test_cp_generation_uses_link_sequence_and_durable_metadata(self):
         parent = _task(link=1)
         due, metadata = self.service.compute_cp_child_due(parent)

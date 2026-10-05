@@ -96,6 +96,23 @@ class ModifyPresentationPortTests(unittest.TestCase):
 
         self.assertEqual(passthrough, [task])
 
+    def test_panel_does_not_hide_unexpected_stderr_failure_during_fallback(self) -> None:
+        from nautical_core.modify_ui_effects import UIEffectsPorts, panel
+
+        ports = UIEffectsPorts(
+            core=lambda: None,
+            load_core=lambda: (_ for _ in ()).throw(RuntimeError("core unavailable")),
+            override=lambda _name: None,
+            emit_passthrough_json=lambda _task: None,
+            emit_task_json=lambda *_args, **_kwargs: None,
+            stderr_write=lambda _message: (_ for _ in ()).throw(
+                RuntimeError("stderr writer defect")
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "stderr writer defect"):
+            panel(ports, "fallback", [])
+
     def test_lifecycle_result_renderer_uses_only_panel_port(self) -> None:
         from nautical_core.modify_models import CompletionLifecycleResult, TaskView
         from nautical_core.modify_presentation_effects import (

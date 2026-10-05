@@ -118,7 +118,7 @@ def panel(
         except Exception:
             try:
                 ports.stderr_write(f"[nautical] {title}\n")
-            except Exception:
+            except (OSError, UnicodeError, ValueError):
                 pass
             return
         core = ports.core()

@@ -51,7 +51,7 @@ class OnModifyServices(Protocol):
         new: TaskPayload,
         unit_of_work: TaskwarriorUnitOfWork,
         transition: TaskTransition,
-        terminal_decision: Any | None = None,
+        terminal_decision: object | None = None,
     ) -> None: ...
 
 

@@ -26,6 +26,10 @@ class HookEngineContractTests(unittest.TestCase):
             get_type_hints(OnModifyServices.handle_completion)["return"],
             CompletionLifecycleResult,
         )
+        self.assertEqual(
+            get_type_hints(OnModifyServices.handle_deleted)["terminal_decision"],
+            object | None,
+        )
         self.assertEqual(get_type_hints(OnModifyRequest)["terminal_decision"], object | None)
         self.assertEqual(
             get_type_hints(HookRuntimeContext)["lifecycle_result"],

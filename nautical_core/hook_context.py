@@ -23,6 +23,8 @@ class ProfilerPort(Protocol):
 
     def section(self, name: str) -> ContextManager[None]: ...
 
+    def add_ms(self, name: str, ms: float) -> None: ...
+
 
 @dataclass(slots=True)
 class HookRuntimeContext:

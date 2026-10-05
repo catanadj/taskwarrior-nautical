@@ -38,7 +38,7 @@ class AddWorkflowTests(unittest.TestCase):
     def test_application_context_and_preview_ports_use_named_contracts(self) -> None:
         from datetime import date
         from typing import Callable
-        from nautical_core.add_composition import due_context
+        from nautical_core.add_composition import AddCompositionServices, due_context
         from nautical_core.add_workflow import (
             AddWorkflowApplication,
             BuildAddContext,
@@ -62,6 +62,12 @@ class AddWorkflowTests(unittest.TestCase):
             get_type_hints(build_on_add_context)["due_context_on_add"],
             Callable[[TaskPayload, datetime], DueContext],
         )
+        composition_hints = get_type_hints(
+            AddCompositionServices.build_context,
+            localns={**localns, "TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
+        )
+        self.assertIs(composition_hints["return"], OnAddContext)
+        self.assertIs(composition_hints["prof"], ProfilerPort)
         annotations = get_type_hints(AddWorkflowApplication, localns=localns)
         self.assertIs(annotations["build_context_fn"], BuildAddContext)
         self.assertIs(annotations["render_anchor_preview_fn"], RenderAddPreview)
@@ -75,6 +81,10 @@ class AddWorkflowTests(unittest.TestCase):
         self.assertIs(context_callback["now_local"], datetime)
         self.assertIs(context_callback["prof"], ProfilerPort)
         self.assertIs(get_type_hints(RenderAddPreview.__call__, localns=localns)["prof"], ProfilerPort)
+        self.assertEqual(
+            get_type_hints(ProfilerPort.add_ms),
+            {"name": str, "ms": float, "return": type(None)},
+        )
         self.assertIs(
             get_type_hints(AddWorkflowApplication.build_context, localns=localns)["return"],
             OnAddContext,

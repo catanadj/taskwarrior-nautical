@@ -11,7 +11,8 @@ from .task_models import TaskPayload
 from .task_datetime import TaskDatetimeParser, parser_for_core
 
 if TYPE_CHECKING:
-    from .hook_context import DueContext
+    from .hook_context import DueContext, OnAddContext, ProfilerPort
+    from .task_models import TaskObservation
 
 
 def _datetime_parser(host: Any) -> TaskDatetimeParser:
@@ -199,7 +200,15 @@ class AddCompositionServices:
         return validate_task(self._host, task)
 
 
-    def build_context(self, task: Any, now_utc: Any, now_local: Any, *, observation: Any = None, prof: Any) -> Any:
+    def build_context(
+        self,
+        task: TaskPayload,
+        now_utc: datetime,
+        now_local: datetime,
+        *,
+        observation: TaskObservation | None = None,
+        prof: ProfilerPort,
+    ) -> OnAddContext:
         host = self._host
         core = host.core
         hook_context = host._module("hook_context")

@@ -66,7 +66,7 @@ class ReconcileCallbackContractTests(unittest.TestCase):
         )
         self.assertEqual(
             execute_hints["return"],
-            tuple[LifecycleApplicationOutcome, LifecycleApplicationOutcome | None, str, dict[str, Any] | None],
+            tuple[LifecycleApplicationOutcome, LifecycleApplicationOutcome | None, str, TaskPayload | None],
         )
 
         terminal_hints = get_type_hints(

@@ -431,7 +431,7 @@ class LifecycleReconciliationService:
         LifecycleApplicationOutcome,
         LifecycleApplicationOutcome | None,
         str,
-        dict[str, Any] | None,
+        TaskPayload | None,
     ]:
         """Stage, execute, and verify one successor lifecycle plan."""
         service = self.application_service()

@@ -710,6 +710,51 @@ class CacheApiContractTests(unittest.TestCase):
 
         self.assertEqual(calls, ["memory", "broken", "healthy", "position", "matcher"])
 
+    def test_optional_cache_failures_are_diagnosed_only_in_diagnostic_mode(self) -> None:
+        stderr = io.StringIO()
+
+        class BrokenCache:
+            @staticmethod
+            def cache_info() -> str:
+                raise RuntimeError("sensitive cache detail")
+
+            @staticmethod
+            def cache_clear() -> None:
+                raise RuntimeError("sensitive cache detail")
+
+        with (
+            patch.dict(os.environ, {"NAUTICAL_DIAG": "1", "NAUTICAL_DIAG_METRICS": "1"}),
+            patch("sys.stderr", stderr),
+        ):
+            cache_facade.emit_metrics(
+                (("broken", BrokenCache()), ("healthy", SimpleNamespace(cache_info=lambda: "hits=3"))),
+                lambda _key, _message: None,
+            )
+            cache_facade.clear_all(
+                SimpleNamespace(clear=lambda: None),
+                (BrokenCache(),),
+                position_selection=SimpleNamespace(clear_candidate_cache=lambda: None),
+                selection_matcher=SimpleNamespace(cache_clear=lambda: None),
+            )
+
+        self.assertIn("cache metric broken failed: RuntimeError", stderr.getvalue())
+        self.assertIn("cache clear cache[0] failed: RuntimeError", stderr.getvalue())
+        self.assertNotIn("sensitive cache detail", stderr.getvalue())
+
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "0", "NAUTICAL_DIAG_METRICS": "1"}), patch("sys.stderr", stderr):
+            cache_facade.emit_metrics(
+                (("broken", BrokenCache()),),
+                lambda _key, _message: None,
+            )
+            cache_facade.clear_all(
+                SimpleNamespace(clear=lambda: None),
+                (BrokenCache(),),
+                position_selection=SimpleNamespace(clear_candidate_cache=lambda: None),
+                selection_matcher=SimpleNamespace(cache_clear=lambda: None),
+            )
+        self.assertEqual(stderr.getvalue(), "")
+
     def test_unsupported_schema_and_invalid_shape_are_quarantined(self) -> None:
         import base64
         import zlib

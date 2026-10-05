@@ -25,6 +25,7 @@ class NativeCarryPorts:
     anchor_field: Callable[[TaskPayload], str]
     panel: "NativeCarryPanel"
     abort: Callable[[int], NoReturn]
+    diagnostic: Callable[[str], None]
 
 
 class NativeCarryPanel(Protocol):
@@ -195,10 +196,16 @@ def reject_native_until_carry(
             ports.parse_datetime(old.get(old_target_field)),
             to_local=ports.to_local,
         )
-    except Exception:
+    except Exception as summary_error:
         # This explanation is optional; never let it replace the primary
         # rejection or prevent the user from seeing the required action.
-        pass
+        try:
+            ports.diagnostic(
+                f"Native-until carry explanation unavailable: {type(summary_error).__name__}"
+            )
+        except Exception:
+            # Diagnostics are optional too; preserve the required rejection.
+            pass
     target_label = (
         ports.format_local(new_target)
         if isinstance(new_target, datetime)

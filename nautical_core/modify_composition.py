@@ -676,6 +676,7 @@ def _native_preserve_ports(host: Any, capabilities: ModifyHookCapabilities) -> A
                 anchor_field=task_fields.recurrence_anchor_field,
                 panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
                 abort=host.sys.exit,
+                diagnostic=host._diag,
             ),
             *args,
         ),

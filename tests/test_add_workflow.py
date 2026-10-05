@@ -194,6 +194,14 @@ class AddWorkflowTests(unittest.TestCase):
             services.record_schedule(plan, {"due": "20260831T060000Z"}, "due")
         self.assertEqual(failures, [])
 
+    def test_schedule_patch_encoder_uses_a_narrow_callable_contract(self) -> None:
+        from typing import Callable
+
+        self.assertEqual(
+            get_type_hints(schedule_patch)["encode_timestamp"],
+            Callable[[TaskTimestamp], object],
+        )
+
     def test_application_prepares_and_attaches_typed_plan(self) -> None:
         application = AddWorkflowApplication(
             record_schedule_fn=lambda plan, _task, _field: plan,

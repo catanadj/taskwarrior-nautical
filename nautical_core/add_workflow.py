@@ -314,7 +314,7 @@ def schedule_patch(
     plan: AddWorkflowPlan,
     *,
     first_occurrence: TaskTimestamp,
-    encode_timestamp: Any,
+    encode_timestamp: Callable[[TaskTimestamp], object],
 ) -> TaskPatch:
     """Build the target-field patch after a successful scheduler decision.
 

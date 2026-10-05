@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 import importlib
 from typing import get_type_hints
@@ -28,6 +29,25 @@ class ModifyGenerationEffectsContractTests(unittest.TestCase):
             modify_generation_effects.CreateChainGenerationService,
         )
         self.assertNotIn("module", annotations)
+
+    def test_generation_due_metadata_is_typed_as_data_not_any(self) -> None:
+        metadata = dict[str, object] | None
+        self.assertEqual(
+            get_type_hints(
+                modify_generation_effects.ChainGenerationServicePort.compute_cp_child_due
+            )["return"],
+            tuple[datetime | None, metadata],
+        )
+        self.assertEqual(
+            get_type_hints(
+                modify_generation_effects.ChainGenerationServicePort.compute_anchor_child_due
+            )["return"],
+            tuple[
+                datetime | None,
+                metadata,
+                modify_generation_effects.AnchorDNF | None,
+            ],
+        )
 
     def test_service_is_cached_and_rebuilt_when_configuration_changes(self) -> None:
         state = SimpleNamespace(chain_generation_service=None)

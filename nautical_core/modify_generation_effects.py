@@ -11,6 +11,9 @@ from .task_models import NauticalTask, TaskDraft, TaskPayload
 from .parsing.parser_models import AnchorDNF
 
 
+ChildDueMetadata = dict[str, object]
+
+
 class NativeUntilGenerationService(Protocol):
     """Generation capability used to carry an occurrence's native expiration."""
 
@@ -44,11 +47,11 @@ class ChainGenerationServicePort(NativeUntilGenerationService, Protocol):
 
     def compute_cp_child_due(
         self, parent: NauticalTask
-    ) -> tuple[datetime | None, dict[str, Any] | None]: ...
+    ) -> tuple[datetime | None, ChildDueMetadata | None]: ...
 
     def compute_anchor_child_due(
         self, parent: NauticalTask
-    ) -> tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None]: ...
+    ) -> tuple[datetime | None, ChildDueMetadata | None, AnchorDNF | None]: ...
 
 
 class GenerationStatePort(Protocol):

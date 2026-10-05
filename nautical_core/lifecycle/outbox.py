@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import sys
 import time
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
 
@@ -725,10 +726,17 @@ class _LifecycleOutboxRepository:
             if conn is not None:
                 try:
                     self._secure_state_files()
-                except Exception:
+                except Exception as exc:
                     # Cleanup hardening must never replace the structured
                     # operation result or prevent connection closure.
-                    pass
+                    if os.environ.get("NAUTICAL_DIAG") == "1":
+                        try:
+                            sys.stderr.write(
+                                "[nautical] lifecycle outbox state-file cleanup failed "
+                                f"({type(exc).__name__})\n"
+                            )
+                        except (OSError, UnicodeError, ValueError):
+                            pass
                 conn.close()
 
     @staticmethod

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import io
+import os
 import sqlite3
 import stat
 import unittest
+from contextlib import redirect_stderr
 from inspect import signature
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -533,6 +536,39 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             self.assertEqual(transactions, ["begin"])
         finally:
             connection.close()
+
+    def test_bulk_cleanup_failure_is_silent_or_gated_without_replacing_result(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 100.0)
+
+            def run_with_diagnostics(enabled: bool) -> str:
+                stderr = io.StringIO()
+                with (
+                    patch.dict(os.environ, {"NAUTICAL_DIAG": "1" if enabled else "0"}),
+                    patch.object(
+                        repository,
+                        "_secure_state_files",
+                        side_effect=RuntimeError("private cleanup detail"),
+                    ),
+                    redirect_stderr(stderr),
+                ):
+                    status, rows = repository._with_bulk_connection(
+                        lambda _connection: {
+                            "intent": OutboxResult(OutboxResultKind.APPLIED)
+                        }
+                    )
+
+                self.assertTrue(status.ok)
+                self.assertEqual(rows["intent"].kind, OutboxResultKind.APPLIED)
+                return stderr.getvalue()
+
+        self.assertEqual(run_with_diagnostics(False), "")
+        diagnostic = run_with_diagnostics(True)
+        self.assertEqual(
+            diagnostic,
+            "[nautical] lifecycle outbox state-file cleanup failed (RuntimeError)\n",
+        )
+        self.assertNotIn("private cleanup detail", diagnostic)
 
     def test_repository_healthy_state_transition_contract(self) -> None:
         with TemporaryDirectory() as directory:

@@ -9,6 +9,7 @@ from .hook_workflow_context import BusinessCalendar, SnapshotLease, WorkflowInvo
 from .taskwarrior_uow import TaskwarriorUnitOfWork
 from .task_models import TaskObservation, TaskPayload
 from .task_changes import TaskTransition
+from .modify_models import CompletionLifecycleResult
 
 
 class ProfilerPort(Protocol):
@@ -28,7 +29,7 @@ class HookRuntimeContext:
     hook_dir: str
     profile_level: int = 0
     import_ms: float | None = None
-    lifecycle_result: Any | None = None
+    lifecycle_result: CompletionLifecycleResult | None = None
     workflow: WorkflowInvocationContext | None = None
 
     def close(self) -> None:
@@ -52,7 +53,7 @@ class OnModifyRequest:
     old_observation: TaskObservation | None = None
     new_observation: TaskObservation | None = None
     transition: TaskTransition | None = None
-    terminal_decision: Any | None = None
+    terminal_decision: object | None = None
 
 
 @dataclass(slots=True)

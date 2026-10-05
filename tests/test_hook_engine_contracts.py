@@ -5,7 +5,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, get_type_hints
 
-from nautical_core.hook_context import OnAddRequest, OnExitRequest, OnModifyRequest
+from nautical_core.hook_context import HookRuntimeContext, OnAddRequest, OnExitRequest, OnModifyRequest
 from nautical_core.hook_engine import OnAddServices, handle_on_add, handle_on_modify
 from nautical_core.modify_models import CompletionLifecycleDiagnostic, CompletionLifecycleResult
 
@@ -25,6 +25,11 @@ class HookEngineContractTests(unittest.TestCase):
         self.assertIs(
             get_type_hints(OnModifyServices.handle_completion)["return"],
             CompletionLifecycleResult,
+        )
+        self.assertEqual(get_type_hints(OnModifyRequest)["terminal_decision"], object | None)
+        self.assertEqual(
+            get_type_hints(HookRuntimeContext)["lifecycle_result"],
+            CompletionLifecycleResult | None,
         )
 
     def test_on_add_profiler_assignment_does_not_hide_internal_failures(self) -> None:

@@ -466,7 +466,7 @@ class LifecycleReconciliationService:
             verified_children[str(child_short).strip().lower()] = verified
         return staged, outcome, str(child_short), verified
 
-    def apply_terminal_plan(self, plan: LifecyclePlan) -> Any:
+    def apply_terminal_plan(self, plan: LifecyclePlan) -> LifecycleApplicationOutcome:
         """Apply a typed terminal lifecycle plan through the shared service."""
         if not isinstance(plan, LifecyclePlan):
             raise TypeError("reconcile terminal application requires a typed lifecycle plan")

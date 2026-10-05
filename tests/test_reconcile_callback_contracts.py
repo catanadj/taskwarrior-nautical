@@ -54,6 +54,12 @@ class ReconcileCallbackContractTests(unittest.TestCase):
             tuple[LifecycleApplicationOutcome, LifecycleApplicationOutcome | None, str, dict[str, Any] | None],
         )
 
+        terminal_hints = get_type_hints(
+            reconciliation.LifecycleReconciliationService.apply_terminal_plan,
+            globalns={**vars(reconciliation), "LifecycleApplicationOutcome": LifecycleApplicationOutcome},
+        )
+        self.assertIs(terminal_hints["return"], LifecycleApplicationOutcome)
+
     def test_reconcile_session_constructor_uses_concrete_owner_types(self) -> None:
         annotations = reconcile_cli._ReconcileSession.__init__.__annotations__
         expected = {

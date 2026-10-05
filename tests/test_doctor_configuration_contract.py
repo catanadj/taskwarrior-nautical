@@ -8,6 +8,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Callable, get_type_hints
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -16,6 +17,33 @@ doctor = importlib.import_module("nautical_core.tools.nautical_doctor")
 
 
 class DoctorConfigurationContractTests(unittest.TestCase):
+    def test_astronomy_preflight_ports_match_the_real_configuration_input_contract(self) -> None:
+        from nautical_core.operator_health_service import ConfigurationDiagnosisRequest
+
+        expected = Callable[[dict[str, Any] | None], dict[str, Any]]
+        self.assertEqual(
+            get_type_hints(ConfigurationDiagnosisRequest)["astronomy_preflight"],
+            expected,
+        )
+        self.assertEqual(
+            get_type_hints(doctor.OperatorHealthService.astronomy_findings)["preflight"],
+            expected,
+        )
+
+    def test_astronomy_findings_normalizes_non_mapping_config_before_preflight(self) -> None:
+        received = []
+
+        def preflight(config: dict[str, Any] | None) -> dict[str, Any]:
+            received.append(config)
+            return {"status": "not_configured"}
+
+        doctor.OperatorHealthService.astronomy_findings(
+            ["malformed", "profile"], effective_timezone=ZoneInfo("UTC"),
+            source_hint="user-config", preflight=preflight,
+        )
+
+        self.assertEqual(received, [None])
+
     def test_panel_configuration_does_not_hide_unexpected_conversion_fault(self) -> None:
         class BrokenString:
             def __str__(self) -> str:

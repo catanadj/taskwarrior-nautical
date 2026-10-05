@@ -76,7 +76,7 @@ class ConfigurationDiagnosisRequest:
     config_dir: object
     timezone_factory: Callable[[str], object] | None
     seasonal_events: Callable[[int], dict[str, Any]]
-    astronomy_preflight: Callable[[object], dict[str, Any]]
+    astronomy_preflight: Callable[[dict[str, Any] | None], dict[str, Any]]
     source_path: str
     drift_loader: Callable[[], dict[str, Any]]
     dependency_available: Callable[[str], bool]
@@ -517,7 +517,7 @@ class OperatorHealthService:
         config_dir: object,
         timezone_factory: Callable[[str], object] | None,
         seasonal_events: Callable[[int], dict[str, Any]],
-        astronomy_preflight: Callable[[object], dict[str, Any]],
+        astronomy_preflight: Callable[[dict[str, Any] | None], dict[str, Any]],
         source_path: str,
         drift_loader: Callable[[], dict[str, Any]],
         dependency_available: Callable[[str], bool],
@@ -868,10 +868,11 @@ class OperatorHealthService:
         *,
         effective_timezone: object,
         source_hint: str,
-        preflight: Callable[[object], dict[str, Any]],
+        preflight: Callable[[dict[str, Any] | None], dict[str, Any]],
     ) -> tuple[OperatorFinding, ...]:
         """Project astronomy-provider preflight into typed findings."""
-        result = preflight(config)
+        astronomy_config = config if isinstance(config, dict) else None
+        result = preflight(astronomy_config)
         status = str(result.get("status") or "error")
         if status == "not_configured":
             return (OperatorFinding(

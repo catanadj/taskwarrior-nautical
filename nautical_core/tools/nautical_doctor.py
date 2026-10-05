@@ -13,7 +13,7 @@ import tomllib
 import zoneinfo
 from datetime import timezone
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
 ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
 RICH_SPEC_FACTORY: Callable[[str], Any] = importlib.util.find_spec
@@ -294,7 +294,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             fix="Create config-nautical.toml or set NAUTICAL_CONFIG to a valid configuration file.",
         )
         from nautical_core.astronomical_seasons import seasonal_events_utc
-        astronomy_preflight = cast(Callable[[object], dict[str, Any]], astronomy.preflight)
+        astronomy_preflight = astronomy.preflight
         report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(
             {}, effective={}, config_dir=taskdata, timezone_factory=ZONEINFO_FACTORY,
             seasonal_events=seasonal_events_utc,
@@ -321,7 +321,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     effective_value = snapshot.get("values")
     effective = effective_value if isinstance(effective_value, dict) else {}
     from nautical_core.astronomical_seasons import seasonal_events_utc
-    astronomy_preflight = cast(Callable[[object], dict[str, Any]], astronomy.preflight)
+    astronomy_preflight = astronomy.preflight
     report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(
         data, effective=effective, config_dir=config.parent, timezone_factory=ZONEINFO_FACTORY,
         seasonal_events=seasonal_events_utc, astronomy_preflight=astronomy_preflight,

@@ -11,7 +11,7 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol
+from typing import TYPE_CHECKING, Callable, Iterator, Protocol
 
 from .. import chain_integrity_lifecycle as lifecycle
 from ..chain_generation import ChainGenerationService
@@ -261,7 +261,7 @@ class LifecycleRecoveryPolicy:
         if not isinstance(child, TaskObservation):
             raise TypeError("terminal recovery validation requires a TaskObservation")
 
-        def value(field: str) -> Any:
+        def value(field: str) -> object:
             state = child.field(field)
             return state.raw_value() if state.presence is FieldPresence.VALUE else None
 

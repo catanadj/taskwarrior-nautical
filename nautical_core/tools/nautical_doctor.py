@@ -175,13 +175,6 @@ def _diagnostic_read_uow(
     return TaskwarriorUnitOfWork.create(context, env=diagnostic_env)
 
 
-def _resolve_hooks_dir(unit_of_work: TaskwarriorUnitOfWork, taskdata: Path) -> Path:
-    ok, raw = _task_get(unit_of_work, "rc.hooks.location")
-    if ok and raw:
-        return Path(raw).expanduser().resolve()
-    return (taskdata / "hooks").resolve()
-
-
 def _check_runtime(
     findings: list[dict[str, Any]],
     *,

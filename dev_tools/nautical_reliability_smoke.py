@@ -179,16 +179,6 @@ def _check_failure(td_path: Path) -> bool:
     return any(state in {"manual_review", "quarantined", "unavailable"} for state, _failure, _plan in _outbox_rows(td_path))
 
 
-def _read_queue_sample(td_path: Path) -> str | None:
-    rows = _outbox_rows(td_path)
-    if not rows:
-        return None
-    states: dict[str, int] = {}
-    for state, _failure, _plan in rows:
-        states[state] = states.get(state, 0) + 1
-    return "outbox: " + ", ".join(f"{state}={count}" for state, count in sorted(states.items()))
-
-
 def _read_queue_child_uuid(td_path: Path) -> str | None:
     for state, _failure, plan_json in _outbox_rows(td_path):
         if state not in {"ready", "claimed", "retry"}:

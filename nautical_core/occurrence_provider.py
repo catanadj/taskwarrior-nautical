@@ -185,18 +185,6 @@ def _compare_datetimes(left: datetime, right: datetime) -> int:
         raise ValueError("Occurrence provider returned an incomparable datetime.") from exc
 
 
-def _sort_datetimes(values: list[datetime]) -> list[datetime]:
-    """Sort a homogeneous datetime list without losing DST fold ordering."""
-    if not values:
-        return []
-    aware = _datetime_is_aware(values[0])
-    if any(_datetime_is_aware(value) != aware for value in values):
-        raise ValueError("Occurrence provider returned incomparable datetime values.")
-    if aware:
-        return sorted(values, key=lambda value: value.astimezone(timezone.utc))
-    return sorted(values)
-
-
 def _cursor_before(value: datetime) -> datetime:
     """Return the instant immediately before an inclusive cursor."""
     if _datetime_is_aware(value):

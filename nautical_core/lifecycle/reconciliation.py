@@ -11,7 +11,7 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterator, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol
 
 from .. import chain_integrity_lifecycle as lifecycle
 from ..chain_generation import ChainGenerationService
@@ -24,6 +24,9 @@ from ..task_models import FieldPresence, TaskObservation, TaskPayload
 from .models import LifecycleAction, LifecyclePlan
 from .recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
 from ..task_set_reads import ChainSlot, ChainSlotSetRequest, SetReadStatus
+
+if TYPE_CHECKING:
+    from .application import LifecycleApplicationOutcome, LifecycleApplicationService
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -344,7 +347,7 @@ class LifecycleReconciliationService:
     configuration_fingerprint: str
     schedule_fingerprint: str
     unit_of_work: Any = None
-    application: Any = None
+    application: LifecycleApplicationService | None = None
     _wave_children: dict[tuple[str, int], tuple[TaskObservation, ...]] = field(default_factory=dict, repr=False, compare=False)
 
     def preflight_wave(self, parents: Sequence[TaskObservation]) -> None:
@@ -408,7 +411,7 @@ class LifecycleReconciliationService:
         ) as acquired:
             yield acquired
 
-    def application_service(self) -> Any:
+    def application_service(self) -> LifecycleApplicationService:
         """Return the one mutation service owned by this invocation."""
         if self.application is None:
             raise RuntimeError("lifecycle reconciliation requires an invocation-scoped application service")
@@ -424,7 +427,12 @@ class LifecycleReconciliationService:
         verified_children: dict[str, dict[str, Any]] | None,
         strict_uuid: bool,
         label: str,
-    ) -> tuple[Any, Any, str, dict[str, Any] | None]:
+    ) -> tuple[
+        LifecycleApplicationOutcome,
+        LifecycleApplicationOutcome | None,
+        str,
+        dict[str, Any] | None,
+    ]:
         """Stage, execute, and verify one successor lifecycle plan."""
         service = self.application_service()
         if not isinstance(plan, LifecyclePlan):

@@ -9,6 +9,10 @@ import unittest
 import nautical_core.lifecycle.reconciliation as reconciliation
 import nautical_core.tools.nautical_reconcile as reconcile_cli
 from nautical_core.lifecycle.recovery_models import RecoveryResult
+from nautical_core.lifecycle.application import (
+    LifecycleApplicationOutcome,
+    LifecycleApplicationService,
+)
 from nautical_core.reconcile_operator_service import (
     ReconcileRecoveryCallbacks,
     ReconcileRecoveryCoordinator,
@@ -17,6 +21,22 @@ from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 class ReconcileCallbackContractTests(unittest.TestCase):
+    def test_lifecycle_reconciliation_application_boundary_is_typed(self) -> None:
+        service_type = get_type_hints(
+            reconciliation.LifecycleReconciliationService.application_service,
+            globalns={**vars(reconciliation), "LifecycleApplicationService": LifecycleApplicationService},
+        )["return"]
+        self.assertIs(service_type, LifecycleApplicationService)
+
+        execute_hints = get_type_hints(
+            reconciliation.LifecycleReconciliationService.execute_lifecycle_plan,
+            globalns={**vars(reconciliation), "LifecycleApplicationOutcome": LifecycleApplicationOutcome},
+        )
+        self.assertEqual(
+            execute_hints["return"],
+            tuple[LifecycleApplicationOutcome, LifecycleApplicationOutcome | None, str, dict[str, Any] | None],
+        )
+
     def test_reconcile_session_constructor_uses_concrete_owner_types(self) -> None:
         annotations = reconcile_cli._ReconcileSession.__init__.__annotations__
         expected = {

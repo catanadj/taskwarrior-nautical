@@ -114,6 +114,20 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         self.assertEqual(parameters["checkpoint"].default, False)
         self.assertEqual(get_type_hints(method)["return"], OutboxMaintenanceResult)
 
+    def test_outbox_status_port_defaults_match_repository(self) -> None:
+        from nautical_core.lifecycle.outbox_operations import LifecycleOutboxOperationsPort
+
+        port_parameters = signature(LifecycleOutboxOperationsPort.status).parameters
+        repository_parameters = signature(
+            outbox_module._LifecycleOutboxRepository.status
+        ).parameters
+        for name in ("limit", "stale_after"):
+            with self.subTest(parameter=name):
+                self.assertEqual(
+                    port_parameters[name].default,
+                    repository_parameters[name].default,
+                )
+
     def test_outbox_execution_port_session_exposes_repository_context(self) -> None:
         import nautical_core.lifecycle.outbox_operations as outbox_operations
         from nautical_core.lifecycle.outbox_operations import LifecycleExecutionOutboxPort

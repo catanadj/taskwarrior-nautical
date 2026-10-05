@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ContextManager, Protocol
 from .models import ExecutionStage, LifecyclePlan
 from .outbox import (
     OUTBOX_ACK_RETENTION_SECONDS,
+    OUTBOX_STATUS_STALE_AFTER_SECONDS,
     LifecycleOutboxRecord,
     OutboxFailure,
     OutboxMaintenanceResult,
@@ -19,7 +20,13 @@ if TYPE_CHECKING:
 
 
 class LifecycleOutboxOperationsPort(Protocol):
-    def status(self, *, limit: int, stale_after: float = 0.0, intent_id: str | None = None) -> tuple[OutboxResult, dict[str, Any]]: ...
+    def status(
+        self,
+        *,
+        limit: int = 20,
+        stale_after: float = OUTBOX_STATUS_STALE_AFTER_SECONDS,
+        intent_id: str | None = None,
+    ) -> tuple[OutboxResult, dict[str, Any]]: ...
     def resolve_manual_review(self, *, intent_id: str, reason: str) -> OutboxResult: ...
     def prune_acknowledged(
         self,

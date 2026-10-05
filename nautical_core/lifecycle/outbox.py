@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
 
 OUTBOX_ACK_RETENTION_SECONDS = 90.0 * 24.0 * 60.0 * 60.0
+OUTBOX_STATUS_STALE_AFTER_SECONDS = 300.0
 OUTBOX_HOUSEKEEPING_INTERVAL_SECONDS = 24.0 * 60.0 * 60.0
 OUTBOX_HOUSEKEEPING_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
 OUTBOX_HOUSEKEEPING_ROW_LIMIT = 1000
@@ -1547,7 +1548,7 @@ class _LifecycleOutboxRepository:
         self,
         *,
         limit: int = 20,
-        stale_after: float = 300.0,
+        stale_after: float = OUTBOX_STATUS_STALE_AFTER_SECONDS,
         retention_seconds: float = OUTBOX_ACK_RETENTION_SECONDS,
         intent_id: str | None = None,
     ) -> tuple[OutboxResult, dict[str, Any]]:
@@ -1905,6 +1906,7 @@ __all__ = (
     "LifecycleOutboxRecord",
     "OUTBOX_SCHEMA_VERSION",
     "OUTBOX_ACK_RETENTION_SECONDS",
+    "OUTBOX_STATUS_STALE_AFTER_SECONDS",
     "OUTBOX_HOUSEKEEPING_INTERVAL_SECONDS",
     "OUTBOX_HOUSEKEEPING_SIZE_THRESHOLD_BYTES",
     "OUTBOX_HOUSEKEEPING_ROW_LIMIT",

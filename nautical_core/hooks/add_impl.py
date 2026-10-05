@@ -1054,7 +1054,7 @@ def _read_on_add_task(prof: Any) -> dict:
                 )
                 task = observation.to_mapping()
                 _PARSED_OBSERVATION = observation
-        except Exception:
+        except codec.TaskCodecError:
             _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
     if not isinstance(task, dict):
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")

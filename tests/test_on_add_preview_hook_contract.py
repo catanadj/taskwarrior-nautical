@@ -190,3 +190,59 @@ class OnAddPreviewHookContractTests(HookSubprocessFixture):
         fail.assert_called_once()
         self.assertEqual(fail.call_args.args[0], "Invalid input")
         self.assertIn("exceeds 32 bytes", fail.call_args.args[1])
+
+    def test_on_add_fallback_parser_propagates_unexpected_codec_failure(self) -> None:
+        if self._run_isolated:
+            self._run_in_child_process()
+            return
+
+        from types import SimpleNamespace
+        from nautical_core.task_codec import TaskCodecError
+
+        hook_results = SimpleNamespace(read_stdin_text=lambda _limit: (b'{"uuid":"task"}', '{"uuid":"task"}'))
+
+        def codec_defect(*_args, **_kwargs):
+            raise RuntimeError("codec defect")
+
+        codec = SimpleNamespace(
+            DEFAULT_TASK_CODEC=SimpleNamespace(
+                decode_object=codec_defect,
+            ),
+            TaskCodecError=TaskCodecError,
+        )
+        self.hook._EARLY_PROTOCOL_RESULT = None
+        self.hook._PROTOCOL = None
+        with (
+            patch.object(self.hook, "_module", side_effect=lambda name: hook_results if name == "hook_results" else codec),
+            patch.object(self.hook, "_fail_and_exit", side_effect=AssertionError("internal failure misclassified as input")),
+            self.assertRaisesRegex(RuntimeError, "codec defect"),
+        ):
+            self.hook._read_on_add_task(self.hook._NoopProfiler())
+
+    def test_on_add_fallback_parser_classifies_codec_error_as_invalid_input(self) -> None:
+        if self._run_isolated:
+            self._run_in_child_process()
+            return
+
+        from types import SimpleNamespace
+        from nautical_core.task_codec import TaskCodecError
+
+        hook_results = SimpleNamespace(read_stdin_text=lambda _limit: (b"{bad", "{bad"))
+
+        def malformed_input(*_args, **_kwargs):
+            raise TaskCodecError("malformed JSON")
+
+        codec = SimpleNamespace(
+            DEFAULT_TASK_CODEC=SimpleNamespace(decode_object=malformed_input),
+            TaskCodecError=TaskCodecError,
+        )
+        self.hook._EARLY_PROTOCOL_RESULT = None
+        self.hook._PROTOCOL = None
+        failure = RuntimeError("input rejected")
+        with (
+            patch.object(self.hook, "_module", side_effect=lambda name: hook_results if name == "hook_results" else codec),
+            patch.object(self.hook, "_fail_and_exit", side_effect=failure) as fail,
+            self.assertRaisesRegex(RuntimeError, "input rejected"),
+        ):
+            self.hook._read_on_add_task(self.hook._NoopProfiler())
+        fail.assert_called_once_with("Invalid input", "on-add must receive a single JSON task")

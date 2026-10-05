@@ -533,7 +533,7 @@ def test_reconcile_candidate_and_plan_paths():
             return None, None
 
         def compute_cp_child_due(self, _parent):
-            return "20260102T090000Z", {"target_field": "due"}
+            return datetime(2026, 1, 2, 9, tzinfo=timezone.utc), {"target_field": "due"}
 
         def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
             from nautical_core.task_codec import DEFAULT_TASK_CODEC
@@ -547,7 +547,7 @@ def test_reconcile_candidate_and_plan_paths():
                 "link": next_link,
                 "prevLink": parent_short,
                 "cp": "P1D",
-                child_field: child_due,
+                child_field: child_due.strftime("%Y%m%dT%H%M%SZ"),
             }
             return TaskDraft.from_task(
                 NauticalTask.from_observation(

@@ -35,9 +35,9 @@ class HookEngineContractTests(unittest.TestCase):
 
         self.assertIs(get_type_hints(handle_on_modify)["request"], OnModifyRequest)
         self.assertIs(get_type_hints(handle_on_exit)["request"], OnExitRequest)
-        self.assertIs(
+        self.assertEqual(
             get_type_hints(OnModifyServices.handle_completion)["return"],
-            CompletionLifecycleResult,
+            CompletionLifecycleResult | None,
         )
         self.assertEqual(
             get_type_hints(OnModifyServices.handle_deleted)["terminal_decision"],
@@ -185,6 +185,50 @@ class HookEngineContractTests(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertIs(runtime.lifecycle_result, lifecycle)
+
+    def test_completion_preflight_skip_is_a_valid_noop_result(self) -> None:
+        runtime = SimpleNamespace(lifecycle_result=None, uow=object())
+        request = OnModifyRequest(
+            old={
+                "uuid": "00000000-0000-4000-8000-000000000333",
+                "status": "pending",
+                "chainID": "chain333",
+            },
+            new={
+                "uuid": "00000000-0000-4000-8000-000000000333",
+                "status": "completed",
+                "chainID": "chain333",
+            },
+            runtime=runtime,
+        )
+
+        class Services:
+            def result(self, *, task, sanitize):
+                return {"task": task, "sanitize": sanitize}
+
+            def has_nautical_fields(self, task):
+                return bool(task.get("chainID"))
+
+            def load_core(self):
+                return None
+
+            def diag(self, _message):
+                return None
+
+            def fail_and_exit(self, *_args):
+                raise AssertionError("preflight skip must not fail completion")
+
+            def handle_completion(self, *_args):
+                return None
+
+            def handle_non_completion(self, *_args):
+                raise AssertionError("non-completion route selected")
+
+            def handle_deleted(self, *_args):
+                raise AssertionError("delete route selected")
+
+        self.assertIsNone(handle_on_modify(request, Services()))
+        self.assertIsNone(runtime.lifecycle_result)
 
     def test_scheduler_completion_failure_vetoes_taskwarrior_completion(self) -> None:
         lifecycle = CompletionLifecycleResult(

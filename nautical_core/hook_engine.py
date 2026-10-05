@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import importlib
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol
+from typing import TYPE_CHECKING, NoReturn, Protocol
 
 from .modify_models import CompletionLifecycleResult
 from .task_changes import TaskTransition
@@ -55,7 +55,7 @@ class OnModifyServices(Protocol):
     def handle_completion(
         self, old: TaskPayload, new: TaskPayload, unit_of_work: TaskwarriorUnitOfWork,
         transition: TaskTransition,
-    ) -> CompletionLifecycleResult: ...
+    ) -> CompletionLifecycleResult | None: ...
     def handle_deleted(
         self,
         old: TaskPayload,
@@ -186,12 +186,13 @@ def handle_on_modify(
             transition,
         )
         request.runtime.lifecycle_result = lifecycle_result
-        diagnostic = lifecycle_result.diagnostic
-        if diagnostic is not None and diagnostic.failure_kind == "scheduler_error":
-            services.fail_and_exit(
-                "Completion blocked",
-                lifecycle_result.reason or "recurrence could not be computed",
-            )
+        if lifecycle_result is not None:
+            diagnostic = lifecycle_result.diagnostic
+            if diagnostic is not None and diagnostic.failure_kind == "scheduler_error":
+                services.fail_and_exit(
+                    "Completion blocked",
+                    lifecycle_result.reason or "recurrence could not be computed",
+                )
         return None
     services.load_core()
     services.handle_non_completion(old, new, request.runtime.uow, transition)

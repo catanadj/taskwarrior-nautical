@@ -39,6 +39,7 @@ from nautical_core.lifecycle.recovery_models import (
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
+_SafeParseDatetimeCallback = Callable[[object], tuple[datetime | None, str | None]]
 
 
 def _recovery_refusal(
@@ -305,7 +306,7 @@ def invalid_relative_carry_reason(
 def invalid_native_until_reason(
     task: TaskObservation,
     *,
-    safe_parse_datetime: Any,
+    safe_parse_datetime: _SafeParseDatetimeCallback,
 ) -> str | None:
     """Describe an invalid native expiration window, if one is present."""
     until_raw = _observation_value(task, "until")
@@ -327,10 +328,10 @@ def repair_native_until_from_previous(
     current: TaskObservation,
     *,
     kind: str,
-    safe_parse_datetime: Any,
-    fmt_isoz: Any,
-    utc_to_local_naive: Any,
-    local_naive_to_utc: Any,
+    safe_parse_datetime: _SafeParseDatetimeCallback,
+    fmt_isoz: Callable[[datetime], str],
+    utc_to_local_naive: Callable[[datetime], datetime],
+    local_naive_to_utc: Callable[[datetime], datetime],
 ) -> tuple[str | None, str | None]:
     """Carry the previous link's native expiration policy onto the current target."""
     parent_field = native_until_target_field(previous)
@@ -340,7 +341,7 @@ def repair_native_until_from_previous(
     child_target, child_target_err = safe_parse_datetime(_observation_value(current, child_field))
     if parent_target_err or parent_until_err or child_target_err:
         return None, "previous link lacks parseable target/until state"
-    if not all((parent_target, parent_until, child_target)):
+    if parent_target is None or parent_until is None or child_target is None:
         return None, "previous link lacks target or native until"
     try:
         repaired = native_until.carry(
@@ -359,10 +360,10 @@ def repair_native_until_from_previous(
 def fallback_native_until_at_day_end(
     current: TaskObservation,
     *,
-    safe_parse_datetime: Any,
-    fmt_isoz: Any,
-    utc_to_local_naive: Any,
-    local_naive_to_utc: Any,
+    safe_parse_datetime: _SafeParseDatetimeCallback,
+    fmt_isoz: Callable[[datetime], str],
+    utc_to_local_naive: Callable[[datetime], datetime],
+    local_naive_to_utc: Callable[[datetime], datetime],
 ) -> tuple[str | None, str | None]:
     """Use local 23:00 when a prior link cannot provide an expiration policy."""
     target_field = native_until_target_field(current)

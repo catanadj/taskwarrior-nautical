@@ -955,13 +955,16 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertEqual(annotations[name], contract)
 
-    def test_chain_integrity_lifecycle_uses_the_safe_datetime_parser_contract(self) -> None:
+    def test_chain_integrity_lifecycle_uses_typed_native_until_ports(self) -> None:
         from datetime import datetime
         from typing import Callable, get_type_hints
 
         from nautical_core.chain_integrity_lifecycle import (
             deleted_chain_disposition,
+            fallback_native_until_at_day_end,
+            invalid_native_until_reason,
             is_orphan_expiration_candidate,
+            repair_native_until_from_previous,
         )
         from nautical_core.modify_composition import _ChainIntegrityLifecycle
         from nautical_core.modify_models import SafeParseDatetimeCallback
@@ -977,6 +980,20 @@ class ModifyIsolationTests(unittest.TestCase):
                 self.assertEqual(
                     get_type_hints(owner)["safe_parse_datetime"],
                     expected_parser,
+                )
+        until_annotations = get_type_hints(invalid_native_until_reason)
+        self.assertEqual(until_annotations["safe_parse_datetime"], expected_parser)
+
+        for owner in (repair_native_until_from_previous, fallback_native_until_at_day_end):
+            with self.subTest(owner=owner.__name__):
+                annotations = get_type_hints(owner)
+                self.assertEqual(annotations["safe_parse_datetime"], expected_parser)
+                self.assertEqual(annotations["fmt_isoz"], Callable[[datetime], str])
+                self.assertEqual(
+                    annotations["utc_to_local_naive"], Callable[[datetime], datetime]
+                )
+                self.assertEqual(
+                    annotations["local_naive_to_utc"], Callable[[datetime], datetime]
                 )
 
     def test_modify_query_composition_uses_datetime_for_root_age_reference(self) -> None:

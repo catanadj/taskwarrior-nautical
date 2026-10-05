@@ -11,6 +11,14 @@ from nautical_core.occurrence_provider import Occurrence
 
 
 class AnchorInclusionContractTests(unittest.TestCase):
+    def test_datetime_only_compatibility_wrappers_are_absent(self) -> None:
+        self.assertFalse(
+            hasattr(anchor_inclusion, "_next_anchor_file_occurrence_local")
+        )
+        self.assertFalse(
+            hasattr(anchor_inclusion, "next_included_occurrence_local")
+        )
+
     def test_same_instant_anchor_file_occurrence_keeps_file_description(self) -> None:
         target = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
 

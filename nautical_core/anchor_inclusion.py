@@ -73,32 +73,6 @@ def _next_anchor_file_occurrence(
     return occurrence
 
 
-def _next_anchor_file_occurrence_local(
-    anchor_file_str: str,
-    *,
-    anchor_file_dir: str,
-    after_local_dt: datetime,
-    inclusive: bool,
-    fallback_hhmm: tuple[int, int],
-    core: Any,
-    anchor_file_provider: Any | None = None,
-    recurrence_context: Any | None = None,
-    business_calendar: Any | None = None,
-) -> datetime | None:
-    occurrence = _next_anchor_file_occurrence(
-        anchor_file_str,
-        anchor_file_dir=anchor_file_dir,
-        after_local_dt=after_local_dt,
-        inclusive=inclusive,
-        fallback_hhmm=fallback_hhmm,
-        core=core,
-        anchor_file_provider=anchor_file_provider,
-        recurrence_context=recurrence_context,
-        business_calendar=business_calendar,
-    )
-    return occurrence.local_datetime if occurrence is not None else None
-
-
 def _build_anchor_file_provider(
     anchor_file_str: str,
     *,
@@ -260,12 +234,6 @@ def next_included_occurrence(
         if comparison > 0 or (comparison == 0 and file_occurrence.description):
             selected = file_occurrence
     return selected
-
-
-def next_included_occurrence_local(**kwargs: Any) -> datetime | None:
-    """Compatibility wrapper returning only the selected local datetime."""
-    occurrence = next_included_occurrence(**kwargs)
-    return occurrence.local_datetime if occurrence is not None else None
 
 
 def next_occurrence_event_local(

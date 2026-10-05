@@ -19,7 +19,7 @@ from nautical_core.lifecycle.models import (
     LifecyclePlan,
     ParentGuard,
 )
-from nautical_core.integration_models import MutationOutcome, MutationRequest
+from nautical_core.integration_models import MutationOutcome, MutationPayload, MutationRequest
 from nautical_core.lifecycle.operator_owner import LifecycleOperatorOwner
 from nautical_core.operator_domain_plans import DomainApplicationAuthorization
 from nautical_core.operator_models import (
@@ -68,6 +68,13 @@ class _CompleteMutationGateway:
 
 
 class LifecycleExecutionCapabilityTests(unittest.TestCase):
+    def test_lifecycle_mutation_helpers_use_the_shared_payload_union(self) -> None:
+        request_hints = get_type_hints(LifecycleApplicationService._request_for)
+        apply_hints = get_type_hints(LifecycleApplicationService._apply)
+
+        self.assertEqual(request_hints["payload"], MutationPayload | None)
+        self.assertEqual(apply_hints["payload"], MutationPayload)
+
     def test_batched_drain_callbacks_have_explicit_execution_contracts(self) -> None:
         annotations = get_type_hints(LifecycleApplicationService._drain_batched)
 

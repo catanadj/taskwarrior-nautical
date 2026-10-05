@@ -30,7 +30,7 @@ import os
 import sqlite3
 import sys
 import time
-from typing import Any, Callable, Protocol, Sequence, cast
+from typing import Callable, Protocol, Sequence, cast
 
 from ..integration_models import (
     ChainDisablePayload,
@@ -43,6 +43,7 @@ from ..integration_models import (
     MutationOperation,
     MutationOutcome,
     MutationOutcomeKind,
+    MutationPayload,
     MutationRequest,
     ParentLinkPayload,
     TaskwarriorMutationPort,
@@ -1561,7 +1562,7 @@ class LifecycleApplicationService:
                 reason="spawn_child transitions require durable outbox staging; call stage/drain",
             )
 
-        payload: Any
+        payload: MutationPayload | None
         if plan.action in _TERMINAL_ACTIONS:
             operation = MutationOperation.CHAIN_DISABLE
             payload = _chain_disable_payload(plan)
@@ -1593,7 +1594,12 @@ class LifecycleApplicationService:
 
     # -- shared mutation application -----------------------------------
 
-    def _request_for(self, operation: MutationOperation, plan: LifecyclePlan, payload: Any = None) -> MutationRequest | None:
+    def _request_for(
+        self,
+        operation: MutationOperation,
+        plan: LifecyclePlan,
+        payload: MutationPayload | None = None,
+    ) -> MutationRequest | None:
         self._require_execution_deps()
         assert self._uow is not None
         guard = _mutation_guard(plan, mutation_epoch=self._uow.mutation_epoch)
@@ -1612,7 +1618,12 @@ class LifecycleApplicationService:
         except IntegrationContractError:
             return None
 
-    def _apply(self, operation: MutationOperation, plan: LifecyclePlan, payload: Any) -> MutationOutcome | None:
+    def _apply(
+        self,
+        operation: MutationOperation,
+        plan: LifecyclePlan,
+        payload: MutationPayload,
+    ) -> MutationOutcome | None:
         self._require_execution_deps()
         assert self._mutations is not None
         request = self._request_for(operation, plan, payload)

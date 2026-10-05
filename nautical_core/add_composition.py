@@ -271,7 +271,7 @@ class AddCompositionServices:
                 raise ValueError(error or "missing datetime")
             timestamp = core._import_sibling("task_models").TaskTimestamp
             return workflow.record_schedule(plan, first_occurrence=timestamp(value))
-        except Exception as exc:
+        except ValueError as exc:
             self._host._fail_and_exit(
                 "Scheduler unavailable", f"Could not record first {target_field}: {exc}"
             )

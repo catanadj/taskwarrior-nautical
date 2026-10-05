@@ -129,6 +129,7 @@ class AddWorkflowTests(unittest.TestCase):
         ):
             owner_hints = get_type_hints(owner, localns=plan_namespace)
             self.assertIs(owner_hints["plan"], AddWorkflowPlan)
+
             self.assertIs(owner_hints["return"], AddWorkflowPlan)
         self.assertIs(
             get_type_hints(AddCompositionServices.stamp_chain_id)["task"],
@@ -166,6 +167,32 @@ class AddWorkflowTests(unittest.TestCase):
             get_type_hints(AddWorkflowApplication.build_context, localns=localns)["return"],
             OnAddContext,
         )
+
+    def test_schedule_recording_does_not_hide_unexpected_parser_failures(self) -> None:
+        from types import SimpleNamespace
+        from nautical_core.add_composition import AddCompositionServices
+
+        class BrokenParser:
+            @staticmethod
+            def parse(_value):
+                raise RuntimeError("parser invariant failed")
+
+        failures = []
+
+        def fail_and_exit(title, message):
+            failures.append((title, message))
+            raise RuntimeError(f"misclassified: {message}")
+
+        services = object.__new__(AddCompositionServices)
+        services._host = SimpleNamespace(
+            _TASK_DATETIME_PARSER=BrokenParser(),
+            core=SimpleNamespace(_import_sibling=lambda _name: SimpleNamespace()),
+            _fail_and_exit=fail_and_exit,
+        )
+        plan = plan_add(observation({"anchor": "w:mon"}))
+        with self.assertRaisesRegex(RuntimeError, "parser invariant failed"):
+            services.record_schedule(plan, {"due": "20260831T060000Z"}, "due")
+        self.assertEqual(failures, [])
 
     def test_application_prepares_and_attaches_typed_plan(self) -> None:
         application = AddWorkflowApplication(

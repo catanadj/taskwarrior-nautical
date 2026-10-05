@@ -686,7 +686,6 @@ def _plan_recovery_decision_unscoped(
         candidate = RecurrenceCandidate(
             child_due=child_due,
             metadata=tuple(sorted(dict(meta or {}).items())),
-            dnf=None,
             until=until_dt,
         )
         preflight = LifecyclePreflight.from_context(

@@ -590,7 +590,6 @@ def attach_lifecycle_plan(
         candidate = RecurrenceCandidate(
             child_due=computed.child_due,
             metadata=tuple(sorted(dict(computed.meta or {}).items())),
-            dnf=computed.dnf,
             until=computed.until_dt,
         )
         plan = plan_candidate_successor(

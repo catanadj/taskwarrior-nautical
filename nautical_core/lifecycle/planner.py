@@ -70,7 +70,6 @@ class RecurrenceCandidate:
 
     child_due: datetime | None
     metadata: tuple[tuple[str, object], ...] = ()
-    dnf: Any = None
     until: datetime | None = None
     terminal_reason: str = ""
 
@@ -180,9 +179,8 @@ class ChainGenerationPlanningService:
         parent = NauticalTask.from_observation(snapshot.observation)
         if kind == "cp":
             child_due, metadata = self.generation.compute_cp_child_due(parent)
-            dnf = None
         else:
-            child_due, metadata, dnf = self.generation.compute_anchor_child_due(parent)
+            child_due, metadata, _dnf = self.generation.compute_anchor_child_due(parent)
         if child_due is None:
             return None
         meta = dict(metadata or {})
@@ -195,7 +193,6 @@ class ChainGenerationPlanningService:
         return RecurrenceCandidate(
             child_due=child_due,
             metadata=tuple(sorted(meta.items())),
-            dnf=dnf,
             until=until,
         )
 
@@ -301,17 +298,15 @@ def expiration_candidate(snapshot: TaskSnapshot, *, generation: Any) -> Recurren
     )
     calculation_task = NauticalTask.from_observation(calculation_observation)
     if kind in {"anchor", "anchor_file"}:
-        child_due, metadata, dnf = generation.compute_anchor_child_due(calculation_task)
+        child_due, metadata, _dnf = generation.compute_anchor_child_due(calculation_task)
     else:
         child_due, metadata = generation.compute_cp_child_due(calculation_task)
-        dnf = None
     result_metadata = dict(metadata or {})
     result_metadata["basis"] = f"{target_field} recurrence target (expired)"
     result_metadata["target_field"] = target_field
     return RecurrenceCandidate(
         child_due=child_due,
         metadata=tuple(sorted(result_metadata.items())),
-        dnf=dnf,
     )
 
 

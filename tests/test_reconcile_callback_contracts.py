@@ -112,6 +112,33 @@ class ReconcileCallbackContractTests(unittest.TestCase):
                 )
                 self.assertEqual(payload_type, expected)
 
+    def test_reconcile_tool_hook_contexts_are_opaque_objects(self) -> None:
+        owners = (
+            reconcile_cli._format_local_until,
+            reconcile_cli._parse_datetime,
+            reconcile_cli._stable_child_uuid,
+            reconcile_cli._configuration_verification,
+            reconcile_cli.configuration_verification,
+            reconcile_cli._configuration_state,
+            reconcile_cli._native_until_repairs,
+            reconcile_cli._native_until_matches,
+            reconcile_cli._chain_generation_for_hook,
+            reconcile_cli._refresh_plan,
+            reconcile_cli._plan_for_parent,
+            reconcile_cli._resolve_lifecycle_plan_child_uuid,
+            reconcile_cli._execute_reconcile_lifecycle_plan,
+            reconcile_cli._execute_reconcile_lifecycle_wave,
+            reconcile_cli._execute_reconcile_terminal_plan,
+            reconcile_cli._apply_parent_atomic,
+            reconcile_cli._recovery_policy,
+            reconcile_cli._reconcile_candidate,
+            reconcile_cli._ReconcileSession.audit_native_until,
+        )
+
+        for owner in owners:
+            with self.subTest(owner=owner.__qualname__):
+                self.assertEqual(owner.__annotations__["hook"], "object")
+
     def test_reconcile_session_constructor_uses_concrete_owner_types(self) -> None:
         annotations = reconcile_cli._ReconcileSession.__init__.__annotations__
         expected = {

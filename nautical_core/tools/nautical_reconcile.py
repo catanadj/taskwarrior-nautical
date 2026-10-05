@@ -191,7 +191,7 @@ def _runtime_core(runtime: Any) -> Any:
     return getattr(runtime, "core", runtime)
 
 
-def _format_local_until(hook: Any, value: Any) -> str:
+def _format_local_until(hook: object, value: Any) -> str:
     """Render a repaired native-until target in configured local time when possible."""
     raw = str(value or "").strip()
     if not raw:
@@ -210,7 +210,7 @@ def _format_local_until(hook: Any, value: Any) -> str:
     return raw
 
 
-def _parse_datetime(hook: Any, value: object) -> tuple[datetime | None, str | None]:
+def _parse_datetime(hook: object, value: object) -> tuple[datetime | None, str | None]:
     # Reconcile and hook workflows use the same configured parser port.  The
     # hook object remains an integration carrier, never the parser contract.
     state = _reconcile_runtime_state()
@@ -228,7 +228,7 @@ def _parse_datetime(hook: Any, value: object) -> tuple[datetime | None, str | No
     return parser_for_core(core, diagnostic=diagnostic).parse(value)
 
 
-def _stable_child_uuid(hook: Any, parent: TaskPayload, child: TaskPayload) -> str:
+def _stable_child_uuid(hook: object, parent: TaskPayload, child: TaskPayload) -> str:
     resolver = getattr(hook, "stable_child_uuid", None)
     if callable(resolver):
         return str(resolver(parent, child) or "")
@@ -270,7 +270,7 @@ def _read_value(
     raise _PlanReadUnavailable(f"{subject} returned an invalid typed result")
 
 
-def _configuration_verification(hook: Any) -> _ConfigurationVerification:
+def _configuration_verification(hook: object) -> _ConfigurationVerification:
     """Return valid, drifted, or unavailable configuration state."""
     core = _runtime_core(hook)
     checker = getattr(core, "configuration_drift", None)
@@ -307,12 +307,12 @@ def _configuration_verification(hook: Any) -> _ConfigurationVerification:
     )
 
 
-def configuration_verification(hook: Any) -> _ConfigurationVerification:
+def configuration_verification(hook: object) -> _ConfigurationVerification:
     """Return the stable configuration-verification result for operators."""
     return _configuration_verification(hook)
 
 
-def _configuration_state(hook: Any) -> tuple[str, str]:
+def _configuration_state(hook: object) -> tuple[str, str]:
     """Return the validated configuration state and actionable reason."""
     check = _configuration_verification(hook)
     return check.status, check.reason
@@ -401,7 +401,7 @@ def _fresh_native_until_parent(row: TaskObservation) -> TaskObservation | None:
 
 def _native_until_repairs(
     task_bin: str,
-    hook: Any,
+    hook: object,
     *,
     apply: bool,
     taskdata: Path | None = None,
@@ -502,7 +502,7 @@ def _modify_native_until(task_bin: str, row: TaskObservation, new_until: str) ->
         raise RuntimeError(outcome.reason or outcome.kind.value)
 
 
-def _native_until_matches(fresh: TaskObservation, expected: str, hook: Any) -> bool:
+def _native_until_matches(fresh: TaskObservation, expected: str, hook: object) -> bool:
     """Compare native-until timestamps by instant, tolerating Taskwarrior formatting."""
     actual = _observation_text(fresh, "until")
     if actual == str(expected or "").strip():
@@ -649,7 +649,7 @@ def _stale_plan(parent: TaskPayload, reason: str) -> RecoveryRefusal:
     )
 
 
-def _chain_generation_for_hook(hook: Any) -> ChainGenerationService:
+def _chain_generation_for_hook(hook: object) -> ChainGenerationService:
     """Build the shared generator from configured core state only."""
     provided = getattr(hook, "chain_generation_service", None)
     if isinstance(provided, ChainGenerationService):
@@ -669,7 +669,7 @@ def _chain_generation_for_hook(hook: Any) -> ChainGenerationService:
 
 
 def _refresh_plan(
-    hook: Any,
+    hook: object,
     original_parent: TaskPayload,
     *,
     generation: ChainGenerationService | None = None,
@@ -705,7 +705,7 @@ def _refresh_plan(
 
 
 def _plan_for_parent(
-    hook: Any,
+    hook: object,
     parent: TaskPayload,
     *,
     generation: ChainGenerationService | None = None,
@@ -761,7 +761,7 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> TaskObservation | N
 def _resolve_lifecycle_plan_child_uuid(
     lifecycle_plan: LifecyclePlan,
     parent: TaskObservation,
-    hook: Any,
+    hook: object,
     *,
     child_observation: TaskObservation | None = None,
 ) -> LifecyclePlan:
@@ -820,7 +820,7 @@ def _raise_for_lifecycle_outcome(outcome: LifecycleApplicationOutcome, *, label:
 
 
 def _execute_reconcile_lifecycle_plan(
-    hook: Any,
+    hook: object,
     plan: LifecyclePlan,
     *,
     parent: TaskObservation,
@@ -863,7 +863,7 @@ def _execute_reconcile_lifecycle_plan(
 
 
 def _execute_reconcile_lifecycle_wave(
-    hook: Any,
+    hook: object,
     lifecycle_service: LifecycleReconciliationService,
     application: Any,
     taskdata: Path,
@@ -959,7 +959,7 @@ def _execute_reconcile_lifecycle_wave(
 
 
 def _execute_reconcile_terminal_plan(
-    hook: Any,
+    hook: object,
     plan: LifecyclePlan,
     *,
     reconciliation_service: LifecycleReconciliationService,
@@ -974,7 +974,7 @@ def _execute_reconcile_terminal_plan(
 
 
 def _apply_parent_atomic(
-    hook: Any,
+    hook: object,
     original_parent: TaskPayload,
     *,
     taskdata: Path,
@@ -986,7 +986,7 @@ def _apply_parent_atomic(
     def lock_busy(kind: str) -> None:
         _LOCK_STATS[f"{kind}_busy"] += 1
 
-    def validated_configuration(current_hook: Any) -> tuple[str, str]:
+    def validated_configuration(current_hook: object) -> tuple[str, str]:
         status, reason = _configuration_state(current_hook)
         if status != "valid":
             raise _ConfigurationDrift(reason)
@@ -1118,7 +1118,7 @@ def _next_recovery_child(
     return child_observation
 
 
-def _recovery_policy(hook: Any) -> LifecycleRecoveryPolicy:
+def _recovery_policy(hook: object) -> LifecycleRecoveryPolicy:
     """Build the lifecycle-owned recovery policy with Taskwarrior adapters."""
     return LifecycleRecoveryPolicy(
         parse_datetime=lambda value: _parse_datetime(hook, value),
@@ -1133,7 +1133,7 @@ def _recovery_policy(hook: Any) -> LifecycleRecoveryPolicy:
 
 def _reconcile_candidate(
     task_bin: str,
-    hook: Any,
+    hook: object,
     parent: TaskPayload,
     *,
     taskdata: Path | None,
@@ -1339,7 +1339,7 @@ class _ReconcileSession:
     def audit_integrity(
         self,
         *,
-        hook: Any,
+        hook: object,
         apply: bool,
     ) -> tuple[
         ChainIntegrityEngine | None,
@@ -1384,7 +1384,7 @@ class _ReconcileSession:
             self.snapshot.invalidate()
         return engine, audit, audit_seconds, applications, application_seconds
 
-    def audit_native_until(self, request: ReconcileRequest, *, hook: Any, taskdata: Path | None, lease_held: bool) -> tuple[list[dict[str, Any]], list[str], str]:
+    def audit_native_until(self, request: ReconcileRequest, *, hook: object, taskdata: Path | None, lease_held: bool) -> tuple[list[dict[str, Any]], list[str], str]:
         """Prepare native-until repairs through the shared control plane."""
         repairs, errors = _native_until_repairs(
             request.task_bin,

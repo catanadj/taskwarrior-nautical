@@ -354,11 +354,7 @@ def _read_query_get(kind: str, key: Any) -> Any:
 
 
 def _record_chain_snapshot_stat(name: str, inc: int = 1) -> None:
-    try:
-        state = _modify_runtime_state()
-        state.diag_stats[name] = state.diag_stats.get(name, 0) + inc
-    except Exception:
-        pass
+    _diag_count(name, inc)
 
 
 def _diag_summary() -> None:

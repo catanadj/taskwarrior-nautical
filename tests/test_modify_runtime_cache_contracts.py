@@ -51,6 +51,22 @@ class ModifyRuntimeCacheContractTests(unittest.TestCase):
         ):
             modify_impl._diag_count("cache_hits")
 
+    def test_chain_snapshot_counter_failure_uses_gated_counter_diagnostic(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}),
+            patch.object(
+                modify_impl,
+                "_modify_runtime_state",
+                side_effect=RuntimeError("private runtime details"),
+            ),
+            patch.object(modify_impl, "_diag") as diagnostic,
+        ):
+            modify_impl._record_chain_snapshot_stat("chain_snapshot_hits")
+
+        diagnostic.assert_called_once_with(
+            "diagnostic counter update failed (RuntimeError)"
+        )
+
     def test_query_context_get_propagates_runtime_state_failure(self) -> None:
         with patch.object(
             modify_impl,

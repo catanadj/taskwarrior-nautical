@@ -949,6 +949,7 @@ def _append_first_expiration_row(
 
 class _NoopProfiler:
     enabled = False
+    import_ms: float | None = None
 
     @contextmanager
     def section(self, _name: str) -> Any:

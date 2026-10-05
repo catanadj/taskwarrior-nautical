@@ -3,12 +3,19 @@ from __future__ import annotations
 import unittest
 from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 
-from nautical_core.hook_engine import handle_on_add, handle_on_modify
+from nautical_core.hook_context import OnAddRequest
+from nautical_core.hook_engine import OnAddServices, handle_on_add, handle_on_modify
 from nautical_core.modify_models import CompletionLifecycleResult
 
 
 class HookEngineContractTests(unittest.TestCase):
+    def test_on_add_engine_uses_typed_request_and_profiler_contracts(self) -> None:
+        self.assertIs(get_type_hints(handle_on_add)["request"], OnAddRequest)
+        self.assertIsNot(get_type_hints(OnAddRequest)["prof"], Any)
+        self.assertIsNot(get_type_hints(OnAddServices.result)["prof"], Any)
+
     def test_on_add_profiler_assignment_does_not_hide_internal_failures(self) -> None:
         class BrokenProfiler:
             enabled = True

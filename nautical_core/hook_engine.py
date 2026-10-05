@@ -4,14 +4,14 @@ import importlib
 from typing import Any, NoReturn, Protocol
 
 from .task_models import TaskPayload
-from .hook_context import HookRuntimeContext
+from .hook_context import HookRuntimeContext, OnAddRequest, ProfilerPort
 from .on_exit_models import ExitDrainStats
 
 
 class OnAddServices(Protocol):
     """Typed services owned by the on-add implementation."""
 
-    def result(self, task: TaskPayload, *, sanitize: bool, prof: Any) -> object: ...
+    def result(self, task: TaskPayload, *, sanitize: bool, prof: ProfilerPort | None) -> object: ...
     def has_nautical_fields(self, task: TaskPayload) -> bool: ...
     def load_core(self) -> None: ...
     def core(self) -> Any: ...
@@ -54,7 +54,7 @@ class OnExitServices(Protocol):
 
 
 def handle_on_add(
-    request: Any,
+    request: OnAddRequest,
     services: OnAddServices,
 ) -> object:
     task = request.task
@@ -68,7 +68,7 @@ def handle_on_add(
     except Exception as exc:
         services.diag(f'core load failed: {exc}')
         services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
-    if getattr(prof, 'enabled', False) and runtime.import_ms is not None:
+    if prof.enabled and runtime.import_ms is not None:
         prof.import_ms = runtime.import_ms
 
     with prof.section('clock:now'):

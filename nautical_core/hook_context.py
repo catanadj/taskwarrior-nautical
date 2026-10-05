@@ -2,13 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, ContextManager, Protocol
 
 from .integration_context import IntegrationContext
 from .hook_workflow_context import BusinessCalendar, SnapshotLease, WorkflowInvocationContext
 from .taskwarrior_uow import TaskwarriorUnitOfWork
 from .task_models import TaskObservation, TaskPayload
 from .task_changes import TaskTransition
+
+
+class ProfilerPort(Protocol):
+    """The hook engine capabilities it consumes from an optional profiler."""
+
+    enabled: bool
+    import_ms: float | None
+
+    def section(self, name: str) -> ContextManager[None]: ...
 
 
 @dataclass(slots=True)
@@ -31,8 +40,8 @@ class HookRuntimeContext:
 class OnAddRequest:
     runtime: HookRuntimeContext
     task: TaskPayload
+    prof: ProfilerPort
     observation: TaskObservation | None = None
-    prof: Any | None = None
 
 
 @dataclass(slots=True)
@@ -162,7 +171,8 @@ def build_on_add_context(
 
 
 def build_on_add_request(
-    *, runtime: HookRuntimeContext, task: TaskPayload, observation: TaskObservation | None = None, prof: Any = None,
+    *, runtime: HookRuntimeContext, task: TaskPayload, observation: TaskObservation | None = None,
+    prof: ProfilerPort,
 ) -> OnAddRequest:
     return OnAddRequest(runtime=runtime, task=task, observation=observation, prof=prof)
 

@@ -926,10 +926,10 @@ class LifecycleApplicationService:
         *,
         configuration_fingerprint: str,
         schedule_fingerprint: str,
-        apply_unverified: Any,
-        apply_children: Any,
-        verify_children: Any,
-        verify_parents: Any,
+        apply_unverified: Callable[[MutationRequest], MutationOutcome],
+        apply_children: Callable[[Sequence[MutationRequest]], dict[str, MutationOutcome]],
+        verify_children: Callable[[Sequence[MutationRequest]], dict[str, MutationOutcome]],
+        verify_parents: Callable[[Sequence[MutationRequest]], dict[str, MutationOutcome]],
         progress: LifecycleDrainProgressCallback | None = None,
     ) -> DrainResult:
         """Run multi-intent spawn work in two mutation/verification phases.
@@ -1095,15 +1095,15 @@ class LifecycleApplicationService:
         advanced: list[_BatchState] = []
         for state in states:
             if state.terminal is not None:
-                outcome = LifecycleApplicationOutcome(
+                result_outcome = LifecycleApplicationOutcome(
                     state.terminal.kind,
                     state.terminal.identity,
                     reason=state.terminal.reason,
                     intent_id=state.terminal.intent_id,
                     mutations=tuple(state.mutations),
                 )
-                outcomes.append(outcome)
-                reporter.outcome(state.record, outcome, state)
+                outcomes.append(result_outcome)
+                reporter.outcome(state.record, result_outcome, state)
                 continue
             advance = advance_rows.get(
                 state.record.intent_id,
@@ -1113,9 +1113,9 @@ class LifecycleApplicationService:
                 advance = advance_status
             reporter.action(state, "intent verified")
             if not advance_status.ok or not advance.ok:
-                outcome = self._retry_or_review(state.record, advance, "could not persist verified lifecycle stage", tuple(state.mutations))
-                outcomes.append(outcome)
-                reporter.outcome(state.record, outcome, state)
+                result_outcome = self._retry_or_review(state.record, advance, "could not persist verified lifecycle stage", tuple(state.mutations))
+                outcomes.append(result_outcome)
+                reporter.outcome(state.record, result_outcome, state)
                 continue
             advanced.append(state)
 
@@ -1126,12 +1126,12 @@ class LifecycleApplicationService:
             ) if ack_candidates else (OutboxResult(OutboxResultKind.APPLIED), {})
         for state in advanced:
             if state.terminal is not None:
-                outcome = LifecycleApplicationOutcome(
+                result_outcome = LifecycleApplicationOutcome(
                     state.terminal.kind, state.terminal.identity, reason=state.terminal.reason,
                     intent_id=state.terminal.intent_id, mutations=tuple(state.mutations),
                 )
-                outcomes.append(outcome)
-                reporter.outcome(state.record, outcome, state)
+                outcomes.append(result_outcome)
+                reporter.outcome(state.record, result_outcome, state)
                 continue
             ack = ack_rows.get(
                 state.record.intent_id,
@@ -1141,18 +1141,18 @@ class LifecycleApplicationService:
                 ack = ack_status
             reporter.action(state, "intent acknowledged")
             if not ack_status.ok or not ack.ok:
-                outcome = self._retry_or_review(state.record, ack, "could not acknowledge finalized lifecycle intent", tuple(state.mutations))
-                outcomes.append(outcome)
-                reporter.outcome(state.record, outcome, state)
+                result_outcome = self._retry_or_review(state.record, ack, "could not acknowledge finalized lifecycle intent", tuple(state.mutations))
+                outcomes.append(result_outcome)
+                reporter.outcome(state.record, result_outcome, state)
                 continue
-            outcome = LifecycleApplicationOutcome(
+            result_outcome = LifecycleApplicationOutcome(
                 LifecycleApplicationOutcomeKind.APPLIED,
                 state.plan.identity,
                 intent_id=state.record.intent_id,
                 mutations=tuple(state.mutations),
             )
-            outcomes.append(outcome)
-            reporter.outcome(state.record, outcome, state)
+            outcomes.append(result_outcome)
+            reporter.outcome(state.record, result_outcome, state)
         return DrainResult(claim=claim, outcomes=tuple(outcomes))
 
     @staticmethod

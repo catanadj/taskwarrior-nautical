@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Callable, Sequence, get_type_hints
 import unittest
 
 from nautical_core.lifecycle.application import (
@@ -18,6 +19,7 @@ from nautical_core.lifecycle.models import (
     LifecyclePlan,
     ParentGuard,
 )
+from nautical_core.integration_models import MutationOutcome, MutationRequest
 from nautical_core.lifecycle.operator_owner import LifecycleOperatorOwner
 from nautical_core.operator_domain_plans import DomainApplicationAuthorization
 from nautical_core.operator_models import (
@@ -66,6 +68,20 @@ class _CompleteMutationGateway:
 
 
 class LifecycleExecutionCapabilityTests(unittest.TestCase):
+    def test_batched_drain_callbacks_have_explicit_execution_contracts(self) -> None:
+        annotations = get_type_hints(LifecycleApplicationService._drain_batched)
+
+        self.assertEqual(
+            annotations["apply_unverified"],
+            Callable[[MutationRequest], MutationOutcome],
+        )
+        batch_operation = Callable[
+            [Sequence[MutationRequest]], dict[str, MutationOutcome]
+        ]
+        for name in ("apply_children", "verify_children", "verify_parents"):
+            with self.subTest(callback=name):
+                self.assertEqual(annotations[name], batch_operation)
+
     def test_explicit_execution_protocol_names_all_required_operations(self) -> None:
         from nautical_core.lifecycle.application import LifecycleExecutionPort
 

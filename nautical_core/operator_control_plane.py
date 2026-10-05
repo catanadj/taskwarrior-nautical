@@ -13,8 +13,11 @@ from .lifecycle.models import LifecycleEvent, LifecyclePlan, TaskSnapshot
 from .lifecycle.planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
 from .chain_repair_planner import IntegrityRepairPlanner
 from .chain_integrity_engine import ChainIntegrityEngine
+from .chain_integrity_engine import IntegrityApplicationResult
+from .chain_integrity_application import IntegrityMutationExecutor, IntegrityMutationRequestFactory
 from .chain_integrity_recovery import RecoveryAudit
 from .chain_generation import ChainGenerationService
+from .lifecycle.outbox_operations import LifecycleExecutionOutboxPort
 from .operator_application import DomainApplicationRegistry
 from .operator_domain_planner import OperatorDomainPlanner
 from .operator_domain_plans import DomainApplicationAuthorization
@@ -29,6 +32,7 @@ from .operator_context import OperatorBudgetLedger, OperatorInvocationContext
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .task_models import TaskObservation
 from .operator_health_service import OperatorHealthReport, OperatorHealthService
+from .taskwarrior_uow import TaskwarriorUnitOfWork
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,28 +102,28 @@ class OperatorControlPlane:
 
     def drain_integrity(
         self,
-        outbox: object,
+        outbox: LifecycleExecutionOutboxPort,
         *,
-        unit_of_work: object,
-        executor: object,
-        request_factory: object,
+        unit_of_work: TaskwarriorUnitOfWork,
+        executor: IntegrityMutationExecutor,
+        request_factory: IntegrityMutationRequestFactory,
         owner: str,
-    ) -> tuple[object, ...]:
+    ) -> tuple[IntegrityApplicationResult, ...]:
         """Drain durable integrity work through the control-plane engine."""
         configuration = self.configuration
         if configuration is None:
             raise ValueError("integrity drain requires validated configuration")
-        snapshots = OperatorSnapshotProvider.for_unit_of_work(cast(Any, unit_of_work))
+        snapshots = OperatorSnapshotProvider.for_unit_of_work(unit_of_work)
         engine = ChainIntegrityEngine(
             snapshots,
             configuration_fingerprint=str(configuration.fingerprint),
             schedule_fingerprint=str(configuration.scheduler_fingerprint),
         )
         return engine.drain(
-            cast(Any, outbox),
+            outbox,
             owner=owner,
-            executor=cast(Any, executor),
-            request_factory=cast(Any, request_factory),
+            executor=executor,
+            request_factory=request_factory,
         )
 
     def audit_native_until(self, rows: object, *, predecessor: object, safe_parse_datetime: object,

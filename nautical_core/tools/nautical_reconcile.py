@@ -1522,8 +1522,8 @@ def main(
         candidates = tuple(lifecycle_service.candidates())
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
-    integrity_audit_result: Any = None
-    integrity_application_results: tuple[Any, ...] = ()
+    integrity_audit_result: IntegrityEngineResult | None = None
+    integrity_application_results: tuple[IntegrityApplicationResult, ...] = ()
     integrity_seconds = 0.0
     integrity_application_seconds = 0.0
     stage_seconds: dict[str, float] = {
@@ -1561,7 +1561,7 @@ def main(
     except Exception as exc:
         return _startup_failure(args, "chain_generation", exc)
     configuration_status, configuration_drift_reason = _configuration_state(hook)
-    integrity_drain_results: tuple[Any, ...] = ()
+    integrity_drain_results: tuple[IntegrityApplicationResult, ...] = ()
     if args.apply and configuration_status == "valid":
         try:
             integrity_drain_results = operator_control_plane.drain_integrity(
@@ -1613,21 +1613,21 @@ def main(
                 )
     if configuration_status == "valid":
         blocked_item = next(
-            (item for item in native_until_repairs if item.get("configuration_drift")),
+            (repair_item for repair_item in native_until_repairs if repair_item.get("configuration_drift")),
             None,
         )
         if blocked_item is not None:
             configuration_drift_reason = str(blocked_item.get("repair_error") or "")
             configuration_status = str(blocked_item.get("configuration_status") or "drifted")
     if not args.json:
-        for item in native_until_repairs:
-            action = item.get("action") or "native_until"
-            suffix = f" -> {_format_local_until(hook, item['new_until'])}" if item.get("new_until") else ""
+        for repair_item in native_until_repairs:
+            action = repair_item.get("action") or "native_until"
+            suffix = f" -> {_format_local_until(hook, repair_item['new_until'])}" if repair_item.get("new_until") else ""
             outcome = " (no change applied)" if action == "manual_review" else ""
             line = (
-                f"native-until: {action:<13} {item.get('task') or '?'} "
-                f"chain={item.get('chainID') or '?'} link={item.get('link') or '?'}"
-                f"  {item.get('reason') or 'invalid native until'}{suffix}{outcome}"
+                f"native-until: {action:<13} {repair_item.get('task') or '?'} "
+                f"chain={repair_item.get('chainID') or '?'} link={repair_item.get('link') or '?'}"
+                f"  {repair_item.get('reason') or 'invalid native until'}{suffix}{outcome}"
             )
             print(_style(line, action_style(action)))
         for error in native_until_errors:

@@ -4,6 +4,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import get_args, get_type_hints
 
 from nautical_core.operator_application import DomainApplicationRegistry
 from nautical_core.operator_control_plane import OperatorControlPlane
@@ -30,6 +31,22 @@ from nautical_core.scheduler_service import SchedulerService
 
 
 class OperatorConformanceTests(unittest.TestCase):
+    def test_integrity_drain_uses_concrete_execution_ports(self) -> None:
+        from nautical_core.chain_integrity_application import (
+            IntegrityMutationExecutor,
+            IntegrityMutationRequestFactory,
+        )
+        from nautical_core.chain_integrity_engine import IntegrityApplicationResult
+        from nautical_core.lifecycle.outbox_operations import LifecycleExecutionOutboxPort
+        from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+        hints = get_type_hints(OperatorControlPlane.drain_integrity)
+        self.assertIs(LifecycleExecutionOutboxPort, hints["outbox"])
+        self.assertIs(TaskwarriorUnitOfWork, hints["unit_of_work"])
+        self.assertIs(IntegrityMutationExecutor, hints["executor"])
+        self.assertIs(IntegrityMutationRequestFactory, hints["request_factory"])
+        self.assertEqual(get_args(hints["return"]), (IntegrityApplicationResult, ...))
+
     def test_integrity_drain_uses_canonical_snapshot_provider(self) -> None:
         class Configuration:
             fingerprint = "config-1"

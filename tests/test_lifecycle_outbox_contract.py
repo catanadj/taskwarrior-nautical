@@ -8,7 +8,7 @@ from inspect import signature
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from typing import Any, get_type_hints
+from typing import Any, ContextManager, get_type_hints
 from unittest.mock import patch
 
 import nautical_core.lifecycle.outbox as outbox_module
@@ -113,6 +113,19 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         self.assertEqual(parameters["limit"].default, 1000)
         self.assertEqual(parameters["checkpoint"].default, False)
         self.assertEqual(get_type_hints(method)["return"], OutboxMaintenanceResult)
+
+    def test_outbox_execution_port_session_exposes_repository_context(self) -> None:
+        import nautical_core.lifecycle.outbox_operations as outbox_operations
+        from nautical_core.lifecycle.outbox_operations import LifecycleExecutionOutboxPort
+
+        hints = get_type_hints(
+            LifecycleExecutionOutboxPort.session,
+            globalns={**vars(outbox_operations), "LifecycleExecutionOutboxPort": LifecycleExecutionOutboxPort},
+        )
+        self.assertEqual(
+            hints["return"],
+            ContextManager[LifecycleExecutionOutboxPort],
+        )
 
     def test_connection_scope_does_not_mask_unexpected_operation_errors(self) -> None:
         for session in (False, True):

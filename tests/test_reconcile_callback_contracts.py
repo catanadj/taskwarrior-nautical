@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, get_args, get_type_hints
 import unittest
 
 import nautical_core.lifecycle.reconciliation as reconciliation
+import nautical_core.tools.nautical_reconcile as reconcile_cli
 from nautical_core.lifecycle.recovery_models import RecoveryResult
 from nautical_core.reconcile_operator_service import (
     ReconcileRecoveryCallbacks,
@@ -16,6 +17,24 @@ from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 class ReconcileCallbackContractTests(unittest.TestCase):
+    def test_reconcile_session_constructor_uses_concrete_owner_types(self) -> None:
+        annotations = reconcile_cli._ReconcileSession.__init__.__annotations__
+        expected = {
+            "unit_of_work": "TaskwarriorUnitOfWork",
+            "repository": "TaskReadRepository",
+            "snapshot": "ReconcileSnapshotService",
+            "control_plane": "OperatorControlPlane",
+            "mutation_gateway": "TaskwarriorMutationService",
+            "integrity_outbox": "LifecycleOutboxRepository",
+            "lifecycle_service": "LifecycleReconciliationService",
+            "lifecycle_application": "LifecycleApplicationService",
+            "runtime_state": "_ReconcileRuntimeState",
+            "datetime_parser": "TaskDatetimeParser",
+        }
+        for name, annotation in expected.items():
+            with self.subTest(owner=name):
+                self.assertEqual(annotations[name], annotation)
+
     def test_reconcile_report_enrichment_uses_datetime_callback_contracts(self) -> None:
         from nautical_core.reconcile_report import describe_plan, describe_recovery_result
 
@@ -82,6 +101,10 @@ class ReconcileCallbackContractTests(unittest.TestCase):
         self.assertEqual(result_types, (RecoveryResult, str))
         operations_hints = get_type_hints(CallbackLifecycleRecoveryOperations.terminal_error)
         self.assertIs(datetime, operations_hints["recovery_at"])
+        self.assertEqual(
+            get_type_hints(LifecycleReconciliationService.preflight_wave)["parents"],
+            Sequence[TaskObservation],
+        )
 
     def test_recovery_outcome_callbacks_have_exact_task_and_result_shapes(self) -> None:
         hints = get_type_hints(ReconcileRecoveryCallbacks)

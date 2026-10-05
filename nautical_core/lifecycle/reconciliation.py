@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from contextlib import contextmanager, nullcontext
+from collections.abc import Sequence
 from datetime import datetime
 import fcntl
 import os
@@ -346,7 +347,7 @@ class LifecycleReconciliationService:
     application: Any = None
     _wave_children: dict[tuple[str, int], tuple[TaskObservation, ...]] = field(default_factory=dict, repr=False, compare=False)
 
-    def preflight_wave(self, parents: list[TaskObservation]) -> None:
+    def preflight_wave(self, parents: Sequence[TaskObservation]) -> None:
         """Acquire one authoritative child-slot set for the current wave."""
         reader = getattr(self.repository, "read_chain_slot_set", None)
         if not callable(reader):

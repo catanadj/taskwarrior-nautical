@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Iterator, cast
+from typing import TYPE_CHECKING, Any, Iterator, cast
 
 _fcntl: ModuleType | None
 try:
@@ -76,6 +76,12 @@ from nautical_core.lifecycle.reconciliation import (  # noqa: E402
 )
 from nautical_core.reconcile_snapshot_service import ReconcileSnapshotService  # noqa: E402
 from nautical_core.reconcile_operator_service import ReconcileRecoveryCallbacks, ReconcileRecoveryCoordinator  # noqa: E402
+
+if TYPE_CHECKING:
+    from nautical_core.chain_integrity_application import IntegrityApplicationResult
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
+    from nautical_core.lifecycle_application import LifecycleApplicationService
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
 safe_lock = partial(
     cache_locking.safe_lock,
@@ -1298,11 +1304,32 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
 class _ReconcileSession:
     """Validated, task-scoped services shared by one reconcile invocation."""
 
+    unit_of_work: TaskwarriorUnitOfWork
+    repository: TaskReadRepository
+    snapshot: ReconcileSnapshotService
+    control_plane: OperatorControlPlane
+    mutation_gateway: TaskwarriorMutationService
+    integrity_outbox: LifecycleOutboxRepository
+    lifecycle_service: LifecycleReconciliationService
+    lifecycle_application: LifecycleApplicationService
+    runtime_state: _ReconcileRuntimeState
+    datetime_parser: TaskDatetimeParser
+
     __slots__ = ("unit_of_work", "repository", "snapshot", "control_plane", "mutation_gateway", "integrity_outbox", "lifecycle_service", "lifecycle_application", "runtime_state", "datetime_parser")
 
-    def __init__(self, unit_of_work: Any, repository: Any, snapshot: Any, control_plane: Any, mutation_gateway: Any,
-                 integrity_outbox: Any, lifecycle_service: Any, lifecycle_application: Any, runtime_state: Any,
-                 datetime_parser: Any) -> None:
+    def __init__(
+        self,
+        unit_of_work: TaskwarriorUnitOfWork,
+        repository: TaskReadRepository,
+        snapshot: ReconcileSnapshotService,
+        control_plane: OperatorControlPlane,
+        mutation_gateway: TaskwarriorMutationService,
+        integrity_outbox: LifecycleOutboxRepository,
+        lifecycle_service: LifecycleReconciliationService,
+        lifecycle_application: LifecycleApplicationService,
+        runtime_state: _ReconcileRuntimeState,
+        datetime_parser: TaskDatetimeParser,
+    ) -> None:
         self.unit_of_work = unit_of_work
         self.repository = repository
         self.snapshot = snapshot
@@ -1314,7 +1341,18 @@ class _ReconcileSession:
         self.runtime_state = runtime_state
         self.datetime_parser = datetime_parser
 
-    def audit_integrity(self, *, hook: Any, apply: bool) -> tuple[Any, Any, float, tuple[Any, ...], float]:
+    def audit_integrity(
+        self,
+        *,
+        hook: Any,
+        apply: bool,
+    ) -> tuple[
+        ChainIntegrityEngine | None,
+        IntegrityEngineResult | None,
+        float,
+        tuple[IntegrityApplicationResult, ...],
+        float,
+    ]:
         """Audit and, when authorized, apply integrity plans for this snapshot."""
         rows = self.snapshot.loaded_rows()
         if rows is None:

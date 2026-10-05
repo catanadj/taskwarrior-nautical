@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from collections.abc import Callable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 import time as _time
 
@@ -26,6 +27,7 @@ from nautical_core.modify_models import (
     WaitScheduleDebug,
 )
 from nautical_core.task_models import TaskObservation, TaskPayload
+from nautical_core.parsing.parser_models import AnchorDNF
 import nautical_core.timezone_facade as timezone_facade
 
 if TYPE_CHECKING:
@@ -223,9 +225,9 @@ def _timeline_lines_adapter(
     def timeline_lines(
         kind: str,
         task: TaskPayload,
-        child_due: Any,
+        child_due: datetime | None,
         child_short: str,
-        dnf: Any,
+        dnf: AnchorDNF | None,
         *,
         next_count: int = 3,
         cap_no: int | None = None,

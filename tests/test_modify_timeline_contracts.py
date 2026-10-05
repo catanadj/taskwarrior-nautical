@@ -23,6 +23,38 @@ from nautical_core.timeutil import parse_dt_any
 
 
 class ModifyTimelineContractTests(unittest.TestCase):
+    def test_runtime_timeline_adapter_uses_datetime_and_anchor_dnf_contracts(self) -> None:
+        from nautical_core.modify_models import TimelineLinesCallback
+        from nautical_core.modify_runtime import _timeline_lines_adapter
+        from nautical_core.parsing.parser_models import AnchorDNF
+
+        expected = {
+            "kind": str,
+            "task": TaskPayload,
+            "child_due": datetime | None,
+            "child_short": str,
+            "dnf": AnchorDNF | None,
+            "next_count": int,
+            "cap_no": int | None,
+            "cur_no": int | None,
+            "show_gaps": bool,
+            "round_anchor_gaps": bool,
+            "return": list[str],
+        }
+        self.assertEqual(
+            {
+                key: value
+                for key, value in get_type_hints(TimelineLinesCallback.__call__).items()
+                if key != "self"
+            },
+            expected,
+        )
+        adapter = _timeline_lines_adapter(
+            SimpleNamespace(timeline_lines=lambda *_args, **_kwargs: []),
+            round_anchor_gaps=True,
+        )
+        self.assertEqual(get_type_hints(adapter), expected)
+
     def test_slot_datetime_uses_calendar_date_and_hhmm_inputs(self) -> None:
         from nautical_core.modify_timeline import _build_slot_datetime
 

@@ -197,7 +197,7 @@ class TimelineLinesCallback(Protocol):
         self,
         kind: str,
         task: TaskRow,
-        child_due: Any,
+        child_due: datetime | None,
         child_short: str,
         dnf: AnchorDNF | None,
         *,

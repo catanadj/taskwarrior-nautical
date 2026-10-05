@@ -3,7 +3,10 @@ from __future__ import annotations
 import importlib
 from typing import Any, NoReturn, Protocol
 
+from .modify_models import CompletionLifecycleResult
+from .task_changes import TaskTransition
 from .task_models import TaskPayload
+from .taskwarrior_uow import TaskwarriorUnitOfWork
 from .hook_context import (
     HookRuntimeContext,
     OnAddRequest,
@@ -35,17 +38,19 @@ class OnModifyServices(Protocol):
     def diag(self, message: str) -> None: ...
     def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
     def handle_non_completion(
-        self, old: TaskPayload, new: TaskPayload, unit_of_work: Any, transition: Any
+        self, old: TaskPayload, new: TaskPayload, unit_of_work: TaskwarriorUnitOfWork,
+        transition: TaskTransition,
     ) -> None: ...
     def handle_completion(
-        self, old: TaskPayload, new: TaskPayload, unit_of_work: Any, transition: Any
-    ) -> Any: ...
+        self, old: TaskPayload, new: TaskPayload, unit_of_work: TaskwarriorUnitOfWork,
+        transition: TaskTransition,
+    ) -> CompletionLifecycleResult: ...
     def handle_deleted(
         self,
         old: TaskPayload,
         new: TaskPayload,
-        unit_of_work: Any,
-        transition: Any,
+        unit_of_work: TaskwarriorUnitOfWork,
+        transition: TaskTransition,
         terminal_decision: Any | None = None,
     ) -> None: ...
 
@@ -126,7 +131,7 @@ def handle_on_exit(
 def handle_on_modify(
     request: OnModifyRequest,
     services: OnModifyServices,
-) -> Any:
+) -> object | None:
     old, new = request.old, request.new
     transition = request.transition
     if transition is None:
@@ -141,18 +146,6 @@ def handle_on_modify(
     terminal_decision = workflow.terminal_decision_for_route(typed_route)
     if terminal_decision is not None:
         request.terminal_decision = terminal_decision
-    def invoke(handler_name: str) -> Any:
-        handler = getattr(services, handler_name)
-        if handler_name == "handle_deleted":
-            return handler(
-                old,
-                new,
-                request.runtime.uow,
-                transition,
-                request.terminal_decision,
-            )
-        return handler(old, new, request.runtime.uow, transition)
-
     if typed_route.kind is workflow.ModifyRouteKind.INVALID_IDENTITY_EDIT:
         services.fail_and_exit(
             "Invalid Nautical edit",
@@ -161,7 +154,13 @@ def handle_on_modify(
     if typed_route.kind is workflow.ModifyRouteKind.DELETION:
         if typed_route.has_nautical_fields:
             services.load_core()
-            invoke("handle_deleted")
+            services.handle_deleted(
+                old,
+                new,
+                request.runtime.uow,
+                transition,
+                request.terminal_decision,
+            )
         return services.result(task=new, sanitize=False)
     if not typed_route.has_nautical_fields or typed_route.kind is workflow.ModifyRouteKind.ORDINARY:
         return services.result(task=new, sanitize=False)
@@ -169,15 +168,20 @@ def handle_on_modify(
         return services.result(task=new, sanitize=False)
     if typed_route.kind is workflow.ModifyRouteKind.COMPLETION:
         services.load_core()
-        lifecycle_result = invoke("handle_completion")
+        lifecycle_result = services.handle_completion(
+            old,
+            new,
+            request.runtime.uow,
+            transition,
+        )
         request.runtime.lifecycle_result = lifecycle_result
-        diagnostic = getattr(lifecycle_result, "diagnostic", None)
-        if getattr(diagnostic, "failure_kind", "") == "scheduler_error":
+        diagnostic = lifecycle_result.diagnostic
+        if diagnostic is not None and diagnostic.failure_kind == "scheduler_error":
             services.fail_and_exit(
                 "Completion blocked",
-                str(getattr(lifecycle_result, "reason", "recurrence could not be computed")),
+                lifecycle_result.reason or "recurrence could not be computed",
             )
         return None
     services.load_core()
-    invoke("handle_non_completion")
+    services.handle_non_completion(old, new, request.runtime.uow, transition)
     return None

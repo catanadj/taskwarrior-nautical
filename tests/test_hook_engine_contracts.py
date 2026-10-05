@@ -7,7 +7,7 @@ from typing import Any, get_type_hints
 
 from nautical_core.hook_context import OnAddRequest, OnExitRequest, OnModifyRequest
 from nautical_core.hook_engine import OnAddServices, handle_on_add, handle_on_modify
-from nautical_core.modify_models import CompletionLifecycleResult
+from nautical_core.modify_models import CompletionLifecycleDiagnostic, CompletionLifecycleResult
 
 
 class HookEngineContractTests(unittest.TestCase):
@@ -17,10 +17,15 @@ class HookEngineContractTests(unittest.TestCase):
         self.assertIsNot(get_type_hints(OnAddServices.result)["prof"], Any)
 
     def test_modify_and_exit_engines_use_typed_request_models(self) -> None:
-        from nautical_core.hook_engine import handle_on_exit, handle_on_modify
+        from nautical_core.hook_engine import OnModifyServices, handle_on_exit, handle_on_modify
+        from nautical_core.modify_models import CompletionLifecycleResult
 
         self.assertIs(get_type_hints(handle_on_modify)["request"], OnModifyRequest)
         self.assertIs(get_type_hints(handle_on_exit)["request"], OnExitRequest)
+        self.assertIs(
+            get_type_hints(OnModifyServices.handle_completion)["return"],
+            CompletionLifecycleResult,
+        )
 
     def test_on_add_profiler_assignment_does_not_hide_internal_failures(self) -> None:
         class BrokenProfiler:
@@ -160,10 +165,10 @@ class HookEngineContractTests(unittest.TestCase):
         self.assertIs(runtime.lifecycle_result, lifecycle)
 
     def test_scheduler_completion_failure_vetoes_taskwarrior_completion(self) -> None:
-        lifecycle = SimpleNamespace(
+        lifecycle = CompletionLifecycleResult(
             state="retryable",
             reason="These anchors joined with '+' don't share any possible date.",
-            diagnostic=SimpleNamespace(failure_kind="scheduler_error"),
+            diagnostic=CompletionLifecycleDiagnostic(failure_kind="scheduler_error"),
         )
         runtime = SimpleNamespace(lifecycle_result=None, uow=object())
         request = OnModifyRequest(

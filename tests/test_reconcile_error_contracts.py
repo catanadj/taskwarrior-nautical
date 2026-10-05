@@ -844,7 +844,7 @@ class ReconcileErrorContracts(unittest.TestCase):
     def test_local_until_formatting_falls_back_to_raw_value(self) -> None:
         class BrokenParser:
             def parse(self, _value: object) -> tuple[None, str]:
-                raise RuntimeError("parser unavailable")
+                raise ValueError("parser rejected timestamp")
 
         class ParsedValue:
             def parse(self, _value: object) -> tuple[object, None]:
@@ -853,7 +853,7 @@ class ReconcileErrorContracts(unittest.TestCase):
         raw = "2026-01-01T00:00:00Z"
 
         def fail_format(_value: object) -> str:
-            raise RuntimeError("formatter unavailable")
+            raise ValueError("formatter rejected timestamp")
 
         parser_failure = SimpleNamespace(
             datetime_parser=BrokenParser(), fmt_dt_local=lambda _value: "formatted"
@@ -863,6 +863,19 @@ class ReconcileErrorContracts(unittest.TestCase):
         )
         self.assertEqual(reconcile._format_local_until(parser_failure, raw), raw)
         self.assertEqual(reconcile._format_local_until(formatter_failure, raw), raw)
+
+    def test_local_until_formatting_propagates_unexpected_formatter_fault(self) -> None:
+        class ParsedValue:
+            def parse(self, _value: object) -> tuple[object, None]:
+                return object(), None
+
+        def broken_formatter(_value: object) -> str:
+            raise RuntimeError("unexpected formatter defect")
+
+        hook = SimpleNamespace(datetime_parser=ParsedValue(), fmt_dt_local=broken_formatter)
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected formatter defect"):
+            reconcile._format_local_until(hook, "2026-01-01T00:00:00Z")
 
     def test_native_until_match_propagates_internal_parser_fault(self) -> None:
         class BrokenParser:

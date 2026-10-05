@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Iterator, cast
+from typing import TYPE_CHECKING, Any, Iterator
 
 _fcntl: ModuleType | None
 try:
@@ -193,7 +193,7 @@ def _format_local_until(hook: Any, value: Any) -> str:
         parsed, error = _parse_datetime(hook, raw)
         if parsed is not None and not error:
             return str(formatter(parsed))
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         # Local-time rendering is optional; retain Taskwarrior's raw timestamp
         # rather than hiding or blocking the recovery result's presentation.
         pass

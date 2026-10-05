@@ -23,6 +23,7 @@ from .models import (
     TaskSnapshot,
     recurrence_fingerprint,
 )
+from ..chain_generation import ChainGenerationService
 from ..task_codec import TaskCodec
 from ..task_codec import DEFAULT_TASK_CODEC
 from ..task_models import NauticalTask, TaskDraft
@@ -166,7 +167,7 @@ class CarryValidator(Protocol):
 class ChainGenerationPlanningService:
     """Adapt ``ChainGenerationService`` to the planner's narrow protocol."""
 
-    generation: Any
+    generation: ChainGenerationService
 
     def next_candidate(
         self,
@@ -204,6 +205,8 @@ class ChainGenerationPlanningService:
         next_link: int,
     ) -> TaskDraft | None:
         del event
+        if candidate.child_due is None:
+            return None
         parent = NauticalTask.from_observation(snapshot.observation)
         metadata = dict(candidate.metadata)
         child_field = str(metadata.get("target_field") or "due")
@@ -254,7 +257,7 @@ def plan_candidate_successor(
     event: LifecycleEvent,
     candidate: RecurrenceCandidate,
     *,
-    generation: Any,
+    generation: ChainGenerationService,
     validated_configuration: Any,
     compare_datetimes: Callable[[Any, Any], int],
     preflight: LifecyclePreflight | None = None,
@@ -278,7 +281,11 @@ def plan_candidate_successor(
     return planner.plan(snapshot, event, preflight=preflight, carry_validator=carry_validator)
 
 
-def expiration_candidate(snapshot: TaskSnapshot, *, generation: Any) -> RecurrenceCandidate:
+def expiration_candidate(
+    snapshot: TaskSnapshot,
+    *,
+    generation: ChainGenerationService,
+) -> RecurrenceCandidate:
     """Calculate an expiration successor from the prior recurrence target."""
     parent = snapshot.to_dict()
     target_field = "due" if parent.get("due") else "scheduled"
@@ -313,7 +320,7 @@ def expiration_candidate(snapshot: TaskSnapshot, *, generation: Any) -> Recurren
 def plan_expiration_successor(
     snapshot: TaskSnapshot,
     *,
-    generation: Any,
+    generation: ChainGenerationService,
     validated_configuration: Any,
     compare_datetimes: Callable[[Any, Any], int],
     preflight: LifecyclePreflight | None = None,
@@ -530,7 +537,7 @@ class LifecyclePlanner:
                 )
             try:
                 candidate = self.recurrence_service.next_candidate(snapshot, event, kind, target_link or 0)
-                if candidate is None or candidate.terminal_reason:
+                if candidate is None or candidate.child_due is None or candidate.terminal_reason:
                     return terminal_plan_for_snapshot(
                         snapshot,
                         event,

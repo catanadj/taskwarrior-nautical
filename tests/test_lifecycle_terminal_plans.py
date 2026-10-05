@@ -84,6 +84,29 @@ class ExhaustedService:
 
 
 class LifecycleTerminalPlanTests(unittest.TestCase):
+    def test_lifecycle_generation_adapters_declare_the_generation_service(self) -> None:
+        from typing import get_type_hints
+
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.lifecycle import planner
+
+        self.assertIs(
+            get_type_hints(planner.ChainGenerationPlanningService)["generation"],
+            ChainGenerationService,
+        )
+        self.assertIs(
+            get_type_hints(planner.expiration_candidate)["generation"],
+            ChainGenerationService,
+        )
+        self.assertIs(
+            get_type_hints(planner.plan_candidate_successor)["generation"],
+            ChainGenerationService,
+        )
+        self.assertIs(
+            get_type_hints(planner.plan_expiration_successor)["generation"],
+            ChainGenerationService,
+        )
+
     def test_recurrence_candidate_requires_datetime_values(self) -> None:
         from datetime import datetime
         from typing import get_type_hints
@@ -186,6 +209,30 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             ).plan(source, LifecycleEvent.COMPLETE)
 
         self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
+    def test_planner_treats_candidate_without_due_as_terminal(self) -> None:
+        source = task_snapshot({
+            "uuid": "00000000-0000-4000-8000-000000000932",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "planner-empty-candidate",
+            "link": 4,
+            "cp": "1d",
+        })
+
+        class Recurrence:
+            def next_candidate(self, *_args: object) -> RecurrenceCandidate:
+                return RecurrenceCandidate(child_due=None)
+
+            def build_child(self, *_args: object) -> None:
+                raise AssertionError("candidate without a due date must not build a child")
+
+        plan = LifecyclePlanner(
+            {"scheduler_fingerprint": "planner-empty-candidate"},
+            recurrence_service=Recurrence(),
+        ).plan(source, LifecycleEvent.COMPLETE)
+
+        self.assertIs(plan.action, LifecycleAction.FINALIZE_CHAIN)
 
     def test_parent_mutation_guard_uses_stable_terminal_timestamp(self) -> None:
         guard = MutationGuard(

@@ -103,22 +103,27 @@ def panic_passthrough(
             try:
                 task = decode_latest_task_from_raw(raw_input_text)
             except Exception:
+                # Panic recovery must continue to the independent raw decoder.
                 task = None
         if task is None:
             try:
                 task = globals()["decode_latest_task_from_raw"](raw_input_text)
             except Exception:
+                # A second decoder failure still permits the empty-object fallback.
                 task = None
     try:
         emit_passthrough_json(task if isinstance(task, dict) else fallback)
     except Exception:
+        # Keep a final protocol-safe emission attempt below the normal emitter.
         try:
             print('{}', end='')
         except Exception:
+            # A broken stdout cannot be repaired here; do not mask the hook error.
             pass
         try:
             sys.stdout.flush()
         except Exception:
+            # Flush failure is also terminal for this output stream.
             pass
 
 

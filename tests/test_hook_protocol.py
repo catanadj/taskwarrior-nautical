@@ -7,11 +7,80 @@ from pathlib import Path
 from unittest.mock import patch
 
 import nautical_core.hook_protocol as hook_protocol
+import nautical_core.hook_results as hook_results
 import nautical_core.modify_protocol as modify_protocol
 from tests.support.hook_process import HookSubprocessFixture
 
 
 class HookProtocolTests(HookSubprocessFixture):
+    def test_panic_passthrough_uses_raw_task_after_decoder_adapter_failure(self) -> None:
+        first = {"uuid": "first", "description": "first task"}
+        latest = {"uuid": "latest", "description": "Cafe ăîșț ✅"}
+        stream = io.StringIO()
+
+        with patch("sys.stdout", stream):
+            hook_results.panic_passthrough(
+                json.dumps(first, ensure_ascii=False)
+                + "\n"
+                + json.dumps(latest, ensure_ascii=False),
+                None,
+                decode_latest_task_from_raw=lambda _raw: (_ for _ in ()).throw(
+                    RuntimeError("decoder adapter failed")
+                ),
+            )
+
+        self.assertEqual(json.loads(stream.getvalue()), latest)
+
+    def test_panic_passthrough_emits_empty_json_after_raw_decoder_failure(self) -> None:
+        stream = io.StringIO()
+        with (
+            patch("sys.stdout", stream),
+            patch.object(
+                hook_results,
+                "decode_latest_task_from_raw",
+                side_effect=RuntimeError("raw decoder failed"),
+            ),
+        ):
+            hook_results.panic_passthrough("malformed raw input", None)
+
+        self.assertEqual(json.loads(stream.getvalue()), {})
+
+    def test_panic_passthrough_preserves_empty_json_when_emitter_and_flush_fail(self) -> None:
+        class BrokenFlushStream(io.StringIO):
+            def flush(self) -> None:
+                raise OSError("stream closed during flush")
+
+        stream = BrokenFlushStream()
+        with (
+            patch("sys.stdout", stream),
+            patch.object(
+                hook_results,
+                "emit_passthrough_json",
+                side_effect=RuntimeError("normal emitter failed"),
+            ),
+        ):
+            hook_results.panic_passthrough("", None)
+
+        self.assertEqual(json.loads(stream.getvalue()), {})
+
+    def test_panic_passthrough_does_not_mask_hook_error_when_stdout_is_broken(self) -> None:
+        class BrokenOutputStream:
+            def write(self, _value: str) -> int:
+                raise OSError("stdout is closed")
+
+            def flush(self) -> None:
+                raise OSError("stdout is closed")
+
+        with (
+            patch("sys.stdout", BrokenOutputStream()),
+            patch.object(
+                hook_results,
+                "emit_passthrough_json",
+                side_effect=RuntimeError("normal emitter failed"),
+            ),
+        ):
+            hook_results.panic_passthrough("", None)
+
     def test_codec_import_fallback_does_not_hide_initialization_defects(self) -> None:
         real_import = builtins.__import__
         package_imports = []

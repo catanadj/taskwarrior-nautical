@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable, Literal, Protocol
 
 from .modify_models import MarkupStripper, PreviewLineFormatter
@@ -74,6 +74,22 @@ def on_time_delta(
     return "[green](on time)[/]"
 
 
+def format_timedelta_short(value: timedelta) -> str:
+    seconds = int(value.total_seconds())
+    if seconds < 0:
+        return "-" + format_timedelta_short(timedelta(seconds=-seconds))
+    if seconds % 86400 == 0:
+        return f"{seconds // 86400}d"
+    units = (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1))
+    parts: list[str] = []
+    remaining = seconds
+    for label, unit_seconds in units:
+        if remaining >= unit_seconds:
+            count, remaining = divmod(remaining, unit_seconds)
+            parts.append(f"{count}{label}")
+    return "".join(parts) if parts else "0s"
+
+
 def line_preview(
     ports: LinePreviewPorts,
     link_no: int,
@@ -112,4 +128,12 @@ def line_preview(
     )
 
 
-__all__ = ("HumanDeltaPort", "LinePreviewPorts", "line_preview_ports_for", "human_delta", "on_time_delta", "line_preview")
+__all__ = (
+    "HumanDeltaPort",
+    "LinePreviewPorts",
+    "line_preview_ports_for",
+    "human_delta",
+    "on_time_delta",
+    "format_timedelta_short",
+    "line_preview",
+)

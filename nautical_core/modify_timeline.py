@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable, TypeAlias
 
 from .anchor_omit import OmitState
 from .parsing.parser_models import AnchorDNF
 from .modify_models import CoerceIntCallback, ShortUuidCallback
+from .modify_format_effects import format_timedelta_short
 from .recurrence_evaluator import RecurrenceEvaluator
 from .scheduler_service import SchedulerService
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
@@ -90,22 +91,6 @@ def _timeline_styles(
         next_style = "bold yellow"
     future_style = future_style_for_chain(task, kind)
     return prev_style, cur_style, next_style, future_style
-
-
-def _format_td_short(td: timedelta) -> str:
-    secs = int(td.total_seconds())
-    if secs < 0:
-        return "-" + _format_td_short(timedelta(seconds=-secs))
-    if secs % 86400 == 0:
-        return f"{secs // 86400}d"
-    units = (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1))
-    parts: list[str] = []
-    rem = secs
-    for label, unit_secs in units:
-        if rem >= unit_secs:
-            n, rem = divmod(rem, unit_secs)
-            parts.append(f"{n}{label}")
-    return "".join(parts) if parts else "0s"
 
 
 def format_gap(
@@ -199,7 +184,7 @@ def _timeline_future_cp_items(
             step_idx = (max(1, fut_no - 1) - 1) % len(tokens)
             if 0 <= step_idx < len(cp_tokens):
                 if tokens[step_idx].get("kind") == "rand":
-                    meta["cp_interval"] = _format_td_short(td)
+                    meta["cp_interval"] = format_timedelta_short(td)
                 else:
                     meta["cp_interval"] = cp_tokens[step_idx]
         items.append((fut_no, fut_dt, meta, "future"))

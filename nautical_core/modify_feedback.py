@@ -28,6 +28,7 @@ from .modify_models import (
 )
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
+from .modify_format_effects import format_timedelta_short
 
 if TYPE_CHECKING:
     from .business_calendar import CalendarDisplacement
@@ -127,22 +128,6 @@ def append_next_wait_sched_rows(
     expected = "scheduled > wait" if anchor_field == "scheduled" else "due > scheduled > wait"
     rows.append(("⚠ Wait/Sched", f"Expected order: {expected}. " + "; ".join(issues)))
     rows.append(("⚠ Wait/Sched", "This can happen when due is auto-assigned; adjust scheduled/wait if undesired."))
-
-
-def _format_td_short(td: timedelta) -> str:
-    secs = int(td.total_seconds())
-    if secs < 0:
-        return "-" + _format_td_short(timedelta(seconds=-secs))
-    if secs % 86400 == 0:
-        return f"{secs // 86400}d"
-    units = (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1))
-    parts: list[str] = []
-    rem = secs
-    for label, unit_secs in units:
-        if rem >= unit_secs:
-            n, rem = divmod(rem, unit_secs)
-            parts.append(f"{n}{label}")
-    return "".join(parts) if parts else "0s"
 
 
 def render_cp_schedule_adjusted_panel(
@@ -1352,7 +1337,7 @@ def render_cp_completion_feedback(
                 chain_id=str(new.get("chainID") or "").strip(),
             )
             if td:
-                step_token = _format_td_short(td)
+                step_token = format_timedelta_short(td)
         suffix = f" ({step_token})" if step_token else ""
         fb.append(("Step", f"{step}/{feedback.meta.get('cp_sequence_len')}{suffix}"))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))

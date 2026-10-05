@@ -4,10 +4,19 @@ import unittest
 from datetime import datetime, timedelta
 from typing import Callable, get_type_hints
 
-from nautical_core.modify_format_effects import HumanDeltaPort, human_delta
+from nautical_core.modify_format_effects import (
+    HumanDeltaPort,
+    format_timedelta_short,
+    human_delta,
+)
 
 
 class HumanDeltaTests(unittest.TestCase):
+    def test_short_timedelta_formatting_is_shared_and_stable(self) -> None:
+        self.assertEqual(format_timedelta_short(timedelta(seconds=-61)), "-1m1s")
+        self.assertEqual(format_timedelta_short(timedelta(days=2)), "2d")
+        self.assertEqual(format_timedelta_short(timedelta(0)), "0d")
+
     def test_human_delta_port_has_datetime_text_contract(self) -> None:
         self.assertEqual(
             get_type_hints(HumanDeltaPort)["humanize"],

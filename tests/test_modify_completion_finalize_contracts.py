@@ -12,9 +12,14 @@ from nautical_core.modify_runtime import ModifyRuntimeState
 
 class ModifyCompletionFinalizeContractTests(unittest.TestCase):
     def test_modify_chain_state_callback_returns_the_named_runtime_state(self) -> None:
-        from nautical_core.modify_models import CompletionRuntimeState, ModifyChainStateCallback
+        from nautical_core.modify_models import (
+            CompletionRuntimeState,
+            DiagnosticSummaryCallback,
+            ModifyChainStateCallback,
+        )
 
         self.assertIs(get_args(ModifyChainStateCallback)[1], CompletionRuntimeState)
+        self.assertIsNone(get_args(DiagnosticSummaryCallback)[1])
 
     def test_lifecycle_presentation_diagnostic_failure_does_not_block_task_response(self) -> None:
         diagnostic_messages = []

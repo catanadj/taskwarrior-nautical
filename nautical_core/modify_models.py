@@ -514,7 +514,7 @@ class SpawnChildCallback(Protocol):
     ) -> tuple[str, list[str], bool, bool, str | None, str | None]:
         ...
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
-DiagnosticSummaryCallback: TypeAlias = Callable[[], Any]
+DiagnosticSummaryCallback: TypeAlias = Callable[[], None]
 
 
 class BuildAndSpawnCallback(Protocol):

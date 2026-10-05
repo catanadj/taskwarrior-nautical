@@ -117,13 +117,13 @@ class AnchorInclusionContractTests(unittest.TestCase):
                     max_file_skips=2,
                 )
 
-    def test_omit_evaluation_failure_is_reported_as_unavailable(self) -> None:
+    def test_unexpected_omit_evaluator_failure_propagates(self) -> None:
         with patch.object(
             anchor_omit,
             "omit_expr_fires_on_date",
             side_effect=RuntimeError("broken omit evaluator"),
         ):
-            with self.assertRaisesRegex(ValueError, "Unable to evaluate omit rule") as raised:
+            with self.assertRaisesRegex(RuntimeError, "broken omit evaluator"):
                 anchor_inclusion._anchor_file_occurrence_is_omitted(
                     datetime(2026, 8, 3, 9),
                     omit_dnf=[["omit"]],
@@ -131,8 +131,6 @@ class AnchorInclusionContractTests(unittest.TestCase):
                     seed_base="omit-failure-contract",
                     core=core,
                 )
-
-        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
 
 
 if __name__ == "__main__":

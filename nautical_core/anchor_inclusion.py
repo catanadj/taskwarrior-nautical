@@ -125,7 +125,7 @@ def _anchor_file_occurrence_is_omitted(
         )
     except OccurrenceSearchExhausted:
         raise
-    except Exception as exc:
+    except ValueError as exc:
         raise ValueError(
             f"Unable to evaluate omit rule for {item_local.date().isoformat()}: {exc}"
         ) from exc

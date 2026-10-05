@@ -416,7 +416,7 @@ class _ChainIntegrityLifecycle(Protocol):
         parent: TaskObservation,
         *,
         existing_children: Sequence[TaskObservation],
-        hook: Any,
+        hook: object,
     ) -> object: ...
 
 

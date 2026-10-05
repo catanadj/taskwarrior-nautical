@@ -962,8 +962,10 @@ class ModifyIsolationTests(unittest.TestCase):
         from nautical_core.modify_models import SafeParseDatetimeCallback
 
         annotations = get_type_hints(_ChainIntegrityLifecycle.deleted_chain_disposition)
+        recovery_annotations = get_type_hints(_ChainIntegrityLifecycle.plan_recovery_decision)
 
         self.assertIs(annotations["safe_parse_datetime"], SafeParseDatetimeCallback)
+        self.assertIs(recovery_annotations["hook"], object)
 
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)

@@ -19,7 +19,7 @@ from .hook_workflow_models import (
 from .task_models import TaskObservation, TaskTimestamp
 
 if TYPE_CHECKING:
-    from .hook_context import OnAddContext
+    from .hook_context import OnAddContext, ProfilerPort
 
 
 class BuildAddContext(Protocol):
@@ -30,12 +30,12 @@ class BuildAddContext(Protocol):
         now_local: datetime,
         *,
         observation: TaskObservation,
-        prof: Any,
+        prof: ProfilerPort,
     ) -> OnAddContext: ...
 
 
 class RenderAddPreview(Protocol):
-    def __call__(self, context: OnAddContext, *, prof: Any) -> None: ...
+    def __call__(self, context: OnAddContext, *, prof: ProfilerPort) -> None: ...
 
 
 class AddScheduleFailure(RuntimeError):
@@ -195,16 +195,24 @@ class AddWorkflowApplication:
     def record_preview(self, plan: AddWorkflowPlan) -> AddWorkflowPlan:
         return self.record_preview_fn(plan)
 
-    def build_context(self, task: MutableMapping[str, Any], now_utc: datetime, now_local: datetime, *, observation: TaskObservation, prof: Any) -> OnAddContext:
+    def build_context(
+        self,
+        task: MutableMapping[str, Any],
+        now_utc: datetime,
+        now_local: datetime,
+        *,
+        observation: TaskObservation,
+        prof: ProfilerPort,
+    ) -> OnAddContext:
         return self.build_context_fn(task, now_utc, now_local, observation=observation, prof=prof)
 
     def stamp_chain_id(self, task: MutableMapping[str, Any]) -> None:
         self.stamp_chain_id_fn(task)
 
-    def render_anchor_preview(self, context: OnAddContext, *, prof: Any) -> None:
+    def render_anchor_preview(self, context: OnAddContext, *, prof: ProfilerPort) -> None:
         self.render_anchor_preview_fn(context, prof=prof)
 
-    def render_cp_preview(self, context: OnAddContext, *, prof: Any) -> None:
+    def render_cp_preview(self, context: OnAddContext, *, prof: ProfilerPort) -> None:
         self.render_cp_preview_fn(context, prof=prof)
 
 

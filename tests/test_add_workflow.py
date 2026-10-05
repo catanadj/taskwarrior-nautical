@@ -44,10 +44,15 @@ class AddWorkflowTests(unittest.TestCase):
             BuildAddContext,
             RenderAddPreview,
         )
-        from nautical_core.hook_context import DueContext, OnAddContext, build_on_add_context
+        from nautical_core.hook_context import (
+            DueContext,
+            OnAddContext,
+            ProfilerPort,
+            build_on_add_context,
+        )
         from nautical_core.task_models import TaskPayload
 
-        localns = {"OnAddContext": OnAddContext}
+        localns = {"OnAddContext": OnAddContext, "ProfilerPort": ProfilerPort}
         self.assertIs(get_type_hints(OnAddContext)["due_day"], date)
         self.assertEqual(
             get_type_hints(due_context, localns={"DueContext": DueContext})["return"],
@@ -68,6 +73,8 @@ class AddWorkflowTests(unittest.TestCase):
         context_callback = get_type_hints(BuildAddContext.__call__, localns=localns)
         self.assertIs(context_callback["now_utc"], datetime)
         self.assertIs(context_callback["now_local"], datetime)
+        self.assertIs(context_callback["prof"], ProfilerPort)
+        self.assertIs(get_type_hints(RenderAddPreview.__call__, localns=localns)["prof"], ProfilerPort)
         self.assertIs(
             get_type_hints(AddWorkflowApplication.build_context, localns=localns)["return"],
             OnAddContext,

@@ -13,6 +13,7 @@ from .task_datetime import TaskDatetimeParser, parser_for_core
 if TYPE_CHECKING:
     from .add_workflow import AddWorkflowApplication, AddWorkflowPlan
     from .hook_context import DueContext, OnAddContext, ProfilerPort
+    from .hook_engine import OnAddCoreClock
     from .task_models import TaskObservation
 
 
@@ -189,7 +190,7 @@ class AddCompositionServices:
     def load_core(self) -> None:
         self._host._load_core()
 
-    def core(self) -> Any:
+    def core(self) -> OnAddCoreClock:
         return self._host.core
 
     def diag(self, message: str) -> None:

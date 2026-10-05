@@ -11,6 +11,19 @@ from nautical_core.modify_models import CompletionLifecycleDiagnostic, Completio
 
 
 class HookEngineContractTests(unittest.TestCase):
+    def test_add_core_dependency_is_limited_to_clock_capabilities(self) -> None:
+        from nautical_core.add_composition import AddCompositionServices
+        from nautical_core.hook_engine import OnAddCoreClock, OnAddServices
+
+        self.assertIs(get_type_hints(OnAddServices.core)["return"], OnAddCoreClock)
+        self.assertIs(
+            get_type_hints(
+                AddCompositionServices.core,
+                localns={"OnAddCoreClock": OnAddCoreClock},
+            )["return"],
+            OnAddCoreClock,
+        )
+
     def test_on_add_engine_uses_typed_request_and_profiler_contracts(self) -> None:
         self.assertIs(get_type_hints(handle_on_add)["request"], OnAddRequest)
         self.assertIsNot(get_type_hints(OnAddRequest)["prof"], Any)

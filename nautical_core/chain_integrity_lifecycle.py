@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 import importlib
-from typing import Any
+from typing import Any, Callable
 
 from . import astronomy, native_until
 from .common import short_uuid
@@ -189,7 +189,7 @@ def is_orphan_deleted_chain_candidate(task: TaskObservation) -> bool:
 def deleted_chain_disposition(
     task: TaskObservation,
     *,
-    safe_parse_datetime: Any,
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
 ) -> DeletionEvidence:
     """Classify an unlinked deleted chain as expiration, manual stop, or ambiguous."""
     if not is_orphan_deleted_chain_candidate(task):
@@ -222,7 +222,11 @@ def deleted_chain_disposition(
         )
 
 
-def is_orphan_expiration_candidate(task: TaskObservation, *, safe_parse_datetime: Any) -> bool:
+def is_orphan_expiration_candidate(
+    task: TaskObservation,
+    *,
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+) -> bool:
     """Return whether a deleted link has strong evidence of native until expiration."""
     evidence = deleted_chain_disposition(
         task,

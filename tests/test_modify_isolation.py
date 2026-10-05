@@ -956,16 +956,28 @@ class ModifyIsolationTests(unittest.TestCase):
                 self.assertEqual(annotations[name], contract)
 
     def test_chain_integrity_lifecycle_uses_the_safe_datetime_parser_contract(self) -> None:
-        from typing import get_type_hints
+        from datetime import datetime
+        from typing import Callable, get_type_hints
 
+        from nautical_core.chain_integrity_lifecycle import (
+            deleted_chain_disposition,
+            is_orphan_expiration_candidate,
+        )
         from nautical_core.modify_composition import _ChainIntegrityLifecycle
         from nautical_core.modify_models import SafeParseDatetimeCallback
 
         annotations = get_type_hints(_ChainIntegrityLifecycle.deleted_chain_disposition)
         recovery_annotations = get_type_hints(_ChainIntegrityLifecycle.plan_recovery_decision)
+        expected_parser = Callable[[object], tuple[datetime | None, str | None]]
 
         self.assertIs(annotations["safe_parse_datetime"], SafeParseDatetimeCallback)
         self.assertIs(recovery_annotations["hook"], object)
+        for owner in (deleted_chain_disposition, is_orphan_expiration_candidate):
+            with self.subTest(owner=owner.__name__):
+                self.assertEqual(
+                    get_type_hints(owner)["safe_parse_datetime"],
+                    expected_parser,
+                )
 
     def test_modify_query_composition_uses_datetime_for_root_age_reference(self) -> None:
         from datetime import datetime

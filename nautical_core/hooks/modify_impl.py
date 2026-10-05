@@ -293,12 +293,9 @@ def _dump_diag_stats() -> None:
 
 
 def _query_ctx_get(bucket: str, key: Any) -> Any:
-    try:
-        store = _modify_runtime_state().query_ctx.get(bucket)
-        if isinstance(store, dict):
-            return store.get(key)
-    except Exception:
-        pass
+    store = _modify_runtime_state().query_ctx.get(bucket)
+    if isinstance(store, dict):
+        return store.get(key)
 
 
 def _write_bench_stats() -> None:
@@ -318,14 +315,11 @@ def _write_bench_stats() -> None:
 
 
 def _query_ctx_set(bucket: str, key: Any, value: Any) -> None:
-    try:
-        state = _modify_runtime_state()
-        store = state.query_ctx.get(bucket)
-        if isinstance(store, dict):
-            store[key] = value
-            state.diag_stats[f"query_ctx_{bucket}_entries"] = len(store)
-    except Exception:
-        pass
+    state = _modify_runtime_state()
+    store = state.query_ctx.get(bucket)
+    if isinstance(store, dict):
+        store[key] = value
+        state.diag_stats[f"query_ctx_{bucket}_entries"] = len(store)
 
 
 _READ_QUERY_MISSING = object()
@@ -333,18 +327,19 @@ _READ_QUERY_MISSING = object()
 
 def _read_query_get(kind: str, key: Any) -> Any:
     """Return a defensive copy of a read-only Taskwarrior query result."""
-    try:
-        state = _modify_runtime_state()
-        bucket = state.query_ctx.get("read_query")
-        cache_key = (str(kind), key)
-        if not isinstance(bucket, dict) or cache_key not in bucket:
-            _diag_count("read_query_cache_misses")
-            return _READ_QUERY_MISSING
-        _diag_count("read_query_cache_hits")
-        return copy.deepcopy(bucket[cache_key])
-    except Exception:
+    state = _modify_runtime_state()
+    bucket = state.query_ctx.get("read_query")
+    cache_key = (str(kind), key)
+    if not isinstance(bucket, dict) or cache_key not in bucket:
         _diag_count("read_query_cache_misses")
         return _READ_QUERY_MISSING
+    try:
+        value = copy.deepcopy(bucket[cache_key])
+    except (copy.Error, TypeError, ValueError, RecursionError):
+        _diag_count("read_query_cache_misses")
+        return _READ_QUERY_MISSING
+    _diag_count("read_query_cache_hits")
+    return value
 
 
 def _record_chain_snapshot_stat(name: str, inc: int = 1) -> None:

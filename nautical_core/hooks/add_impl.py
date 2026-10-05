@@ -673,6 +673,18 @@ def _validate_native_until_anchor_slots_or_fail(
     until_dt, until_err = _validate_datetime_field(until_raw, "until")
     if until_err or until_dt is None:
         return
+    astronomy = core._import_sibling("astronomy")
+    scheduler_models = core._import_sibling("scheduler_models")
+    expected_failures = (
+        OSError,
+        UnicodeError,
+        ValueError,
+        OverflowError,
+        scheduler_models.OccurrenceSearchExhausted,
+        astronomy.AstronomyUnavailableError,
+        astronomy.AstronomyEventUnavailableError,
+        astronomy.AstronomyConfigurationError,
+    )
     try:
         valid, reason, slots = core._import_sibling("astronomy_validation").validate_native_until_slots(
             until_dt=until_dt,
@@ -688,8 +700,7 @@ def _validate_native_until_anchor_slots_or_fail(
             to_local=core.to_local,
             validate_time_slots=core._import_sibling("native_until").validate_calendar_slots,
         )
-    except Exception as exc:
-        astronomy = core._import_sibling("astronomy")
+    except expected_failures as exc:
         if astronomy.is_astronomy_error(exc):
             _panel("❌ Invalid astronomy time", [("Required", astronomy.scheduling_error_message(exc))], kind="error")
             sys.exit(1)

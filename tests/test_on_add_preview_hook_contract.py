@@ -7,7 +7,7 @@ import importlib.util
 import io
 import json
 import os
-from datetime import date, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 import sys
 from unittest.mock import patch
@@ -274,6 +274,34 @@ class OnAddPreviewHookContractTests(HookSubprocessFixture):
 
         with patch.object(self.hook, "_validate_omit_expr_cached", side_effect=self.hook.core.ParseError("bad omit")):
             self.assertEqual(self.hook._validate_omit_syntax_strict("invalid"), (None, "bad omit"))
+
+    def test_on_add_native_until_slot_validation_propagates_internal_failure(self) -> None:
+        if self._run_isolated:
+            self._run_in_child_process()
+            return
+
+        astronomy_validation = self.hook.core._import_sibling("astronomy_validation")
+        task = {
+            **self.task,
+            "until": self.hook.core.fmt_isoz(datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)),
+        }
+        dnf = self.hook._validate_anchor_expr_cached("w:mon")
+        with (
+            patch.object(
+                astronomy_validation,
+                "validate_native_until_slots",
+                side_effect=RuntimeError("slot validator invariant failed"),
+            ),
+            patch.object(self.hook, "_panel"),
+            self.assertRaisesRegex(RuntimeError, "slot validator invariant failed"),
+        ):
+            self.hook._validate_native_until_anchor_slots_or_fail(
+                task,
+                datetime(2026, 4, 13, 12, 0, tzinfo=timezone.utc),
+                dnf,
+                "",
+                (9, 0),
+            )
 
     def test_on_add_chain_id_derivation_propagates_internal_failure(self) -> None:
         if self._run_isolated:

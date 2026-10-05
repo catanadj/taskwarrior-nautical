@@ -4,7 +4,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import get_args, get_type_hints
+from typing import Callable, Iterable, get_args, get_type_hints
 
 from nautical_core.operator_application import DomainApplicationRegistry
 from nautical_core.operator_control_plane import OperatorControlPlane
@@ -31,6 +31,49 @@ from nautical_core.scheduler_service import SchedulerService
 
 
 class OperatorConformanceTests(unittest.TestCase):
+    def test_native_until_audit_dependencies_share_datetime_ports(self) -> None:
+        from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+        from nautical_core.chain_integrity_lifecycle import (
+            fallback_native_until_at_day_end,
+            invalid_native_until_reason,
+            repair_native_until_from_previous,
+        )
+        from nautical_core.chain_integrity_recovery import (
+            IntegrityRecoveryService,
+            RecoveryAudit,
+        )
+        from nautical_core.task_models import TaskObservation
+
+        parser = Callable[[object], tuple[datetime | None, str | None]]
+        formatter = Callable[[datetime], str]
+        convert = Callable[[datetime], datetime]
+        predecessor = Callable[[TaskObservation], TaskObservation | None]
+        typed_signatures = (
+            get_type_hints(OperatorControlPlane.audit_native_until),
+            get_type_hints(ChainIntegrityEngine.audit_native_until),
+            get_type_hints(IntegrityRecoveryService.audit_native_until),
+        )
+        for hints in typed_signatures:
+            self.assertEqual(hints["rows"], Iterable[TaskObservation])
+            self.assertEqual(hints["predecessor"], predecessor)
+            self.assertEqual(hints["safe_parse_datetime"], parser)
+            self.assertEqual(hints["fmt_isoz"], formatter)
+            self.assertEqual(hints["utc_to_local_naive"], convert)
+            self.assertEqual(hints["local_naive_to_utc"], convert)
+        self.assertIs(RecoveryAudit, typed_signatures[-1].get("return"))
+
+        self.assertEqual(get_type_hints(invalid_native_until_reason)["safe_parse_datetime"], parser)
+        repair_hints = get_type_hints(repair_native_until_from_previous)
+        self.assertEqual(repair_hints["safe_parse_datetime"], parser)
+        self.assertEqual(repair_hints["fmt_isoz"], formatter)
+        self.assertEqual(repair_hints["utc_to_local_naive"], convert)
+        self.assertEqual(repair_hints["local_naive_to_utc"], convert)
+        fallback_hints = get_type_hints(fallback_native_until_at_day_end)
+        self.assertEqual(fallback_hints["safe_parse_datetime"], parser)
+        self.assertEqual(fallback_hints["fmt_isoz"], formatter)
+        self.assertEqual(fallback_hints["utc_to_local_naive"], convert)
+        self.assertEqual(fallback_hints["local_naive_to_utc"], convert)
+
     def test_integrity_drain_uses_concrete_execution_ports(self) -> None:
         from nautical_core.chain_integrity_application import (
             IntegrityMutationExecutor,

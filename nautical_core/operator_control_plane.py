@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from datetime import datetime
+from typing import Any, Callable, Iterable, cast
 from collections.abc import Sequence
 
 from .chain_integrity_context import IntegrityContext
@@ -126,8 +127,16 @@ class OperatorControlPlane:
             request_factory=request_factory,
         )
 
-    def audit_native_until(self, rows: object, *, predecessor: object, safe_parse_datetime: object,
-                           fmt_isoz: object, utc_to_local_naive: object, local_naive_to_utc: object) -> RecoveryAudit:
+    def audit_native_until(
+        self,
+        rows: Iterable[TaskObservation],
+        *,
+        predecessor: Callable[[TaskObservation], TaskObservation | None],
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        fmt_isoz: Callable[[datetime], str],
+        utc_to_local_naive: Callable[[datetime], datetime],
+        local_naive_to_utc: Callable[[datetime], datetime],
+    ) -> RecoveryAudit:
         """Audit native-until windows through the shared integrity engine."""
         engine = ChainIntegrityEngine.lifecycle_only(
             configuration_fingerprint="reconcile-recovery",

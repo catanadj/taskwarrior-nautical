@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Any, Protocol
+from datetime import datetime
+from typing import Any, Callable, Iterable, Protocol
 
 from .chain_graph import ChainGraph
 from .chain_integrity_application import (
@@ -153,13 +154,13 @@ class ChainIntegrityEngine:
 
     def audit_native_until(
         self,
-        rows: Any,
+        rows: Iterable[TaskObservation],
         *,
-        predecessor: Any,
-        safe_parse_datetime: Any,
-        fmt_isoz: Any,
-        utc_to_local_naive: Any,
-        local_naive_to_utc: Any,
+        predecessor: Callable[[TaskObservation], TaskObservation | None],
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        fmt_isoz: Callable[[datetime], str],
+        utc_to_local_naive: Callable[[datetime], datetime],
+        local_naive_to_utc: Callable[[datetime], datetime],
     ) -> RecoveryAudit:
         """Delegate recovery evidence through the single integrity owner."""
         return self._recovery.audit_native_until(

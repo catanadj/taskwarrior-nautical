@@ -8,6 +8,7 @@ and presentation are performed by the outer application services.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Iterable
 
 from . import chain_integrity_lifecycle as lifecycle
@@ -128,10 +129,10 @@ class IntegrityRecoveryService:
         rows: Iterable[TaskObservation],
         *,
         predecessor: Callable[[TaskObservation], TaskObservation | None],
-        safe_parse_datetime: Callable[[Any], tuple[Any, str | None]],
-        fmt_isoz: Callable[[Any], str],
-        utc_to_local_naive: Callable[[Any], Any],
-        local_naive_to_utc: Callable[[Any], Any],
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        fmt_isoz: Callable[[datetime], str],
+        utc_to_local_naive: Callable[[datetime], datetime],
+        local_naive_to_utc: Callable[[datetime], datetime],
     ) -> RecoveryAudit:
         materialized = tuple(rows)
         by_chain_link = {

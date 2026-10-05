@@ -494,6 +494,13 @@ CompletionCapsCallback: TypeAlias = Callable[
 CompletionCapGuardCallback: TypeAlias = Callable[
     [TaskRow, int, int | None, datetime], bool
 ]
+class CompletionRuntimeState(Protocol):
+    panel_chain_by_link: dict[int, list[TaskObservation]] | None
+    panel_chain_by_short: dict[str, TaskObservation] | None
+    panel_chain_snapshot_loaded: bool
+
+
+ModifyChainStateCallback: TypeAlias = Callable[[], CompletionRuntimeState]
 BuildChildDraftCallback: TypeAlias = Callable[
     [TaskRow, datetime, str, int, str, str, int, datetime | None], TaskDraft
 ]
@@ -506,7 +513,6 @@ class SpawnChildCallback(Protocol):
         lifecycle_plan: "LifecyclePlan | None",
     ) -> tuple[str, list[str], bool, bool, str | None, str | None]:
         ...
-ModifyChainStateCallback: TypeAlias = Callable[[], Any]
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
 DiagnosticSummaryCallback: TypeAlias = Callable[[], Any]
 

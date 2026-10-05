@@ -2,13 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import get_args
 import unittest
 
 import nautical_core.modify_completion_flow as flow
 from nautical_core.modify_models import CompletionLifecycleResult, CompletionSpawnResult
+from nautical_core.modify_runtime import ModifyRuntimeState
 
 
 class ModifyCompletionFinalizeContractTests(unittest.TestCase):
+    def test_modify_chain_state_callback_returns_the_named_runtime_state(self) -> None:
+        from nautical_core.modify_models import CompletionRuntimeState, ModifyChainStateCallback
+
+        self.assertIs(get_args(ModifyChainStateCallback)[1], CompletionRuntimeState)
+
     def test_lifecycle_presentation_diagnostic_failure_does_not_block_task_response(self) -> None:
         diagnostic_messages = []
         printed_tasks = []
@@ -20,9 +27,7 @@ class ModifyCompletionFinalizeContractTests(unittest.TestCase):
         services = flow.CompletionFinalizeServices(
             build_and_spawn_child=lambda *_args, **_kwargs: None,
             seed_runtime_lookup_tasks=lambda *_args, **_kwargs: None,
-            modify_chain_state=lambda: SimpleNamespace(
-                panel_chain_by_link=None, panel_chain_by_short=None
-            ),
+            modify_chain_state=ModifyRuntimeState,
             lifecycle_read_service=None,
             chain_health_advice=lambda *_args, **_kwargs: None,
             chain_integrity_warnings=lambda *_args, **_kwargs: [],
@@ -88,9 +93,7 @@ class ModifyCompletionFinalizeContractTests(unittest.TestCase):
                 outcome_state="applied",
             ),
             seed_runtime_lookup_tasks=lambda *_args, **_kwargs: None,
-            modify_chain_state=lambda: SimpleNamespace(
-                panel_chain_by_link=None, panel_chain_by_short=None
-            ),
+            modify_chain_state=ModifyRuntimeState,
             lifecycle_read_service=SimpleNamespace(
                 get_chain_export=lambda _chain_id: (_ for _ in ()).throw(
                     RuntimeError("optional chain refresh failed")
@@ -172,9 +175,7 @@ class ModifyCompletionFinalizeContractTests(unittest.TestCase):
                 outcome_state="applied",
             ),
             seed_runtime_lookup_tasks=lambda *_args, **_kwargs: None,
-            modify_chain_state=lambda: SimpleNamespace(
-                panel_chain_by_link=None, panel_chain_by_short=None
-            ),
+            modify_chain_state=ModifyRuntimeState,
             lifecycle_read_service=None,
             chain_health_advice=lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError("analytics must not be computed when hidden")

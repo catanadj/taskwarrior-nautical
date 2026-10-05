@@ -32,6 +32,19 @@ from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_reconcile_report_keeps_plain_text_when_optional_styling_fails(self) -> None:
+        from nautical_core.reconcile_report import render_human
+
+        def broken_style(_text: str, _color: str) -> str:
+            raise RuntimeError("terminal styling unavailable")
+
+        summary, diagnostics = render_human(
+            {"mode": "apply", "status": "ok"}, broken_style
+        )
+
+        self.assertTrue(summary.startswith("summary: apply;"))
+        self.assertTrue(diagnostics.startswith("diagnostics: exports="))
+
     def test_day_end_fallback_propagates_unexpected_timezone_adapter_errors(self) -> None:
         from nautical_core.chain_integrity_lifecycle import fallback_native_until_at_day_end
 

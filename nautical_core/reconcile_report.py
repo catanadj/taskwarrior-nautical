@@ -220,6 +220,7 @@ def _style(style: Callable[[str, str], str], text: str, color: str) -> str:
     try:
         return str(style(text, color))
     except Exception:
+        # Styling is optional; preserve the complete plain-text report.
         return text
 
 

@@ -18,6 +18,24 @@ class TomlParserPort(Protocol):
     def load(self, fp: BinaryIO) -> dict: ...
 
 
+class ValidatedUserDirPort(Protocol):
+    def __call__(
+        self,
+        path_value: str,
+        *,
+        label: str,
+        trust_env: str = "",
+        env_map: Mapping[str, Any] | None = None,
+        warn_on_error: bool = True,
+    ) -> str: ...
+
+
+class CacheDirectorySupportPort(Protocol):
+    def nautical_cache_dir(
+        self, *, validated_user_dir: ValidatedUserDirPort
+    ) -> str: ...
+
+
 class ConfigReadResultPort(Protocol):
     @property
     def data(self) -> dict: ...
@@ -130,12 +148,14 @@ class ConfigSupportPort(Protocol):
 
 
 if TYPE_CHECKING:
+    from . import cache_support as _cache_support_module
     from . import config_support as _config_support_module
 
+    _cache_support_contract: CacheDirectorySupportPort = _cache_support_module
     _config_support_contract: ConfigSupportPort = _config_support_module
 
 
-cache_support: Any = None
+cache_support: CacheDirectorySupportPort | None = None
 config_support: ConfigSupportPort | None = None
 diagnostic_warnings: Any = None
 
@@ -145,7 +165,11 @@ def _load_support_module(name: Literal["config_support"]) -> ConfigSupportPort: 
 
 
 @overload
-def _load_support_module(name: Literal["cache_support", "diagnostic_warnings"]) -> Any: ...
+def _load_support_module(name: Literal["cache_support"]) -> CacheDirectorySupportPort: ...
+
+
+@overload
+def _load_support_module(name: Literal["diagnostic_warnings"]) -> Any: ...
 
 
 def _load_support_module(name: str) -> Any:

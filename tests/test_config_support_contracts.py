@@ -33,6 +33,13 @@ class ConfigSupportContractTests(unittest.TestCase):
             core_config.ConfigReadResultPort,
         )
 
+    def test_core_configuration_cache_owner_uses_its_directory_capability(self) -> None:
+        hints = get_type_hints(core_config)
+        self.assertEqual(
+            hints["cache_support"],
+            core_config.CacheDirectorySupportPort | None,
+        )
+
     def test_toml_reader_declares_parser_and_diagnostic_callback_contracts(self) -> None:
         expected = {
             "tomllib_mod": config_support.TomlParserPort | None,

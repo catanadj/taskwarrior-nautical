@@ -88,6 +88,25 @@ class TaskCommandContractTests(unittest.TestCase):
         self.assertEqual(state.diag_stats["run_task_seconds_other"], 0.5)
         self.assertEqual(state.diag_stats["run_task_seconds_export_chain"], 0.75)
 
+    def test_run_task_bucket_failure_is_reported_only_when_diagnostics_are_enabled(self) -> None:
+        import os
+        from nautical_core.hooks import modify_impl
+
+        class UnprintableCommand:
+            def __str__(self) -> str:
+                raise RuntimeError("command contents must not leak")
+
+        with (
+            patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}),
+            patch.object(modify_impl, "_diag") as diagnostic,
+        ):
+            result = modify_impl._run_task_diag_bucket([UnprintableCommand()])
+
+        self.assertEqual(result, "other")
+        diagnostic.assert_called_once_with(
+            "run-task diagnostic bucket failed (RuntimeError)"
+        )
+
     def test_client_observation_preserves_evidence_without_command_contents(self) -> None:
         observations = []
 

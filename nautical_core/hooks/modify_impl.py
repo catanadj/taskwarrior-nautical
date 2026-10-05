@@ -249,7 +249,12 @@ def _run_task_diag_bucket(cmd: list[str]) -> str:
         for p in (cmd or ()):
             parts.extend(str(p).split())
         tokens = tuple(parts)
-    except Exception:
+    except Exception as exc:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                _diag(f"run-task diagnostic bucket failed ({type(exc).__name__})")
+            except Exception:
+                pass
         return "other"
     if not parts:
         return "other"

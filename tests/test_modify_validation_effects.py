@@ -318,6 +318,37 @@ class ModifyValidationEffectsTests(unittest.TestCase):
         self.assertNotIn("chain", candidate)
         self.assertNotIn("chainID", candidate)
 
+    def test_unexpected_transition_defect_propagates_to_hook_containment(self) -> None:
+        services = SimpleNamespace(
+            field_changed=lambda old, new, field: old.get(field) != new.get(field),
+            strip_quotes=lambda value: value,
+            validate_anchor=lambda *_args: None,
+            validate_omit=lambda *_args: None,
+            reject_conflicting_types=lambda *_args: None,
+            validate_chain_limits=lambda *_args: None,
+            preserve_cp_offsets=lambda *_args: None,
+            task_has_recurrence=lambda _task: False,
+            preserve_native_until=lambda *_args: None,
+            validate_native_until=lambda *_args: None,
+            validate_native_until_slots=lambda *_args: None,
+            render_cp_adjustment=lambda *_args: None,
+            render_timing_warning=lambda *_args: None,
+            apply_transition=lambda *_args: (_ for _ in ()).throw(
+                RuntimeError("transition invariant defect")
+            ),
+        )
+
+        with self.assertRaises(RuntimeError) as raised:
+            modify_ordinary.handle_non_completion_modify(
+                {},
+                {},
+                services=services,
+                lifecycle=SimpleNamespace(recurrence_setting_changes=lambda *_args: []),
+            )
+
+        self.assertIs(type(raised.exception), RuntimeError)
+        self.assertEqual(str(raised.exception), "transition invariant defect")
+
     def test_recurrence_feedback_calculation_propagates_internal_failures(self) -> None:
         services = SimpleNamespace(
             field_changed=lambda old, new, field: old.get(field) != new.get(field),

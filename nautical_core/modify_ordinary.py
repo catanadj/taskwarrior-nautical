@@ -129,7 +129,7 @@ def handle_non_completion_modify(
 
     try:
         lifecycle_transition = services.apply_transition(old, new)
-    except Exception as exc:
+    except ValueError as exc:
         raise RecurrenceActivationError(
             f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}"
         ) from exc

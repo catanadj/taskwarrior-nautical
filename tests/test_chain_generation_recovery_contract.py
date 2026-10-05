@@ -705,6 +705,39 @@ class ChainGenerationContractTests(unittest.TestCase):
         )
         self.assertEqual(draft.to_mapping()["bc"], "weekend")
 
+    def test_child_draft_debug_clear_failure_is_gated_and_nonfatal(self):
+        import io
+        from contextlib import redirect_stderr
+
+        class BrokenDebugState(dict):
+            def clear(self):
+                raise RuntimeError("secret debug payload")
+
+        service = ChainGenerationService.from_core(
+            _Core(),
+            debug_wait_sched=True,
+            wait_sched_debug=BrokenDebugState({"stale": {"private": "task text"}}),
+        )
+        stderr = io.StringIO()
+        with patch.dict("os.environ", {"NAUTICAL_DIAG": "1"}), redirect_stderr(stderr):
+            draft = service.build_child_draft(
+                _task(), datetime(2026, 1, 3, 10, tzinfo=timezone.utc),
+                "due", 2, "11111111", "cp", 0, None,
+            )
+
+        self.assertEqual(draft.target.value, datetime(2026, 1, 3, 10, tzinfo=timezone.utc))
+        self.assertIn("debug wait-schedule state cleanup failed: RuntimeError", stderr.getvalue())
+        self.assertNotIn("secret debug payload", stderr.getvalue())
+        self.assertNotIn("task text", stderr.getvalue())
+
+        stderr = io.StringIO()
+        with patch.dict("os.environ", {"NAUTICAL_DIAG": "0"}), redirect_stderr(stderr):
+            service.build_child_draft(
+                _task(), datetime(2026, 1, 3, 10, tzinfo=timezone.utc),
+                "due", 2, "11111111", "cp", 0, None,
+            )
+        self.assertEqual(stderr.getvalue(), "")
+
     def test_child_draft_reports_unrecoverable_relative_carry(self):
         parent = _task(wait="2026-01-02T08:00:00Z", due=None, scheduled=None)
         with self.assertRaisesRegex(RuntimeError, "wait carry failed"):

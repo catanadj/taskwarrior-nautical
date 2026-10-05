@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from collections import OrderedDict
 import json
+import os
+import sys
 import uuid
 from typing import Any, MutableMapping
 
@@ -519,8 +521,15 @@ class ChainGenerationService:
         if self.debug_wait_sched and self.wait_sched_debug is not None:
             try:
                 self.wait_sched_debug.clear()
-            except Exception:
-                pass
+            except Exception as exc:
+                if os.environ.get("NAUTICAL_DIAG") == "1":
+                    try:
+                        sys.stderr.write(
+                            "[nautical] debug wait-schedule state cleanup failed: "
+                            f"{type(exc).__name__}\n"
+                        )
+                    except (OSError, UnicodeError, ValueError):
+                        pass
         # One explicit serialization creates the mutable Taskwarrior import
         # payload; all scheduling and carry decisions above use typed fields.
         parent_payload = parent_task.observation.to_mapping()

@@ -36,6 +36,43 @@ class CacheDirectorySupportPort(Protocol):
     ) -> str: ...
 
 
+class DiagnosticWarningsPort(Protocol):
+    def warn_once_per_day(
+        self,
+        key: str,
+        message: str,
+        *,
+        cache_dir: str,
+        require_diag: bool,
+    ) -> None: ...
+
+    def warn_rate_limited_any(
+        self,
+        key: str,
+        message: str,
+        *,
+        cache_dir: str,
+        min_interval_s: float = 3600.0,
+    ) -> None: ...
+
+    def warn_missing_toml_parser(
+        self,
+        config_path: str,
+        *,
+        warn_once_per_day: Callable[[str, str], None],
+        warn_once_per_day_any: Callable[[str, str], None],
+    ) -> None: ...
+
+    def warn_toml_parse_error(
+        self,
+        config_path: str,
+        err: Exception,
+        *,
+        warn_once_per_day: Callable[[str, str], None],
+        warn_once_per_day_any: Callable[[str, str], None],
+    ) -> None: ...
+
+
 class ConfigReadResultPort(Protocol):
     @property
     def data(self) -> dict: ...
@@ -150,14 +187,16 @@ class ConfigSupportPort(Protocol):
 if TYPE_CHECKING:
     from . import cache_support as _cache_support_module
     from . import config_support as _config_support_module
+    from . import diagnostic_warnings as _diagnostic_warnings_module
 
     _cache_support_contract: CacheDirectorySupportPort = _cache_support_module
     _config_support_contract: ConfigSupportPort = _config_support_module
+    _diagnostic_warnings_contract: DiagnosticWarningsPort = _diagnostic_warnings_module
 
 
 cache_support: CacheDirectorySupportPort | None = None
 config_support: ConfigSupportPort | None = None
-diagnostic_warnings: Any = None
+diagnostic_warnings: DiagnosticWarningsPort | None = None
 
 
 @overload
@@ -169,7 +208,7 @@ def _load_support_module(name: Literal["cache_support"]) -> CacheDirectorySuppor
 
 
 @overload
-def _load_support_module(name: Literal["diagnostic_warnings"]) -> Any: ...
+def _load_support_module(name: Literal["diagnostic_warnings"]) -> DiagnosticWarningsPort: ...
 
 
 def _load_support_module(name: str) -> Any:

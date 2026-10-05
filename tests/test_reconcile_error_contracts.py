@@ -768,6 +768,12 @@ class ReconcileErrorContracts(unittest.TestCase):
             reconcile._configuration_state(hook), ("unavailable", result.reason)
         )
 
+    def test_configuration_verification_result_is_immutable(self) -> None:
+        result = reconcile._ConfigurationVerification("valid")
+
+        with self.assertRaisesRegex(AttributeError, "immutable"):
+            result.status = "drifted"
+
     def test_expiration_hop_limit_wraps_invalid_input_not_internal_faults(self) -> None:
         class BrokenIntegerConversion:
             def __int__(self) -> int:

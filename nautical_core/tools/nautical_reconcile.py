@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator, Literal
 
 _fcntl: ModuleType | None
 try:
@@ -145,9 +145,19 @@ class _ConfigurationVerification:
 
     __slots__ = ("status", "reason")
 
-    def __init__(self, status: str, reason: str = "") -> None:
-        self.status = status
-        self.reason = reason
+    status: Literal["valid", "unavailable", "drifted"]
+    reason: str
+
+    def __init__(
+        self,
+        status: Literal["valid", "unavailable", "drifted"],
+        reason: str = "",
+    ) -> None:
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "reason", reason)
+
+    def __setattr__(self, _name: str, _value: object) -> None:
+        raise AttributeError("configuration verification results are immutable")
 
 
 from nautical_core.native_until_integrity import NativeUntilAudit, audit_result

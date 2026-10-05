@@ -80,8 +80,6 @@ class ModifyRuntimeState:
             "format_root_age_cache_misses": 0,
             "read_query_cache_hits": 0,
             "read_query_cache_misses": 0,
-            "read_query_cache_invalidations": 0,
-            "read_query_cache_entries": 0,
             "chain_snapshot_hits": 0,
             "chain_snapshot_misses": 0,
             "chain_snapshot_filter_hits": 0,

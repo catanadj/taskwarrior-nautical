@@ -347,60 +347,6 @@ def _read_query_get(kind: str, key: Any) -> Any:
         return _READ_QUERY_MISSING
 
 
-def _read_query_set(kind: str, key: Any, value: Any) -> None:
-    try:
-        state = _modify_runtime_state()
-        bucket = state.query_ctx.get("read_query")
-        if not isinstance(bucket, dict):
-            return
-        stored = copy.deepcopy(value)
-        if str(kind) in {"chain", "chain_snapshot"} and isinstance(stored, list):
-            if len(stored) > _MAX_CHAIN_WALK:
-                stored = stored[:_MAX_CHAIN_WALK]
-                state.diag_stats["chain_snapshot_truncations"] = (
-                    state.diag_stats.get("chain_snapshot_truncations", 0) + 1
-                )
-        bucket[(str(kind), key)] = stored
-        state.diag_stats["read_query_cache_entries"] = len(bucket)
-    except Exception:
-        pass
-
-
-def _read_query_delete(kind: str, key: Any) -> None:
-    try:
-        state = _modify_runtime_state()
-        bucket = state.query_ctx.get("read_query")
-        if isinstance(bucket, dict):
-            bucket.pop((str(kind), key), None)
-            state.diag_stats["read_query_cache_entries"] = len(bucket)
-    except Exception:
-        pass
-
-
-def _invalidate_read_query_cache() -> None:
-    """Invalidate all request-scoped reads after a Taskwarrior mutation."""
-    try:
-        state = _modify_runtime_state()
-        bucket = state.query_ctx.get("read_query")
-        if isinstance(bucket, dict):
-            bucket.clear()
-        state.diag_stats["read_query_cache_entries"] = 0
-        state.diag_stats["read_query_cache_invalidations"] = (
-            state.diag_stats.get("read_query_cache_invalidations", 0) + 1
-        )
-    except Exception:
-        pass
-    try:
-        service = getattr(_modify_runtime_state(), "lifecycle_read_service", None)
-        clear_cache = getattr(service, "clear_cache", None)
-        if callable(clear_cache):
-            clear_cache()
-        else:
-            _module("lifecycle_read_service").clear_cached_chain_exports()
-    except Exception:
-        pass
-
-
 def _record_chain_snapshot_stat(name: str, inc: int = 1) -> None:
     try:
         state = _modify_runtime_state()

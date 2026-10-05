@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, get_type_hints
@@ -21,6 +22,21 @@ from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
 
 
 class ModifyExpirationContractTests(unittest.TestCase):
+    def test_expiration_lazy_import_names_only_its_typed_carry_capability(self) -> None:
+        from typing import Literal
+
+        core_contract = get_type_hints(modify_expiration._ExpirationCore._import_sibling)
+        self.assertEqual(core_contract["name"], Literal["add_validation"])
+        self.assertIs(core_contract["return"], modify_expiration._AddValidationAPI)
+
+        carry_contract = get_type_hints(
+            modify_expiration._AddValidationAPI.describe_native_until_carry
+        )
+        self.assertEqual(carry_contract["until_dt"], datetime)
+        self.assertEqual(carry_contract["target_dt"], datetime)
+        self.assertEqual(carry_contract["to_local"], Callable[[datetime], datetime])
+        self.assertEqual(carry_contract["return"], str | None)
+
     def test_expiration_service_dependencies_have_explicit_types(self) -> None:
         for service_type in (
             modify_expiration.ExpirationServices,

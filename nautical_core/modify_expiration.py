@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 import sqlite3
-from typing import Any, Protocol
+from typing import Literal, Protocol
 
 from .chain_generation import AnchorChildDueResult, CpChildDueResult
 from .modify_models import BuildChildDraftCallback, DiagnosticCallback, PanelCallback, ShortUuidCallback
@@ -19,12 +19,25 @@ from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, Recovery
 from nautical_core.task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 
 
+class _AddValidationAPI(Protocol):
+    def describe_native_until_carry(
+        self,
+        until_dt: datetime,
+        target_dt: datetime,
+        *,
+        to_local: Callable[[datetime], datetime],
+    ) -> str | None: ...
+
+
 class _ExpirationCore(Protocol):
     def coerce_int(self, value: object, default: int) -> int: ...
 
     def fmt_dt_local(self, value: datetime) -> str: ...
 
-    def _import_sibling(self, name: str) -> Any: ...
+    def _import_sibling(
+        self,
+        name: Literal["add_validation"],
+    ) -> _AddValidationAPI: ...
 
     def to_local(self, value: datetime) -> datetime: ...
 

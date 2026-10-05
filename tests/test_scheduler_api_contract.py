@@ -231,6 +231,31 @@ class SchedulerAtomContractTests(unittest.TestCase):
 
 
 class SchedulerApiDelegationTests(unittest.TestCase):
+    def test_scheduler_api_drops_private_passthrough_aliases(self):
+        binding = scheduler_api.for_core(module=core)
+
+        for name in (
+            "_expand_monthly_for_month_impl",
+            "_expand_weekly_impl",
+            "_expand_yearly_for_year_strict_impl",
+            "expand_monthly_for_month",
+            "expand_weekly",
+            "expand_yearly_for_year_strict",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(binding, name))
+
+        for name in (
+            "_expand_monthly_for_month_impl",
+            "_expand_weekly_impl",
+            "_expand_yearly_for_year_strict_impl",
+            "expand_monthly_for_month",
+            "expand_weekly",
+            "expand_yearly_for_year_strict",
+        ):
+            with self.subTest(root_name=name):
+                self.assertFalse(hasattr(core, name))
+
     def test_interval_owner_uses_explicit_atom_and_interval_dependencies(self):
         owner = scheduler_api.SchedulerIntervalDependencies(
             weeks_between=lambda first, second: (second - first).days // 7,

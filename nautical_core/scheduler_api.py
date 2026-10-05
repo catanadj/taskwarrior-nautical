@@ -528,15 +528,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
-    def expand_monthly_for_month_impl(spec: str, year: int, month: int) -> Any:
-        return expand_monthly_cached_impl(spec, year, month)
-
-    def expand_weekly_impl(spec: str) -> Any:
-        return expand_weekly_cached_impl(spec)
-
-    def expand_yearly_for_year_strict_impl(spec: str, year: int) -> Any:
-        return expand_yearly_cached_impl(spec, year)
-
     def roll_apply_impl(dt: Any, mods: Any, business_calendar: Any = None) -> Any:
         business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return deps["_schedule_utils"].roll_apply(
@@ -983,9 +974,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         _expand_weekly_cached_mods_impl=expand_weekly_cached_mods_impl,
         _expand_yearly_cached_impl=expand_yearly_cached_impl,
         _expand_monthly_cached_impl=expand_monthly_cached_impl,
-        _expand_monthly_for_month_impl=expand_monthly_for_month_impl,
-        _expand_weekly_impl=expand_weekly_impl,
-        _expand_yearly_for_year_strict_impl=expand_yearly_for_year_strict_impl,
         _roll_apply_impl=roll_apply_impl,
         _month_doms_safe=month_doms_safe,
         _month_has_hit=month_has_hit,
@@ -1015,9 +1003,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         expand_weekly_cached_mods=expand_weekly_cached_mods_impl,
         expand_yearly_cached=expand_yearly_cached_impl,
         expand_monthly_cached=expand_monthly_cached_impl,
-        expand_monthly_for_month=expand_monthly_for_month_impl,
-        expand_weekly=expand_weekly_impl,
-        expand_yearly_for_year_strict=expand_yearly_for_year_strict_impl,
         roll_apply=roll_apply_impl,
         apply_day_offset=apply_day_offset,
         base_next_after_atom=base_next_after_atom,

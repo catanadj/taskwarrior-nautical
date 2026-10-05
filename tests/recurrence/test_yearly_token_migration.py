@@ -145,21 +145,21 @@ class YearlyTokenMigrationTests(unittest.TestCase):
 
     def test_year_day_ordinals_expand_and_schedule_across_leap_years(self) -> None:
         self.assertEqual(
-            core.expand_yearly_for_year_strict("d1,d60,d-1", 2023),
+            self.scheduler.expand_yearly_cached("d1,d60,d-1", 2023),
             [date(2023, 1, 1), date(2023, 3, 1), date(2023, 12, 31)],
         )
         self.assertEqual(
-            core.expand_yearly_for_year_strict("d1,d60,d-1", 2024),
+            self.scheduler.expand_yearly_cached("d1,d60,d-1", 2024),
             [date(2024, 1, 1), date(2024, 2, 29), date(2024, 12, 31)],
         )
-        self.assertEqual(core.expand_yearly_for_year_strict("d366", 2023), [])
-        self.assertEqual(core.expand_yearly_for_year_strict("d1..d366", 2023)[-1], date(2023, 12, 31))
+        self.assertEqual(self.scheduler.expand_yearly_cached("d366", 2023), [])
+        self.assertEqual(self.scheduler.expand_yearly_cached("d1..d366", 2023)[-1], date(2023, 12, 31))
         self.assertEqual(
-            core.expand_yearly_for_year_strict("d366,d-366", 2024),
+            self.scheduler.expand_yearly_cached("d366,d-366", 2024),
             [date(2024, 1, 1), date(2024, 12, 31)],
         )
         self.assertEqual(
-            core.expand_yearly_for_year_strict("d100..d102,d-2..d-1", 2024),
+            self.scheduler.expand_yearly_cached("d100..d102,d-2..d-1", 2024),
             [
                 date(2024, 4, 9), date(2024, 4, 10), date(2024, 4, 11),
                 date(2024, 12, 30), date(2024, 12, 31),
@@ -202,24 +202,24 @@ class YearlyTokenMigrationTests(unittest.TestCase):
 
     def test_iso_week_ordinals_expand_across_gregorian_year_boundaries(self) -> None:
         self.assertEqual(
-            core.expand_yearly_for_year_strict("w53", 2020),
+            self.scheduler.expand_yearly_cached("w53", 2020),
             [date(2020, 12, 28), date(2020, 12, 29), date(2020, 12, 30), date(2020, 12, 31)],
         )
         self.assertEqual(
-            core.expand_yearly_for_year_strict("w53", 2021),
+            self.scheduler.expand_yearly_cached("w53", 2021),
             [date(2021, 1, 1), date(2021, 1, 2), date(2021, 1, 3)],
         )
-        self.assertEqual(core.expand_yearly_for_year_strict("w1", 2018)[-1], date(2018, 12, 31))
+        self.assertEqual(self.scheduler.expand_yearly_cached("w1", 2018)[-1], date(2018, 12, 31))
         self.assertEqual(
-            core.expand_yearly_for_year_strict("w-1", 2021),
+            self.scheduler.expand_yearly_cached("w-1", 2021),
             [
                 date(2021, 1, 1), date(2021, 1, 2), date(2021, 1, 3),
                 date(2021, 12, 27), date(2021, 12, 28), date(2021, 12, 29),
                 date(2021, 12, 30), date(2021, 12, 31),
             ],
         )
-        self.assertEqual(len(core.expand_yearly_for_year_strict("w20", 2024)), 7)
-        self.assertEqual(len(core.expand_yearly_for_year_strict("w1..w53", 2021)), 365)
+        self.assertEqual(len(self.scheduler.expand_yearly_cached("w20", 2024)), 7)
+        self.assertEqual(len(self.scheduler.expand_yearly_cached("w1..w53", 2021)), 365)
 
         dnf = core.validate_anchor_expr_strict("y:w53")
         next_date, _meta = core.next_after_expr(dnf, date(2020, 12, 31), default_seed=date(2020, 1, 1))

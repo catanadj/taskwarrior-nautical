@@ -33,6 +33,7 @@ _PARENT_LOCK_RETRIES = 600
 _PARENT_LOCK_SLEEP_SECONDS = 0.1
 _PARENT_LOCK_STALE_SECONDS = 300.0
 _RECONCILE_LOCK_STALE_SECONDS = 300.0
+_SafeParseDatetime = Callable[[object], tuple[datetime | None, str | None]]
 
 
 class LifecycleChildReadUnavailable(TimeoutError):
@@ -551,7 +552,7 @@ class LifecycleReconciliationService:
         *,
         hook: Any,
         generation: ChainGenerationService,
-        safe_parse_datetime: Any,
+        safe_parse_datetime: _SafeParseDatetime,
     ) -> RecoveryResult:
         existing_children = self.existing_children(
             parent,
@@ -574,7 +575,7 @@ class LifecycleReconciliationService:
         *,
         hook: Any,
         generation: ChainGenerationService,
-        safe_parse_datetime: Any,
+        safe_parse_datetime: _SafeParseDatetime,
     ) -> LifecyclePlan:
         """Return the direct lifecycle plan for one recovery candidate."""
         existing_children = self.existing_children(parent, safe_parse_datetime=safe_parse_datetime)
@@ -589,7 +590,12 @@ class LifecycleReconciliationService:
             generation=generation,
         )
 
-    def existing_children(self, parent: TaskObservation, *, safe_parse_datetime: Any) -> tuple[TaskObservation, ...]:
+    def existing_children(
+        self,
+        parent: TaskObservation,
+        *,
+        safe_parse_datetime: _SafeParseDatetime,
+    ) -> tuple[TaskObservation, ...]:
         if not isinstance(parent, TaskObservation):
             raise TypeError("lifecycle child lookup requires a TaskObservation parent")
         if str(getattr(parent.field("status").value, "value", parent.field("status").value) or "").strip().lower() == "deleted":

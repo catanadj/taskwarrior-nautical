@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime
 from collections.abc import Callable, Sequence
-from typing import Any, get_args, get_type_hints
+from typing import Any, Callable as TypingCallable, get_args, get_type_hints
 import unittest
 
 import nautical_core.lifecycle.reconciliation as reconciliation
@@ -21,6 +21,17 @@ from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 class ReconcileCallbackContractTests(unittest.TestCase):
+    def test_reconcile_child_parser_callbacks_use_the_datetime_contract(self) -> None:
+        expected = TypingCallable[[object], tuple[datetime | None, str | None]]
+
+        for method in (
+            reconciliation.LifecycleReconciliationService.plan,
+            reconciliation.LifecycleReconciliationService.plan_typed,
+            reconciliation.LifecycleReconciliationService.existing_children,
+        ):
+            with self.subTest(method=method.__name__):
+                self.assertEqual(get_type_hints(method)["safe_parse_datetime"], expected)
+
     def test_reconciliation_service_does_not_retain_unused_unit_of_work(self) -> None:
         self.assertNotIn(
             "unit_of_work",

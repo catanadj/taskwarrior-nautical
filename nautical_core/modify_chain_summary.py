@@ -85,7 +85,7 @@ class ChainSummaryRenderServices:
     limits_row: SummaryLimitsRow
     last_n_timeline_rows: SummaryTimelineRows
     format_rows: SummaryRowsFormatter
-    coerce_int: Callable[[Any, Any], int | None]
+    coerce_int: Callable[[object, int], int | None]
     format_local: Callable[[datetime], str]
     max_chain_walk: int
     panel: FeedbackPanelCallback
@@ -107,7 +107,7 @@ def span_fields(
     stop_at: datetime | None = None,
     stopped_by_delete: bool = False,
     export_endpoint: Callable[[str, str], TaskObservation | None],
-    parse_datetime: Callable[[Any], datetime | None],
+    parse_datetime: Callable[[object], datetime | None],
     human_delta: SpanHumanDelta,
 ) -> tuple[datetime | None, datetime | None, str]:
     first_task = chain[0] if chain else None
@@ -182,8 +182,8 @@ def limits_row(
     rows: list[tuple[str, str]],
     current: TaskPayload,
     *,
-    coerce_int: Callable[[Any, Any], int | None],
-    parse_datetime: Callable[[Any], datetime | None],
+    coerce_int: Callable[[object, int], int | None],
+    parse_datetime: Callable[[object], datetime | None],
     format_local: Callable[[datetime], str],
 ) -> None:
     cpmax = coerce_int(current.get("chainMax"), 0)
@@ -200,11 +200,11 @@ def last_n_timeline(
     chain: list[TaskObservation],
     n: int = 6,
     *,
-    coerce_int: Callable[[Any, Any], int | None],
-    parse_datetime: Callable[[Any], datetime | None],
-    format_local: Callable[[Any], str],
-    format_on_time_delta: Callable[[Any, Any], str],
-    short_uuid: Callable[[Any], str],
+    coerce_int: Callable[[object, int], int | None],
+    parse_datetime: Callable[[object], datetime | None],
+    format_local: Callable[[datetime], str],
+    format_on_time_delta: Callable[[datetime | None, datetime | None], str],
+    short_uuid: Callable[[str | None], str],
 ) -> list[str]:
     """Render the compact recent-history rows used by chain summaries."""
     if not chain:

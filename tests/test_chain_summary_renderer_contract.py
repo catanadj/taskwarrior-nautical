@@ -23,6 +23,32 @@ from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 class ChainSummaryRendererContractTests(unittest.TestCase):
+    def test_summary_timeline_callbacks_use_validated_value_types(self) -> None:
+        from nautical_core.modify_chain_summary import last_n_timeline
+
+        hints = get_type_hints(last_n_timeline)
+        self.assertEqual(
+            {
+                name: hints[name]
+                for name in (
+                    "coerce_int",
+                    "parse_datetime",
+                    "format_local",
+                    "format_on_time_delta",
+                    "short_uuid",
+                )
+            },
+            {
+                "coerce_int": Callable[[object, int], int | None],
+                "parse_datetime": Callable[[object], datetime | None],
+                "format_local": Callable[[datetime], str],
+                "format_on_time_delta": Callable[
+                    [datetime | None, datetime | None], str
+                ],
+                "short_uuid": Callable[[str | None], str],
+            },
+        )
+
     def test_kind_rows_keeps_pattern_when_anchor_syntax_is_invalid(self) -> None:
         rows: list[tuple[str, str]] = []
 

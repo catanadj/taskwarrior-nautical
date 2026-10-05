@@ -199,7 +199,7 @@ class AddCompositionServices:
     def fail_and_exit(self, title: str, message: str) -> None:
         self._host._fail_and_exit(title, message)
 
-    def validate_task(self, task: Any) -> Any:
+    def validate_task(self, task: TaskPayload) -> TaskObservation:
         """Validate and classify the add request before workflow construction."""
         return validate_task(self._host, task)
 

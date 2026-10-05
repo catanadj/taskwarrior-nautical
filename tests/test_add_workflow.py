@@ -111,6 +111,12 @@ class AddWorkflowTests(unittest.TestCase):
         self.assertIs(result_hints["task"], TaskPayload)
         self.assertEqual(result_hints["prof"], ProfilerPort | None)
         self.assertIs(result_hints["return"], object)
+        validator_hints = get_type_hints(
+            AddCompositionServices.validate_task,
+            localns={"TaskPayload": TaskPayload, "TaskObservation": TaskObservation},
+        )
+        self.assertIs(validator_hints["task"], TaskPayload)
+        self.assertIs(validator_hints["return"], TaskObservation)
         for owner in (
             AddCompositionServices.record_limits,
             AddCompositionServices.render_anchor_preview,

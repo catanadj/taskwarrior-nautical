@@ -168,7 +168,7 @@ class CacheApiContractTests(unittest.TestCase):
                     self.assertIs(hints["time_mod"], cache_ports.ClockPort)
 
         lock_hints = get_type_hints(cache_locking.safe_lock)
-        self.assertIs(lock_hints["os_mod"], cache_ports.FilesystemPort)
+        self.assertIs(lock_hints["os_mod"], cache_ports.LockFilesystemPort)
         self.assertIs(lock_hints["time_mod"], cache_ports.ClockPort)
         self.assertIs(lock_hints["random_mod"], cache_ports.RandomPort)
         self.assertEqual(lock_hints["fcntl_mod"], cache_ports.FcntlPort | None)

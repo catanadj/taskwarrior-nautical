@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import ContextManager, Iterator, Protocol
 
-from nautical_core.cache_ports import ClockPort, FcntlPort, FilesystemPort, RandomPort
+from nautical_core.cache_ports import ClockPort, FcntlPort, LockFilesystemPort, RandomPort
 from nautical_core.cache_support import ValidatedUserDir
 
 
@@ -82,7 +82,7 @@ def safe_lock_sleep_once(
         time_mod.sleep(delay)
 
 
-def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: FilesystemPort) -> None:
+def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: LockFilesystemPort) -> None:
     if not mkdir:
         return
     try:
@@ -93,7 +93,7 @@ def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: FilesystemPor
         pass
 
 
-def safe_lock_age(path_str: str, *, time_mod: ClockPort, os_mod: FilesystemPort) -> float | None:
+def safe_lock_age(path_str: str, *, time_mod: ClockPort, os_mod: LockFilesystemPort) -> float | None:
     try:
         with open(path_str, "r", encoding="utf-8") as fh:
             head = fh.read(64)
@@ -114,7 +114,7 @@ def safe_lock_stale_pid(
     stale_after: float | None,
     *,
     time_mod: ClockPort,
-    os_mod: FilesystemPort,
+    os_mod: LockFilesystemPort,
 ) -> bool:
     try:
         with open(path_str, "r", encoding="utf-8") as fh:
@@ -156,7 +156,7 @@ def safe_lock_fcntl_context(
     safe_lock_ensure_parent: Callable[[str, bool], None],
     safe_lock_sleep_once: Callable[[float, float], None],
     fcntl_mod: FcntlPort | None,
-    os_mod: FilesystemPort,
+    os_mod: LockFilesystemPort,
 ) -> Iterator[bool]:
     if fcntl_mod is None:
         yield False
@@ -220,7 +220,7 @@ def safe_lock_excl_context(
     safe_lock_stale_pid: Callable[[str, float | None], bool],
     safe_lock_age: Callable[[str], float | None],
     safe_lock_sleep_once: Callable[[float, float], None],
-    os_mod: FilesystemPort,
+    os_mod: LockFilesystemPort,
     time_mod: ClockPort,
 ) -> Iterator[bool]:
     fd = None
@@ -286,7 +286,7 @@ def safe_lock(
     mkdir: bool = True,
     stale_after: float | None = 60.0,
     fcntl_mod: FcntlPort | None,
-    os_mod: FilesystemPort,
+    os_mod: LockFilesystemPort,
     time_mod: ClockPort,
     random_mod: RandomPort,
 ) -> Iterator[bool]:
@@ -380,7 +380,7 @@ def bind_locking(
     jitter: float,
     stale_after: float,
     fcntl_mod: FcntlPort | None,
-    os_mod: FilesystemPort,
+    os_mod: LockFilesystemPort,
     time_mod: ClockPort,
     random_mod: RandomPort,
 ) -> BoundLocking:

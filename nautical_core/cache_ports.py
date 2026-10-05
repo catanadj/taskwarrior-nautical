@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from os import PathLike, stat_result
 from typing import IO, Protocol
 
 
@@ -63,6 +64,42 @@ class FilesystemPort(Protocol):
     def replace(self, src: str, dst: str) -> None: ...
 
     def listdir(self, path: str) -> list[str]: ...
+
+    def unlink(self, path: str) -> None: ...
+
+    def close(self, file_descriptor: int) -> None: ...
+
+    def fchmod(self, file_descriptor: int, mode: int) -> None: ...
+
+    def write(self, file_descriptor: int, data: bytes) -> int: ...
+
+    def open(self, path: str, flags: int, mode: int = 0o777) -> int: ...
+
+    def fdopen(self, file_descriptor: int, mode: str, *, encoding: str) -> IO[str]: ...
+
+    def makedirs(self, path: str, *, exist_ok: bool = False) -> None: ...
+
+    def kill(self, pid: int, signal: int) -> None: ...
+
+
+class LockFilesystemPort(Protocol):
+    """Filesystem capabilities used by lock operations (without environment access)."""
+
+    O_CREAT: int
+    O_EXCL: int
+    O_RDWR: int
+    O_WRONLY: int
+    path: PathPort
+
+    def stat(
+        self,
+        path: int | str | bytes | PathLike[str] | PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> stat_result: ...
+
+    def getpid(self) -> int: ...
 
     def unlink(self, path: str) -> None: ...
 

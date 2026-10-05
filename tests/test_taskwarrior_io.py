@@ -94,6 +94,9 @@ class TaskDocumentTests(unittest.TestCase):
         self.assertEqual(document.integer("link", 4), 4)
         self.assertFalse(document.boolean("chain", False))
 
+    def test_document_rejects_non_json_values_inside_task_fields(self) -> None:
+        self.assertIsNone(TaskDocument.from_object({"custom": {"nested": object()}}))
+
 
 class TaskCodecBoundaryTests(unittest.TestCase):
     def test_sanitization_removes_controls_and_clamps_string_fields(self) -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias, cast
+from typing import TypeAlias, TypeGuard
 
 
 JsonScalar: TypeAlias = None | bool | int | float | str
@@ -11,9 +11,36 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 
-def is_json_object(value: object) -> bool:
-    """Return whether a decoded value can be used as a task object."""
-    return isinstance(value, dict) and all(isinstance(key, str) for key in value)
+def _is_json_value(value: object, ancestors: set[int]) -> bool:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return True
+    if not isinstance(value, (list, dict)):
+        return False
+
+    identity = id(value)
+    if identity in ancestors:
+        return False
+    ancestors.add(identity)
+    try:
+        if isinstance(value, list):
+            return all(_is_json_value(item, ancestors) for item in value)
+        return all(
+            isinstance(key, str) and _is_json_value(item, ancestors)
+            for key, item in value.items()
+        )
+    finally:
+        ancestors.remove(identity)
+
+
+def is_json_object(value: object) -> TypeGuard[JsonObject]:
+    """Return whether a value is a complete, acyclic JSON task object."""
+    if not isinstance(value, dict):
+        return False
+    ancestors = {id(value)}
+    return all(
+        isinstance(key, str) and _is_json_value(item, ancestors)
+        for key, item in value.items()
+    )
 
 
 @dataclass(slots=True)
@@ -31,7 +58,7 @@ class TaskDocument:
     def from_object(cls, value: object) -> "TaskDocument | None":
         if not is_json_object(value):
             return None
-        return cls(cast(JsonObject, value))
+        return cls(value)
 
     def as_dict(self) -> JsonObject:
         """Return the live payload so hook mutations remain lossless."""

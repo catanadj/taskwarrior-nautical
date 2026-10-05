@@ -237,6 +237,17 @@ class AddWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "result factory is not configured"):
             services.result({}, sanitize=False, prof=None)
 
+    def test_composition_service_host_is_not_an_unbounded_dependency_bag(self) -> None:
+        from nautical_core.add_composition import AddCompositionHost, AddCompositionServices
+
+        self.assertIs(
+            get_type_hints(
+                AddCompositionServices.__init__,
+                localns={"AddCompositionHost": AddCompositionHost},
+            )["host"],
+            AddCompositionHost,
+        )
+
     def test_application_prepares_and_attaches_typed_plan(self) -> None:
         application = AddWorkflowApplication(
             record_schedule_fn=lambda plan, _task, _field: plan,

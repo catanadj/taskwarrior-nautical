@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import os
 import sys
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .task_models import TaskPayload
@@ -17,11 +18,50 @@ if TYPE_CHECKING:
     from .task_models import TaskObservation
 
 
+class AddCompositionCore(Protocol):
+    def _import_sibling(self, module_name: str) -> Any: ...
+    def coerce_int(self, value: object, default: int = 0) -> int: ...
+    def now_utc(self) -> datetime: ...
+    def to_local(self, value: datetime) -> datetime: ...
+
+    parse_cp_sequence: Callable[[str], object]
+    cp_sequence_parse_error: Callable[[str], str | None]
+
+
 class AddDatetimeParserHost(Protocol):
     _TASK_DATETIME_PARSER: TaskDatetimeParser | None
-    core: object
+    core: AddCompositionCore
 
     def _diag(self, message: str) -> None: ...
+
+
+class AddCompositionClock(Protocol):
+    def perf_counter(self) -> float: ...
+
+
+class AddCompositionHost(AddDatetimeParserHost, Protocol):
+    UPCOMING_PREVIEW: int
+    _PREVIEW_HARD_CAP: int
+    time: AddCompositionClock
+
+    def _task_has_nautical_fields(self, task: TaskPayload) -> bool: ...
+    def _load_core(self) -> None: ...
+    def _fail_and_exit(self, title: str, message: str) -> None: ...
+    def _error_and_exit(self, messages: Sequence[tuple[str, object]]) -> None: ...
+    def _module(self, name: str, *, required: bool = True) -> Any: ...
+    def _strip_quotes(self, value: str) -> str: ...
+    def _load_anchor_file_dates(self, name: str) -> Any: ...
+    def _load_omit_file_dates(self, name: str) -> Any: ...
+    def _validate_until_not_past(
+        self, until_dt: datetime, now_utc: datetime
+    ) -> tuple[bool, str | None]: ...
+    def _validate_datetime_field(
+        self, value: object, field_name: str
+    ) -> tuple[datetime | None, str | None]: ...
+    def _check_due_in_past(
+        self, due_dt: datetime, now_utc: datetime
+    ) -> tuple[bool, str | None]: ...
+    def _stamp_chain_id_on_add(self, task: TaskPayload) -> None: ...
 
 
 class AddHookResultFactory(Protocol):
@@ -175,7 +215,7 @@ class AddCompositionServices:
     """Bind add workflow infrastructure without owning recurrence decisions."""
 
     def __init__(
-        self, host: Any, result_cls: AddHookResultFactory | None = None
+        self, host: AddCompositionHost, result_cls: AddHookResultFactory | None = None
     ) -> None:
         self._host = host
         self._result_cls = result_cls

@@ -339,6 +339,56 @@ class AddWorkflowTests(unittest.TestCase):
                 self.assertTrue(host._CORE_READY)
                 self.assertEqual(stderr.getvalue(), expected_stderr)
 
+    def test_invalid_core_json_limit_fallback_is_diagnosed_only_when_enabled(self) -> None:
+        import io
+        import os
+        from contextlib import redirect_stderr
+        from datetime import timezone
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from nautical_core.add_composition import load_core
+        from nautical_core.task_datetime import ConfiguredTaskDatetimeParser
+
+        class Core:
+            MAX_JSON_BYTES = "sensitive-invalid-limit"
+
+            @staticmethod
+            def parse_dt_any(_value):
+                return datetime(2026, 10, 5, tzinfo=timezone.utc)
+
+            @staticmethod
+            def _import_sibling(name):
+                if name != "core_config":
+                    raise AssertionError(f"unexpected sibling: {name}")
+                return SimpleNamespace(warn_once_per_day_any=lambda *_args: None)
+
+        def host_with_invalid_limit():
+            return SimpleNamespace(
+                _INTEGRATION_CONTEXT=object(),
+                _TASK_DATETIME_PARSER=ConfiguredTaskDatetimeParser(Core.parse_dt_any),
+                core=Core(),
+                _CORE_READY=False,
+                _MAX_JSON_BYTES=1024,
+                _IMPORT_T0=0.0,
+                time=SimpleNamespace(perf_counter=lambda: 1.0),
+            )
+
+        expected_diagnostic = "[nautical] on-add MAX_JSON_BYTES fallback (ValueError)\n"
+        for diagnostic_env, expected_stderr in (
+            ({"NAUTICAL_DIAG": "1"}, expected_diagnostic),
+            ({}, ""),
+        ):
+            with self.subTest(diagnostics=bool(diagnostic_env)):
+                host = host_with_invalid_limit()
+                stderr = io.StringIO()
+                with patch.dict(os.environ, diagnostic_env, clear=True), redirect_stderr(stderr):
+                    load_core(host)
+
+                self.assertEqual(host._MAX_JSON_BYTES, 1024)
+                self.assertTrue(host._CORE_READY)
+                self.assertEqual(stderr.getvalue(), expected_stderr)
+                self.assertNotIn("sensitive-invalid-limit", stderr.getvalue())
+
     def test_application_prepares_and_attaches_typed_plan(self) -> None:
         application = AddWorkflowApplication(
             record_schedule_fn=lambda plan, _task, _field: plan,

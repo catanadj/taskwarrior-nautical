@@ -163,8 +163,14 @@ def load_core(host: AddCoreBootstrapHost) -> None:
                 pass
     try:
         host._MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", host._MAX_JSON_BYTES))
-    except (TypeError, ValueError, OverflowError):
-        pass
+    except (TypeError, ValueError, OverflowError) as exc:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                sys.stderr.write(
+                    f"[nautical] on-add MAX_JSON_BYTES fallback ({type(exc).__name__})\n"
+                )
+            except (OSError, ValueError):
+                pass
     host._IMPORT_MS = (host.time.perf_counter() - host._IMPORT_T0) * 1000.0
     host._CORE_READY = True
 

@@ -39,6 +39,29 @@ class ModifyTimelineContractTests(unittest.TestCase):
             datetime(2026, 10, 5, 7, 30),
         )
 
+    def test_timeline_rows_with_missing_dates_render_a_safe_placeholder(self) -> None:
+        due_formatter = lambda value: value.strftime("%Y-%m-%d %H:%M")
+        line = _timeline_base_line(
+            2,
+            None,
+            {"uuid": "child-uuid"},
+            "next",
+            task={},
+            cap_no=None,
+            prev_style="",
+            cur_style="",
+            next_style="yellow",
+            future_style="",
+            fmt_dt_local=due_formatter,
+            dtparse=lambda _value: None,
+            fmt_on_time_delta=lambda _due, _end: "",
+            fmtlocal=lambda value: value.isoformat(),
+            short=lambda value: str(value or "–"),
+        )
+
+        self.assertIn("(date unavailable)", line)
+        self.assertIn("child-uuid", line)
+
     def test_timeline_gap_formatter_uses_datetime_values(self) -> None:
         from nautical_core.modify_timeline import format_gap
 

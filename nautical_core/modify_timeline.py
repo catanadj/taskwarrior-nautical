@@ -387,7 +387,7 @@ def _timeline_no_text(no: object) -> str:
 
 def _timeline_base_line(
     no: object,
-    dt: Any,
+    dt: datetime | None,
     obj: TaskPayload,
     item_type: str,
     *,
@@ -397,11 +397,11 @@ def _timeline_base_line(
     cur_style: str,
     next_style: str,
     future_style: str,
-    fmt_dt_local: Callable[[Any], str],
+    fmt_dt_local: Callable[[datetime], str],
     dtparse: Callable[[object], datetime | None],
-    fmt_on_time_delta: Callable[[Any, Any], str],
-    fmtlocal: Callable[[Any], str],
-    short: Callable[[Any], str],
+    fmt_on_time_delta: Callable[[datetime | None, datetime | None], str],
+    fmtlocal: Callable[[datetime], str],
+    short: ShortUuidCallback,
 ) -> str:
     no_text = _timeline_no_text(no)
     if item_type == "prev":
@@ -421,7 +421,8 @@ def _timeline_base_line(
 
     if item_type == "next":
         is_last = cap_no is not None and no == cap_no
-        next_text = f"{no_text} {'►':<2}{fmt_dt_local(dt)} {short(obj.get('uuid'))}"
+        next_date = fmt_dt_local(dt) if dt is not None else "(date unavailable)"
+        next_text = f"{no_text} {'►':<2}{next_date} {short(obj.get('uuid'))}"
         if is_last:
             return f"[{next_style}]{next_text} [bold red](last link)[/][/]"
         return f"[{next_style}]{next_text}[/]"
@@ -432,7 +433,8 @@ def _timeline_base_line(
             omit_label = omit_label.replace("[", "(").replace("]", ")")
         else:
             omit_label = "omitted"
-        return f"[dim red]{no_text} {'×':<2}{fmt_dt_local(dt)} [italic]({omit_label})[/][/]"
+        omitted_date = fmt_dt_local(dt) if dt is not None else "(date unavailable)"
+        return f"[dim red]{no_text} {'×':<2}{omitted_date} [italic]({omit_label})[/][/]"
 
     if item_type == "warning":
         message = str(obj.get("message") or "Timeline projection unavailable")
@@ -440,7 +442,8 @@ def _timeline_base_line(
         return f"[bright_yellow]{no_text} {'⚠':<2}{message}[/]"
 
     is_last = cap_no is not None and no == cap_no
-    future_text = f"{no_text} {'»':<2}{fmt_dt_local(dt)}"
+    future_date = fmt_dt_local(dt) if dt is not None else "(date unavailable)"
+    future_text = f"{no_text} {'»':<2}{future_date}"
     cp_interval = str(obj.get("cp_interval") or "").strip()
     if cp_interval:
         future_text = f"{future_text} [dim]({cp_interval})[/]"
@@ -484,14 +487,14 @@ def anchor_file_timeline_lines(
     show_gaps: bool,
     round_anchor_gaps: bool,
     coerce_int: CoerceIntCallback,
-    fmt_dt_local: Callable[[Any], str],
+    fmt_dt_local: Callable[[datetime], str],
     max_iterations: int,
     future_style_for_chain: Callable[[TaskPayload, str], str],
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
     dtparse: Callable[[object], datetime | None],
-    fmt_on_time_delta: Callable[[Any, Any], str],
-    fmtlocal: Callable[[Any], str],
-    short: Callable[[Any], str],
+    fmt_on_time_delta: Callable[[datetime | None, datetime | None], str],
+    fmtlocal: Callable[[datetime], str],
+    short: ShortUuidCallback,
     to_local_cached: Callable[[datetime], datetime],
     scheduler_service: SchedulerService,
     evaluator: RecurrenceEvaluator,
@@ -499,7 +502,7 @@ def anchor_file_timeline_lines(
     omit_description_for_date: Callable[
         [OmitState | None, date], str | None
     ] | None,
-    format_gap: Callable[[Any, Any, str, bool], str],
+    format_gap: Callable[[datetime | None, datetime | None, str, bool], str],
 ) -> list[str]:
     """Project anchor-file events and render their timeline rows."""
     child_local = to_local_cached(child_due_utc)

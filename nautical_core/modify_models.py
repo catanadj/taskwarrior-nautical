@@ -358,7 +358,7 @@ class CoerceIntCallback(Protocol):
 
 
 class DatetimeParserCallback(Protocol):
-    def __call__(self, value: Any) -> datetime | None:
+    def __call__(self, value: object) -> datetime | None:
         ...
 
 

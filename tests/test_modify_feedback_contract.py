@@ -370,6 +370,10 @@ class ModifyFeedbackContractTests(unittest.TestCase):
     def test_feedback_recurrence_parser_callbacks_return_optional_datetime(self) -> None:
         from nautical_core.modify_models import DatetimeParserCallback
 
+        self.assertEqual(
+            get_type_hints(DatetimeParserCallback.__call__),
+            {"value": object, "return": datetime | None},
+        )
         helpers = (
             modify_feedback._recurrence_display_value,
             modify_feedback._recurrence_change_row,

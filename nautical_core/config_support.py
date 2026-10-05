@@ -151,7 +151,7 @@ def validated_user_dir(
         if warn_on_error and env_flag_true("NAUTICAL_DIAG", env_map):
             try:
                 sys.stderr.write(f"[nautical] Ignoring unsafe {label} '{raw}': {in_err}\n")
-            except Exception:
+            except (OSError, ValueError):
                 pass
         return ""
     ap = normalized_abspath(raw)
@@ -162,7 +162,7 @@ def validated_user_dir(
         if warn_on_error and env_flag_true("NAUTICAL_DIAG", env_map):
             try:
                 sys.stderr.write(f"[nautical] Ignoring unsafe {label} '{path_value}': {err}\n")
-            except Exception:
+            except (OSError, ValueError):
                 pass
         return ""
     return ap
@@ -247,7 +247,7 @@ def read_toml_result(
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 try:
                     sys.stderr.write(f"[nautical] Rejected unsafe config path '{path}': {in_err}\n")
-                except Exception:
+                except (OSError, ValueError):
                     pass
             return ConfigReadResult("invalid", {}, message)
         safety_err = path_safety_error(path, expect_dir=False)
@@ -258,7 +258,7 @@ def read_toml_result(
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 try:
                     sys.stderr.write(f"[nautical] Rejected unsafe config path '{path}': {safety_err}\n")
-                except Exception:
+                except (OSError, ValueError):
                     pass
             return ConfigReadResult("invalid", {}, message)
 
@@ -375,7 +375,7 @@ def config_paths(
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 try:
                     sys.stderr.write(f"[nautical] Rejected unsafe NAUTICAL_CONFIG '{raw_env}': {in_err}\n")
-                except Exception:
+                except (OSError, ValueError):
                     pass
             return []
         ap = os.path.abspath(os.path.expanduser(raw_env))
@@ -438,7 +438,7 @@ def config_paths(
             for path in out:
                 print(f"  - {path}", file=sys.stderr)
             _LAST_DIAG_SEARCH_ORDER = tuple(out)
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     return out
@@ -475,7 +475,7 @@ def load_config(
                 print("[nautical] Search order:", file=sys.stderr)
                 for path in paths:
                     print(f"  - {path}", file=sys.stderr)
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     cfg["wrand_salt"] = str(cfg.get("wrand_salt") or defaults["wrand_salt"])
@@ -598,7 +598,7 @@ def conf_uda_field_list(conf: Mapping[str, object], key: str) -> list[str]:
         if os.environ.get("NAUTICAL_DIAG") == "1":
             try:
                 print(f"[nautical] Ignoring invalid UDA field in {key}: {field!r}", file=sys.stderr)
-            except Exception:
+            except (OSError, ValueError):
                 pass
     return out
 

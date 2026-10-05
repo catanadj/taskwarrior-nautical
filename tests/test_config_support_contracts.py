@@ -127,6 +127,23 @@ class ConfigSupportContractTests(unittest.TestCase):
             with self.subTest(owner=owner.__name__):
                 self.assertEqual(get_type_hints(owner)["conf"], Mapping[str, object])
 
+    def test_unexpected_stderr_failure_is_not_misclassified_as_best_effort_io(self) -> None:
+        class BrokenStderr:
+            def write(self, _value: str) -> int:
+                raise RuntimeError("diagnostic writer invariant failed")
+
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), patch.object(
+            config_support.sys,
+            "stderr",
+            BrokenStderr(),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "writer invariant"):
+                config_support.validated_user_dir(
+                    "unsafe\0path",
+                    label="cache directory",
+                    env_map={"NAUTICAL_DIAG": "1"},
+                )
+
     def test_integer_configuration_does_not_hide_conversion_defects(self) -> None:
         class BrokenString:
             def __str__(self) -> str:

@@ -101,8 +101,8 @@ def print_task(ports: UIEffectsPorts, task: Any) -> None:
 
 def panel(
     ports: UIEffectsPorts,
-    title: Any,
-    rows: Any,
+    title: str,
+    rows: list[tuple[str | None, Any]],
     kind: str = "info",
     border_style: str | None = None,
     title_style: str | None = None,

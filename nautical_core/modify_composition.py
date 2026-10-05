@@ -331,7 +331,16 @@ class _ModifyUIEffects(Protocol):
 
     def print_task(self, ports: object, task: TaskPayload) -> None: ...
 
-    def panel(self, ports: object, title: Any, rows: Any, **kwargs: Any) -> Any: ...
+    def panel(
+        self,
+        ports: object,
+        title: str,
+        rows: list[tuple[str | None, Any]],
+        kind: str = "info",
+        border_style: str | None = None,
+        title_style: str | None = None,
+        label_style: str | None = None,
+    ) -> Any: ...
 
 
 class _ModifyQueries(Protocol):

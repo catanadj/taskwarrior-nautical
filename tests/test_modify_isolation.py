@@ -979,6 +979,19 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIs(annotations["task"], TaskPayload)
         self.assertIs(annotations["now_utc"], datetime)
 
+    def test_modify_ui_panel_composition_types_presentation_inputs(self) -> None:
+        from typing import Any, get_type_hints
+
+        from nautical_core.modify_composition import _ModifyUIEffects
+        from nautical_core.modify_ui_effects import panel as render_panel
+
+        expected_rows = list[tuple[str | None, Any]]
+        for owner in (_ModifyUIEffects.panel, render_panel):
+            annotations = get_type_hints(owner)
+
+            self.assertIs(annotations["title"], str)
+            self.assertEqual(annotations["rows"], expected_rows)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

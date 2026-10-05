@@ -359,6 +359,23 @@ class ModifyFeedbackContractTests(unittest.TestCase):
                     get_type_hints(renderer)["format_local"], expected
                 )
 
+    def test_completion_preview_without_child_due_skips_human_delta(self) -> None:
+        now = datetime(2026, 10, 5, 9, tzinfo=timezone.utc)
+        line = modify_feedback.format_line_preview(
+            2,
+            {"uuid": "00000000-0000-4000-8000-000000000111"},
+            None,
+            "–",
+            now,
+            core=SimpleNamespace(strip_rich_markup=lambda text: text),
+            format_local=lambda value: value.isoformat(),
+            on_time_delta=lambda _due, _end: "",
+            human_delta=lambda *_args: self.fail("missing child due has no delta"),
+        )
+
+        self.assertIn("next ⛓", line)
+        self.assertIn("—", line)
+
     def test_wait_schedule_row_callback_accepts_optional_datetime_anchor(self) -> None:
         from nautical_core.modify_models import WaitScheduleRowsCallback
 
@@ -417,7 +434,7 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         expected_callbacks = {
             "format_local": Callable[[datetime], str],
             "on_time_delta": Callable[[datetime_or_none, datetime_or_none], str],
-            "human_delta": Callable[[datetime, datetime_or_none, bool], str],
+            "human_delta": Callable[[datetime, datetime, bool], str],
         }
         preview_hints = get_type_hints(PreviewLineFormatter.__call__)
         for field, annotation in expected_callbacks.items():

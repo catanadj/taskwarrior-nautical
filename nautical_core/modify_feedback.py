@@ -566,7 +566,7 @@ def format_line_preview(
     core: MarkupStripper,
     format_local: Callable[[datetime], str],
     on_time_delta: Callable[[datetime | None, datetime | None], str],
-    human_delta: Callable[[datetime, datetime | None, bool], str],
+    human_delta: Callable[[datetime, datetime, bool], str],
 ) -> str:
     """Render one compact completion preview line."""
     due_local = format_local(child_due_utc) if child_due_utc else "—"
@@ -581,7 +581,7 @@ def format_line_preview(
     delta_text = core.strip_rich_markup(on_time_delta(cur_due, cur_end) or "").strip()
     if delta_text.startswith("(") and delta_text.endswith(")"):
         delta_text = delta_text[1:-1].strip()
-    due_delta = human_delta(now_utc, child_due_utc, False)
+    due_delta = human_delta(now_utc, child_due_utc, False) if child_due_utc is not None else ""
     due_label = "scheduled" if child_field == "scheduled" else "due"
     if due_delta.startswith("in "):
         due_delta = due_label + " " + due_delta

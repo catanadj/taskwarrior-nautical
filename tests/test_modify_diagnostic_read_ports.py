@@ -298,7 +298,7 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
         )
         self.assertEqual(
             preview_annotations["human_delta"],
-            abc.Callable[[datetime, datetime | None, bool], str],
+            abc.Callable[[datetime, datetime, bool], str],
         )
 
     def test_line_preview_adapters_expose_explicit_temporal_options(self) -> None:

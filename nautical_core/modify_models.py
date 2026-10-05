@@ -242,7 +242,7 @@ class PreviewLineFormatter(Protocol):
         core: MarkupStripper,
         format_local: Callable[[datetime], str],
         on_time_delta: Callable[[datetime | None, datetime | None], str],
-        human_delta: Callable[[datetime, datetime | None, bool], str],
+        human_delta: Callable[[datetime, datetime, bool], str],
     ) -> str:
         ...
 

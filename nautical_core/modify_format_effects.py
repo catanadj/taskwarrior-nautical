@@ -93,7 +93,7 @@ def line_preview(
     def format_on_time_delta(due: Any, end: Any) -> str:
         return on_time_delta(ports.delta, due, end)
 
-    def format_human_delta(start: Any, end: Any, prefer: bool = True) -> str:
+    def format_human_delta(start: datetime, end: datetime, prefer: bool = True) -> str:
         return human_delta(ports.delta, start, end, prefer)
 
     return ports.format_line_preview(

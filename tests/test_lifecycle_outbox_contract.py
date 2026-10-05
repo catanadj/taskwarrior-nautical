@@ -570,6 +570,29 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         )
         self.assertNotIn("private cleanup detail", diagnostic)
 
+    def test_bulk_cleanup_diagnostic_sink_failure_does_not_replace_result(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 100.0)
+            stderr = io.StringIO()
+            with (
+                patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}),
+                patch.object(
+                    repository,
+                    "_secure_state_files",
+                    side_effect=RuntimeError("private cleanup detail"),
+                ),
+                redirect_stderr(stderr),
+                patch.object(stderr, "write", side_effect=RuntimeError("stderr failed")),
+            ):
+                status, rows = repository._with_bulk_connection(
+                    lambda _connection: {
+                        "intent": OutboxResult(OutboxResultKind.APPLIED)
+                    }
+                )
+
+        self.assertTrue(status.ok)
+        self.assertEqual(rows["intent"].kind, OutboxResultKind.APPLIED)
+
     def test_repository_healthy_state_transition_contract(self) -> None:
         with TemporaryDirectory() as directory:
             repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 100.0)

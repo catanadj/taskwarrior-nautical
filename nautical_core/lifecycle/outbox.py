@@ -735,7 +735,8 @@ class _LifecycleOutboxRepository:
                                 "[nautical] lifecycle outbox state-file cleanup failed "
                                 f"({type(exc).__name__})\n"
                             )
-                        except (OSError, UnicodeError, ValueError):
+                        except Exception:
+                            # A broken diagnostic sink cannot replace the result.
                             pass
                 conn.close()
 

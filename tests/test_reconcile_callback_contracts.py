@@ -32,6 +32,21 @@ class ReconcileCallbackContractTests(unittest.TestCase):
             with self.subTest(method=method.__name__):
                 self.assertEqual(get_type_hints(method)["safe_parse_datetime"], expected)
 
+    def test_hook_carriers_are_opaque_objects_at_reconciliation_boundary(self) -> None:
+        for method in (
+            reconciliation.LifecycleApplyOperations.configuration_state,
+            reconciliation.CallbackLifecycleApplyOperations.configuration_state,
+            reconciliation.LifecycleReconciliationService.plan,
+            reconciliation.LifecycleReconciliationService.plan_typed,
+        ):
+            with self.subTest(method=method.__qualname__):
+                self.assertIs(get_type_hints(method)["hook"], object)
+
+        configuration_callback = get_type_hints(
+            reconciliation.CallbackLifecycleApplyOperations
+        )["configuration_callback"]
+        self.assertEqual(get_args(configuration_callback)[0], [object])
+
     def test_reconciliation_service_does_not_retain_unused_unit_of_work(self) -> None:
         self.assertNotIn(
             "unit_of_work",

@@ -99,7 +99,7 @@ class VirtualChildCallback(Protocol):
 
 
 class LifecycleApplyOperations(Protocol):
-    def configuration_state(self, hook: Any) -> tuple[str, str]: ...
+    def configuration_state(self, hook: object) -> tuple[str, str]: ...
     def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> RecoveryResult: ...
     def execute_plan(self, plan: LifecyclePlan, *, parent: TaskObservation,
                      child_observation: TaskObservation | None,
@@ -135,13 +135,13 @@ class ExecuteLifecyclePlanCallback(Protocol):
 class CallbackLifecycleApplyOperations:
     """Taskwarrior-specific callbacks used by the service-owned dispatcher."""
 
-    configuration_callback: Callable[[Any], tuple[str, str]]
+    configuration_callback: Callable[[object], tuple[str, str]]
     refresh_callback: RefreshPlanCallback
     execute_callback: ExecuteLifecyclePlanCallback
     terminal_callback: Callable[[LifecyclePlan], str]
     lock_callback: Callable[[str], None]
 
-    def configuration_state(self, hook: Any) -> tuple[str, str]:
+    def configuration_state(self, hook: object) -> tuple[str, str]:
         return self.configuration_callback(hook)
 
     def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> RecoveryResult:
@@ -481,7 +481,7 @@ class LifecycleReconciliationService:
         lease_held: bool = False,
         verified_children: dict[str, dict[str, Any]] | None = None,
         generation: ChainGenerationService | None = None,
-        hook: Any = None,
+        hook: object = None,
     ) -> tuple[Any, str]:
         """Own locks and action dispatch for one candidate mutation."""
         parent_uuid = str(parent.get("uuid") or "").strip()
@@ -550,7 +550,7 @@ class LifecycleReconciliationService:
         self,
         parent: TaskObservation,
         *,
-        hook: Any,
+        hook: object,
         generation: ChainGenerationService,
         safe_parse_datetime: _SafeParseDatetime,
     ) -> RecoveryResult:
@@ -573,7 +573,7 @@ class LifecycleReconciliationService:
         self,
         parent: TaskObservation,
         *,
-        hook: Any,
+        hook: object,
         generation: ChainGenerationService,
         safe_parse_datetime: _SafeParseDatetime,
     ) -> LifecyclePlan:

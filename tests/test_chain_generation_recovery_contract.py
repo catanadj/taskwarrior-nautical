@@ -715,6 +715,20 @@ class ChainGenerationContractTests(unittest.TestCase):
 
 
 class IntegrityRecoveryContractTests(unittest.TestCase):
+    def test_recovery_calendar_provider_defects_are_not_mislabeled_as_invalid_config(self):
+        from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
+
+        def broken_calendar(_task):
+            raise RuntimeError("calendar provider implementation defect")
+
+        generation = SimpleNamespace(
+            core=SimpleNamespace(use_task_business_calendar=broken_calendar)
+        )
+        with self.assertRaisesRegex(RuntimeError, "calendar provider implementation defect"):
+            plan_recovery_decision(
+                _observation(), existing_children=(), hook=None, generation=generation
+            )
+
     def test_hookless_recovery_preserves_scheduled_and_wait_offsets(self):
         import nautical_core as core
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision

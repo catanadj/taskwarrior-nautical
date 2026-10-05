@@ -5,6 +5,7 @@ import importlib
 from typing import Any, Callable
 
 from . import astronomy, native_until
+from .business_calendar_config import BusinessCalendarConfigError
 from .common import short_uuid
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
@@ -839,7 +840,7 @@ def plan_recovery_decision(
 
     try:
         calendar_context = use_task_calendar(parent_values)
-    except Exception as exc:
+    except BusinessCalendarConfigError as exc:
         return _recovery_refusal(parent, RecoveryStatus.ERROR, f"invalid business calendar: {exc}")
     with calendar_context:
         return _plan_recovery_decision_unscoped(

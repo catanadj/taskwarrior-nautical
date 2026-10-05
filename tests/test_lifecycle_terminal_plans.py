@@ -779,6 +779,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
     def test_reconcile_planning_uses_and_releases_task_business_calendar(self) -> None:
         from contextlib import contextmanager
         from datetime import datetime, timezone
+        from nautical_core.business_calendar_config import BusinessCalendarConfigError
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
         from nautical_core.chain_generation import ChainGenerationService
 
@@ -789,7 +790,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             @classmethod
             def use_task_business_calendar(cls, task):
                 if task.get("bc") == "missing":
-                    raise ValueError("Unknown business calendar 'missing'")
+                    raise BusinessCalendarConfigError("Unknown business calendar 'missing'")
 
                 @contextmanager
                 def context():

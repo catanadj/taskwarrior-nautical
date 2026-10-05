@@ -4,7 +4,7 @@ import os
 import importlib
 from typing import BinaryIO, Protocol
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, TypedDict, overload
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, TypedDict, cast, overload
 
 from . import config_schema
 
@@ -184,6 +184,10 @@ class ConfigSupportPort(Protocol):
     def trueish(self, value: object, default: bool = False) -> bool: ...
 
 
+SupportModuleName = Literal["config_support", "cache_support", "diagnostic_warnings"]
+SupportModule = ConfigSupportPort | CacheDirectorySupportPort | DiagnosticWarningsPort
+
+
 if TYPE_CHECKING:
     from . import cache_support as _cache_support_module
     from . import config_support as _config_support_module
@@ -211,13 +215,28 @@ def _load_support_module(name: Literal["cache_support"]) -> CacheDirectorySuppor
 def _load_support_module(name: Literal["diagnostic_warnings"]) -> DiagnosticWarningsPort: ...
 
 
-def _load_support_module(name: str) -> Any:
+def _load_support_module(name: SupportModuleName) -> SupportModule:
     global cache_support, config_support, diagnostic_warnings
-    module = globals().get(name)
-    if module is None:
-        module = importlib.import_module(f"nautical_core.{name}")
-        globals()[name] = module
-    return module
+    if name == "config_support":
+        if config_support is None:
+            config_support = cast(
+                ConfigSupportPort,
+                importlib.import_module("nautical_core.config_support"),
+            )
+        return config_support
+    if name == "cache_support":
+        if cache_support is None:
+            cache_support = cast(
+                CacheDirectorySupportPort,
+                importlib.import_module("nautical_core.cache_support"),
+            )
+        return cache_support
+    if diagnostic_warnings is None:
+        diagnostic_warnings = cast(
+            DiagnosticWarningsPort,
+            importlib.import_module("nautical_core.diagnostic_warnings"),
+        )
+    return diagnostic_warnings
 
 tomllib: TomlParserPort | None = None
 

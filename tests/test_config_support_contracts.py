@@ -8,7 +8,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from typing import Callable, Mapping, get_type_hints
+from typing import Callable, Literal, Mapping, get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -45,6 +45,19 @@ class ConfigSupportContractTests(unittest.TestCase):
         self.assertEqual(
             hints["diagnostic_warnings"],
             core_config.DiagnosticWarningsPort | None,
+        )
+
+    def test_core_configuration_loader_restricts_module_names_and_results(self) -> None:
+        hints = get_type_hints(core_config._load_support_module)
+        self.assertEqual(
+            hints["name"],
+            Literal["config_support", "cache_support", "diagnostic_warnings"],
+        )
+        self.assertEqual(
+            hints["return"],
+            core_config.ConfigSupportPort
+            | core_config.CacheDirectorySupportPort
+            | core_config.DiagnosticWarningsPort,
         )
 
     def test_toml_reader_declares_parser_and_diagnostic_callback_contracts(self) -> None:

@@ -296,7 +296,13 @@ def render_chain_summary(
         # while showing that this optional read was unavailable.
         chain = []
         chain_read_error = str(exc) or "chain export unavailable"
-        services.diagnostic(f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}")
+        try:
+            services.diagnostic(
+                f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}"
+            )
+        except Exception:
+            # The diagnostic is secondary; it must not suppress the summary.
+            pass
 
     link_no = services.coerce_int(current.get("link"), len(chain))
     root = services.short_uuid(services.root_uuid_from(current))

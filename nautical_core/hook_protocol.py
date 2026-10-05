@@ -167,16 +167,10 @@ class HookProtocolResult:
 
 
 def _field_has_value(task: TaskPayload, field: str) -> bool:
-    try:
-        value = task.get(field)
-    except Exception:
-        return False
+    value = task.get(field)
     if value is None:
         return False
-    try:
-        return bool(str(value).strip())
-    except Exception:
-        return False
+    return bool(str(value).strip())
 
 
 def task_has_add_nautical_fields(task: dict | None) -> bool:

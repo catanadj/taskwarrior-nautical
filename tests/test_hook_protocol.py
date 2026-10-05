@@ -13,6 +13,14 @@ from tests.support.hook_process import HookSubprocessFixture
 
 
 class HookProtocolTests(HookSubprocessFixture):
+    def test_field_detection_does_not_hide_mapping_implementation_failures(self) -> None:
+        class BrokenTask(dict):
+            def get(self, _field, _default=None):
+                raise RuntimeError("task mapping implementation defect")
+
+        with self.assertRaisesRegex(RuntimeError, "task mapping implementation defect"):
+            hook_protocol.task_has_add_nautical_fields(BrokenTask({"anchor": "daily"}))
+
     def test_panic_passthrough_uses_raw_task_after_decoder_adapter_failure(self) -> None:
         first = {"uuid": "first", "description": "first task"}
         latest = {"uuid": "latest", "description": "Cafe ăîșț ✅"}

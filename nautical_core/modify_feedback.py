@@ -90,7 +90,7 @@ def _timestamp(task: TaskPayload, field: str) -> TaskTimestamp | None:
 def append_next_wait_sched_rows(
     rows: list[tuple[str, str]],
     next_task: TaskView,
-    next_due_utc: datetime,
+    next_due_utc: datetime | None,
     *,
     anchor_field: str = "due",
     format_local: Callable[[datetime], str],

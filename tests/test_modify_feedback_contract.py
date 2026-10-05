@@ -359,6 +359,14 @@ class ModifyFeedbackContractTests(unittest.TestCase):
                     get_type_hints(renderer)["format_local"], expected
                 )
 
+    def test_wait_schedule_row_callback_accepts_optional_datetime_anchor(self) -> None:
+        from nautical_core.modify_models import WaitScheduleRowsCallback
+
+        self.assertEqual(
+            get_type_hints(WaitScheduleRowsCallback.__call__)["anchor_due"],
+            datetime | None,
+        )
+
     def test_feedback_recurrence_parser_callbacks_return_optional_datetime(self) -> None:
         from nautical_core.modify_models import DatetimeParserCallback
 

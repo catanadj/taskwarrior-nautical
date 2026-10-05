@@ -407,7 +407,7 @@ atexit.register(_dump_diag_stats)
 def _append_next_wait_sched_rows(
     fb: list[tuple[str, str]],
     nxt: dict,
-    nxt_due_utc: datetime,
+    nxt_due_utc: datetime | None,
     *,
     anchor_field: str = "due",
 ) -> None:

@@ -185,7 +185,7 @@ class WaitScheduleRowsCallback(Protocol):
         self,
         rows: list[tuple[str, Any]],
         task: TaskRow,
-        anchor_due: Any,
+        anchor_due: datetime | None,
         *,
         anchor_field: str = "due",
     ) -> None:

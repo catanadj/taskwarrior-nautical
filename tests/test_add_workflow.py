@@ -41,10 +41,17 @@ class AddWorkflowTests(unittest.TestCase):
         from nautical_core.add_composition import (
             AddHookResultFactory,
             AddDatetimeParserHost,
+            AddCompositionHost,
             AddCompositionServices,
+            _due_matches_entry,
             _datetime_parser,
+            apply_description_uda_aliases,
             build_on_add_context as build_add_composition_context,
             due_context,
+            kind_and_defaults,
+            render_anchor_preview,
+            render_cp_preview,
+            validate_chain_limits,
             validate_task,
         )
         from nautical_core.add_workflow import (
@@ -72,6 +79,31 @@ class AddWorkflowTests(unittest.TestCase):
             get_type_hints(_datetime_parser)["host"],
             AddDatetimeParserHost,
         )
+        for owner in (
+            apply_description_uda_aliases,
+            kind_and_defaults,
+            validate_chain_limits,
+            due_context,
+            _due_matches_entry,
+            validate_task,
+            build_add_composition_context,
+            render_anchor_preview,
+            render_cp_preview,
+        ):
+            with self.subTest(owner=owner.__name__):
+                self.assertIs(
+                    get_type_hints(
+                        owner,
+                        localns={
+                            **localns,
+                            "AddCompositionHost": AddCompositionHost,
+                            "TaskObservation": TaskObservation,
+                            "TaskPayload": TaskPayload,
+                            "DueContext": DueContext,
+                        },
+                    )["host"],
+                    AddCompositionHost,
+                )
         self.assertEqual(
             get_type_hints(
                 AddCompositionServices.__init__,

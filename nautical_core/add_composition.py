@@ -59,7 +59,7 @@ class AddCompositionHost(AddDatetimeParserHost, Protocol):
         self, value: object, field_name: str
     ) -> tuple[datetime | None, str | None]: ...
     def _check_due_in_past(
-        self, due_dt: datetime, now_utc: datetime
+        self, due_dt: datetime | None, now_utc: datetime
     ) -> tuple[bool, str | None]: ...
     def _stamp_chain_id_on_add(self, task: TaskPayload) -> None: ...
 
@@ -127,7 +127,7 @@ def load_core(host: Any) -> None:
     host._CORE_READY = True
 
 
-def apply_description_uda_aliases(host: Any, task: TaskPayload) -> None:
+def apply_description_uda_aliases(host: AddCompositionHost, task: TaskPayload) -> None:
     if not bool(getattr(host.core, "ENABLE_UDA_ALIASES", False)):
         return
     description = task.get("description")
@@ -140,7 +140,7 @@ def apply_description_uda_aliases(host: Any, task: TaskPayload) -> None:
         host._error_and_exit([("Invalid UDA alias", str(exc))])
 
 
-def kind_and_defaults(host: Any, task: TaskPayload, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
+def kind_and_defaults(host: AddCompositionHost, task: TaskPayload, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
     has_cp, has_anchor, has_anchor_file = bool(cp_str), bool(anchor_str), bool(anchor_file_str)
     kind = "anchor" if has_anchor else ("anchor_file" if has_anchor_file else ("cp" if has_cp else None))
     ch = (task.get("chain") or "").strip().lower()
@@ -153,7 +153,7 @@ def kind_and_defaults(host: Any, task: TaskPayload, cp_str: str, anchor_str: str
     return kind, ch
 
 
-def validate_chain_limits(host: Any, task: TaskPayload, now_utc: datetime) -> datetime | None:
+def validate_chain_limits(host: AddCompositionHost, task: TaskPayload, now_utc: datetime) -> datetime | None:
     add_validation = host._module("add_validation")
     pipeline = host.core._import_sibling("hook_validation_pipeline")
     cpmax, until_dt, findings = pipeline.validate_recurrence_limits(
@@ -175,7 +175,7 @@ def validate_chain_limits(host: Any, task: TaskPayload, now_utc: datetime) -> da
     return until_dt
 
 
-def due_context(host: Any, task: TaskPayload, now_utc: datetime) -> DueContext:
+def due_context(host: AddCompositionHost, task: TaskPayload, now_utc: datetime) -> DueContext:
     has_due, has_scheduled = bool(task.get("due")), bool(task.get("scheduled"))
     implicit_due = has_due and _due_matches_entry(host, task)
     if has_scheduled and (not has_due or implicit_due):
@@ -203,7 +203,7 @@ def due_context(host: Any, task: TaskPayload, now_utc: datetime) -> DueContext:
     return user_provided_due, recurrence_field, due_dt, past_due_warning, due_local.date(), (due_local.hour, due_local.minute)
 
 
-def _due_matches_entry(host: Any, task: TaskPayload) -> bool:
+def _due_matches_entry(host: AddCompositionHost, task: TaskPayload) -> bool:
     if not task.get("due") or not task.get("entry"):
         return False
     due_dt, due_err = host._validate_datetime_field(task.get("due"), "due")
@@ -400,7 +400,7 @@ class AddCompositionServices:
         )
 
 
-def validate_task(host: Any, task: TaskPayload) -> TaskObservation:
+def validate_task(host: AddCompositionHost, task: TaskPayload) -> TaskObservation:
     """Validate and classify an add request without constructing services."""
     core = host.core
     validation = core._import_sibling("hook_validation_pipeline")
@@ -436,7 +436,7 @@ __all__ = (
 
 
 def build_on_add_context(
-    host: Any,
+    host: AddCompositionHost,
     task: TaskPayload,
     now_utc: datetime,
     now_local: datetime,
@@ -450,9 +450,9 @@ def build_on_add_context(
     )
 
 
-def render_anchor_preview(host: Any, context: OnAddContext, *, prof: ProfilerPort) -> None:
+def render_anchor_preview(host: AddCompositionHost, context: OnAddContext, *, prof: ProfilerPort) -> None:
     AddCompositionServices(host).render_anchor_preview(context, prof=prof)
 
 
-def render_cp_preview(host: Any, context: OnAddContext, *, prof: ProfilerPort) -> None:
+def render_cp_preview(host: AddCompositionHost, context: OnAddContext, *, prof: ProfilerPort) -> None:
     AddCompositionServices(host).render_cp_preview(context, prof=prof)

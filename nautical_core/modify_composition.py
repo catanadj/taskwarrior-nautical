@@ -730,7 +730,6 @@ def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities
         ),
         apply_transition=apply_transition,
         fail=host._fail_and_exit,
-        diagnostic=host._diag,
     )
 
 

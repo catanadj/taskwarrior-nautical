@@ -18,6 +18,50 @@ from nautical_core.modify_datetime_effects import (
 
 
 class ModifyValidationEffectsTests(unittest.TestCase):
+    def _completion_validation_services(self, parse_cp_sequence, fail):
+        from nautical_core.modify_validation import CompletionValidationServices
+
+        return CompletionValidationServices(
+            strip_quotes=lambda value: value,
+            reject_conflicting_types=lambda *_args: None,
+            validate_omit=lambda *_args: None,
+            validate_chain_limits=lambda _task: None,
+            parse_cp_sequence=parse_cp_sequence,
+            cp_sequence_parse_error=lambda _value: None,
+            field_changed=lambda *_args: False,
+            validate_anchor=lambda _value: None,
+            validate_cp=lambda *_args: None,
+            apply_transition=lambda *_args: None,
+            fail=fail,
+        )
+
+    def test_completion_cp_parser_defect_propagates(self) -> None:
+        from nautical_core.modify_validation import validate_completion_cp_and_anchor
+
+        failures = []
+        services = self._completion_validation_services(
+            lambda _value: (_ for _ in ()).throw(RuntimeError("parser defect")),
+            lambda title, message: failures.append((title, message)),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "parser defect"):
+            validate_completion_cp_and_anchor({}, {"cp": "P1D"}, services=services)
+
+        self.assertEqual(failures, [])
+
+    def test_completion_invalid_cp_remains_a_user_validation_failure(self) -> None:
+        from nautical_core.modify_validation import validate_completion_cp_and_anchor
+
+        failures = []
+        services = self._completion_validation_services(
+            lambda _value: None,
+            lambda title, message: failures.append((title, message)),
+        )
+
+        validate_completion_cp_and_anchor({}, {"cp": "invalid"}, services=services)
+
+        self.assertEqual(failures, [("Invalid CP", "invalid duration format 'invalid'")])
+
     def test_omit_validation_maps_user_value_errors_but_surfaces_internal_defects(self) -> None:
         failures = []
 

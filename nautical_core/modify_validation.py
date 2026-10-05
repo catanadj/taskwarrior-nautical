@@ -91,7 +91,6 @@ class CompletionValidationServices:
     validate_cp: Callable[[str, object, object], None]
     apply_transition: Callable[[TaskPayload, TaskPayload], None]
     fail: Callable[[str, str], NoReturn]
-    diagnostic: Callable[[str], None]
 
 
 def validate_completion_cp_and_anchor(
@@ -119,16 +118,10 @@ def validate_completion_cp_and_anchor(
         services.validate_chain_limits(new)
 
     if new_cp:
-        try:
-            sequence = services.parse_cp_sequence(new_cp)
-            if not sequence:
-                reason = services.cp_sequence_parse_error(new_cp) or f"invalid duration format '{new_cp}'"
-                raise ValueError(reason)
-        except ValueError as exc:
-            services.fail("Invalid CP", str(exc))
-        except Exception as exc:
-            services.diagnostic(f"cp parse unexpected error: {exc}")
-            services.fail("CP parsing error", "Unexpected error while parsing cp")
+        sequence = services.parse_cp_sequence(new_cp)
+        if not sequence:
+            reason = services.cp_sequence_parse_error(new_cp) or f"invalid duration format '{new_cp}'"
+            services.fail("Invalid CP", reason)
 
         if (
             services.field_changed(old, new, "anchor")

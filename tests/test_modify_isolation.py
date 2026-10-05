@@ -1892,7 +1892,6 @@ class ModifyIsolationTests(unittest.TestCase):
             validate_cp=lambda *_args: None,
             apply_transition=lambda _old, _new: "applied",
             fail=lambda *_args: None,
-            diagnostic=lambda *_args: None,
         )
         transition = TaskTransition.from_observations(old, new)
 

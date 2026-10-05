@@ -138,7 +138,6 @@ class CompletionValidationPorts:
     validate_cp: Callable[[str, object, object], None]
     apply_transition: Callable[[TaskPayload, TaskPayload], None]
     fail: Callable[[str, str], NoReturn]
-    diagnostic: Callable[[str], None]
 
 
 class CompletionValidator(Protocol):
@@ -275,7 +274,6 @@ def validate_completion_cp_and_anchor(
             validate_cp=ports.validate_cp,
             apply_transition=ports.apply_transition,
             fail=ports.fail,
-            diagnostic=ports.diagnostic,
         ),
     )
 

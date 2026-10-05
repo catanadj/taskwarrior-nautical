@@ -455,11 +455,12 @@ class ReconcileErrorContracts(unittest.TestCase):
         self.assertIn("rerun reconcile", result.reason)
 
     def test_reconcile_evidence_prefers_due_over_carried_scheduled(self) -> None:
-        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.chain_generation import AnchorChildDueResult, ChainGenerationService
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
         from nautical_core.reconcile_report import describe_recovery_result
         from nautical_core.task_codec import DEFAULT_TASK_CODEC
         from nautical_core.task_models import NauticalTask, TaskDraft
+        from nautical_core.timeutil import fmt_isoz
 
         parent = TaskObservation.from_mapping(
             {
@@ -493,13 +494,15 @@ class ReconcileErrorContracts(unittest.TestCase):
             def safe_parse_datetime(self, _value: object) -> tuple[None, None]:
                 return None, None
 
-            def compute_anchor_child_due(self, _parent: object) -> tuple[str, dict[str, str], list[object]]:
-                return "20260706T140000Z", {"target_field": "due"}, []
+            def compute_anchor_child_due(
+                self, _parent: object
+            ) -> AnchorChildDueResult:
+                return datetime(2026, 7, 6, 14, tzinfo=timezone.utc), {"target_field": "due"}, []
 
             def build_child_draft(
                 self,
                 task: NauticalTask,
-                child_due: str,
+                child_due: datetime,
                 _child_field: str,
                 next_link: int,
                 parent_short: str,
@@ -517,7 +520,7 @@ class ReconcileErrorContracts(unittest.TestCase):
                     "prevLink": parent_short,
                     "anchor": "w:mon@t=09:00,17:00",
                     "anchor_mode": "skip",
-                    "due": child_due,
+                    "due": fmt_isoz(child_due),
                     "scheduled": "20260706T130000Z",
                 }
                 child = NauticalTask.from_observation(

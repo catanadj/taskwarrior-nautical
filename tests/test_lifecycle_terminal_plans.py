@@ -84,6 +84,22 @@ class ExhaustedService:
 
 
 class LifecycleTerminalPlanTests(unittest.TestCase):
+    def test_recovery_plan_result_requires_datetime_for_child_due(self) -> None:
+        from datetime import datetime
+        from typing import get_type_hints
+
+        self.assertEqual(
+            get_type_hints(RecoveryPlanResult)["child_due"],
+            datetime | None,
+        )
+        plan = terminal_plan_for_snapshot(snapshot(), LifecycleEvent.COMPLETE)
+        with self.assertRaisesRegex(TypeError, "child_due must be a datetime"):
+            RecoveryPlanResult(
+                snapshot().observation,
+                plan,
+                child_due="20260825T090000Z",
+            )
+
     def test_link_conversion_does_not_hide_unexpected_integer_adapter_errors(self) -> None:
         class BrokenFloat(float):
             def __int__(self) -> int:
@@ -739,6 +755,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
     def test_reconcile_planning_uses_and_releases_task_business_calendar(self) -> None:
         from contextlib import contextmanager
+        from datetime import datetime, timezone
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
         from nautical_core.chain_generation import ChainGenerationService
 
@@ -779,7 +796,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             def compute_cp_child_due(self, _parent):
                 if not CalendarCore.active:
                     raise AssertionError("reconcile computed outside the task calendar")
-                return "20260102T090000Z", {"target_field": "due"}
+                return datetime(2026, 1, 2, 9, tzinfo=timezone.utc), {"target_field": "due"}
 
             def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, _kind, _cpmax, _until):
                 values = parent.observation.to_mapping()
@@ -787,7 +804,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
                     "uuid": "22222222-0000-4000-8000-000000000002",
                     "description": "calendar child", "status": "pending", "chain": "on",
                     "chainID": values["chainID"], "link": next_link, "prevLink": parent_short,
-                    "cp": "1d", child_field: child_due,
+                    "cp": "1d", child_field: child_due.isoformat().replace("+00:00", "Z"),
                 })
 
         parent = task_snapshot({

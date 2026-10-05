@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -30,7 +31,7 @@ class RecoveryPlanResult:
     plan: LifecyclePlan
     reason: str = ""
     child_short: str = ""
-    child_due: Any = None
+    child_due: datetime | None = None
     child_observation: TaskObservation | None = None
     terminal_kind: str | None = None
     applied: bool = False
@@ -42,6 +43,8 @@ class RecoveryPlanResult:
             raise TypeError("recovery plan result requires a LifecyclePlan")
         if self.child_observation is not None and not isinstance(self.child_observation, TaskObservation):
             raise TypeError("recovery plan child evidence requires a TaskObservation")
+        if self.child_due is not None and not isinstance(self.child_due, datetime):
+            raise TypeError("recovery plan child_due must be a datetime")
         reason = str(self.reason or "").strip()
         child_short = str(self.child_short or "").strip()
         if len(child_short) > 64:

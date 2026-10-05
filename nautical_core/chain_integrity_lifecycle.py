@@ -58,7 +58,7 @@ def _recovery_plan_result(
     *,
     reason: str = "",
     child_short: str = "",
-    child_due: Any = None,
+    child_due: datetime | None = None,
     child_observation: TaskObservation | None = None,
     terminal_kind: str | None = None,
 ) -> RecoveryPlanResult:

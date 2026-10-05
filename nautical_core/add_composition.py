@@ -5,10 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 import os
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .task_models import TaskPayload
 from .task_datetime import TaskDatetimeParser, parser_for_core
+
+if TYPE_CHECKING:
+    from .hook_context import DueContext
 
 
 def _datetime_parser(host: Any) -> TaskDatetimeParser:
@@ -116,7 +119,7 @@ def validate_chain_limits(host: Any, task: TaskPayload, now_utc: datetime) -> da
     return until_dt
 
 
-def due_context(host: Any, task: TaskPayload, now_utc: datetime) -> Any:
+def due_context(host: Any, task: TaskPayload, now_utc: datetime) -> DueContext:
     has_due, has_scheduled = bool(task.get("due")), bool(task.get("scheduled"))
     implicit_due = has_due and _due_matches_entry(host, task)
     if has_scheduled and (not has_due or implicit_due):

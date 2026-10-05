@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Callable, ContextManager, Protocol
+from datetime import date, datetime
+from typing import Any, Callable, ContextManager, Protocol, TypeAlias
 
 from .integration_context import IntegrationContext
 from .hook_workflow_context import BusinessCalendar, SnapshotLease, WorkflowInvocationContext
@@ -10,6 +10,9 @@ from .taskwarrior_uow import TaskwarriorUnitOfWork
 from .task_models import TaskObservation, TaskPayload
 from .task_changes import TaskTransition
 from .modify_models import CompletionLifecycleResult
+
+
+DueContext: TypeAlias = tuple[bool, str, datetime, str | None, date, tuple[int, int]]
 
 
 class ProfilerPort(Protocol):
@@ -77,7 +80,7 @@ class OnAddContext:
     recurrence_field: str
     due_dt: datetime
     past_due_warning: str | None
-    due_day: Any
+    due_day: date
     due_hhmm: tuple[int, int]
 
 
@@ -120,7 +123,7 @@ def build_on_add_context(
     validate_chain_limits_on_add: Callable[[TaskPayload, datetime], datetime | None],
     due_context_on_add: Callable[
         [TaskPayload, datetime],
-        tuple[bool, str, datetime, str | None, Any, tuple[int, int]],
+        DueContext,
     ],
     observation: TaskObservation | None = None,
 ) -> OnAddContext:

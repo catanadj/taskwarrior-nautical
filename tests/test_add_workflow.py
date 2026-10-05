@@ -36,14 +36,27 @@ def observation(values: dict[str, object]) -> TaskObservation:
 
 class AddWorkflowTests(unittest.TestCase):
     def test_application_context_and_preview_ports_use_named_contracts(self) -> None:
+        from datetime import date
+        from typing import Callable
+        from nautical_core.add_composition import due_context
         from nautical_core.add_workflow import (
             AddWorkflowApplication,
             BuildAddContext,
             RenderAddPreview,
         )
-        from nautical_core.hook_context import OnAddContext
+        from nautical_core.hook_context import DueContext, OnAddContext, build_on_add_context
+        from nautical_core.task_models import TaskPayload
 
         localns = {"OnAddContext": OnAddContext}
+        self.assertIs(get_type_hints(OnAddContext)["due_day"], date)
+        self.assertEqual(
+            get_type_hints(due_context, localns={"DueContext": DueContext})["return"],
+            DueContext,
+        )
+        self.assertEqual(
+            get_type_hints(build_on_add_context)["due_context_on_add"],
+            Callable[[TaskPayload, datetime], DueContext],
+        )
         annotations = get_type_hints(AddWorkflowApplication, localns=localns)
         self.assertIs(annotations["build_context_fn"], BuildAddContext)
         self.assertIs(annotations["render_anchor_preview_fn"], RenderAddPreview)

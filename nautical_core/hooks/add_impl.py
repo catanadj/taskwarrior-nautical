@@ -124,7 +124,7 @@ if __name__ == "__main__":
 import atexit
 import re
 from contextlib import contextmanager, nullcontext
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -1060,7 +1060,10 @@ def _due_matches_entry_timestamp_on_add(task: dict) -> bool:
     return _module("add_composition")._due_matches_entry(host, task)
 
 
-def _due_context_on_add(task: dict, now_utc: datetime) -> Any:
+def _due_context_on_add(
+    task: dict,
+    now_utc: datetime,
+) -> tuple[bool, str, datetime, str | None, date, tuple[int, int]]:
     host = sys.modules.get(__name__, SimpleNamespace(**globals()))
     return _module("add_composition").due_context(host, task, now_utc)
 

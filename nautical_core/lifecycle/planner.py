@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import math
-from typing import Any, Callable, Protocol
+from typing import Callable, Protocol, SupportsInt
 
 from .models import (
     LifecycleAction,
@@ -53,7 +53,7 @@ def _terminal_kind_for(event: LifecycleEvent, reason: str = "") -> str | None:
 
 def _recurrence_kind(task: TaskSnapshot | NauticalTask) -> str:
     """Return the active recurrence kind, treating Taskwarrior null as unset."""
-    def raw_value(key: str) -> Any:
+    def raw_value(key: str) -> object:
         if isinstance(task, TaskSnapshot):
             return task.get(key)
         return task.observation.field(key).raw_value()
@@ -101,10 +101,10 @@ class LifecyclePreflight:
     def from_context(
         cls,
         *,
-        base_link: Any,
-        next_link: Any,
+        base_link: object,
+        next_link: object,
         kind: str,
-        chain_id: Any,
+        chain_id: object,
     ) -> "LifecyclePreflight":
         try:
             base = _link(base_link)
@@ -370,7 +370,7 @@ class ChainGenerationLimitPolicy:
         return None
 
 
-def _link(value: Any, *, default: int | None = None) -> int:
+def _link(value: object, *, default: int | None = None) -> int:
     if value is None or value == "":
         if default is not None:
             return default
@@ -378,6 +378,8 @@ def _link(value: Any, *, default: int | None = None) -> int:
     if isinstance(value, bool):
         raise LifecyclePlanningError("lifecycle link cannot be boolean")
     try:
+        if not isinstance(value, SupportsInt):
+            raise TypeError("lifecycle link does not support integer conversion")
         parsed = int(value)
     except (TypeError, ValueError) as exc:
         # Taskwarrior exports numeric UDAs as fixed-point text (for example

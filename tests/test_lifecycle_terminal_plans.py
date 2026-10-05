@@ -116,6 +116,10 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         candidate_hints = get_type_hints(planner.plan_candidate_successor)
         self.assertIs(candidate_hints["validated_configuration"], object)
         self.assertEqual(candidate_hints["compare_datetimes"], Callable[[datetime, datetime], int])
+        preflight_hints = get_type_hints(planner.LifecyclePreflight.from_context)
+        self.assertIs(preflight_hints["base_link"], object)
+        self.assertIs(preflight_hints["chain_id"], object)
+        self.assertIs(get_type_hints(planner._link)["value"], object)
 
     def test_recurrence_candidate_requires_datetime_values(self) -> None:
         from datetime import datetime

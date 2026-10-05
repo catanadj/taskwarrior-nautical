@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import nautical_core.modify_lifecycle as modify_lifecycle
@@ -61,6 +61,52 @@ class ModifyValidationEffectsTests(unittest.TestCase):
         validate_completion_cp_and_anchor({}, {"cp": "invalid"}, services=services)
 
         self.assertEqual(failures, [("Invalid CP", "invalid duration format 'invalid'")])
+
+    def test_completion_transition_internal_failure_propagates(self) -> None:
+        from nautical_core.modify_validation import validate_completion_cp_and_anchor
+
+        failures = []
+
+        def fail(title, message):
+            failures.append((title, message))
+
+        services = self._completion_validation_services(lambda _value: [timedelta(days=1)], fail)
+        services.apply_transition = lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("transition invariant defect")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "transition invariant defect"):
+            validate_completion_cp_and_anchor({}, {"cp": "P1D"}, services=services)
+
+        self.assertEqual(failures, [])
+
+    def test_completion_transition_value_error_remains_a_safe_rejection(self) -> None:
+        from nautical_core.modify_validation import validate_completion_cp_and_anchor
+
+        class ValidationRejected(Exception):
+            pass
+
+        failures = []
+
+        def fail(title, message):
+            failures.append((title, message))
+            raise ValidationRejected(message)
+
+        services = self._completion_validation_services(lambda _value: [timedelta(days=1)], fail)
+        services.apply_transition = lambda *_args: (_ for _ in ()).throw(
+            ValueError("chain identity is incomplete")
+        )
+
+        with self.assertRaisesRegex(ValidationRejected, "chain identity is incomplete"):
+            validate_completion_cp_and_anchor({}, {"cp": "P1D"}, services=services)
+
+        self.assertEqual(
+            failures,
+            [(
+                "Nautical recurrence activation failed",
+                "Nautical recurrence transition failed: ValueError: chain identity is incomplete",
+            )],
+        )
 
     def test_omit_validation_maps_user_value_errors_but_surfaces_internal_defects(self) -> None:
         failures = []

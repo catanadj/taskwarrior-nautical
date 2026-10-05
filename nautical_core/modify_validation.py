@@ -139,7 +139,7 @@ def validate_completion_cp_and_anchor(
 
         try:
             services.apply_transition(old, new)
-        except Exception as exc:
+        except ValueError as exc:
             services.fail(
                 "Nautical recurrence activation failed",
                 f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}",

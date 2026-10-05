@@ -692,7 +692,7 @@ class ReconcileErrorContracts(unittest.TestCase):
                 taskdata=Path("/tmp/reconcile-recovery-error-contract"),
                 apply=True,
                 max_expiration_hops=1,
-                recovery_at=None,
+                recovery_at=datetime(2026, 10, 5, 9, tzinfo=timezone.utc),
                 reconciliation_service=service,
             )
 

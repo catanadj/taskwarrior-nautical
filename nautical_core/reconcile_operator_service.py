@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from .chain_generation import ChainGenerationService
 from .chain_integrity_lifecycle import is_orphan_deleted_chain_candidate
@@ -27,7 +28,7 @@ class ReconcileRecoveryCallbacks:
     plan_parent: PlanParentCallback
     next_child: Callable[[TaskObservation, str], TaskObservation]
     virtual_child: VirtualChildCallback
-    terminal_error: Callable[[TaskObservation, Any], str]
+    terminal_error: Callable[[TaskObservation, datetime], str]
     recovery_error: Callable[[TaskPayload, str], RecoveryResult]
     recovery_partial: Callable[[TaskPayload, str], RecoveryResult]
     recovery_manual_review: Callable[[TaskPayload, str], RecoveryResult]
@@ -49,7 +50,7 @@ class ReconcileRecoveryCoordinator:
         taskdata: Path | None,
         apply: bool,
         max_expiration_hops: int,
-        recovery_at: Any,
+        recovery_at: datetime,
         lease_held: bool = False,
         generation: ChainGenerationService | None = None,
     ) -> list[tuple[RecoveryResult, str]]:

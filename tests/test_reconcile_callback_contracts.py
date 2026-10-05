@@ -8,7 +8,10 @@ import unittest
 
 import nautical_core.lifecycle.reconciliation as reconciliation
 from nautical_core.lifecycle.recovery_models import RecoveryResult
-from nautical_core.reconcile_operator_service import ReconcileRecoveryCallbacks
+from nautical_core.reconcile_operator_service import (
+    ReconcileRecoveryCallbacks,
+    ReconcileRecoveryCoordinator,
+)
 from nautical_core.task_models import TaskObservation, TaskPayload
 
 
@@ -60,11 +63,31 @@ class ReconcileCallbackContractTests(unittest.TestCase):
         self.assertEqual([datetime, datetime], compare_arguments)
         self.assertIs(int, compare_result)
 
+    def test_reconcile_recovery_datetime_and_result_contracts_are_concrete(self) -> None:
+        from nautical_core.lifecycle.reconciliation import (
+            CallbackLifecycleRecoveryOperations,
+            LifecycleReconciliationService,
+        )
+
+        callback_hints = get_type_hints(ReconcileRecoveryCallbacks)
+        callback_arguments, callback_result = get_args(callback_hints["terminal_error"])
+        self.assertEqual(list(callback_arguments), [TaskObservation, datetime])
+        self.assertIs(str, callback_result)
+        coordinator_hints = get_type_hints(ReconcileRecoveryCoordinator.recover)
+        self.assertIs(datetime, coordinator_hints["recovery_at"])
+        service_hints = get_type_hints(LifecycleReconciliationService.recover_candidate)
+        self.assertIs(datetime, service_hints["recovery_at"])
+        result_item, = get_args(service_hints["return"])
+        result_types = get_args(result_item)
+        self.assertEqual(result_types, (RecoveryResult, str))
+        operations_hints = get_type_hints(CallbackLifecycleRecoveryOperations.terminal_error)
+        self.assertIs(datetime, operations_hints["recovery_at"])
+
     def test_recovery_outcome_callbacks_have_exact_task_and_result_shapes(self) -> None:
         hints = get_type_hints(ReconcileRecoveryCallbacks)
         expected = {
             "next_child": ((TaskObservation, str), TaskObservation),
-            "terminal_error": ((TaskObservation, Any), str),
+            "terminal_error": ((TaskObservation, datetime), str),
             "recovery_error": ((TaskPayload, str), RecoveryResult),
             "recovery_partial": ((TaskPayload, str), RecoveryResult),
             "recovery_manual_review": ((TaskPayload, str), RecoveryResult),

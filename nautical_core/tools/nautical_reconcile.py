@@ -1138,7 +1138,7 @@ def _reconcile_candidate(
     taskdata: Path | None,
     apply: bool,
     max_expiration_hops: int,
-    recovery_at: Any,
+    recovery_at: datetime,
     lease_held: bool = False,
     generation: ChainGenerationService | None = None,
     reconciliation_service: LifecycleReconciliationService,

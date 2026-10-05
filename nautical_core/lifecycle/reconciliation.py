@@ -213,11 +213,11 @@ class CallbackLifecycleRecoveryOperations:
         plan: LifecyclePlan,
         *,
         parent: TaskObservation,
-        recovery_at: Any,
+        recovery_at: datetime,
     ) -> tuple[VirtualExpiredChild | None, str]:
         return self.virtual_child_callback(plan, parent=parent, recovery_at=recovery_at)
 
-    def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str:
+    def terminal_error(self, child: TaskObservation, recovery_at: datetime) -> str:
         return self.terminal_error_callback(child, recovery_at)
 
     def is_orphan_deleted(self, child: TaskObservation) -> bool:
@@ -619,10 +619,10 @@ class LifecycleReconciliationService:
         taskdata: Path | None,
         apply: bool,
         max_expiration_hops: int,
-        recovery_at: Any,
+        recovery_at: datetime,
         lease_held: bool = False,
         generation: ChainGenerationService | None = None,
-    ) -> list[tuple[Any, str]]:
+    ) -> list[tuple[RecoveryResult, str]]:
         """Run bounded successor recovery; policy and mutation stay typed ports."""
         outcomes: list[tuple[RecoveryResult, str]] = []
         current = parent

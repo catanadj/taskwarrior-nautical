@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -8,6 +9,48 @@ from nautical_core.hooks import modify_impl
 
 
 class ModifyRuntimeCacheContractTests(unittest.TestCase):
+    def test_counter_failure_is_reported_only_in_diagnostic_mode(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}),
+            patch.object(
+                modify_impl,
+                "_modify_runtime_state",
+                side_effect=RuntimeError("private runtime details"),
+            ),
+            patch.object(modify_impl, "_diag") as diagnostic,
+        ):
+            modify_impl._diag_count("cache_hits")
+
+        diagnostic.assert_called_once_with(
+            "diagnostic counter update failed (RuntimeError)"
+        )
+
+    def test_counter_failure_stays_silent_without_diagnostic_mode(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_DIAG": "0"}),
+            patch.object(
+                modify_impl,
+                "_modify_runtime_state",
+                side_effect=RuntimeError("private runtime details"),
+            ),
+            patch.object(modify_impl, "_diag") as diagnostic,
+        ):
+            modify_impl._diag_count("cache_hits")
+
+        diagnostic.assert_not_called()
+
+    def test_broken_diagnostic_sink_does_not_change_counter_fallback(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}),
+            patch.object(
+                modify_impl,
+                "_modify_runtime_state",
+                side_effect=RuntimeError("private runtime details"),
+            ),
+            patch.object(modify_impl, "_diag", side_effect=OSError("stderr closed")),
+        ):
+            modify_impl._diag_count("cache_hits")
+
     def test_query_context_get_propagates_runtime_state_failure(self) -> None:
         with patch.object(
             modify_impl,

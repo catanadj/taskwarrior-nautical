@@ -233,8 +233,14 @@ def _diag_count(key: str, inc: float = 1) -> None:
         state = _modify_runtime_state()
         stats = state.diag_stats
         stats[key] = stats.get(key, 0) + inc
-    except Exception:
-        pass
+    except Exception as exc:
+        # Counter bookkeeping is optional; report an unavailable sink only in
+        # diagnostic mode and never include task data or exception messages.
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                _diag(f"diagnostic counter update failed ({type(exc).__name__})")
+            except Exception:
+                pass
 
 
 def _run_task_diag_bucket(cmd: list[str]) -> str:

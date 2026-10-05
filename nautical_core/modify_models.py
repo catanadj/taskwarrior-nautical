@@ -448,7 +448,7 @@ class EndChainSummaryCallback(Protocol):
         self,
         current: TaskRow,
         reason: str,
-        now_utc: Any,
+        now_utc: datetime,
         *,
         current_task: TaskRow | None = None,
     ) -> None:

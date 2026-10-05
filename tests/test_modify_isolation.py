@@ -539,6 +539,7 @@ class ModifyIsolationTests(unittest.TestCase):
             PanelCallback,
             PrintTaskCallback,
             SafeParseDatetimeCallback,
+            EndChainSummaryCallback,
             ValidateChainDurationCallback,
             ValidateUntilCallback,
         )
@@ -566,6 +567,10 @@ class ModifyIsolationTests(unittest.TestCase):
                 "now_utc": datetime,
                 "return": tuple[bool, str | None],
             },
+        )
+        self.assertEqual(
+            get_type_hints(EndChainSummaryCallback.__call__)["now_utc"],
+            datetime,
         )
 
         contracts = {

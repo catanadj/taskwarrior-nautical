@@ -203,6 +203,15 @@ class OperatorConformanceTests(unittest.TestCase):
         diagnose_hints = get_type_hints(OperatorControlPlane.diagnose_chains)
         self.assertIs(diagnose_hints["unit_of_work"], TaskwarriorUnitOfWork)
 
+    def test_operator_invocation_cache_contains_values_as_objects(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationCache
+
+        self.assertIs(get_type_hints(OperatorInvocationCache.put)["value"], object)
+        self.assertEqual(
+            get_type_hints(OperatorInvocationCache.get)["return"],
+            object | None,
+        )
+
     def test_integrity_drain_uses_concrete_execution_ports(self) -> None:
         from nautical_core.chain_integrity_application import (
             IntegrityMutationExecutor,
@@ -735,6 +744,8 @@ class OperatorConformanceTests(unittest.TestCase):
         self.assertTrue(result.retryable)
 
     def test_invalid_snapshot_collector_result_fails_closed(self) -> None:
+        from nautical_core.integration_models import Found
+
         configuration = ValidatedNauticalConfiguration(
             source="test", fingerprint="config-1", scheduler_fingerprint="schedule-1",
             timezone_name="UTC", values=(),
@@ -751,6 +762,16 @@ class OperatorConformanceTests(unittest.TestCase):
         result = reader.read(context, SnapshotReadRequest(OperatorScope.system()))
         self.assertIsInstance(result, OperatorFailure)
         self.assertEqual(result.code, "invalid_snapshot_read")
+
+        malformed_reader = ChainSnapshotReader(
+            lambda _request: Found(SimpleNamespace(coverage="complete"), "snapshot")
+        )
+        malformed_result = malformed_reader.read(
+            context,
+            SnapshotReadRequest(OperatorScope.system()),
+        )
+        self.assertIsInstance(malformed_result, OperatorFailure)
+        self.assertEqual(malformed_result.code, "invalid_snapshot")
 
 
 if __name__ == "__main__":

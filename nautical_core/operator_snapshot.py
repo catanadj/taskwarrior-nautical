@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import hashlib
-from typing import Any, Callable, Mapping, Protocol, TypeAlias, cast
+from typing import Any, Callable, Mapping, Protocol, TypeAlias
 
 from .operator_models import (
     CoverageRequirement,
@@ -518,11 +518,11 @@ class ChainSnapshotReader:
             )
         outcome = self._collector(source_request)
         if isinstance(outcome, Found):
-            if not hasattr(outcome.value, "coverage"):
+            if not isinstance(outcome.value, ChainSnapshot):
                 return OperatorFailure("invalid_snapshot", "snapshot provider returned an invalid value", scope=scope)
             if not request.refresh:
                 context.cache.put(cache_key, outcome.value)
-            return cast(ChainSnapshot, outcome.value)
+            return outcome.value
         if isinstance(outcome, Unavailable):
             return OperatorFailure(
                 "snapshot_unavailable",

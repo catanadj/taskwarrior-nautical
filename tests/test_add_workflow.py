@@ -40,11 +40,12 @@ class AddWorkflowTests(unittest.TestCase):
         from typing import Callable
         from nautical_core.add_composition import (
             AddCompositionServices,
-            build_on_add_context,
+            build_on_add_context as build_add_composition_context,
             due_context,
             validate_task,
         )
         from nautical_core.add_workflow import (
+            AddWorkflowPlan,
             AddWorkflowApplication,
             BuildAddContext,
             RenderAddPreview,
@@ -53,18 +54,22 @@ class AddWorkflowTests(unittest.TestCase):
             DueContext,
             OnAddContext,
             ProfilerPort,
-            build_on_add_context,
+            build_on_add_context as build_hook_add_context,
         )
         from nautical_core.task_models import TaskPayload
 
-        localns = {"OnAddContext": OnAddContext, "ProfilerPort": ProfilerPort}
+        localns = {
+            "OnAddContext": OnAddContext,
+            "ProfilerPort": ProfilerPort,
+            "AddWorkflowPlan": AddWorkflowPlan,
+        }
         self.assertIs(get_type_hints(OnAddContext)["due_day"], date)
         self.assertEqual(
             get_type_hints(due_context, localns={"DueContext": DueContext})["return"],
             DueContext,
         )
         self.assertEqual(
-            get_type_hints(build_on_add_context)["due_context_on_add"],
+            get_type_hints(build_hook_add_context)["due_context_on_add"],
             Callable[[TaskPayload, datetime], DueContext],
         )
         composition_hints = get_type_hints(
@@ -85,6 +90,24 @@ class AddWorkflowTests(unittest.TestCase):
             self.assertIs(owner_hints["context"], OnAddContext)
             if "prof" in owner_hints:
                 self.assertIs(owner_hints["prof"], ProfilerPort)
+        plan_namespace = {
+            **localns,
+            "AddWorkflowPlan": AddWorkflowPlan,
+            "TaskPayload": TaskPayload,
+            "TaskObservation": TaskObservation,
+        }
+        for owner in (
+            AddCompositionServices.record_schedule,
+            AddCompositionServices.record_limits,
+            AddCompositionServices.record_preview,
+        ):
+            owner_hints = get_type_hints(owner, localns=plan_namespace)
+            self.assertIs(owner_hints["plan"], AddWorkflowPlan)
+            self.assertIs(owner_hints["return"], AddWorkflowPlan)
+        self.assertIs(
+            get_type_hints(AddCompositionServices.stamp_chain_id)["task"],
+            TaskPayload,
+        )
         validate_hints = get_type_hints(
             validate_task,
             localns={"TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
@@ -92,7 +115,7 @@ class AddWorkflowTests(unittest.TestCase):
         self.assertIs(validate_hints["task"], TaskPayload)
         self.assertIs(validate_hints["return"], TaskObservation)
         context_hints = get_type_hints(
-            build_on_add_context,
+            build_add_composition_context,
             localns={**localns, "TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
         )
         self.assertIs(context_hints["return"], OnAddContext)

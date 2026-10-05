@@ -11,6 +11,7 @@ from .task_models import TaskPayload
 from .task_datetime import TaskDatetimeParser, parser_for_core
 
 if TYPE_CHECKING:
+    from .add_workflow import AddWorkflowPlan
     from .hook_context import DueContext, OnAddContext, ProfilerPort
     from .task_models import TaskObservation
 
@@ -180,7 +181,7 @@ class AddCompositionServices:
     def result(self, task: Any, *, sanitize: bool, prof: Any) -> Any:
         return self._result_cls(task=task, sanitize=sanitize, prof=prof)
 
-    def has_nautical_fields(self, task: Any) -> bool:
+    def has_nautical_fields(self, task: TaskPayload) -> bool:
         return self._host._task_has_nautical_fields(task)
 
     def load_core(self) -> None:
@@ -255,7 +256,12 @@ class AddCompositionServices:
             if prof is not None:
                 prof.add_ms("validate:cp_vs_anchor", (host.time.perf_counter() - started) * 1000.0)
 
-    def record_schedule(self, plan: Any, task: Any, target_field: Any) -> Any:
+    def record_schedule(
+        self,
+        plan: AddWorkflowPlan,
+        task: TaskPayload,
+        target_field: str,
+    ) -> AddWorkflowPlan:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         raw = task.get(target_field)
@@ -271,7 +277,7 @@ class AddCompositionServices:
             )
             raise
 
-    def record_preview(self, plan: Any) -> Any:
+    def record_preview(self, plan: AddWorkflowPlan) -> AddWorkflowPlan:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         policy = workflow.preview_policy(
@@ -281,7 +287,12 @@ class AddCompositionServices:
         )
         return workflow.record_preview(plan, policy)
 
-    def record_limits(self, plan: Any, task: TaskPayload, context: OnAddContext) -> Any:
+    def record_limits(
+        self,
+        plan: AddWorkflowPlan,
+        task: TaskPayload,
+        context: OnAddContext,
+    ) -> AddWorkflowPlan:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         timestamp = core._import_sibling("task_models").TaskTimestamp
@@ -305,7 +316,7 @@ class AddCompositionServices:
         )
         return workflow.record_limits(plan, limits)
 
-    def stamp_chain_id(self, task: Any) -> None:
+    def stamp_chain_id(self, task: TaskPayload) -> None:
         self._host._stamp_chain_id_on_add(task)
 
     def render_anchor_preview(self, context: OnAddContext, *, prof: ProfilerPort) -> None:

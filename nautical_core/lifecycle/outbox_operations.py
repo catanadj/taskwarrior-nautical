@@ -6,7 +6,13 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .models import ExecutionStage, LifecyclePlan
-from .outbox import LifecycleOutboxRecord, OutboxFailure, OutboxMaintenanceResult, OutboxResult
+from .outbox import (
+    OUTBOX_ACK_RETENTION_SECONDS,
+    LifecycleOutboxRecord,
+    OutboxFailure,
+    OutboxMaintenanceResult,
+    OutboxResult,
+)
 
 if TYPE_CHECKING:
     from ..integrity_outbox_envelope import IntegrityOutboxRecord
@@ -15,7 +21,13 @@ if TYPE_CHECKING:
 class LifecycleOutboxOperationsPort(Protocol):
     def status(self, *, limit: int, stale_after: float = 0.0, intent_id: str | None = None) -> tuple[OutboxResult, dict[str, Any]]: ...
     def resolve_manual_review(self, *, intent_id: str, reason: str) -> OutboxResult: ...
-    def prune_acknowledged(self, **kwargs: Any) -> OutboxMaintenanceResult: ...
+    def prune_acknowledged(
+        self,
+        *,
+        retention_seconds: float = OUTBOX_ACK_RETENTION_SECONDS,
+        limit: int = 1000,
+        checkpoint: bool = False,
+    ) -> OutboxMaintenanceResult: ...
     def opportunistic_housekeeping(self) -> OutboxMaintenanceResult: ...
 
 

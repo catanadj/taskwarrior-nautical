@@ -96,6 +96,24 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             expected_snapshot,
         )
 
+    def test_outbox_maintenance_port_matches_repository_contract(self) -> None:
+        from nautical_core.lifecycle.outbox import (
+            OUTBOX_ACK_RETENTION_SECONDS,
+            OutboxMaintenanceResult,
+        )
+        from nautical_core.lifecycle.outbox_operations import LifecycleOutboxOperationsPort
+
+        method = LifecycleOutboxOperationsPort.prune_acknowledged
+        parameters = signature(method).parameters
+        self.assertEqual(
+            set(parameters),
+            {"self", "retention_seconds", "limit", "checkpoint"},
+        )
+        self.assertEqual(parameters["retention_seconds"].default, OUTBOX_ACK_RETENTION_SECONDS)
+        self.assertEqual(parameters["limit"].default, 1000)
+        self.assertEqual(parameters["checkpoint"].default, False)
+        self.assertEqual(get_type_hints(method)["return"], OutboxMaintenanceResult)
+
     def test_connection_scope_does_not_mask_unexpected_operation_errors(self) -> None:
         for session in (False, True):
             with self.subTest(session=session), TemporaryDirectory() as directory:

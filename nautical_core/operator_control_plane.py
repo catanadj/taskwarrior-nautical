@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Iterable, cast
 from collections.abc import Sequence
 
@@ -151,13 +153,49 @@ class OperatorControlPlane:
             local_naive_to_utc=local_naive_to_utc,
         )
 
-    def apply_native_until(self, candidate: object, previous: object, item: object, **kwargs: object) -> object:
+    def apply_native_until(
+        self,
+        row: TaskObservation,
+        previous: TaskObservation | None,
+        item: dict[str, Any],
+        *,
+        repaired: str,
+        taskdata: Path | None,
+        lease_held: bool,
+        mutation_lock: Callable[[Path, bool], AbstractContextManager[bool]],
+        parent_lock: Callable[[str], AbstractContextManager[bool]],
+        refresh_parent: Callable[[TaskObservation], TaskObservation | None],
+        refresh_previous: Callable[[TaskObservation], TaskObservation | None],
+        guard_error: Callable[
+            [TaskObservation, TaskObservation | None, TaskObservation | None], str | None
+        ],
+        configuration: Callable[[], tuple[str, str]],
+        mutate: Callable[[TaskObservation, str], None],
+        verify: Callable[[TaskObservation | None, str], bool],
+        on_lock_busy: Callable[[str], None],
+    ) -> str | None:
         """Apply one guarded native-until repair through the shared engine."""
         engine = ChainIntegrityEngine.lifecycle_only(
             configuration_fingerprint="reconcile-recovery",
             schedule_fingerprint="reconcile-recovery",
         )
-        return engine.apply_native_until_candidate(candidate, previous, item, **kwargs)
+        return engine.apply_native_until_candidate(
+            row,
+            previous,
+            item,
+            repaired=repaired,
+            taskdata=taskdata,
+            lease_held=lease_held,
+            mutation_lock=mutation_lock,
+            parent_lock=parent_lock,
+            refresh_parent=refresh_parent,
+            refresh_previous=refresh_previous,
+            guard_error=guard_error,
+            configuration=configuration,
+            mutate=mutate,
+            verify=verify,
+            on_lock_busy=on_lock_busy,
+        )
 
 
     def plan_lifecycle(

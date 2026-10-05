@@ -4,7 +4,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, get_args, get_type_hints
+from typing import Any, Callable, Iterable, get_args, get_type_hints
 
 from nautical_core.operator_application import DomainApplicationRegistry
 from nautical_core.operator_control_plane import OperatorControlPlane
@@ -73,6 +73,52 @@ class OperatorConformanceTests(unittest.TestCase):
         self.assertEqual(fallback_hints["fmt_isoz"], formatter)
         self.assertEqual(fallback_hints["utc_to_local_naive"], convert)
         self.assertEqual(fallback_hints["local_naive_to_utc"], convert)
+
+    def test_native_until_application_uses_explicit_mutation_ports(self) -> None:
+        from contextlib import AbstractContextManager
+        from pathlib import Path
+
+        from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+        from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
+        from nautical_core.task_models import TaskObservation
+
+        lock_factory = Callable[[Path, bool], AbstractContextManager[bool]]
+        parent_lock = Callable[[str], AbstractContextManager[bool]]
+        refresh = Callable[[TaskObservation], TaskObservation | None]
+        guard = Callable[
+            [TaskObservation, TaskObservation | None, TaskObservation | None],
+            str | None,
+        ]
+        configuration = Callable[[], tuple[str, str]]
+        mutate = Callable[[TaskObservation, str], None]
+        verify = Callable[[TaskObservation | None, str], bool]
+        on_lock_busy = Callable[[str], None]
+        expected = {
+            "row": TaskObservation,
+            "previous": TaskObservation | None,
+            "item": dict[str, Any],
+            "repaired": str,
+            "taskdata": Path | None,
+            "lease_held": bool,
+            "mutation_lock": lock_factory,
+            "parent_lock": parent_lock,
+            "refresh_parent": refresh,
+            "refresh_previous": refresh,
+            "guard_error": guard,
+            "configuration": configuration,
+            "mutate": mutate,
+            "verify": verify,
+            "on_lock_busy": on_lock_busy,
+        }
+        signatures = (
+            get_type_hints(OperatorControlPlane.apply_native_until),
+            get_type_hints(ChainIntegrityEngine.apply_native_until_candidate),
+            get_type_hints(IntegrityRecoveryService.apply_native_until_candidate),
+        )
+        for hints in signatures:
+            for name, annotation in expected.items():
+                self.assertEqual(hints[name], annotation, name)
+            self.assertEqual(hints["return"], str | None)
 
     def test_integrity_drain_uses_concrete_execution_ports(self) -> None:
         from nautical_core.chain_integrity_application import (

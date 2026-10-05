@@ -7,8 +7,10 @@ and presentation are performed by the outer application services.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import chain_integrity_lifecycle as lifecycle
@@ -215,10 +217,10 @@ class IntegrityRecoveryService:
         item: dict[str, Any],
         *,
         repaired: str,
-        taskdata: Any,
+        taskdata: Path | None,
         lease_held: bool,
-        mutation_lock: Callable[[Any, bool], Any],
-        parent_lock: Callable[[str], Any],
+        mutation_lock: Callable[[Path, bool], AbstractContextManager[bool]],
+        parent_lock: Callable[[str], AbstractContextManager[bool]],
         refresh_parent: Callable[[TaskObservation], TaskObservation | None],
         refresh_previous: Callable[[TaskObservation], TaskObservation | None],
         guard_error: Callable[[TaskObservation, TaskObservation | None, TaskObservation | None], str | None],

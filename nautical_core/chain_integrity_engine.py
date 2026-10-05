@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 import hashlib
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
 from .chain_graph import ChainGraph
@@ -172,9 +174,45 @@ class ChainIntegrityEngine:
             local_naive_to_utc=local_naive_to_utc,
         )
 
-    def apply_native_until_candidate(self, row: Any, previous: Any, item: Any, **kwargs: Any) -> Any:
+    def apply_native_until_candidate(
+        self,
+        row: TaskObservation,
+        previous: TaskObservation | None,
+        item: dict[str, Any],
+        *,
+        repaired: str,
+        taskdata: Path | None,
+        lease_held: bool,
+        mutation_lock: Callable[[Path, bool], AbstractContextManager[bool]],
+        parent_lock: Callable[[str], AbstractContextManager[bool]],
+        refresh_parent: Callable[[TaskObservation], TaskObservation | None],
+        refresh_previous: Callable[[TaskObservation], TaskObservation | None],
+        guard_error: Callable[
+            [TaskObservation, TaskObservation | None, TaskObservation | None], str | None
+        ],
+        configuration: Callable[[], tuple[str, str]],
+        mutate: Callable[[TaskObservation, str], None],
+        verify: Callable[[TaskObservation | None, str], bool],
+        on_lock_busy: Callable[[str], None],
+    ) -> str | None:
         """Apply one guarded recovery candidate through the recovery owner."""
-        return self._recovery.apply_native_until_candidate(row, previous, item, **kwargs)
+        return self._recovery.apply_native_until_candidate(
+            row,
+            previous,
+            item,
+            repaired=repaired,
+            taskdata=taskdata,
+            lease_held=lease_held,
+            mutation_lock=mutation_lock,
+            parent_lock=parent_lock,
+            refresh_parent=refresh_parent,
+            refresh_previous=refresh_previous,
+            guard_error=guard_error,
+            configuration=configuration,
+            mutate=mutate,
+            verify=verify,
+            on_lock_busy=on_lock_busy,
+        )
 
     def audit(
         self,

@@ -55,7 +55,7 @@ def diag_log_redact(msg: str, redact_keys: frozenset | None = None) -> Any:
                 if k in keys:
                     data[k] = "[redacted]"
             return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
+    except json.JSONDecodeError:
         pass
     return msg
 
@@ -95,7 +95,7 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-    except Exception:
+    except OSError:
         pass
     try:
         if max_bytes > 0 and os.path.exists(path):
@@ -104,13 +104,8 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
                 if st.st_size > max_bytes:
                     overflow = path.replace(".jsonl", f".overflow.{int(time.time())}.jsonl")
                     os.replace(path, overflow)
-            except Exception:
+            except OSError:
                 pass
-        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
         payload = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "hook": hook_name,
@@ -129,9 +124,13 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
                 payload["msg"] = str(red)
         else:
             payload["msg"] = diag_log_redact(str(msg))
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
+            os.fchmod(fd, 0o600)
             f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
     except Exception:
+        # Diagnostic persistence is optional; it must not replace the hook's
+        # primary result.
         pass
 
 
@@ -149,7 +148,7 @@ def diag(msg: Any, hook_name: str = "nautical", data_dir: str | None = None) -> 
     if os.environ.get("NAUTICAL_DIAG") == "1":
         try:
             sys.stderr.write(f"[nautical] {rendered}\n")
-        except Exception:
+        except (OSError, UnicodeError, ValueError):
             pass
     diag_log(log_value, hook_name, data_dir)
 

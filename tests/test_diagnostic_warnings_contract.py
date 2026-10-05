@@ -44,6 +44,18 @@ class DiagnosticWarningsContractTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("Taskwarrior lock active", stderr.getvalue())
 
+    def test_stderr_diagnostic_propagates_unexpected_writer_failure(self) -> None:
+        class BrokenStderr:
+            def write(self, _value: str) -> int:
+                raise RuntimeError("stderr writer invariant failed")
+
+        with (
+            patch.dict(os.environ, {"NAUTICAL_DIAG": "1", "NAUTICAL_DIAG_LOG": "0"}),
+            patch.object(runtime.sys, "stderr", BrokenStderr()),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "writer invariant"):
+                runtime.diag("diagnostic", "on-modify")
+
     def test_structured_diag_log_preserves_fields_and_redacts_sensitive_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             stderr = StringIO()
@@ -90,6 +102,34 @@ class DiagnosticWarningsContractTests(unittest.TestCase):
             self.assertIn("[redacted]", content)
             self.assertIn("keep", content)
             self.assertEqual(stderr.getvalue(), "")
+
+    def test_diag_log_redaction_only_treats_json_syntax_errors_as_plain_text(self) -> None:
+        with patch.object(runtime.json, "loads", side_effect=RuntimeError("parser defect")):
+            with self.assertRaisesRegex(RuntimeError, "parser defect"):
+                runtime.diag_log_redact('{"description":"secret"}')
+
+    def test_diag_log_does_not_write_when_private_mode_cannot_be_set(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".nautical_diag.jsonl"
+            opened: list[int] = []
+            real_open = os.open
+
+            def capture_open(path_value: str, flags: int, mode: int = 0o777) -> int:
+                descriptor = real_open(path_value, flags, mode)
+                opened.append(descriptor)
+                return descriptor
+
+            with (
+                patch.dict(os.environ, {"NAUTICAL_DIAG_LOG": "1"}),
+                patch.object(runtime.os, "open", side_effect=capture_open),
+                patch.object(runtime.os, "fchmod", side_effect=PermissionError("mode denied")),
+            ):
+                runtime.diag_log("sensitive diagnostic", "on-modify", directory)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "")
+            self.assertEqual(len(opened), 1)
+            with self.assertRaises(OSError):
+                os.fstat(opened[0])
 
     def test_diag_log_rotation_moves_oversized_file_and_writes_new_record(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

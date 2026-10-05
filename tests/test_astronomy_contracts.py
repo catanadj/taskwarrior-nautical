@@ -273,6 +273,18 @@ class AstronomyContractTests(unittest.TestCase):
         self.assertEqual(healthy.get("status"), "ok")
         self.assertEqual(healthy.get("event"), "sunrise")
 
+    def test_preflight_does_not_reclassify_unexpected_resolver_failures(self) -> None:
+        config = {
+            "default_location": "home",
+            "locations": {"home": {"latitude": 1, "longitude": 2, "timezone": "UTC"}},
+        }
+        with (
+            patch.object(astronomy, "_observer", return_value=("home", object(), "UTC")),
+            patch.object(astronomy, "resolve_event", side_effect=RuntimeError("internal defect")),
+            self.assertRaisesRegex(RuntimeError, "internal defect"),
+        ):
+            astronomy.preflight(config, reference_day=date(2026, 7, 31))
+
     def test_none_from_real_event_cache_becomes_actionable_unavailable_error(self) -> None:
         config = {
             "default_location": "home",

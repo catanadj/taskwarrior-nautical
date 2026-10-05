@@ -312,7 +312,7 @@ def preflight(config: dict[str, Any] | None = None, *, reference_day: date | Non
     try:
         selected, _observer_value, timezone = _observer(data)
         event = resolve_event("sunrise", day, config=data, location_name=selected)
-    except Exception as exc:
+    except (AstronomyConfigurationError, AstronomyUnavailableError, AstronomyEventUnavailableError) as exc:
         status = "warning" if isinstance(exc, LookupError) else "error"
         return {
             "status": status,

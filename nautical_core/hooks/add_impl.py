@@ -881,13 +881,6 @@ def _resolve_time_slots(v: Any, target_date: Any) -> Any:
     )
 
 
-def _anchor_step_once(dnf: Any, prev_local_date: Any, interval_seed: Any, seed_base: Any, omit_dnf: Any = None) -> Any:
-    add_anchor_compute = _module("add_anchor_compute")
-    return add_anchor_compute.anchor_step_once_with_omit(
-        dnf, prev_local_date, interval_seed, seed_base, omit_dnf=omit_dnf, core=core
-    )
-
-
 def _anchor_until_summary(
     dnf: Any,
     until_dt: Any,
@@ -910,32 +903,6 @@ def _anchor_until_summary(
         core=core,
         to_local_cached=_to_local_cached,
         max_iterations=_MAX_ITERATIONS,
-        evaluator=evaluator,
-    )
-
-
-def _anchor_build_preview(
-    dnf: Any,
-    first_due_local_dt: Any,
-    preview_limit: int,
-    until_dt: Any,
-    fallback_hhmm: Any,
-    interval_seed: Any,
-    seed_base: Any,
-    omit_dnf: Any = None,
-    evaluator: Any = None,
-) -> Any:
-    add_anchor_compute = _module("add_anchor_compute")
-    return add_anchor_compute.anchor_build_preview(
-        dnf,
-        first_due_local_dt,
-        preview_limit,
-        until_dt,
-        fallback_hhmm,
-        interval_seed,
-        seed_base,
-        omit_dnf=omit_dnf,
-        core=core,
         evaluator=evaluator,
     )
 

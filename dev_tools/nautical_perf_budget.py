@@ -1028,16 +1028,6 @@ def _bench_hook_fast_paths(cfg: dict, *, panel_mode: str = "minimal") -> dict[st
     )
 
 
-def _run_workflow_hook(hook_path: Path, *, input_text: str, env: dict[str, str], expect_output: bool) -> float:
-    elapsed, _result, _stderr = _run_workflow_hook_result(
-        hook_path,
-        input_text=input_text,
-        env=env,
-        expect_output=expect_output,
-    )
-    return elapsed
-
-
 def _run_workflow_hook_result(
     hook_path: Path,
     *,

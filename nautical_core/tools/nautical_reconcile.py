@@ -630,22 +630,6 @@ def _parent_guard_filters(parent: TaskPayload) -> list[str]:
     ]
 
 
-def _verify_disabled_parent(task_bin: str, parent: TaskPayload) -> None:
-    """Re-export a terminal parent before reporting chain disablement as applied."""
-    fresh_parent = _fresh_parent(parent)
-    if fresh_parent is None:
-        raise RuntimeError("post-apply verification could not re-export the disabled parent")
-    if str(fresh_parent.get("chain") or "").strip().lower() != "off":
-        shown = str(fresh_parent.get("chain") or "<empty>").strip() or "<empty>"
-        raise RuntimeError(f"post-apply verification found parent chain {shown}; expected off")
-    successor = str(fresh_parent.get("nextLink") or "").strip()
-    if successor:
-        raise RuntimeError(
-            f"post-apply verification found successor {successor}; "
-            "terminal chain must not remain spawnable"
-        )
-
-
 def _stale_plan(parent: TaskPayload, reason: str) -> RecoveryRefusal:
     return RecoveryRefusal(
         DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile stale plan"),

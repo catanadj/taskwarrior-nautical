@@ -935,21 +935,6 @@ def _display_mode_name(core: Any) -> str:
     return mode
 
 
-def _rows_are_notable(rows: list[tuple[str, object]]) -> bool:
-    notable_labels = {"integrity", "warning", "error", "link status", "links left", "sanitised", "intent"}
-    for k, v in rows:
-        if k is None:
-            continue
-        lk = str(k).strip().lower()
-        if lk in notable_labels or lk == "last occurrence":
-            return True
-        if lk == "basis":
-            return True
-        if lk == "analytics" and str(v or "").strip():
-            return True
-    return False
-
-
 def _build_text_feedback(
     core: Any,
     *,

@@ -70,7 +70,7 @@ def _timeline_omit_label(
     return text[:14] + "..."
 
 
-def _timeline_warning(message: str) -> tuple[object, None, dict[str, Any], str]:
+def _timeline_warning(message: str) -> TimelineItem:
     return ("!", None, {"message": message}, "warning")
 
 
@@ -172,14 +172,14 @@ def _timeline_future_cp_items(
     cap_no: int | None,
     max_iterations: int,
     evaluator: RecurrenceEvaluator,
-) -> list[tuple[int, datetime, dict[str, Any], str]]:
+) -> list[TimelineItem]:
     cp_str = str(task.get("cp") or "")
     tokens = evaluator.cp_tokens
     if not tokens:
         return []
     cp_tokens = [p.strip() for p in cp_str.split(",")]
     show_interval = len(tokens) > 1 or any(t.get("kind") == "rand" for t in tokens)
-    items: list[tuple[int, datetime, dict[str, Any], str]] = []
+    items: list[TimelineItem] = []
     fut_dt = child_due_utc
     fut_no = start_no
     iterations = 0
@@ -222,8 +222,8 @@ def _timeline_future_anchor_items(
         [OmitState | None, date], str | None
     ] | None,
     max_iterations: int,
-) -> list[tuple[object, Any, dict[str, Any], str]]:
-    items: list[tuple[object, Any, dict[str, Any], str]] = []
+) -> list[TimelineItem]:
+    items: list[TimelineItem] = []
     fut_no = start_no
     nxt_local = to_local_cached(child_due_utc)
     fallback_hhmm = (nxt_local.hour, nxt_local.minute)
@@ -325,14 +325,14 @@ def _timeline_omitted_before_next_anchor_items(
         [OmitState | None, date], str | None
     ] | None,
     max_iterations: int,
-) -> list[tuple[object, Any, dict[str, Any], str]]:
+) -> list[TimelineItem]:
     if not omit_dnf:
         return []
     cur_end = dtparse(task.get("end"))
     if not cur_end:
         return []
 
-    items: list[tuple[object, Any, dict[str, Any], str]] = []
+    items: list[TimelineItem] = []
     child_local = to_local_cached(child_due_utc)
     after_local = to_local_cached(cur_end)
     fallback_hhmm = (child_local.hour, child_local.minute)

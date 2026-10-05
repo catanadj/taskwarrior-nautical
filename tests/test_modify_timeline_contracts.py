@@ -84,6 +84,24 @@ class ModifyTimelineContractTests(unittest.TestCase):
             tuple[object, datetime | None, TaskPayload, str],
         )
 
+    def test_projection_item_helpers_share_the_timeline_item_contract(self) -> None:
+        from nautical_core.modify_timeline import (
+            TimelineItem,
+            _timeline_future_anchor_items,
+            _timeline_future_cp_items,
+            _timeline_omitted_before_next_anchor_items,
+            _timeline_warning,
+        )
+
+        self.assertEqual(get_type_hints(_timeline_warning)["return"], TimelineItem)
+        for function in (
+            _timeline_future_cp_items,
+            _timeline_future_anchor_items,
+            _timeline_omitted_before_next_anchor_items,
+        ):
+            with self.subTest(function=function.__name__):
+                self.assertEqual(get_type_hints(function)["return"], list[TimelineItem])
+
     def test_timeline_recurrence_inputs_use_parser_dnf_model(self) -> None:
         from nautical_core.parsing.parser_models import AnchorDNF
         from nautical_core.modify_timeline import (

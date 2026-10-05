@@ -676,13 +676,17 @@ print(json.dumps(payload, sort_keys=True))
                 owner="prefetch-test",
             )
 
-            result = service.drain(
-                limit=2, configuration_fingerprint="cfg", schedule_fingerprint="sch"
-            )
+            stderr = io.StringIO()
+            with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stderr(stderr):
+                result = service.drain(
+                    limit=2, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+                )
 
             self.assertEqual(result.claim.kind.value, "applied")
             claimed_ids = {record.intent_id for record in service.drained_records}
             self.assertEqual(claimed_ids, {plan.identity.idempotency_key for plan in plans})
+            self.assertIn("lifecycle batch preflight failed (OSError)", stderr.getvalue())
+            self.assertNotIn("prefetch unavailable", stderr.getvalue())
 
     def test_outbox_failures_are_retryable(self) -> None:
         test_lifecycle_application_outbox_faults_are_retryable()

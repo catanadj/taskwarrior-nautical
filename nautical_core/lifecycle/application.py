@@ -712,10 +712,10 @@ class LifecycleApplicationService:
             )
             try:
                 self._execution.preflight_lifecycle_batch(payloads, parent_expectations=parent_expectations)
-            except Exception:
+            except Exception as exc:
                 # Preflight is an optimization. The guarded mutation methods
                 # retain the authoritative read fallback when it is unavailable.
-                pass
+                self._report_prefetch_failure(exc)
         staged_records: list[LifecycleOutboxRecord] = []
         staged_outcomes: list[LifecycleApplicationOutcome] = []
         spawn_plans: list[LifecyclePlan] = []
@@ -844,10 +844,10 @@ class LifecycleApplicationService:
         )
         try:
             self._execution.preflight_lifecycle_batch(payloads, parent_expectations=parent_expectations)
-        except Exception:
+        except Exception as exc:
             # Prefetch is an optimization only; normal authoritative
             # UUID reads remain the correctness fallback.
-            pass
+            self._report_prefetch_failure(exc)
         if len(records) > 1:
             return self._drain_batched(
                 claim,
@@ -1154,6 +1154,16 @@ class LifecycleApplicationService:
             outcomes.append(outcome)
             reporter.outcome(state.record, outcome, state)
         return DrainResult(claim=claim, outcomes=tuple(outcomes))
+
+    @staticmethod
+    def _report_prefetch_failure(exc: Exception) -> None:
+        """Report optional-prefetch failures without exposing task data."""
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            print(
+                f"[nautical] lifecycle batch preflight failed ({type(exc).__name__}); "
+                "continuing with guarded reads",
+                file=sys.stderr,
+            )
 
     @staticmethod
     def _report_drain_progress(

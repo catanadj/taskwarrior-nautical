@@ -38,6 +38,12 @@ class ReconcileErrorContracts(unittest.TestCase):
             TaskObservation | None,
         )
 
+    def test_child_uuid_resolution_uses_task_observation_inputs(self) -> None:
+        annotations = get_type_hints(reconcile._resolve_lifecycle_plan_child_uuid)
+
+        self.assertIs(annotations["parent"], TaskObservation)
+        self.assertEqual(annotations["child_observation"], TaskObservation | None)
+
     def test_reconcile_report_keeps_plain_text_when_optional_styling_fails(self) -> None:
         from nautical_core.reconcile_report import render_human
 

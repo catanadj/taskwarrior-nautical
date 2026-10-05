@@ -750,10 +750,10 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> TaskObservation | N
 
 def _resolve_lifecycle_plan_child_uuid(
     lifecycle_plan: LifecyclePlan,
-    parent: Any,
+    parent: TaskObservation,
     hook: Any,
     *,
-    child_observation: Any | None = None,
+    child_observation: TaskObservation | None = None,
 ) -> LifecyclePlan:
     """Resolve the child identity on a typed spawn plan.
 

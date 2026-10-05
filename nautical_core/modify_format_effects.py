@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Literal, Protocol
+from typing import Callable, Literal, Protocol
 
 from .modify_models import MarkupStripper, PreviewLineFormatter
 from .task_models import TaskPayload
@@ -90,7 +90,7 @@ def line_preview(
     kind: str = "cp",
     minimal: bool = False,
 ) -> str:
-    def format_on_time_delta(due: Any, end: Any) -> str:
+    def format_on_time_delta(due: datetime | None, end: datetime | None) -> str:
         return on_time_delta(ports.delta, due, end)
 
     def format_human_delta(start: datetime, end: datetime, prefer: bool = True) -> str:

@@ -318,7 +318,7 @@ class StripQuotesCallback(Protocol):
 
 
 class HumanDeltaCallback(Protocol):
-    def __call__(self, start: Any, end: Any, prefer_months: bool = True) -> str:
+    def __call__(self, start: datetime, end: datetime, prefer_months: bool = True) -> str:
         ...
 
 

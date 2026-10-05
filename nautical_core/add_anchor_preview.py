@@ -589,11 +589,11 @@ def anchor_preview_limit_rows(
     exact_until_count: int | None,
     final_until_dt: datetime | None,
     now_utc: datetime,
-    fmt_dt_local: Callable[[Any], str],
-    human_delta: Callable[[Any, Any, bool], str],
+    fmt_dt_local: Callable[[datetime], str],
+    human_delta: Callable[[datetime, datetime, bool], str],
     final_max_dt: datetime | None = None,
 ) -> None:
-    def _fmt(dt: Any) -> str:
+    def _fmt(dt: datetime) -> str:
         return fmt_dt_local(dt)
 
     future_counts = []

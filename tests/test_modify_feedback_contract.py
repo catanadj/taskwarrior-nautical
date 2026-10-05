@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import importlib
 from types import SimpleNamespace
-from typing import Any, Literal, get_type_hints
+from typing import Any, Literal, get_args, get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -358,6 +358,23 @@ class ModifyFeedbackContractTests(unittest.TestCase):
                 self.assertEqual(
                     get_type_hints(renderer)["format_local"], expected
                 )
+
+    def test_human_delta_callback_uses_validated_datetime_inputs(self) -> None:
+        from nautical_core.add_anchor_preview import anchor_preview_limit_rows
+        from nautical_core.modify_models import HumanDeltaCallback
+
+        callback_hints = get_type_hints(HumanDeltaCallback.__call__)
+        self.assertEqual(callback_hints["start"], datetime)
+        self.assertEqual(callback_hints["end"], datetime)
+        preview_hints = get_type_hints(anchor_preview_limit_rows)
+        self.assertEqual(
+            get_args(preview_hints["human_delta"]),
+            ([datetime, datetime, bool], str),
+        )
+        self.assertEqual(
+            get_args(preview_hints["fmt_dt_local"]),
+            ([datetime], str),
+        )
 
     def test_completion_preview_without_child_due_skips_human_delta(self) -> None:
         now = datetime(2026, 10, 5, 9, tzinfo=timezone.utc)

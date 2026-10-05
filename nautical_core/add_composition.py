@@ -207,7 +207,7 @@ class AddCompositionServices:
         now_local: datetime,
         *,
         observation: TaskObservation | None = None,
-        prof: ProfilerPort,
+        prof: ProfilerPort | None = None,
     ) -> OnAddContext:
         host = self._host
         core = host.core
@@ -328,7 +328,7 @@ class AddCompositionServices:
         )
 
 
-def validate_task(host: Any, task: Any) -> Any:
+def validate_task(host: Any, task: TaskPayload) -> TaskObservation:
     """Validate and classify an add request without constructing services."""
     core = host.core
     validation = core._import_sibling("hook_validation_pipeline")
@@ -363,16 +363,24 @@ __all__ = (
 )
 
 
-def build_on_add_context(host: Any, task: Any, now_utc: Any, now_local: Any, *, observation: Any = None, prof: Any = None) -> Any:
+def build_on_add_context(
+    host: Any,
+    task: TaskPayload,
+    now_utc: datetime,
+    now_local: datetime,
+    *,
+    observation: TaskObservation | None = None,
+    prof: ProfilerPort | None = None,
+) -> OnAddContext:
     """Build recurrence context through the installed composition boundary."""
     return AddCompositionServices(host, object()).build_context(
         task, now_utc, now_local, observation=observation, prof=prof
     )
 
 
-def render_anchor_preview(host: Any, context: Any, *, prof: Any) -> None:
+def render_anchor_preview(host: Any, context: OnAddContext, *, prof: ProfilerPort) -> None:
     AddCompositionServices(host, object()).render_anchor_preview(context, prof=prof)
 
 
-def render_cp_preview(host: Any, context: Any, *, prof: Any) -> None:
+def render_cp_preview(host: Any, context: OnAddContext, *, prof: ProfilerPort) -> None:
     AddCompositionServices(host, object()).render_cp_preview(context, prof=prof)

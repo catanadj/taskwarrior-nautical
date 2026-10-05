@@ -38,7 +38,12 @@ class AddWorkflowTests(unittest.TestCase):
     def test_application_context_and_preview_ports_use_named_contracts(self) -> None:
         from datetime import date
         from typing import Callable
-        from nautical_core.add_composition import AddCompositionServices, due_context
+        from nautical_core.add_composition import (
+            AddCompositionServices,
+            build_on_add_context,
+            due_context,
+            validate_task,
+        )
         from nautical_core.add_workflow import (
             AddWorkflowApplication,
             BuildAddContext,
@@ -67,7 +72,7 @@ class AddWorkflowTests(unittest.TestCase):
             localns={**localns, "TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
         )
         self.assertIs(composition_hints["return"], OnAddContext)
-        self.assertIs(composition_hints["prof"], ProfilerPort)
+        self.assertEqual(composition_hints["prof"], ProfilerPort | None)
         for owner in (
             AddCompositionServices.record_limits,
             AddCompositionServices.render_anchor_preview,
@@ -80,6 +85,17 @@ class AddWorkflowTests(unittest.TestCase):
             self.assertIs(owner_hints["context"], OnAddContext)
             if "prof" in owner_hints:
                 self.assertIs(owner_hints["prof"], ProfilerPort)
+        validate_hints = get_type_hints(
+            validate_task,
+            localns={"TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
+        )
+        self.assertIs(validate_hints["task"], TaskPayload)
+        self.assertIs(validate_hints["return"], TaskObservation)
+        context_hints = get_type_hints(
+            build_on_add_context,
+            localns={**localns, "TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
+        )
+        self.assertIs(context_hints["return"], OnAddContext)
         annotations = get_type_hints(AddWorkflowApplication, localns=localns)
         self.assertIs(annotations["build_context_fn"], BuildAddContext)
         self.assertIs(annotations["render_anchor_preview_fn"], RenderAddPreview)

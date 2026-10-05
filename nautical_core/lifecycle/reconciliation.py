@@ -346,7 +346,6 @@ class LifecycleReconciliationService:
     repository: LifecycleChildRepository
     configuration_fingerprint: str
     schedule_fingerprint: str
-    unit_of_work: Any = None
     application: LifecycleApplicationService | None = None
     _wave_children: dict[tuple[str, int], tuple[TaskObservation, ...]] = field(default_factory=dict, repr=False, compare=False)
 

@@ -21,6 +21,12 @@ from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 class ReconcileCallbackContractTests(unittest.TestCase):
+    def test_reconciliation_service_does_not_retain_unused_unit_of_work(self) -> None:
+        self.assertNotIn(
+            "unit_of_work",
+            reconciliation.LifecycleReconciliationService.__dataclass_fields__,
+        )
+
     def test_lifecycle_reconciliation_application_boundary_is_typed(self) -> None:
         service_type = get_type_hints(
             reconciliation.LifecycleReconciliationService.application_service,

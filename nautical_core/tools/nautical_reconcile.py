@@ -1422,7 +1422,6 @@ def _build_reconcile_session(
         repository,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
-        unit_of_work=unit_of_work,
         application=lifecycle_application,
     )
     datetime_parser = datetime_parser or parser_for_core(nautical_core_package)

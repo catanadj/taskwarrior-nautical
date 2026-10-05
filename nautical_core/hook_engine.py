@@ -4,7 +4,13 @@ import importlib
 from typing import Any, NoReturn, Protocol
 
 from .task_models import TaskPayload
-from .hook_context import HookRuntimeContext, OnAddRequest, ProfilerPort
+from .hook_context import (
+    HookRuntimeContext,
+    OnAddRequest,
+    OnExitRequest,
+    OnModifyRequest,
+    ProfilerPort,
+)
 from .on_exit_models import ExitDrainStats
 
 
@@ -104,7 +110,7 @@ def handle_on_add(
 
 
 def handle_on_exit(
-    request: Any,
+    request: OnExitRequest,
     services: OnExitServices,
 ) -> object:
     _ = request.runtime
@@ -118,11 +124,11 @@ def handle_on_exit(
 
 
 def handle_on_modify(
-    request: Any,
+    request: OnModifyRequest,
     services: OnModifyServices,
 ) -> Any:
     old, new = request.old, request.new
-    transition = getattr(request, "transition", None)
+    transition = request.transition
     if transition is None:
         from .task_changes import TaskTransition
         from .task_models import TaskObservation

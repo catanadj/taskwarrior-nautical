@@ -5,7 +5,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, get_type_hints
 
-from nautical_core.hook_context import OnAddRequest
+from nautical_core.hook_context import OnAddRequest, OnExitRequest, OnModifyRequest
 from nautical_core.hook_engine import OnAddServices, handle_on_add, handle_on_modify
 from nautical_core.modify_models import CompletionLifecycleResult
 
@@ -15,6 +15,12 @@ class HookEngineContractTests(unittest.TestCase):
         self.assertIs(get_type_hints(handle_on_add)["request"], OnAddRequest)
         self.assertIsNot(get_type_hints(OnAddRequest)["prof"], Any)
         self.assertIsNot(get_type_hints(OnAddServices.result)["prof"], Any)
+
+    def test_modify_and_exit_engines_use_typed_request_models(self) -> None:
+        from nautical_core.hook_engine import handle_on_exit, handle_on_modify
+
+        self.assertIs(get_type_hints(handle_on_modify)["request"], OnModifyRequest)
+        self.assertIs(get_type_hints(handle_on_exit)["request"], OnExitRequest)
 
     def test_on_add_profiler_assignment_does_not_hide_internal_failures(self) -> None:
         class BrokenProfiler:
@@ -90,7 +96,7 @@ class HookEngineContractTests(unittest.TestCase):
             }, 1, 1),
         ):
             new = dict(task, status="deleted")
-            request = SimpleNamespace(
+            request = OnModifyRequest(
                 old=task,
                 new=new,
                 runtime=SimpleNamespace(uow=object(), lifecycle_result=None),
@@ -109,7 +115,7 @@ class HookEngineContractTests(unittest.TestCase):
             reason="planner unavailable",
         )
         runtime = SimpleNamespace(lifecycle_result=None, uow=object())
-        request = SimpleNamespace(
+        request = OnModifyRequest(
             old={
                 "uuid": "00000000-0000-4000-8000-000000000303",
                 "status": "pending",
@@ -160,7 +166,7 @@ class HookEngineContractTests(unittest.TestCase):
             diagnostic=SimpleNamespace(failure_kind="scheduler_error"),
         )
         runtime = SimpleNamespace(lifecycle_result=None, uow=object())
-        request = SimpleNamespace(
+        request = OnModifyRequest(
             old={"uuid": "00000000-0000-4000-8000-000000000304", "status": "pending", "chainID": "chain304"},
             new={"uuid": "00000000-0000-4000-8000-000000000304", "status": "completed", "chainID": "chain304"},
             runtime=runtime,

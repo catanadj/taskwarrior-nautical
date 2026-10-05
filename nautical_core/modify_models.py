@@ -335,17 +335,22 @@ class ComputeCpChildDueCallback(Protocol):
 
 
 class SafeParseDatetimeCallback(Protocol):
-    def __call__(self, value: Any) -> tuple[datetime | None, str | None]:
+    def __call__(self, value: object) -> tuple[datetime | None, str | None]:
         ...
 
 
 class ValidateUntilCallback(Protocol):
-    def __call__(self, until_dt: datetime, now_utc: Any) -> tuple[bool, str | None]:
+    def __call__(self, until_dt: datetime, now_utc: datetime) -> tuple[bool, str | None]:
         ...
 
 
 class ValidateChainDurationCallback(Protocol):
-    def __call__(self, child_due: Any, until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
+    def __call__(
+        self,
+        child_due: datetime | None,
+        until_dt: datetime | None,
+        now_utc: datetime,
+    ) -> tuple[bool, str | None]:
         ...
 
 

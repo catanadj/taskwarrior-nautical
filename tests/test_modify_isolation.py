@@ -546,6 +546,28 @@ class ModifyIsolationTests(unittest.TestCase):
         from nautical_core.scheduler_models import OccurrenceSearchExhausted
         from nautical_core.parsing.parser_models import AnchorDNF
 
+        self.assertEqual(
+            get_type_hints(SafeParseDatetimeCallback.__call__),
+            {"value": object, "return": tuple[datetime | None, str | None]},
+        )
+        self.assertEqual(
+            get_type_hints(ValidateUntilCallback.__call__),
+            {
+                "until_dt": datetime,
+                "now_utc": datetime,
+                "return": tuple[bool, str | None],
+            },
+        )
+        self.assertEqual(
+            get_type_hints(ValidateChainDurationCallback.__call__),
+            {
+                "child_due": datetime | None,
+                "until_dt": datetime | None,
+                "now_utc": datetime,
+                "return": tuple[bool, str | None],
+            },
+        )
+
         contracts = {
             "completion_compute_child_due": {
                 "task": TaskPayload,

@@ -80,7 +80,7 @@ from nautical_core.reconcile_operator_service import ReconcileRecoveryCallbacks,
 if TYPE_CHECKING:
     from nautical_core.chain_integrity_application import IntegrityApplicationResult
     from nautical_core.chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
-    from nautical_core.lifecycle.application import LifecycleApplicationService
+    from nautical_core.lifecycle.application import LifecycleApplicationOutcome, LifecycleApplicationService
     from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
 
 safe_lock = partial(
@@ -794,7 +794,7 @@ def _resolve_lifecycle_plan_child_uuid(
     )
     return resolved_plan
 
-def _raise_for_lifecycle_outcome(outcome: Any, *, label: str) -> None:
+def _raise_for_lifecycle_outcome(outcome: LifecycleApplicationOutcome, *, label: str) -> None:
     """Preserve the retryable/manual-review exception contract callers depend on."""
     from nautical_core.lifecycle.application import LifecycleApplicationOutcomeKind
 

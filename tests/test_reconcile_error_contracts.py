@@ -28,6 +28,7 @@ from nautical_core.integration_models import (
     Unavailable,
 )
 from nautical_core.lifecycle.recovery_models import RecoveryStatus
+from nautical_core.lifecycle.application import LifecycleApplicationOutcome
 from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
 
 
@@ -43,6 +44,14 @@ class ReconcileErrorContracts(unittest.TestCase):
 
         self.assertIs(annotations["parent"], TaskObservation)
         self.assertEqual(annotations["child_observation"], TaskObservation | None)
+
+    def test_lifecycle_outcome_error_boundary_uses_owner_model(self) -> None:
+        annotations = get_type_hints(
+            reconcile._raise_for_lifecycle_outcome,
+            globalns={**vars(reconcile), "LifecycleApplicationOutcome": LifecycleApplicationOutcome},
+        )
+
+        self.assertIs(annotations["outcome"], LifecycleApplicationOutcome)
 
     def test_reconcile_report_keeps_plain_text_when_optional_styling_fails(self) -> None:
         from nautical_core.reconcile_report import render_human

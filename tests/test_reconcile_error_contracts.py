@@ -698,6 +698,28 @@ class ReconcileErrorContracts(unittest.TestCase):
 
         self.assertIs(result[0][0], partial_result)
 
+    def test_fresh_native_until_parent_rejects_multi_row_verification_result(self) -> None:
+        parent = TaskObservation.from_mapping(
+            {"uuid": "00000000-0000-4000-8000-000000000101"},
+            source_query="uuid:00000000-0000-4000-8000-000000000101",
+        )
+        child = TaskObservation.from_mapping(
+            {"uuid": "00000000-0000-4000-8000-000000000102"},
+            source_query="uuid:00000000-0000-4000-8000-000000000102",
+        )
+        repository = SimpleNamespace(
+            verification=lambda _uuid: reconcile.Found((parent, child), "verification")
+        )
+        row = TaskObservation.from_mapping(
+            {"uuid": "00000000-0000-4000-8000-000000000101"},
+            source_query="native-until-test",
+        )
+
+        with patch.object(reconcile, "_repository", return_value=repository):
+            result = reconcile._fresh_native_until_parent(row)
+
+        self.assertIsNone(result)
+
     def test_configuration_verification_fails_closed_on_unexpected_fault(self) -> None:
         def broken_verifier() -> dict[str, bool]:
             raise RuntimeError("malformed TOML")

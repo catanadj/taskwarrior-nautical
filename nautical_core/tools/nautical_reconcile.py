@@ -80,8 +80,8 @@ from nautical_core.reconcile_operator_service import ReconcileRecoveryCallbacks,
 if TYPE_CHECKING:
     from nautical_core.chain_integrity_application import IntegrityApplicationResult
     from nautical_core.chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
-    from nautical_core.lifecycle_application import LifecycleApplicationService
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle.application import LifecycleApplicationService
+    from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
 
 safe_lock = partial(
     cache_locking.safe_lock,
@@ -382,10 +382,11 @@ def _fresh_native_until_parent(row: TaskObservation) -> TaskObservation | None:
     uuid_value = _observation_text(row, "uuid")
     if not uuid_value:
         raise RuntimeError("native-until target has no UUID")
-    return cast(TaskObservation | None, _read_value(
+    value = _read_value(
         _repository().verification(uuid_value),
         f"native-until parent {uuid_value}",
-    ))
+    )
+    return value if isinstance(value, TaskObservation) else None
 
 
 def _native_until_repairs(

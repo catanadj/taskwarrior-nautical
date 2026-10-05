@@ -39,6 +39,7 @@ class AddWorkflowTests(unittest.TestCase):
         from datetime import date
         from typing import Callable
         from nautical_core.add_composition import (
+            AddHookResultFactory,
             AddDatetimeParserHost,
             AddCompositionServices,
             _datetime_parser,
@@ -70,6 +71,13 @@ class AddWorkflowTests(unittest.TestCase):
         self.assertIs(
             get_type_hints(_datetime_parser)["host"],
             AddDatetimeParserHost,
+        )
+        self.assertEqual(
+            get_type_hints(
+                AddCompositionServices.__init__,
+                localns={"AddHookResultFactory": AddHookResultFactory},
+            )["result_cls"],
+            AddHookResultFactory | None,
         )
         self.assertIs(
             get_type_hints(
@@ -220,6 +228,14 @@ class AddWorkflowTests(unittest.TestCase):
             get_type_hints(schedule_patch)["encode_timestamp"],
             Callable[[TaskTimestamp], object],
         )
+
+    def test_result_requires_an_explicit_hook_response_factory(self) -> None:
+        from nautical_core.add_composition import AddCompositionServices
+
+        services = object.__new__(AddCompositionServices)
+        services._result_cls = None
+        with self.assertRaisesRegex(RuntimeError, "result factory is not configured"):
+            services.result({}, sanitize=False, prof=None)
 
     def test_application_prepares_and_attaches_typed_plan(self) -> None:
         application = AddWorkflowApplication(

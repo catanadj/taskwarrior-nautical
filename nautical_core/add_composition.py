@@ -24,6 +24,12 @@ class AddDatetimeParserHost(Protocol):
     def _diag(self, message: str) -> None: ...
 
 
+class AddHookResultFactory(Protocol):
+    def __call__(
+        self, *, task: TaskPayload, sanitize: bool, prof: ProfilerPort | None
+    ) -> object: ...
+
+
 def _datetime_parser(host: AddDatetimeParserHost) -> TaskDatetimeParser:
     parser = host._TASK_DATETIME_PARSER
     if parser is None:
@@ -168,7 +174,9 @@ def _due_matches_entry(host: Any, task: TaskPayload) -> bool:
 class AddCompositionServices:
     """Bind add workflow infrastructure without owning recurrence decisions."""
 
-    def __init__(self, host: Any, result_cls: Any) -> None:
+    def __init__(
+        self, host: Any, result_cls: AddHookResultFactory | None = None
+    ) -> None:
         self._host = host
         self._result_cls = result_cls
         core = host.core
@@ -189,7 +197,10 @@ class AddCompositionServices:
     def result(
         self, task: TaskPayload, *, sanitize: bool, prof: ProfilerPort | None
     ) -> object:
-        return self._result_cls(task=task, sanitize=sanitize, prof=prof)
+        result_cls = self._result_cls
+        if result_cls is None:
+            raise RuntimeError("add hook result factory is not configured")
+        return result_cls(task=task, sanitize=sanitize, prof=prof)
 
     def has_nautical_fields(self, task: TaskPayload) -> bool:
         return self._host._task_has_nautical_fields(task)
@@ -394,14 +405,14 @@ def build_on_add_context(
     prof: ProfilerPort | None = None,
 ) -> OnAddContext:
     """Build recurrence context through the installed composition boundary."""
-    return AddCompositionServices(host, object()).build_context(
+    return AddCompositionServices(host).build_context(
         task, now_utc, now_local, observation=observation, prof=prof
     )
 
 
 def render_anchor_preview(host: Any, context: OnAddContext, *, prof: ProfilerPort) -> None:
-    AddCompositionServices(host, object()).render_anchor_preview(context, prof=prof)
+    AddCompositionServices(host).render_anchor_preview(context, prof=prof)
 
 
 def render_cp_preview(host: Any, context: OnAddContext, *, prof: ProfilerPort) -> None:
-    AddCompositionServices(host, object()).render_cp_preview(context, prof=prof)
+    AddCompositionServices(host).render_cp_preview(context, prof=prof)

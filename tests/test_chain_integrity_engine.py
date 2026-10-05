@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from nautical_core.chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
 from nautical_core.chain_integrity_application import IntegrityApplicationResult, IntegrityApplicationService
@@ -56,6 +57,27 @@ def node(row: dict[str, object]) -> ChainNode:
 
 
 class ChainIntegrityEngineTests(unittest.TestCase):
+    def test_snapshot_audit_does_not_classify_planner_defects_as_unavailable(self) -> None:
+        snapshot = ChainSnapshot(
+            "planner-defect-snapshot",
+            SnapshotCoverage.CANDIDATES,
+            "test",
+            (),
+        )
+        engine = ChainIntegrityEngine.lifecycle_only(
+            configuration_fingerprint="planner-defect-config",
+        )
+        with TemporaryDirectory() as directory:
+            outbox = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(outbox.open().ok)
+            with patch.object(
+                engine._planner,
+                "plan",
+                side_effect=RuntimeError("repair planner invariant failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "repair planner invariant failed"):
+                    engine.audit_snapshot(snapshot, outbox_repository=outbox)
+
     def test_integrity_context_keeps_graph_and_outbox_provenance_separate(self) -> None:
         graph = ChainGraph.from_snapshot(
             ChainSnapshot("context-graph", SnapshotCoverage.CANDIDATES, "taskwarrior", ())

@@ -345,36 +345,21 @@ class ChainIntegrityEngine:
                 snapshot.complete_chain_history or chain_id in hydrated_chains,
                 snapshot.reason,
             )
-            try:
-                graph = ChainGraph.from_snapshot(scoped)
-                # Outbox evidence is global at load time but chain-local during
-                # invariant evaluation. Filtering here prevents every intent
-                # from being compared with every chain in a broad audit.
-                chain_outbox = OutboxSnapshot.from_records(
-                    outbox.for_chain(chain_id), source=outbox.source,
-                )
-                context = IntegrityContext(
-                    graph, chain_outbox, self._configuration_fingerprint, mutation_epoch,
-                )
-                from .chain_invariants import evaluate_context
+            graph = ChainGraph.from_snapshot(scoped)
+            # Outbox evidence is global at load time but chain-local during
+            # invariant evaluation. Filtering here prevents every intent
+            # from being compared with every chain in a broad audit.
+            chain_outbox = OutboxSnapshot.from_records(
+                outbox.for_chain(chain_id), source=outbox.source,
+            )
+            context = IntegrityContext(
+                graph, chain_outbox, self._configuration_fingerprint, mutation_epoch,
+            )
+            from .chain_invariants import evaluate_context
 
-                local_findings = evaluate_context(context)
-                planning: IntegrityPlanningResult = self._planner.plan(context, local_findings)
-                local_status = self._status(local_findings, planning)
-            except Exception as exc:
-                local_findings = ()
-                planning = IntegrityPlanningResult((), ())
-                local_status = IntegrityReportStatus.UNAVAILABLE
-                reason = str(exc).strip() or type(exc).__name__
-                return IntegrityEngineResult(
-                    IntegrityReportStatus.UNAVAILABLE,
-                    snapshot,
-                    tuple(findings),
-                    tuple(plans),
-                    tuple(refusals),
-                    chain_statuses=tuple(statuses) + ((chain_id, local_status),),
-                    reason=reason,
-                )
+            local_findings = evaluate_context(context)
+            planning: IntegrityPlanningResult = self._planner.plan(context, local_findings)
+            local_status = self._status(local_findings, planning)
             findings.extend(local_findings)
             plans.extend(planning.plans)
             refusals.extend(planning.refusals)

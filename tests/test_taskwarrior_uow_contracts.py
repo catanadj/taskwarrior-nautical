@@ -4,6 +4,7 @@ from datetime import timezone
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from typing import get_type_hints
 import unittest
 
 from nautical_core.integration_context import (
@@ -13,7 +14,13 @@ from nautical_core.integration_context import (
     SystemClock,
     ValidatedNauticalConfiguration,
 )
-from nautical_core.taskwarrior_uow import QueryScope, QueryScopeKind, TaskwarriorUnitOfWork
+from nautical_core.taskwarrior_uow import (
+    CachedAuthoritativeRead,
+    InvocationReadCache,
+    QueryScope,
+    QueryScopeKind,
+    TaskwarriorUnitOfWork,
+)
 
 
 def make_uow(taskdata: str | Path, *, access: IntegrationAccess, budget: int = 8):
@@ -27,6 +34,11 @@ def make_uow(taskdata: str | Path, *, access: IntegrationAccess, budget: int = 8
 
 
 class TaskwarriorUnitOfWorkContractTests(unittest.TestCase):
+    def test_read_cache_keeps_heterogeneous_values_at_object_boundary(self) -> None:
+        self.assertIs(get_type_hints(CachedAuthoritativeRead)["value"], object)
+        self.assertIs(get_type_hints(InvocationReadCache.put)["value"], object)
+        self.assertIs(get_type_hints(TaskwarriorUnitOfWork.cache_read)["value"], object)
+
     def test_command_budget_is_advisory_and_reported_once(self) -> None:
         events = []
 

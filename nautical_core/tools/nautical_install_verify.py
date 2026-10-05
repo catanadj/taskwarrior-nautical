@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -18,25 +19,29 @@ if str(CORE_ROOT) not in sys.path:
     sys.path.insert(0, str(CORE_ROOT))
 
 from nautical_core.operator_presentation import bounded_text, finding_status, ordered_findings, render_json_document
-def _findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+
+
+def _findings(payload: Mapping[str, object]) -> list[Mapping[str, object]]:
     """Return canonical finding mappings from a Doctor payload."""
-    source = payload.get("operator_findings") or []
-    return [item for item in source if isinstance(item, dict) and "code" in item]
+    source = payload.get("operator_findings")
+    if not isinstance(source, list):
+        return []
+    return [item for item in source if isinstance(item, Mapping) and "code" in item]
 
 
-def _items(payload: dict[str, Any], prefix: str) -> list[dict[str, Any]]:
+def _items(payload: Mapping[str, object], prefix: str) -> list[Mapping[str, object]]:
     return [
         item for item in _findings(payload)
         if str(item.get("code") or "").startswith(prefix)
     ]
 
 
-def _group_status(items: list[dict[str, Any]], *, empty_status: str = "failed") -> str:
+def _group_status(items: list[Mapping[str, object]], *, empty_status: str = "failed") -> str:
     return finding_status(items, empty=empty_status)
 
 
 def build_report(
-    payload: dict[str, Any],
+    payload: Mapping[str, object],
     *,
     platform: str,
     launcher: Path,

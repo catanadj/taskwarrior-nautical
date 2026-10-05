@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest.mock import patch
 
+import nautical_core.lifecycle.outbox as outbox_module
 from nautical_core.lifecycle.models import ExecutionStage
 from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 from nautical_core.lifecycle.execution_policy import (
@@ -53,6 +54,47 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                 self.assertEqual(set(signature(method).parameters), parameters)
                 hints = get_type_hints(method)
                 self.assertNotIn(Any, hints.values())
+
+    def test_integrity_outbox_ports_use_record_models(self) -> None:
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxRecord
+        from nautical_core.lifecycle import outbox_operations
+
+        from nautical_core.lifecycle.outbox import LifecycleOutboxRecord
+
+        expected_claim = tuple[OutboxResult, tuple[IntegrityOutboxRecord, ...]]
+        expected_snapshot = tuple[
+            OutboxResult,
+            tuple[LifecycleOutboxRecord | IntegrityOutboxRecord, ...],
+        ]
+        operations_namespace = {
+            **vars(outbox_operations),
+            "IntegrityOutboxRecord": IntegrityOutboxRecord,
+        }
+        repository_namespace = {
+            **vars(outbox_module),
+            "IntegrityOutboxRecord": IntegrityOutboxRecord,
+        }
+        self.assertEqual(
+            get_type_hints(
+                outbox_operations.LifecycleExecutionOutboxPort.claim_integrity_batch,
+                globalns=operations_namespace,
+            )["return"],
+            expected_claim,
+        )
+        self.assertEqual(
+            get_type_hints(
+                outbox_operations.LifecycleOutboxEvidencePort.snapshot_records,
+                globalns=operations_namespace,
+            )["return"],
+            expected_snapshot,
+        )
+        self.assertEqual(
+            get_type_hints(
+                outbox_module._LifecycleOutboxRepository.snapshot_records,
+                globalns=repository_namespace,
+            )["return"],
+            expected_snapshot,
+        )
 
     def test_connection_scope_does_not_mask_unexpected_operation_errors(self) -> None:
         for session in (False, True):

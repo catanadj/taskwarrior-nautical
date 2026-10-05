@@ -17,7 +17,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import time
-from typing import Any, Callable, Iterator, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
 
 from .models import ExecutionStage, LifecyclePlan
 from .outbox_codec import (
@@ -35,6 +35,9 @@ from .outbox_schema import (
     initialize as initialize_schema,
     validate_schema,
 )
+
+if TYPE_CHECKING:
+    from ..integrity_outbox_envelope import IntegrityOutboxRecord
 
 
 OUTBOX_ACK_RETENTION_SECONDS = 90.0 * 24.0 * 60.0 * 60.0
@@ -1044,7 +1047,9 @@ class _LifecycleOutboxRepository:
 
         return self._with_bulk_connection(operation)
 
-    def claim_integrity_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[Any, ...]]:
+    def claim_integrity_batch(
+        self, *, owner: str, lease_seconds: float, limit: int
+    ) -> tuple[OutboxResult, tuple[IntegrityOutboxRecord, ...]]:
         self._metric("outbox_lease_claims")
         """Claim integrity work without exposing it to lifecycle executors."""
         from ..integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
@@ -1070,7 +1075,7 @@ class _LifecycleOutboxRepository:
                     "ORDER BY created_at, intent_id LIMIT ?",
                     ("integrity", *_ACTIVE_STATES, int(limit)),
                 ).fetchall()
-                records: list[Any] = []
+                records: list[IntegrityOutboxRecord] = []
                 for row in rows:
                     intent_id = str(row["intent_id"])
                     try:
@@ -1662,7 +1667,9 @@ class _LifecycleOutboxRepository:
             if conn is not None:
                 conn.close()
 
-    def snapshot_records(self) -> tuple[OutboxResult, tuple[Any, ...]]:
+    def snapshot_records(
+        self,
+    ) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord | IntegrityOutboxRecord, ...]]:
         """Read every validated intent for one immutable integrity snapshot.
 
         This is deliberately a repository operation: callers do not inspect

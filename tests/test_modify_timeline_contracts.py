@@ -23,6 +23,22 @@ from nautical_core.timeutil import parse_dt_any
 
 
 class ModifyTimelineContractTests(unittest.TestCase):
+    def test_slot_datetime_uses_calendar_date_and_hhmm_inputs(self) -> None:
+        from nautical_core.modify_timeline import _build_slot_datetime
+
+        self.assertEqual(
+            get_type_hints(_build_slot_datetime),
+            {
+                "day": date,
+                "hhmm": tuple[int, int],
+                "return": datetime,
+            },
+        )
+        self.assertEqual(
+            _build_slot_datetime(date(2026, 10, 5), (7, 30)),
+            datetime(2026, 10, 5, 7, 30),
+        )
+
     def test_timeline_gap_formatter_uses_datetime_values(self) -> None:
         from nautical_core.modify_timeline import format_gap
 

@@ -43,7 +43,7 @@ class TimelineFormattingServices:
 TimelineItem: TypeAlias = tuple[object, datetime | None, TaskPayload, str]
 
 
-def _build_slot_datetime(day: Any, hhmm: Any) -> datetime:
+def _build_slot_datetime(day: date, hhmm: tuple[int, int]) -> datetime:
     return datetime.combine(day, datetime.min.time().replace(hour=int(hhmm[0]), minute=int(hhmm[1])))
 
 

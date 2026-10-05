@@ -90,11 +90,16 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
         candidate_hints = get_type_hints(RecurrenceCandidate)
         self.assertEqual(candidate_hints["child_due"], datetime | None)
+        self.assertEqual(
+            candidate_hints["metadata"], tuple[tuple[str, object], ...]
+        )
         self.assertEqual(candidate_hints["until"], datetime | None)
         with self.assertRaisesRegex(TypeError, "child_due must be a datetime"):
             RecurrenceCandidate(child_due="20260825T090000Z")
         with self.assertRaisesRegex(TypeError, "until must be a datetime"):
             RecurrenceCandidate(child_due=None, until="20260825T090000Z")
+        with self.assertRaisesRegex(TypeError, "metadata keys must be strings"):
+            RecurrenceCandidate(child_due=None, metadata=((1, "target_field"),))
 
     def test_recovery_plan_result_requires_datetime_for_child_due(self) -> None:
         from datetime import datetime

@@ -69,7 +69,7 @@ class RecurrenceCandidate:
     """Pure recurrence result consumed by completion/expiration planning."""
 
     child_due: datetime | None
-    metadata: tuple[tuple[str, Any], ...] = ()
+    metadata: tuple[tuple[str, object], ...] = ()
     dnf: Any = None
     until: datetime | None = None
     terminal_reason: str = ""
@@ -77,6 +77,13 @@ class RecurrenceCandidate:
     def __post_init__(self) -> None:
         if self.child_due is not None and not isinstance(self.child_due, datetime):
             raise TypeError("recurrence candidate child_due must be a datetime")
+        if not isinstance(self.metadata, tuple) or any(
+            not isinstance(item, tuple)
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            for item in self.metadata
+        ):
+            raise TypeError("recurrence candidate metadata keys must be strings")
         if self.until is not None and not isinstance(self.until, datetime):
             raise TypeError("recurrence candidate until must be a datetime")
 

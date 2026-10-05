@@ -789,7 +789,7 @@ def _validate_anchor_file_or_fail(anchor_file: str) -> None:
         return
     try:
         _load_anchor_file_dates(anchor_file)
-    except Exception as exc:
+    except (OSError, UnicodeError, ValueError) as exc:
         _error_and_exit([("Invalid anchor_file", str(exc))])
 
 
@@ -800,7 +800,7 @@ def _validate_omit_file_for_anchor_or_fail(anchor_str: str, anchor_file_str: str
         return
     try:
         _load_omit_file_dates(omit_file)
-    except Exception as exc:
+    except (OSError, UnicodeError, ValueError) as exc:
         _error_and_exit([("Invalid omit_file", str(exc))])
 
 

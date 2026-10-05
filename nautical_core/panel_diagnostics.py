@@ -1,10 +1,42 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from datetime import date
+from typing import Literal, Protocol, overload
 
 from . import timezone_facade
 from .modify_models import TaskView
+
+
+class AnchorFilesPort(Protocol):
+    def load_anchor_file_dates(
+        self, name: str | None, anchor_file_dir: str | None
+    ) -> frozenset[date]: ...
+
+    def unmatched_anchor_file_patterns(
+        self, name: str | None, anchor_file_dir: str | None
+    ) -> tuple[str, ...]: ...
+
+
+class OmitFilesPort(Protocol):
+    def load_omit_file_dates(
+        self, name: str | None, omit_file_dir: str | None
+    ) -> frozenset[date]: ...
+
+    def unmatched_omit_file_patterns(
+        self, name: str | None, omit_file_dir: str | None
+    ) -> tuple[str, ...]: ...
+
+
+class PanelDiagnosticsCore(Protocol):
+    ANCHOR_FILE_DIR: str
+    OMIT_FILE_DIR: str
+
+    @overload
+    def _import_sibling(self, name: Literal["anchor_files"]) -> AnchorFilesPort: ...
+
+    @overload
+    def _import_sibling(self, name: Literal["omit_files"]) -> OmitFilesPort: ...
 
 
 def recurrence_timezone_warning(task: TaskView) -> str:
@@ -25,7 +57,7 @@ def config_warnings() -> list[str]:
     return [f"NAUTICAL_CONFIG points to a missing file; built-in defaults are active ({env_path})."]
 
 
-def file_source_warnings(core: Any, task: TaskView) -> list[str]:
+def file_source_warnings(core: PanelDiagnosticsCore, task: TaskView) -> list[str]:
     warnings: list[str] = []
     anchor_file = str(task.get("anchor_file") or "").strip()
     omit_file = str(task.get("omit_file") or "").strip()
@@ -60,7 +92,12 @@ def file_source_warnings(core: Any, task: TaskView) -> list[str]:
     return warnings
 
 
-def panel_warnings(core: Any, task: TaskView, *, include_files: bool = True) -> list[str]:
+def panel_warnings(
+    core: PanelDiagnosticsCore,
+    task: TaskView,
+    *,
+    include_files: bool = True,
+) -> list[str]:
     warnings: list[str] = []
     tz_warning = recurrence_timezone_warning(task)
     if tz_warning:

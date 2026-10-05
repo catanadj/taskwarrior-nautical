@@ -84,6 +84,18 @@ class ExhaustedService:
 
 
 class LifecycleTerminalPlanTests(unittest.TestCase):
+    def test_recurrence_candidate_requires_datetime_values(self) -> None:
+        from datetime import datetime
+        from typing import get_type_hints
+
+        candidate_hints = get_type_hints(RecurrenceCandidate)
+        self.assertEqual(candidate_hints["child_due"], datetime | None)
+        self.assertEqual(candidate_hints["until"], datetime | None)
+        with self.assertRaisesRegex(TypeError, "child_due must be a datetime"):
+            RecurrenceCandidate(child_due="20260825T090000Z")
+        with self.assertRaisesRegex(TypeError, "until must be a datetime"):
+            RecurrenceCandidate(child_due=None, until="20260825T090000Z")
+
     def test_recovery_plan_result_requires_datetime_for_child_due(self) -> None:
         from datetime import datetime
         from typing import get_type_hints
@@ -136,6 +148,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             )
 
     def test_planner_preserves_successor_limit_error_context(self) -> None:
+        from datetime import datetime, timezone
         from nautical_core.lifecycle.planner import LifecyclePlanningError
 
         source = task_snapshot({
@@ -149,7 +162,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
         class Recurrence:
             def next_candidate(self, *_args: object) -> RecurrenceCandidate:
-                return RecurrenceCandidate("2026-08-13T09:00:00Z")
+                return RecurrenceCandidate(datetime(2026, 8, 13, 9, tzinfo=timezone.utc))
 
             def build_child(self, *_args: object) -> None:
                 raise AssertionError("limit failure must prevent child construction")
@@ -236,6 +249,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             )
 
     def test_lifecycle_planner_is_pure_and_deterministic(self) -> None:
+        from datetime import datetime, timezone
         from nautical_core.lifecycle.planner import (
             LifecyclePlanningError,
             LifecyclePreflight,
@@ -266,7 +280,10 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
         class Recurrence:
             def next_candidate(self, _snapshot: TaskSnapshot, _event: LifecycleEvent, _kind: str, _next_link: int) -> RecurrenceCandidate:
-                return RecurrenceCandidate(child_due="20260824T090000Z", metadata=(("target_field", "due"),))
+                return RecurrenceCandidate(
+                    child_due=datetime(2026, 8, 24, 9, tzinfo=timezone.utc),
+                    metadata=(("target_field", "due"),),
+                )
 
             def build_child(self, child_snapshot: TaskSnapshot, event: LifecycleEvent, _candidate: RecurrenceCandidate, _next_link: int) -> TaskDraft:
                 return build_child(child_snapshot, event)
@@ -616,7 +633,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             "cp": "1d",
         }
         source = task_snapshot(source_values)
-        candidate = RecurrenceCandidate("2026-08-13T09:00:00Z")
+        candidate = RecurrenceCandidate(datetime(2026, 8, 13, 9, tzinfo=timezone.utc))
 
         class Recurrence:
             def __init__(self, value: RecurrenceCandidate) -> None:
@@ -632,7 +649,8 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
                 return task_draft({
                     **values, "uuid": "00000000-0000-4000-8000-000000000505",
                     "description": "next", "status": "pending", "link": next_link,
-                    "prevLink": values["uuid"][:8], "due": selected_candidate.child_due,
+                    "prevLink": values["uuid"][:8],
+                    "due": selected_candidate.child_due.isoformat().replace("+00:00", "Z"),
                 })
 
         service = Recurrence(candidate)

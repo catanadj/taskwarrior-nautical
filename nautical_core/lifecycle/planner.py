@@ -9,6 +9,7 @@ shared by on-modify and reconcile.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import math
 from typing import Any, Callable, Protocol
 
@@ -67,11 +68,17 @@ def _recurrence_kind(task: TaskSnapshot | NauticalTask) -> str:
 class RecurrenceCandidate:
     """Pure recurrence result consumed by completion/expiration planning."""
 
-    child_due: Any
+    child_due: datetime | None
     metadata: tuple[tuple[str, Any], ...] = ()
     dnf: Any = None
-    until: Any = None
+    until: datetime | None = None
     terminal_reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.child_due is not None and not isinstance(self.child_due, datetime):
+            raise TypeError("recurrence candidate child_due must be a datetime")
+        if self.until is not None and not isinstance(self.until, datetime):
+            raise TypeError("recurrence candidate until must be a datetime")
 
 
 @dataclass(frozen=True, slots=True)

@@ -290,6 +290,55 @@ class AddWorkflowTests(unittest.TestCase):
         self.assertIs(get_type_hints(initialize_core)["host"], AddCoreBootstrapHost)
         self.assertIs(get_type_hints(load_core)["host"], AddCoreBootstrapHost)
 
+    def test_optional_core_loaded_warning_failure_does_not_block_hook_init(self) -> None:
+        import io
+        import os
+        from contextlib import redirect_stderr
+        from datetime import timezone
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from nautical_core.add_composition import load_core
+        from nautical_core.task_datetime import ConfiguredTaskDatetimeParser
+
+        class Core:
+            @staticmethod
+            def parse_dt_any(_value):
+                return datetime(2026, 10, 5, tzinfo=timezone.utc)
+
+            @staticmethod
+            def _import_sibling(name):
+                if name != "core_config":
+                    raise AssertionError(f"unexpected sibling: {name}")
+
+                def fail_warning(*_args):
+                    raise RuntimeError("optional warning failed")
+
+                return SimpleNamespace(warn_once_per_day_any=fail_warning)
+
+        def host_with_uninitialized_core():
+            return SimpleNamespace(
+                _INTEGRATION_CONTEXT=object(),
+                _TASK_DATETIME_PARSER=ConfiguredTaskDatetimeParser(Core.parse_dt_any),
+                core=Core(),
+                _CORE_READY=False,
+                _MAX_JSON_BYTES=1024,
+                _IMPORT_T0=0.0,
+                time=SimpleNamespace(perf_counter=lambda: 1.0),
+            )
+
+        for diagnostic_env, expected_stderr in (
+            ({"NAUTICAL_DIAG": "1"}, "[nautical] on-add core-loaded warning failed (RuntimeError)\n"),
+            ({}, ""),
+        ):
+            with self.subTest(diagnostics=bool(diagnostic_env)):
+                host = host_with_uninitialized_core()
+                stderr = io.StringIO()
+                with patch.dict(os.environ, diagnostic_env, clear=True), redirect_stderr(stderr):
+                    load_core(host)
+
+                self.assertTrue(host._CORE_READY)
+                self.assertEqual(stderr.getvalue(), expected_stderr)
+
     def test_application_prepares_and_attaches_typed_plan(self) -> None:
         application = AddWorkflowApplication(
             record_schedule_fn=lambda plan, _task, _field: plan,

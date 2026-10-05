@@ -29,7 +29,7 @@ class BuildAddContext(Protocol):
         now_utc: datetime,
         now_local: datetime,
         *,
-        observation: TaskObservation,
+        observation: TaskObservation | None,
         prof: ProfilerPort,
     ) -> OnAddContext: ...
 
@@ -201,7 +201,7 @@ class AddWorkflowApplication:
         now_utc: datetime,
         now_local: datetime,
         *,
-        observation: TaskObservation,
+        observation: TaskObservation | None,
         prof: ProfilerPort,
     ) -> OnAddContext:
         return self.build_context_fn(task, now_utc, now_local, observation=observation, prof=prof)

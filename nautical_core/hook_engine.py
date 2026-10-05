@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, NoReturn, Protocol
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 
 from .modify_models import CompletionLifecycleResult
 from .task_changes import TaskTransition
@@ -16,6 +16,9 @@ from .hook_context import (
 )
 from .on_exit_models import ExitDrainStats
 
+if TYPE_CHECKING:
+    from .add_workflow import AddWorkflowApplication
+
 
 class OnAddServices(Protocol):
     """Typed services owned by the on-add implementation."""
@@ -26,7 +29,7 @@ class OnAddServices(Protocol):
     def core(self) -> Any: ...
     def diag(self, message: str) -> None: ...
     def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
-    def workflow_application(self) -> Any: ...
+    def workflow_application(self) -> AddWorkflowApplication: ...
 
 
 class OnModifyServices(Protocol):
@@ -97,7 +100,7 @@ def handle_on_add(
         task,
         now_utc,
         now_local,
-        observation=getattr(request, "observation", None),
+        observation=request.observation,
         prof=prof,
     )
     if not ctx.kind:

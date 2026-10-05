@@ -11,7 +11,7 @@ from .task_models import TaskPayload
 from .task_datetime import TaskDatetimeParser, parser_for_core
 
 if TYPE_CHECKING:
-    from .add_workflow import AddWorkflowPlan
+    from .add_workflow import AddWorkflowApplication, AddWorkflowPlan
     from .hook_context import DueContext, OnAddContext, ProfilerPort
     from .task_models import TaskObservation
 
@@ -175,7 +175,7 @@ class AddCompositionServices:
             render_cp_preview_fn=self.render_cp_preview,
         )
 
-    def workflow_application(self) -> Any:
+    def workflow_application(self) -> AddWorkflowApplication:
         return self._workflow_application
 
     def result(self, task: Any, *, sanitize: bool, prof: Any) -> Any:

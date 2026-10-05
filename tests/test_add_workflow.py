@@ -45,8 +45,8 @@ class AddWorkflowTests(unittest.TestCase):
             validate_task,
         )
         from nautical_core.add_workflow import (
-            AddWorkflowPlan,
             AddWorkflowApplication,
+            AddWorkflowPlan,
             BuildAddContext,
             RenderAddPreview,
         )
@@ -56,6 +56,7 @@ class AddWorkflowTests(unittest.TestCase):
             ProfilerPort,
             build_on_add_context as build_hook_add_context,
         )
+        from nautical_core.hook_engine import OnAddServices
         from nautical_core.task_models import TaskPayload
 
         localns = {
@@ -64,6 +65,31 @@ class AddWorkflowTests(unittest.TestCase):
             "AddWorkflowPlan": AddWorkflowPlan,
         }
         self.assertIs(get_type_hints(OnAddContext)["due_day"], date)
+        self.assertIs(
+            get_type_hints(
+                AddCompositionServices.workflow_application,
+                localns={"AddWorkflowApplication": AddWorkflowApplication},
+            )["return"],
+            AddWorkflowApplication,
+        )
+        self.assertIs(
+            get_type_hints(
+                OnAddServices.workflow_application,
+                localns={"AddWorkflowApplication": AddWorkflowApplication},
+            )["return"],
+            AddWorkflowApplication,
+        )
+        self.assertEqual(
+            get_type_hints(
+                AddWorkflowApplication.build_context,
+                localns={
+                    "TaskObservation": TaskObservation,
+                    "ProfilerPort": ProfilerPort,
+                    "OnAddContext": OnAddContext,
+                },
+            )["observation"],
+            TaskObservation | None,
+        )
         self.assertEqual(
             get_type_hints(due_context, localns={"DueContext": DueContext})["return"],
             DueContext,

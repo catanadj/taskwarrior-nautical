@@ -36,6 +36,7 @@ from .occurrence_outcomes import OccurrenceCollectionResult
 from .task_models import TaskObservation
 from .operator_health_service import OperatorHealthReport, OperatorHealthService
 from .taskwarrior_uow import TaskwarriorUnitOfWork
+from .integration_context import ValidatedNauticalConfiguration
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,10 +45,14 @@ class OperatorControlPlane:
 
     planner: OperatorDomainPlanner
     applications: DomainApplicationRegistry
-    configuration: Any | None = None
+    configuration: ValidatedNauticalConfiguration | None = None
 
     @classmethod
-    def from_configuration(cls, configuration: object, applications: DomainApplicationRegistry) -> "OperatorControlPlane":
+    def from_configuration(
+        cls,
+        configuration: ValidatedNauticalConfiguration | None,
+        applications: DomainApplicationRegistry,
+    ) -> "OperatorControlPlane":
         """Build the planner bundle from one already-validated configuration."""
         if configuration is None:
             raise ValueError("operator control plane requires validated configuration")
@@ -76,8 +81,8 @@ class OperatorControlPlane:
             schedule_fingerprint=str(configuration.scheduler_fingerprint),
         )
         return engine.plan_recovery_plan(
-            cast(Any, parent),
-            existing_children=cast(Any, existing_children),
+            parent.observation,
+            existing_children=[child.observation for child in existing_children],
             hook=hook,
             generation=generation,
         )
@@ -85,7 +90,9 @@ class OperatorControlPlane:
     def plan_recovery_candidates(
         self,
         candidates: Sequence[TaskSnapshot],
-        children_for: object,
+        children_for: Callable[
+            [TaskSnapshot], tuple[TaskSnapshot, ...] | list[TaskSnapshot]
+        ],
         *,
         hook: object,
         generation: ChainGenerationService | None = None,

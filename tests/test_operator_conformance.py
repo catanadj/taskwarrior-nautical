@@ -4,6 +4,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any, Callable, Iterable, get_args, get_type_hints
 
 from nautical_core.operator_application import DomainApplicationRegistry
@@ -119,6 +120,73 @@ class OperatorConformanceTests(unittest.TestCase):
             for name, annotation in expected.items():
                 self.assertEqual(hints[name], annotation, name)
             self.assertEqual(hints["return"], str | None)
+
+    def test_recovery_planning_uses_validated_configuration_and_snapshot_ports(self) -> None:
+        from nautical_core.integration_context import ValidatedNauticalConfiguration
+        from nautical_core.lifecycle.models import TaskSnapshot
+
+        control_plane_types = get_type_hints(OperatorControlPlane)
+        self.assertEqual(
+            control_plane_types["configuration"],
+            ValidatedNauticalConfiguration | None,
+        )
+        configuration_hints = get_type_hints(OperatorControlPlane.from_configuration)
+        self.assertEqual(
+            configuration_hints["configuration"],
+            ValidatedNauticalConfiguration | None,
+        )
+        recovery_hints = get_type_hints(OperatorControlPlane.plan_recovery)
+        self.assertEqual(recovery_hints["parent"], TaskSnapshot)
+        self.assertEqual(
+            recovery_hints["existing_children"],
+            tuple[TaskSnapshot, ...] | list[TaskSnapshot],
+        )
+        candidates_hints = get_type_hints(OperatorControlPlane.plan_recovery_candidates)
+        self.assertEqual(candidates_hints["candidates"], Sequence[TaskSnapshot])
+        self.assertEqual(
+            candidates_hints["children_for"],
+            Callable[
+                [TaskSnapshot], tuple[TaskSnapshot, ...] | list[TaskSnapshot]
+            ],
+        )
+
+    def test_recovery_planning_unwraps_snapshot_observations(self) -> None:
+        from nautical_core.lifecycle.models import TaskSnapshot
+        from nautical_core.task_models import TaskObservation
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        parent_observation = TaskObservation.from_mapping(
+            {"uuid": "parent"}, source_query="operator recovery parent"
+        )
+        child_observation = TaskObservation.from_mapping(
+            {"uuid": "child"}, source_query="operator recovery child"
+        )
+        parent = TaskSnapshot.from_observation(parent_observation)
+        child = TaskSnapshot.from_observation(child_observation)
+        engine = SimpleNamespace(
+            plan_recovery_plan=lambda received_parent, **kwargs: (
+                received_parent,
+                kwargs["existing_children"],
+            )
+        )
+        control_plane = OperatorControlPlane.from_configuration(
+            Configuration(), DomainApplicationRegistry()
+        )
+        with patch(
+            "nautical_core.operator_control_plane.ChainIntegrityEngine.lifecycle_only",
+            return_value=engine,
+        ):
+            result = control_plane.plan_recovery(
+                parent,
+                existing_children=(child,),
+                hook=object(),
+            )
+
+        self.assertIs(parent_observation, result[0])
+        self.assertEqual([child_observation], result[1])
 
     def test_integrity_drain_uses_concrete_execution_ports(self) -> None:
         from nautical_core.chain_integrity_application import (

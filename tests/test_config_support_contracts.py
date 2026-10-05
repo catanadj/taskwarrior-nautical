@@ -22,6 +22,17 @@ import nautical_core.core_config as core_config
 
 
 class ConfigSupportContractTests(unittest.TestCase):
+    def test_core_configuration_cache_uses_a_typed_support_owner(self) -> None:
+        hints = get_type_hints(core_config)
+        self.assertEqual(
+            hints["config_support"],
+            core_config.ConfigSupportPort | None,
+        )
+        self.assertIs(
+            get_type_hints(core_config._read_toml_result)["return"],
+            core_config.ConfigReadResultPort,
+        )
+
     def test_toml_reader_declares_parser_and_diagnostic_callback_contracts(self) -> None:
         expected = {
             "tomllib_mod": config_support.TomlParserPort | None,
@@ -48,7 +59,7 @@ class ConfigSupportContractTests(unittest.TestCase):
         self.assertEqual(hints["config_paths"], Callable[[], list[str]])
         self.assertEqual(
             hints["read_toml_result"],
-            Callable[[str], config_support.ConfigReadResult],
+            Callable[[str], config_support.ConfigReadResultPort],
         )
         self.assertEqual(hints["normalize_keys"], Callable[[dict], dict])
 

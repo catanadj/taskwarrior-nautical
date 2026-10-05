@@ -4,9 +4,12 @@ import os
 import importlib
 from typing import BinaryIO, Protocol
 from types import MappingProxyType
-from typing import Any, Mapping, TypedDict
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, TypedDict, overload
 
 from . import config_schema
+
+if TYPE_CHECKING:
+    from .config_support import ConfigReadResultPort as ConfigSupportReadResultPort
 
 
 class TomlParserPort(Protocol):
@@ -14,9 +17,135 @@ class TomlParserPort(Protocol):
 
     def load(self, fp: BinaryIO) -> dict: ...
 
+
+class ConfigReadResultPort(Protocol):
+    @property
+    def data(self) -> dict: ...
+
+    @property
+    def is_absent(self) -> bool: ...
+
+    @property
+    def is_invalid(self) -> bool: ...
+
+
+class ConfigSupportPort(Protocol):
+    def env_flag_true(self, name: str, env_map: Mapping[str, object] | None = None) -> bool: ...
+
+    def path_input_error(self, path_value: str) -> str | None: ...
+
+    def normalized_abspath(self, path_value: str) -> str: ...
+
+    def nearest_existing_dir(self, path_value: str) -> str | None: ...
+
+    def world_writable_without_sticky(self, mode: int) -> bool: ...
+
+    def path_safety_error(self, path_value: str, *, expect_dir: bool = True) -> str | None: ...
+
+    def validated_user_dir(
+        self,
+        path_value: str,
+        *,
+        label: str,
+        trust_env: str = "",
+        env_map: Mapping[str, object] | None = None,
+        warn_on_error: bool = True,
+    ) -> str: ...
+
+    def warn_env_config_missing(
+        self,
+        env_path: str,
+        *,
+        warn_once_per_day_any: Callable[[str, str], None],
+    ) -> None: ...
+
+    def read_toml_result(
+        self,
+        path: str,
+        *,
+        tomllib_mod: TomlParserPort | None,
+        warn_missing_toml_parser: Callable[[str], None],
+        warn_toml_parse_error: Callable[[str, Exception], None],
+        error_sink: Callable[[str], None] | None = None,
+    ) -> ConfigSupportReadResultPort: ...
+
+    def config_paths(
+        self,
+        *,
+        warn_env_config_missing: Callable[[str], None],
+        taskdata: str | None = None,
+        error_sink: Callable[[str], None] | None = None,
+    ) -> list[str]: ...
+
+    def normalize_keys(self, data: dict) -> dict: ...
+
+    def load_config(
+        self,
+        *,
+        defaults: dict,
+        config_paths: Callable[[], list[str]],
+        read_toml_result: Callable[[str], ConfigSupportReadResultPort],
+        normalize_keys: Callable[[dict], dict],
+    ) -> dict: ...
+
+    def get_config(
+        self, conf_cache: dict | None, *, load_config: Callable[[], dict]
+    ) -> tuple[dict, dict]: ...
+
+    def conf_raw(self, conf: Mapping[str, object], key: str) -> object: ...
+
+    def conf_str(self, conf: Mapping[str, object], key: str, default: str) -> str: ...
+
+    def conf_int(
+        self,
+        conf: Mapping[str, object],
+        key: str,
+        default: int,
+        min_value: int | None = None,
+        max_value: int | None = None,
+    ) -> int: ...
+
+    def conf_bool(
+        self,
+        conf: Mapping[str, object],
+        key: str,
+        default: bool = False,
+        true_values: set[str] | None = None,
+        false_values: set[str] | None = None,
+    ) -> bool: ...
+
+    def conf_csv_or_list(
+        self,
+        conf: Mapping[str, object],
+        key: str,
+        default: list[str] | None = None,
+        lower: bool = False,
+    ) -> list[str]: ...
+
+    def conf_uda_field_list(
+        self, conf: Mapping[str, object], key: str
+    ) -> list[str]: ...
+
+    def trueish(self, value: object, default: bool = False) -> bool: ...
+
+
+if TYPE_CHECKING:
+    from . import config_support as _config_support_module
+
+    _config_support_contract: ConfigSupportPort = _config_support_module
+
+
 cache_support: Any = None
-config_support: Any = None
+config_support: ConfigSupportPort | None = None
 diagnostic_warnings: Any = None
+
+
+@overload
+def _load_support_module(name: Literal["config_support"]) -> ConfigSupportPort: ...
+
+
+@overload
+def _load_support_module(name: Literal["cache_support", "diagnostic_warnings"]) -> Any: ...
 
 
 def _load_support_module(name: str) -> Any:
@@ -153,7 +282,7 @@ def _read_toml(path: str) -> dict:
     return _read_toml_result(path).data
 
 
-def _read_toml_result(path: str) -> Any:
+def _read_toml_result(path: str) -> ConfigReadResultPort:
     return _load_support_module("config_support").read_toml_result(
         path,
         tomllib_mod=_load_tomllib(),

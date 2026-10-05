@@ -42,6 +42,17 @@ class ConfigReadResult:
         return self.state == "invalid"
 
 
+class ConfigReadResultPort(Protocol):
+    @property
+    def data(self) -> dict: ...
+
+    @property
+    def is_absent(self) -> bool: ...
+
+    @property
+    def is_invalid(self) -> bool: ...
+
+
 class TomlParserPort(Protocol):
     """Parser capability kept local because hooks load this helper by path."""
 
@@ -437,7 +448,7 @@ def load_config(
     *,
     defaults: dict,
     config_paths: Callable[[], list[str]],
-    read_toml_result: Callable[[str], ConfigReadResult],
+    read_toml_result: Callable[[str], ConfigReadResultPort],
     normalize_keys: Callable[[dict], dict],
 ) -> dict:
     cfg = dict(defaults)

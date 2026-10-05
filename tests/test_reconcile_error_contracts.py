@@ -32,6 +32,12 @@ from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
 
 
 class ReconcileErrorContracts(unittest.TestCase):
+    def test_positional_child_lookup_returns_task_observation(self) -> None:
+        self.assertEqual(
+            get_type_hints(reconcile._find_positional_child)["return"],
+            TaskObservation | None,
+        )
+
     def test_reconcile_report_keeps_plain_text_when_optional_styling_fails(self) -> None:
         from nautical_core.reconcile_report import render_human
 

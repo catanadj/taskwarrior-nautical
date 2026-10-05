@@ -722,7 +722,7 @@ def _plan_for_parent(
         raise _PlanReadUnavailable(f"reconcile child read unavailable: {reason}") from exc
 
 
-def _find_positional_child(lifecycle_plan: LifecyclePlan) -> Any | None:
+def _find_positional_child(lifecycle_plan: LifecyclePlan) -> TaskObservation | None:
     """Find a task already occupying this exact chain position, by uuid or
     by (chainID, link, prevLink) match, regardless of whether it carries the
     deterministic stable UUID. Preserves duplicate-avoidance for chains that

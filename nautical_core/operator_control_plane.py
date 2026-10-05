@@ -6,7 +6,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, cast
+from typing import Any, Callable, Iterable
 from collections.abc import Sequence
 
 from .chain_integrity_context import IntegrityContext
@@ -16,7 +16,7 @@ from .lifecycle.models import LifecycleEvent, LifecyclePlan, TaskSnapshot
 from .lifecycle.planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
 from .chain_repair_planner import IntegrityRepairPlanner
 from .chain_integrity_engine import ChainIntegrityEngine
-from .chain_integrity_engine import IntegrityApplicationResult
+from .chain_integrity_engine import IntegrityApplicationResult, IntegrityEngineResult
 from .chain_integrity_application import IntegrityMutationExecutor, IntegrityMutationRequestFactory
 from .chain_integrity_recovery import RecoveryAudit
 from .chain_generation import ChainGenerationService
@@ -396,23 +396,23 @@ class OperatorControlPlane:
         return inspect_occurrence_collection(collection, scope=scope)
 
     def audit_integrity(
-        self, unit_of_work: object, rows: Sequence[TaskObservation]
-    ) -> tuple[object | None, list[dict[str, object]]]:
+        self, unit_of_work: TaskwarriorUnitOfWork, rows: Sequence[TaskObservation]
+    ) -> tuple[IntegrityEngineResult | None, list[dict[str, object]]]:
         """Audit an authoritative task snapshot through the shared integrity service."""
         from .integrity_audit_service import audit_authoritative_rows
 
-        return audit_authoritative_rows(cast(Any, unit_of_work), rows)
+        return audit_authoritative_rows(unit_of_work, rows)
 
     def diagnose_chains(
         self,
-        unit_of_work: object,
+        unit_of_work: TaskwarriorUnitOfWork,
         *,
         budget: OperatorBudgetLedger | None = None,
     ) -> tuple[dict[str, int], list[dict[str, object]]]:
         """Export and audit chain state as one read-only diagnosis request."""
         from .integration_models import Absent, Found, Unavailable
 
-        repository = getattr(unit_of_work, "repository", None)
+        repository = unit_of_work.repository
         if repository is None:
             return {"tasks": 0, "nautical_tasks": 0, "chains": 0}, [{
                 "id": "chains.export",

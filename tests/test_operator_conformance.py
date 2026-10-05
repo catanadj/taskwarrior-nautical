@@ -188,6 +188,21 @@ class OperatorConformanceTests(unittest.TestCase):
         self.assertIs(parent_observation, result[0])
         self.assertEqual([child_observation], result[1])
 
+    def test_integrity_audit_uses_typed_unit_of_work_and_result(self) -> None:
+        from nautical_core.chain_integrity_engine import IntegrityEngineResult
+        from nautical_core.task_models import TaskObservation
+        from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+        hints = get_type_hints(OperatorControlPlane.audit_integrity)
+        self.assertIs(hints["unit_of_work"], TaskwarriorUnitOfWork)
+        self.assertEqual(hints["rows"], Sequence[TaskObservation])
+        self.assertEqual(
+            hints["return"],
+            tuple[IntegrityEngineResult | None, list[dict[str, object]]],
+        )
+        diagnose_hints = get_type_hints(OperatorControlPlane.diagnose_chains)
+        self.assertIs(diagnose_hints["unit_of_work"], TaskwarriorUnitOfWork)
+
     def test_integrity_drain_uses_concrete_execution_ports(self) -> None:
         from nautical_core.chain_integrity_application import (
             IntegrityMutationExecutor,

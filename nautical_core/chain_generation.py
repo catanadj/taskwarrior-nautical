@@ -20,7 +20,7 @@ from typing import Any, MutableMapping
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
 from .task_codec import TaskCodec
-from .task_models import TaskDraft, NauticalTask
+from .task_models import TaskDraft, NauticalTask, TaskPayload
 from .task_datetime import TaskDatetimeParser, parser_for_core
 from . import timezone_facade
 from .parsing.parser_models import AnchorDNF
@@ -464,7 +464,7 @@ class ChainGenerationService:
     def _carry_native_until(
         self,
         parent: NauticalTask,
-        child: dict[str, Any],
+        child: TaskPayload,
         child_due_utc: datetime,
         kind: str,
         *,
@@ -501,7 +501,7 @@ class ChainGenerationService:
     def carry_native_until(
         self,
         parent: NauticalTask,
-        child: dict[str, Any],
+        child: TaskPayload,
         child_due_utc: datetime,
         kind: str,
         *,

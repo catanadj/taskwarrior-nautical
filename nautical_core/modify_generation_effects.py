@@ -33,6 +33,9 @@ class ChainGenerationServicePort(NativeUntilGenerationService, Protocol):
 
     core: object
     recurrence_update_udas: tuple[str, ...]
+
+    def parse_datetime(self, value: object) -> tuple[datetime | None, str | None]: ...
+
     def build_child_draft(
         self,
         parent: NauticalTask,

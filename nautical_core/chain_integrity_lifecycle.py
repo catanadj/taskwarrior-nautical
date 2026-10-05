@@ -266,11 +266,9 @@ def invalid_relative_carry_reason(
     child: TaskDraft,
     *,
     child_field: str,
-    hook: Any = None,
-    generation: ChainGenerationService | None = None,
+    generation: ChainGenerationService,
 ) -> str | None:
     """Verify that scheduled/wait retain their local offset from the recurrence target."""
-    generation = generation or _generation_service(hook)
     core = generation.core
     utc_to_local_naive = getattr(core, "utc_to_local_naive", None)
     if not callable(utc_to_local_naive):

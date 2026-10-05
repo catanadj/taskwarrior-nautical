@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from typing import cast
+from typing import cast, get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -95,6 +95,18 @@ class ReconcileErrorContracts(unittest.TestCase):
             invalid_relative_carry_reason(
                 parent, child, child_field="due", generation=generation
             )
+
+    def test_relative_carry_requires_generation_service_without_hook_bridge(self) -> None:
+        import inspect
+
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.chain_integrity_lifecycle import invalid_relative_carry_reason
+
+        self.assertIs(
+            get_type_hints(invalid_relative_carry_reason)["generation"],
+            ChainGenerationService,
+        )
+        self.assertNotIn("hook", inspect.signature(invalid_relative_carry_reason).parameters)
 
     def test_native_until_carry_fallback_and_verification_contract(self) -> None:
         from nautical_core.chain_integrity_lifecycle import (

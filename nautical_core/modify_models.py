@@ -26,6 +26,7 @@ from .task_models import (
     TaskPayload,
 )
 from .lifecycle.models import LifecyclePlan
+from .modify_generation_effects import ChainGenerationServicePort
 
 if TYPE_CHECKING:
     from .lifecycle.read_service import LifecycleReadService
@@ -462,8 +463,7 @@ class InvalidRelativeCarryReasonCallback(Protocol):
         child: TaskDraft,
         *,
         child_field: str,
-        hook: Any = None,
-        generation: Any = None,
+        generation: ChainGenerationServicePort,
     ) -> str | None:
         ...
 

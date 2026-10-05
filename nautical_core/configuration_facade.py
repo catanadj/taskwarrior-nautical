@@ -87,7 +87,7 @@ def validate_scheduling(
         if callable(clear_cache):
             clear_cache()
         configured_business_calendars()
-    except Exception as exc:
+    except ValueError as exc:
         message = str(exc).strip() or type(exc).__name__
         raise RuntimeError(f"Invalid Nautical scheduling configuration: {message}") from exc
 

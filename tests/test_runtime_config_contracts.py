@@ -40,6 +40,18 @@ def _validate_scheduling_owner(
 
 
 class RuntimeConfigContracts(unittest.TestCase):
+    def test_scheduling_validation_does_not_relabel_internal_failures_as_bad_config(self) -> None:
+        def broken_validator(_expression):
+            raise RuntimeError("validator defect")
+
+        with self.assertRaises(RuntimeError) as raised:
+            _validate_scheduling_owner(
+                anchor_presets={"work": "every day"},
+                validate_anchor=broken_validator,
+                astronomy_validation=lambda: None,
+            )
+        self.assertEqual(str(raised.exception), "validator defect")
+
     def test_configuration_error_contains_expected_path_failure(self) -> None:
         with (
             patch.dict(os.environ, {"NAUTICAL_CONFIG": ""}),

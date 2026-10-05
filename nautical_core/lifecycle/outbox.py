@@ -35,6 +35,7 @@ from .outbox_schema import (
     initialize as initialize_schema,
     validate_schema,
 )
+from ..taskwarrior_io import JsonObject, is_json_object
 
 if TYPE_CHECKING:
     from ..integrity_outbox_envelope import IntegrityOutboxRecord
@@ -91,13 +92,15 @@ _TERMINAL_STATES = frozenset(
 class OutboxFailure:
     code: str
     message: str
-    evidence: dict[str, Any] | None = None
+    evidence: JsonObject | None = None
 
     def __post_init__(self) -> None:
         code = str(self.code or "").strip()
         message = str(self.message or "").strip()
         if not code or not message:
             raise LifecycleOutboxError("outbox failure requires a code and message")
+        if self.evidence is not None and not is_json_object(self.evidence):
+            raise LifecycleOutboxError("outbox failure evidence must be a JSON object")
         evidence = None if self.evidence is None else dict(self.evidence)
         object.__setattr__(self, "code", code)
         object.__setattr__(self, "message", message)
@@ -122,7 +125,7 @@ class OutboxFailure:
         if not isinstance(raw, dict):
             raise LifecycleOutboxError("invalid outbox failure JSON: expected object")
         evidence = raw.get("evidence")
-        if evidence is not None and not isinstance(evidence, dict):
+        if evidence is not None and not is_json_object(evidence):
             raise LifecycleOutboxError("invalid outbox failure evidence")
         return cls(str(raw.get("code") or ""), str(raw.get("message") or ""), evidence)
 

@@ -461,6 +461,10 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         self.assertIn("échec", failure.to_json())
         self.assertEqual(json.loads(failure.to_json())["evidence"]["note"], "再試")
 
+    def test_failure_evidence_rejects_non_json_values_before_persistence(self) -> None:
+        with self.assertRaises(LifecycleOutboxError):
+            OutboxFailure("invalid", "evidence must be JSON", {"opaque": object()})
+
     def test_failure_decoder_rejects_malformed_and_non_object_payloads(self) -> None:
         for payload in ("{bad", "[]", '"text"'):
             with self.subTest(payload=payload), self.assertRaises(LifecycleOutboxError):

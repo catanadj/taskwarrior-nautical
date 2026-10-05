@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import date
 from typing import Literal, Protocol, overload
 
@@ -73,8 +74,8 @@ def file_source_warnings(core: PanelDiagnosticsCore, task: TaskView) -> list[str
                 warnings.append(f"anchor_file pattern '{pattern}' matched no files.")
             if not dates and not unmatched:
                 warnings.append(f"anchor_file '{_file_label(anchor_file)}' has no usable dates.")
-        except (FileNotFoundError, ImportError):
-            pass
+        except (FileNotFoundError, ImportError) as exc:
+            _diagnose_file_source_failure("anchor_file", exc)
     if omit_file:
         try:
             omit_files = core._import_sibling("omit_files")
@@ -87,8 +88,8 @@ def file_source_warnings(core: PanelDiagnosticsCore, task: TaskView) -> list[str
                 warnings.append(f"omit_file pattern '{pattern}' matched no files.")
             if not dates and not unmatched:
                 warnings.append(f"omit_file '{_file_label(omit_file)}' has no usable dates.")
-        except (FileNotFoundError, ImportError):
-            pass
+        except (FileNotFoundError, ImportError) as exc:
+            _diagnose_file_source_failure("omit_file", exc)
     return warnings
 
 
@@ -114,6 +115,17 @@ def _has_recurrence_source(task: TaskView) -> bool:
 
 def _file_label(expr: str) -> str:
     return str(expr or "").split("@", 1)[0].strip() or str(expr or "").strip()
+
+
+def _diagnose_file_source_failure(source_kind: str, exc: Exception) -> None:
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
+    try:
+        sys.stderr.write(
+            f"[nautical] {source_kind} diagnostic unavailable ({type(exc).__name__})\n"
+        )
+    except (OSError, ValueError):
+        return
 
 
 def _dedup(items: list[str]) -> list[str]:

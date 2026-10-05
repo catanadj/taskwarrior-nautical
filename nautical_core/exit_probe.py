@@ -44,7 +44,7 @@ def _outbox_may_have_work(path: Path) -> bool | None:
 def probe_exit_work(taskdata: str | os.PathLike[str]) -> ExitWorkProbe:
     try:
         root = Path(taskdata).expanduser().resolve()
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return ExitWorkProbe(True, "taskdata path could not be resolved")
 
     # An invalid or inaccessible taskdata path must never be classified as

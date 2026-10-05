@@ -376,6 +376,12 @@ class PerformanceBudgetContractTests(unittest.TestCase):
             self.assertFalse(result.definitely_empty)
             self.assertIn("unavailable", result.reason)
 
+    def test_exit_probe_propagates_unexpected_taskdata_resolution_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(Path, "resolve", side_effect=AssertionError("resolver defect")):
+                with self.assertRaisesRegex(AssertionError, "resolver defect"):
+                    probe_exit_work(directory)
+
     def test_exit_probe_propagates_unexpected_taskdata_inspection_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(Path, "is_dir", side_effect=RuntimeError("inspection defect")):

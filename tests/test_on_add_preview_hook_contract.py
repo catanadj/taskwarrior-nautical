@@ -246,3 +246,31 @@ class OnAddPreviewHookContractTests(HookSubprocessFixture):
         ):
             self.hook._read_on_add_task(self.hook._NoopProfiler())
         fail.assert_called_once_with("Invalid input", "on-add must receive a single JSON task")
+
+    def test_on_add_expression_validators_propagate_unexpected_parser_failures(self) -> None:
+        if self._run_isolated:
+            self._run_in_child_process()
+            return
+
+        with (
+            patch.object(self.hook, "_validate_anchor_expr_cached", side_effect=RuntimeError("anchor parser defect")),
+            self.assertRaisesRegex(RuntimeError, "anchor parser defect"),
+        ):
+            self.hook._validate_anchor_syntax_strict("w:mon")
+
+        with (
+            patch.object(self.hook, "_validate_omit_expr_cached", side_effect=RuntimeError("omit parser defect")),
+            self.assertRaisesRegex(RuntimeError, "omit parser defect"),
+        ):
+            self.hook._validate_omit_syntax_strict("w:mon")
+
+    def test_on_add_expression_validators_classify_parser_errors(self) -> None:
+        if self._run_isolated:
+            self._run_in_child_process()
+            return
+
+        with patch.object(self.hook, "_validate_anchor_expr_cached", side_effect=self.hook.core.ParseError("bad anchor")):
+            self.assertEqual(self.hook._validate_anchor_syntax_strict("invalid"), (None, "bad anchor"))
+
+        with patch.object(self.hook, "_validate_omit_expr_cached", side_effect=self.hook.core.ParseError("bad omit")):
+            self.assertEqual(self.hook._validate_omit_syntax_strict("invalid"), (None, "bad omit"))

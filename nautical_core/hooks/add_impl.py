@@ -762,7 +762,7 @@ def _validate_anchor_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[l
             validate_anchor_expr=_validate_anchor_expr_cached,
         )
         return dnf, None
-    except Exception as exc:
+    except (core.ParseError, ValueError) as exc:
         return None, str(exc)
 
 
@@ -770,7 +770,7 @@ def _validate_omit_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[lis
     try:
         dnf = _validate_omit_expr_cached(str(expr))
         return dnf, None
-    except Exception as exc:
+    except (core.ParseError, ValueError) as exc:
         return None, str(exc)
 
 

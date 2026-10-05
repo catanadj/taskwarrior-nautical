@@ -265,6 +265,8 @@ class OperatorControlPlane:
             if not isinstance(result, OperatorResult):
                 raise OperatorContractError("domain owner returned an untyped result")
         except Exception as exc:
+            # An owner can fail after an external effect has started; report an
+            # uncertain, retryable phase outcome instead of implying no effect.
             phases.append(
                 OperatorPhaseResult(
                     OperatorPhase.APPLY,

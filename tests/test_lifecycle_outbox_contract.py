@@ -4,9 +4,11 @@ import json
 import sqlite3
 import stat
 import unittest
+from inspect import signature
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 from unittest.mock import patch
 
 from nautical_core.lifecycle.models import ExecutionStage
@@ -35,6 +37,23 @@ from nautical_core.lifecycle.outbox import (
 
 
 class LifecycleOutboxContractTests(unittest.TestCase):
+    def test_claim_lease_adapter_has_concrete_operation_signatures(self) -> None:
+        from nautical_core.lifecycle.outbox_claims import RepositoryClaimLeasePort
+
+        expected = {
+            "claim_batch": {"self", "owner", "lease_seconds", "limit"},
+            "claim_intents": {"self", "intent_ids", "owner", "lease_seconds"},
+            "renew_lease": {"self", "intent_id", "owner", "lease_seconds"},
+            "renew_leases": {"self", "intent_ids", "owner", "lease_seconds"},
+            "advance_stages": {"self", "stages", "owner"},
+        }
+        for name, parameters in expected.items():
+            with self.subTest(operation=name):
+                method = getattr(RepositoryClaimLeasePort, name)
+                self.assertEqual(set(signature(method).parameters), parameters)
+                hints = get_type_hints(method)
+                self.assertNotIn(Any, hints.values())
+
     def test_connection_scope_does_not_mask_unexpected_operation_errors(self) -> None:
         for session in (False, True):
             with self.subTest(session=session), TemporaryDirectory() as directory:

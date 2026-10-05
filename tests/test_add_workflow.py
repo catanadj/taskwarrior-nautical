@@ -39,7 +39,9 @@ class AddWorkflowTests(unittest.TestCase):
         from datetime import date
         from typing import Callable
         from nautical_core.add_composition import (
+            AddDatetimeParserHost,
             AddCompositionServices,
+            _datetime_parser,
             build_on_add_context as build_add_composition_context,
             due_context,
             validate_task,
@@ -65,6 +67,10 @@ class AddWorkflowTests(unittest.TestCase):
             "AddWorkflowPlan": AddWorkflowPlan,
         }
         self.assertIs(get_type_hints(OnAddContext)["due_day"], date)
+        self.assertIs(
+            get_type_hints(_datetime_parser)["host"],
+            AddDatetimeParserHost,
+        )
         self.assertIs(
             get_type_hints(
                 AddCompositionServices.workflow_application,

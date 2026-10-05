@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import os
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import TaskDatetimeParser, parser_for_core
@@ -17,11 +17,18 @@ if TYPE_CHECKING:
     from .task_models import TaskObservation
 
 
-def _datetime_parser(host: Any) -> TaskDatetimeParser:
-    parser = getattr(host, "_TASK_DATETIME_PARSER", None)
+class AddDatetimeParserHost(Protocol):
+    _TASK_DATETIME_PARSER: TaskDatetimeParser | None
+    core: object
+
+    def _diag(self, message: str) -> None: ...
+
+
+def _datetime_parser(host: AddDatetimeParserHost) -> TaskDatetimeParser:
+    parser = host._TASK_DATETIME_PARSER
     if parser is None:
-        parser = parser_for_core(host.core, diagnostic=getattr(host, "_diag", None))
-        setattr(host, "_TASK_DATETIME_PARSER", parser)
+        parser = parser_for_core(host.core, diagnostic=host._diag)
+        host._TASK_DATETIME_PARSER = parser
     return parser
 
 

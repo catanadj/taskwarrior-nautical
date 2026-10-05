@@ -696,6 +696,13 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertNotIn("id", payload)
         self.assertEqual(draft.target.value, datetime(2026, 1, 3, 10, tzinfo=timezone.utc))
 
+    def test_child_draft_until_input_is_an_optional_datetime(self):
+        self.assertEqual(
+            get_type_hints(ChainGenerationService.build_child_draft)["until_dt"],
+            datetime | None,
+        )
+        self.assertIs(get_type_hints(ChainGenerationService.parse_datetime)["value"], object)
+
     def test_child_draft_preserves_parent_business_calendar(self):
         parent = _task(anchor="w:sun", cp=None, bc="weekend")
         draft = self.service.build_child_draft(

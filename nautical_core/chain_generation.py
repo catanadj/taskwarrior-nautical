@@ -185,7 +185,7 @@ class ChainGenerationService:
         )
         return service
 
-    def parse_datetime(self, value: Any) -> tuple[datetime | None, str | None]:
+    def parse_datetime(self, value: object) -> tuple[datetime | None, str | None]:
         if self.datetime_parser is None:
             return None, "datetime parser unavailable"
         return self.datetime_parser.parse(value)
@@ -527,7 +527,7 @@ class ChainGenerationService:
         parent_short: str,
         kind: str,
         cpmax: int,
-        until_dt: Any,
+        until_dt: datetime | None,
     ) -> TaskDraft:
         """Build a complete, validated child intent without exposing mappings."""
         parent_chain = self._require_chain_id(parent)

@@ -955,6 +955,16 @@ class ModifyIsolationTests(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertEqual(annotations[name], contract)
 
+    def test_chain_integrity_lifecycle_uses_the_safe_datetime_parser_contract(self) -> None:
+        from typing import get_type_hints
+
+        from nautical_core.modify_composition import _ChainIntegrityLifecycle
+        from nautical_core.modify_models import SafeParseDatetimeCallback
+
+        annotations = get_type_hints(_ChainIntegrityLifecycle.deleted_chain_disposition)
+
+        self.assertIs(annotations["safe_parse_datetime"], SafeParseDatetimeCallback)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

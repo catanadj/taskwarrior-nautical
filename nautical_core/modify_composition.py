@@ -14,6 +14,7 @@ from .modify_models import (
     CpCompletionRenderCallback,
     CompletionComputeCallback,
     LifecycleResultRenderCallback,
+    SafeParseDatetimeCallback,
     SeedLookupCallback,
 )
 from .task_datetime import datetime_value, parser_for_core
@@ -400,14 +401,14 @@ class _ChainIntegrityLifecycle(Protocol):
         self,
         task: TaskObservation,
         *,
-        safe_parse_datetime: Callable[[Any], Any],
+        safe_parse_datetime: SafeParseDatetimeCallback,
     ) -> object: ...
 
     def is_orphan_expiration_candidate(
         self,
         task: TaskObservation,
         *,
-        safe_parse_datetime: Callable[[Any], Any],
+        safe_parse_datetime: SafeParseDatetimeCallback,
     ) -> bool: ...
 
     def plan_recovery_decision(

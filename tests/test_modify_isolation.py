@@ -967,6 +967,18 @@ class ModifyIsolationTests(unittest.TestCase):
         self.assertIs(annotations["safe_parse_datetime"], SafeParseDatetimeCallback)
         self.assertIs(recovery_annotations["hook"], object)
 
+    def test_modify_query_composition_uses_datetime_for_root_age_reference(self) -> None:
+        from datetime import datetime
+        from typing import get_type_hints
+
+        from nautical_core.modify_composition import _ModifyQueries
+        from nautical_core.task_models import TaskPayload
+
+        annotations = get_type_hints(_ModifyQueries.cached_format_root_and_age)
+
+        self.assertIs(annotations["task"], TaskPayload)
+        self.assertIs(annotations["now_utc"], datetime)
+
     def test_read_effects_import_without_hook_bootstrap(self) -> None:
         sys.modules.pop("nautical_core.hooks.modify_impl", None)
         module = importlib.import_module("nautical_core.modify_read_effects")

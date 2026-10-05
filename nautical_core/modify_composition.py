@@ -341,7 +341,7 @@ class _ModifyQueries(Protocol):
         self,
         ports: object,
         task: TaskPayload,
-        now_utc: Any,
+        now_utc: datetime,
     ) -> str: ...
 
 

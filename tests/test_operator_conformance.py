@@ -32,6 +32,16 @@ from nautical_core.scheduler_service import SchedulerService
 
 
 class OperatorConformanceTests(unittest.TestCase):
+    def test_chain_snapshot_reader_uses_the_typed_collector_boundary(self) -> None:
+        from nautical_core.chain_integrity_models import ChainSnapshot
+        from nautical_core.chain_snapshot import IntegritySnapshotRequest
+        from nautical_core.integration_models import TaskRead
+
+        self.assertEqual(
+            get_type_hints(ChainSnapshotReader.__init__)["collector"],
+            Callable[[IntegritySnapshotRequest], TaskRead[ChainSnapshot]],
+        )
+
     def test_native_until_audit_dependencies_share_datetime_ports(self) -> None:
         from nautical_core.chain_integrity_engine import ChainIntegrityEngine
         from nautical_core.chain_integrity_lifecycle import (

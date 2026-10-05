@@ -23,6 +23,7 @@ from .operator_models import (
 from .operator_context import OperatorBudgetLedger, OperatorInvocationContext
 from .integration_models import Absent, Found, TaskRead, Unavailable
 from .chain_integrity_models import ChainSnapshot
+from .chain_snapshot import IntegritySnapshotRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,7 +332,10 @@ SnapshotReadResult: TypeAlias = OperatorSnapshot | OperatorFailure
 class ChainSnapshotReader:
     """Adapt the existing integrity snapshot provider to operator requests."""
 
-    def __init__(self, collector: Callable[[object], TaskRead[object]]) -> None:
+    def __init__(
+        self,
+        collector: Callable[[IntegritySnapshotRequest], TaskRead[ChainSnapshot]],
+    ) -> None:
         if not callable(collector):
             raise OperatorContractError("snapshot collector must be callable")
         self._collector = collector
@@ -395,8 +399,6 @@ class ChainSnapshotReader:
         if not isinstance(request, SnapshotReadRequest):
             raise OperatorContractError("snapshot read requires a typed request")
         ledger = budget or context.budget
-        from .chain_snapshot import IntegritySnapshotRequest
-
         scope = request.scope
         if scope.kind in {OperatorScopeKind.CHAINS, OperatorScopeKind.UUIDS}:
             requested_identities = len(scope.values)

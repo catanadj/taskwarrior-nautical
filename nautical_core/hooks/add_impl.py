@@ -784,26 +784,6 @@ def _load_anchor_file_dates(name: str) -> Any:
     return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
 
 
-def _validate_anchor_file_or_fail(anchor_file: str) -> None:
-    if not anchor_file:
-        return
-    try:
-        _load_anchor_file_dates(anchor_file)
-    except (OSError, UnicodeError, ValueError) as exc:
-        _error_and_exit([("Invalid anchor_file", str(exc))])
-
-
-def _validate_omit_file_for_anchor_or_fail(anchor_str: str, anchor_file_str: str, omit_file: str) -> None:
-    if omit_file and not (anchor_str or anchor_file_str):
-        _error_and_exit([("Invalid omit_file", "omit_file requires anchor or anchor_file")])
-    if not omit_file:
-        return
-    try:
-        _load_omit_file_dates(omit_file)
-    except (OSError, UnicodeError, ValueError) as exc:
-        _error_and_exit([("Invalid omit_file", str(exc))])
-
-
 def _validate_anchor_mode(mode_str: Any) -> tuple[str, str | None]:
     add_validation = _module("add_validation")
     return add_validation.validate_anchor_mode(mode_str)

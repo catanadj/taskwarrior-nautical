@@ -275,23 +275,6 @@ class OnAddPreviewHookContractTests(HookSubprocessFixture):
         with patch.object(self.hook, "_validate_omit_expr_cached", side_effect=self.hook.core.ParseError("bad omit")):
             self.assertEqual(self.hook._validate_omit_syntax_strict("invalid"), (None, "bad omit"))
 
-    def test_on_add_file_validators_propagate_unexpected_loader_failures(self) -> None:
-        if self._run_isolated:
-            self._run_in_child_process()
-            return
-
-        with (
-            patch.object(self.hook, "_load_anchor_file_dates", side_effect=RuntimeError("anchor loader defect")),
-            self.assertRaisesRegex(RuntimeError, "anchor loader defect"),
-        ):
-            self.hook._validate_anchor_file_or_fail("dates.csv")
-
-        with (
-            patch.object(self.hook, "_load_omit_file_dates", side_effect=RuntimeError("omit loader defect")),
-            self.assertRaisesRegex(RuntimeError, "omit loader defect"),
-        ):
-            self.hook._validate_omit_file_for_anchor_or_fail("w:mon", "", "dates.csv")
-
     def test_on_add_chain_id_derivation_propagates_internal_failure(self) -> None:
         if self._run_isolated:
             self._run_in_child_process()

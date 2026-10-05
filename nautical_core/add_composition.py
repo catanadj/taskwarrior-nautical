@@ -178,7 +178,9 @@ class AddCompositionServices:
     def workflow_application(self) -> AddWorkflowApplication:
         return self._workflow_application
 
-    def result(self, task: Any, *, sanitize: bool, prof: Any) -> Any:
+    def result(
+        self, task: TaskPayload, *, sanitize: bool, prof: ProfilerPort | None
+    ) -> object:
         return self._result_cls(task=task, sanitize=sanitize, prof=prof)
 
     def has_nautical_fields(self, task: TaskPayload) -> bool:

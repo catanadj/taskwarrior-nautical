@@ -183,7 +183,7 @@ class RootAgeFormatter(Protocol):
 class WaitScheduleRowsCallback(Protocol):
     def __call__(
         self,
-        rows: list[tuple[str, Any]],
+        rows: list[tuple[str, str]],
         task: TaskRow,
         anchor_due: datetime | None,
         *,

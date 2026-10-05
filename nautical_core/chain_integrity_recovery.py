@@ -274,6 +274,9 @@ class IntegrityRecoveryService:
                                 else:
                                     item["applied"] = True
                             except Exception as exc:
+                                # Mutation or verification may fail after
+                                # Taskwarrior accepted the update; retain an
+                                # explicit repair error for reconciliation.
                                 item["action"] = "repair_error"
                                 item["repair_error"] = str(exc).strip() or type(exc).__name__
         return item.get("repair_error") if item.get("action") == "repair_error" else None

@@ -68,6 +68,18 @@ class AddWorkflowTests(unittest.TestCase):
         )
         self.assertIs(composition_hints["return"], OnAddContext)
         self.assertIs(composition_hints["prof"], ProfilerPort)
+        for owner in (
+            AddCompositionServices.record_limits,
+            AddCompositionServices.render_anchor_preview,
+            AddCompositionServices.render_cp_preview,
+        ):
+            owner_hints = get_type_hints(
+                owner,
+                localns={**localns, "TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
+            )
+            self.assertIs(owner_hints["context"], OnAddContext)
+            if "prof" in owner_hints:
+                self.assertIs(owner_hints["prof"], ProfilerPort)
         annotations = get_type_hints(AddWorkflowApplication, localns=localns)
         self.assertIs(annotations["build_context_fn"], BuildAddContext)
         self.assertIs(annotations["render_anchor_preview_fn"], RenderAddPreview)

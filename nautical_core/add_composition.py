@@ -281,7 +281,7 @@ class AddCompositionServices:
         )
         return workflow.record_preview(plan, policy)
 
-    def record_limits(self, plan: Any, task: Any, context: Any) -> Any:
+    def record_limits(self, plan: Any, task: TaskPayload, context: OnAddContext) -> Any:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         timestamp = core._import_sibling("task_models").TaskTimestamp
@@ -308,7 +308,7 @@ class AddCompositionServices:
     def stamp_chain_id(self, task: Any) -> None:
         self._host._stamp_chain_id_on_add(task)
 
-    def render_anchor_preview(self, context: Any, *, prof: Any) -> None:
+    def render_anchor_preview(self, context: OnAddContext, *, prof: ProfilerPort) -> None:
         self._host._module("add_preview_composition").render_anchor(
             self._host, task=context.task, anchor_str=context.anchor_str,
             anchor_file_str=context.anchor_file_str, ch=context.chain_state,
@@ -320,7 +320,7 @@ class AddCompositionServices:
             prof=prof,
         )
 
-    def render_cp_preview(self, context: Any, *, prof: Any) -> None:
+    def render_cp_preview(self, context: OnAddContext, *, prof: ProfilerPort) -> None:
         self._host._module("add_preview_composition").render_cp(
             self._host, context.task, context.cp_str, context.chain_state,
             context.now_utc, context.user_provided_due,

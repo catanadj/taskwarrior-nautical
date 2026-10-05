@@ -6,6 +6,7 @@ from datetime import datetime
 import os
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .task_models import TaskPayload
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from .add_workflow import AddWorkflowApplication, AddWorkflowPlan
     from .hook_context import DueContext, OnAddContext, ProfilerPort
     from .hook_engine import OnAddCoreClock
+    from .hook_runtime import HookRuntimeState
     from .task_models import TaskObservation
 
 
@@ -37,6 +39,46 @@ class AddDatetimeParserHost(Protocol):
 
 class AddCompositionClock(Protocol):
     def perf_counter(self) -> float: ...
+
+
+class AddArgvProvider(Protocol):
+    argv: Sequence[str]
+
+
+class AddHookRuntimeModule(Protocol):
+    def initialize_integration_context(
+        self,
+        *,
+        module_access: object,
+        hook_bootstrap: object,
+        core_base: Path,
+        argv: tuple[str, ...],
+        tw_dir: str,
+        access: str,
+    ) -> HookRuntimeState: ...
+
+
+class AddCoreBootstrapHost(Protocol):
+    _INTEGRATION_CONTEXT: object | None
+    _TASK_DATETIME_PARSER: TaskDatetimeParser | None
+    _CORE_BASE: Path
+    _CORE_READY: bool
+    _CORE_IMPORT_TARGET: Path | None
+    _TASKDATA_RAW: str
+    _USE_RC_DATA_LOCATION: bool
+    _MAX_JSON_BYTES: int
+    _IMPORT_T0: float
+    _IMPORT_MS: float | None
+    TW_DIR: str | Path
+    TW_DATA_DIR: Path
+    core: AddCompositionCore
+    hook_bootstrap: object
+    sys: AddArgvProvider
+    time: AddCompositionClock
+
+    def _diag(self, message: str) -> None: ...
+    def _hook_runtime_module(self) -> AddHookRuntimeModule: ...
+    def _hook_module_access(self) -> object: ...
 
 
 class AddCompositionHost(AddDatetimeParserHost, Protocol):
@@ -78,7 +120,7 @@ def _datetime_parser(host: AddDatetimeParserHost) -> TaskDatetimeParser:
     return parser
 
 
-def initialize_core(host: Any) -> None:
+def initialize_core(host: AddCoreBootstrapHost) -> None:
     """Own installed-layout integration context construction for on-add."""
     if getattr(host, "_INTEGRATION_CONTEXT", None) is not None:
         _datetime_parser(host)
@@ -101,7 +143,7 @@ def initialize_core(host: Any) -> None:
     _datetime_parser(host)
 
 
-def load_core(host: Any) -> None:
+def load_core(host: AddCoreBootstrapHost) -> None:
     """Load and finalize the on-add core exactly once."""
     if getattr(host, "core", None) is not None and getattr(host, "_CORE_READY", False):
         return

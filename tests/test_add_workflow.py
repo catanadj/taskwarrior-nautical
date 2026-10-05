@@ -280,6 +280,16 @@ class AddWorkflowTests(unittest.TestCase):
             AddCompositionHost,
         )
 
+    def test_core_bootstrap_helpers_have_a_named_host_contract(self) -> None:
+        from nautical_core.add_composition import (
+            AddCoreBootstrapHost,
+            initialize_core,
+            load_core,
+        )
+
+        self.assertIs(get_type_hints(initialize_core)["host"], AddCoreBootstrapHost)
+        self.assertIs(get_type_hints(load_core)["host"], AddCoreBootstrapHost)
+
     def test_application_prepares_and_attaches_typed_plan(self) -> None:
         application = AddWorkflowApplication(
             record_schedule_fn=lambda plan, _task, _field: plan,

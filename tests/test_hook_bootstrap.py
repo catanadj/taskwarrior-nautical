@@ -247,6 +247,18 @@ class HookBootstrapTrustTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "ModuleNotFoundError"):
             access.module("broken")
 
+    def test_module_loader_does_not_hide_module_initialization_defects(self) -> None:
+        access = HookModuleAccess(
+            {},
+            {"broken": ("_broken", "_broken_failed", "broken.py", "broken_module")},
+        )
+        with patch(
+            "nautical_core.hook_runtime.importlib.import_module",
+            side_effect=RuntimeError("module initialization invariant failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "module initialization invariant failed"):
+                access.module("broken", required=False)
+
     def test_numeric_environment_values_fall_back_and_clamp_to_bounds(self) -> None:
         self.assertEqual(hook_bootstrap.env_int("VALUE", 5, env={"VALUE": "bad"}), 5)
         self.assertEqual(

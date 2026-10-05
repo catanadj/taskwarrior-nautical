@@ -161,7 +161,7 @@ class HookModuleAccess:
             module = importlib.import_module(import_name)
             self.namespace[cache_attr] = module
             return module
-        except Exception as exc:
+        except ImportError as exc:
             self.errors[name] = f"{type(exc).__name__}: {exc}"
             self.namespace[failed_attr] = True
             return None

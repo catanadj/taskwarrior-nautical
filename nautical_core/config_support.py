@@ -43,6 +43,8 @@ class ConfigReadResult:
 
 
 class TomlParserPort(Protocol):
+    """Parser capability kept local because hooks load this helper by path."""
+
     def load(self, fp: BinaryIO) -> dict: ...
 
 

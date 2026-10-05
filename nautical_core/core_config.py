@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import os
 import importlib
+from typing import BinaryIO, Protocol
 from types import MappingProxyType
 from typing import Any, Mapping, TypedDict
 
 from . import config_schema
+
+
+class TomlParserPort(Protocol):
+    """Parser shape for the lazily loaded stdlib/optional TOML module."""
+
+    def load(self, fp: BinaryIO) -> dict: ...
 
 cache_support: Any = None
 config_support: Any = None
@@ -20,10 +27,10 @@ def _load_support_module(name: str) -> Any:
         globals()[name] = module
     return module
 
-tomllib: Any = None
+tomllib: TomlParserPort | None = None
 
 
-def _load_tomllib() -> Any:
+def _load_tomllib() -> TomlParserPort | None:
     global tomllib
     if tomllib is not None:
         return tomllib

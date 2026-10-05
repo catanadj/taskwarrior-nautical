@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import importlib.util
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -124,6 +126,25 @@ class ConfigSupportContractTests(unittest.TestCase):
             [call.args[0] for call in import_module.call_args_list],
             ["tomllib", "tomli"],
         )
+
+    def test_lazy_toml_loader_declares_the_shared_parser_capability(self) -> None:
+        self.assertEqual(
+            get_type_hints(core_config._load_tomllib)["return"],
+            core_config.TomlParserPort | None,
+        )
+
+    def test_config_support_remains_loadable_without_package_context(self) -> None:
+        source = Path(config_support.__file__)
+        spec = importlib.util.spec_from_file_location(
+            "_standalone_config_support_contract", source
+        )
+        self.assertIsNotNone(spec)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+
+        spec.loader.exec_module(module)
+
+        self.assertEqual(module.path_input_error("/tmp/safe"), None)
 
     def test_toml_loader_does_not_hide_parser_initialization_failure(self) -> None:
         with (

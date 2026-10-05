@@ -1,13 +1,47 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import nullcontext
 from types import SimpleNamespace
 
-from nautical_core.hook_engine import handle_on_modify
+from nautical_core.hook_engine import handle_on_add, handle_on_modify
 from nautical_core.modify_models import CompletionLifecycleResult
 
 
 class HookEngineContractTests(unittest.TestCase):
+    def test_on_add_profiler_assignment_does_not_hide_internal_failures(self) -> None:
+        class BrokenProfiler:
+            enabled = True
+
+            @property
+            def import_ms(self):
+                return None
+
+            @import_ms.setter
+            def import_ms(self, _value):
+                raise RuntimeError("profiler assignment invariant failed")
+
+            @staticmethod
+            def section(_name):
+                return nullcontext()
+
+        class Services:
+            @staticmethod
+            def has_nautical_fields(_task):
+                return True
+
+            @staticmethod
+            def load_core():
+                return None
+
+        request = SimpleNamespace(
+            task={"chainID": "typed"},
+            prof=BrokenProfiler(),
+            runtime=SimpleNamespace(import_ms=12.0),
+        )
+        with self.assertRaisesRegex(RuntimeError, "profiler assignment invariant failed"):
+            handle_on_add(request, Services())
+
     def test_delete_route_loads_core_only_for_nautical_tasks(self) -> None:
         calls = {"load": 0, "deleted": 0, "completion": 0, "non_completion": 0}
 

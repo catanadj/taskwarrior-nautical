@@ -68,11 +68,8 @@ def handle_on_add(
     except Exception as exc:
         services.diag(f'core load failed: {exc}')
         services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
-    try:
-        if getattr(prof, 'enabled', False) and runtime.import_ms is not None:
-            prof.import_ms = runtime.import_ms
-    except Exception:
-        pass
+    if getattr(prof, 'enabled', False) and runtime.import_ms is not None:
+        prof.import_ms = runtime.import_ms
 
     with prof.section('clock:now'):
         core = services.core()

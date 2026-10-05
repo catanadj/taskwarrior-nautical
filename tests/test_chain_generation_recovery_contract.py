@@ -738,6 +738,27 @@ class ChainGenerationContractTests(unittest.TestCase):
             )
         self.assertEqual(stderr.getvalue(), "")
 
+    def test_debug_record_failure_is_gated_and_redacted(self):
+        import io
+        from contextlib import redirect_stderr
+
+        class BrokenDebugState(dict):
+            def __setitem__(self, _key, _value):
+                raise RuntimeError("secret task payload")
+
+        service = ChainGenerationService.from_core(
+            _Core(),
+            debug_wait_sched=True,
+            wait_sched_debug=BrokenDebugState(),
+        )
+        stderr = io.StringIO()
+        with patch.dict("os.environ", {"NAUTICAL_DIAG": "1"}), redirect_stderr(stderr):
+            service._record_carry_debug("wait", {"description": "private task"})
+
+        self.assertIn("debug wait-schedule state record failed: RuntimeError", stderr.getvalue())
+        self.assertNotIn("secret task payload", stderr.getvalue())
+        self.assertNotIn("private task", stderr.getvalue())
+
     def test_child_draft_reports_unrecoverable_relative_carry(self):
         parent = _task(wait="2026-01-02T08:00:00Z", due=None, scheduled=None)
         with self.assertRaisesRegex(RuntimeError, "wait carry failed"):

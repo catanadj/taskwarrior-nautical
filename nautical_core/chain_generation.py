@@ -47,6 +47,19 @@ _RESERVED_DROP = frozenset(
     }
 )
 _RESERVED_OVERRIDE = frozenset({"due", "entry", "status", "chain", "prevLink", "link"})
+
+
+def _diagnose_optional_debug_failure(operation: str, exc: Exception) -> None:
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
+    try:
+        sys.stderr.write(
+            f"[nautical] debug wait-schedule state {operation} failed: {type(exc).__name__}\n"
+        )
+    except (OSError, UnicodeError, ValueError):
+        pass
+
+
 _UDA_CARRY_SKIP_LOWER = frozenset(
     {
         "id",
@@ -444,7 +457,8 @@ class ChainGenerationService:
             return
         try:
             self.wait_sched_debug[field] = payload
-        except Exception:
+        except Exception as exc:
+            _diagnose_optional_debug_failure("record", exc)
             return
 
     def _carry_native_until(
@@ -522,14 +536,7 @@ class ChainGenerationService:
             try:
                 self.wait_sched_debug.clear()
             except Exception as exc:
-                if os.environ.get("NAUTICAL_DIAG") == "1":
-                    try:
-                        sys.stderr.write(
-                            "[nautical] debug wait-schedule state cleanup failed: "
-                            f"{type(exc).__name__}\n"
-                        )
-                    except (OSError, UnicodeError, ValueError):
-                        pass
+                _diagnose_optional_debug_failure("cleanup", exc)
         # One explicit serialization creates the mutable Taskwarrior import
         # payload; all scheduling and carry decisions above use typed fields.
         parent_payload = parent_task.observation.to_mapping()

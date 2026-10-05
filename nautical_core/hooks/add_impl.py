@@ -853,7 +853,7 @@ def _stamp_chain_id_on_add(task: dict) -> None:
         return
     try:
         chain_id = str(core.short_uuid(task.get("uuid")) or "").strip()
-    except Exception as exc:
+    except ValueError as exc:
         _fail_and_exit(
             "Chain identity unavailable",
             "Could not derive the required chainID for this recurring root: "

@@ -291,3 +291,12 @@ class OnAddPreviewHookContractTests(HookSubprocessFixture):
             self.assertRaisesRegex(RuntimeError, "omit loader defect"),
         ):
             self.hook._validate_omit_file_for_anchor_or_fail("w:mon", "", "dates.csv")
+
+    def test_on_add_chain_id_derivation_propagates_internal_failure(self) -> None:
+        if self._run_isolated:
+            self._run_in_child_process()
+            return
+
+        with patch.object(self.hook.core, "short_uuid", side_effect=RuntimeError("uuid helper defect")):
+            with self.assertRaisesRegex(RuntimeError, "uuid helper defect"):
+                self.hook._stamp_chain_id_on_add({"anchor": "w:mon", "uuid": "task-uuid"})

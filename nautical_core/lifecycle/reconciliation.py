@@ -53,7 +53,7 @@ class LifecycleRecoveryOperations(Protocol):
     """Policy operations used by the service-owned recovery loop."""
 
     def apply_parent(self, parent: TaskPayload, *, taskdata: Path, lease_held: bool,
-                     verified_children: dict[str, dict[str, Any]], generation: ChainGenerationService | None) -> tuple[RecoveryResult, str]: ...
+                     verified_children: dict[str, TaskPayload], generation: ChainGenerationService | None) -> tuple[RecoveryResult, str]: ...
     def plan_parent(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> RecoveryResult: ...
     def next_child(self, parent: TaskObservation, child_short: str) -> TaskObservation: ...
     def virtual_child(self, plan: LifecyclePlan, *, parent: TaskObservation,
@@ -74,7 +74,7 @@ class ApplyParentCallback(Protocol):
         *,
         taskdata: Path,
         lease_held: bool,
-        verified_children: dict[str, dict[str, Any]],
+        verified_children: dict[str, TaskPayload],
         generation: ChainGenerationService | None,
     ) -> tuple[RecoveryResult, str]: ...
 
@@ -103,7 +103,7 @@ class LifecycleApplyOperations(Protocol):
     def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> RecoveryResult: ...
     def execute_plan(self, plan: LifecyclePlan, *, parent: TaskObservation,
                      child_observation: TaskObservation | None,
-                     verified_children: dict[str, dict[str, Any]] | None,
+                     verified_children: dict[str, TaskPayload] | None,
                      label: str, strict_uuid: bool) -> str: ...
     def terminal_plan(self, plan: LifecyclePlan) -> str: ...
     def lock_busy(self, kind: str) -> None: ...
@@ -125,7 +125,7 @@ class ExecuteLifecyclePlanCallback(Protocol):
         *,
         parent: TaskObservation,
         child_observation: TaskObservation | None,
-        verified_children: dict[str, dict[str, Any]] | None,
+        verified_children: dict[str, TaskPayload] | None,
         label: str,
         strict_uuid: bool,
     ) -> str: ...
@@ -147,7 +147,7 @@ class CallbackLifecycleApplyOperations:
     def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> RecoveryResult:
         return self.refresh_callback(parent, generation=generation)
 
-    def execute_plan(self, plan: LifecyclePlan, *, parent: TaskObservation, child_observation: TaskObservation | None, verified_children: dict[str, dict[str, Any]] | None, label: str, strict_uuid: bool) -> str:
+    def execute_plan(self, plan: LifecyclePlan, *, parent: TaskObservation, child_observation: TaskObservation | None, verified_children: dict[str, TaskPayload] | None, label: str, strict_uuid: bool) -> str:
         return self.execute_callback(
             plan,
             parent=parent,
@@ -191,7 +191,7 @@ class CallbackLifecycleRecoveryOperations:
         *,
         taskdata: Path,
         lease_held: bool,
-        verified_children: dict[str, dict[str, Any]],
+        verified_children: dict[str, TaskPayload],
         generation: ChainGenerationService | None,
     ) -> tuple[RecoveryResult, str]:
         return self.apply_parent_callback(
@@ -424,7 +424,7 @@ class LifecycleReconciliationService:
         configuration_fingerprint: str,
         schedule_fingerprint: str,
         resolve_plan: Callable[[LifecyclePlan], LifecyclePlan],
-        verified_children: dict[str, dict[str, Any]] | None,
+        verified_children: dict[str, TaskPayload] | None,
         strict_uuid: bool,
         label: str,
     ) -> tuple[
@@ -479,7 +479,7 @@ class LifecycleReconciliationService:
         operations: LifecycleApplyOperations,
         taskdata: Path,
         lease_held: bool = False,
-        verified_children: dict[str, dict[str, Any]] | None = None,
+        verified_children: dict[str, TaskPayload] | None = None,
         generation: ChainGenerationService | None = None,
         hook: object = None,
     ) -> tuple[RecoveryResult, str]:
@@ -642,7 +642,7 @@ class LifecycleReconciliationService:
         current = parent
         visited: set[tuple[str, int]] = set()
         expiration_hops = 0
-        verified_children: dict[str, dict[str, Any]] = {}
+        verified_children: dict[str, TaskPayload] = {}
         while True:
             slot = (str(current.get("chainID") or "").strip(), lifecycle.int_or_default(current.get("link"), 0))
             if slot in visited:

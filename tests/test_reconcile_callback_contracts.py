@@ -83,6 +83,35 @@ class ReconcileCallbackContractTests(unittest.TestCase):
             tuple[RecoveryResult, str],
         )
 
+    def test_verified_child_cache_uses_the_shared_task_payload_model(self) -> None:
+        expected = dict[str, TaskPayload]
+        owners = (
+            reconciliation.LifecycleRecoveryOperations.apply_parent,
+            reconciliation.ApplyParentCallback.__call__,
+            reconciliation.LifecycleApplyOperations.execute_plan,
+            reconciliation.CallbackLifecycleRecoveryOperations.apply_parent,
+            reconciliation.LifecycleReconciliationService.execute_lifecycle_plan,
+            reconciliation.LifecycleReconciliationService.apply_parent,
+            reconcile_cli._execute_reconcile_lifecycle_plan,
+            reconcile_cli._apply_parent_atomic,
+        )
+
+        for owner in owners:
+            with self.subTest(owner=owner.__qualname__):
+                globalns = {
+                    **owner.__globals__,
+                    "LifecycleApplicationOutcome": LifecycleApplicationOutcome,
+                    "LifecycleApplicationService": LifecycleApplicationService,
+                }
+                hint = get_type_hints(owner, globalns=globalns)["verified_children"]
+                alternatives = get_args(hint)
+                payload_type = (
+                    next(item for item in alternatives if item is not type(None))
+                    if type(None) in alternatives
+                    else hint
+                )
+                self.assertEqual(payload_type, expected)
+
     def test_reconcile_session_constructor_uses_concrete_owner_types(self) -> None:
         annotations = reconcile_cli._ReconcileSession.__init__.__annotations__
         expected = {

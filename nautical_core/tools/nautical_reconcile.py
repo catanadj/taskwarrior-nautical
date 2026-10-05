@@ -825,7 +825,7 @@ def _execute_reconcile_lifecycle_plan(
     *,
     parent: TaskObservation,
     child_observation: TaskObservation | None = None,
-    verified_children: dict[str, dict[str, Any]] | None,
+    verified_children: dict[str, TaskPayload] | None,
     label: str,
     strict_uuid: bool,
     reconciliation_service: LifecycleReconciliationService,
@@ -979,7 +979,7 @@ def _apply_parent_atomic(
     *,
     taskdata: Path,
     lease_held: bool = False,
-    verified_children: dict[str, dict[str, Any]] | None = None,
+    verified_children: dict[str, TaskPayload] | None = None,
     generation: ChainGenerationService | None = None,
     reconciliation_service: LifecycleReconciliationService,
 ) -> tuple[RecoveryResult, str]:
@@ -997,7 +997,7 @@ def _apply_parent_atomic(
         *,
         parent: TaskObservation,
         child_observation: TaskObservation | None,
-        verified_children: dict[str, dict[str, Any]] | None,
+        verified_children: dict[str, TaskPayload] | None,
         label: str,
         strict_uuid: bool,
     ) -> str:

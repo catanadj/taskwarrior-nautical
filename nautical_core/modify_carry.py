@@ -115,7 +115,7 @@ def preserve_native_until_on_target_change(
         return True
     except native_until.NativeUntilCarryError as exc:
         reject_carry(old, new, new_target, old_target_field, exc)
-    except Exception as exc:
+    except (ImportError, TypeError, ValueError, OverflowError) as exc:
         diagnostic(f"native until target carry failed: {exc}")
         typed_error = native_until.NativeUntilCarryError(
             native_until.CARRY_FAILED,

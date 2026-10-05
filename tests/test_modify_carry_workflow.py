@@ -182,6 +182,37 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
         self.assertFalse(carried)
         self.assertEqual(new["until"], old["until"])
 
+    def test_native_until_carry_does_not_translate_unexpected_parser_failures(self) -> None:
+        import nautical_core.native_until as native_until
+
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "due": "2026-08-25T09:00:00Z",
+            "until": "2026-08-25T23:00:00Z",
+        }
+        new = {**old, "due": "2026-08-26T09:00:00Z"}
+
+        def parse_datetime(_value):
+            raise RuntimeError("datetime parser implementation failed")
+
+        with self.assertRaisesRegex(
+            RuntimeError, "datetime parser implementation failed"
+        ) as caught:
+            preserve_native_until_on_target_change(
+                old,
+                new,
+                "anchor",
+                field_changed=lambda _old, _new, field: field == "due",
+                recurrence_anchor_field=lambda _task: "due",
+                parse_datetime=parse_datetime,
+                native_until=native_until,
+                generation_service=lambda: self.fail("generation must not start"),
+                reject_carry=lambda *_args: self.fail("unexpectedly rejected carry"),
+                diagnostic=lambda _message: self.fail("unexpected diagnostic"),
+            )
+
+        self.assertIs(type(caught.exception), RuntimeError)
+
     def test_temporal_edits_are_reported_as_recurrence_changes(self) -> None:
         changes = recurrence_setting_changes(
             {"due": "2026-08-25T09:00:00Z", "wait": "2026-08-25T08:00:00Z"},

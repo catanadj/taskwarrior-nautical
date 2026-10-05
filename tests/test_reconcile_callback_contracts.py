@@ -75,6 +75,14 @@ class ReconcileCallbackContractTests(unittest.TestCase):
         )
         self.assertIs(terminal_hints["return"], LifecycleApplicationOutcome)
 
+    def test_parent_reconciliation_returns_the_existing_recovery_result(self) -> None:
+        self.assertEqual(
+            get_type_hints(
+                reconciliation.LifecycleReconciliationService.apply_parent
+            )["return"],
+            tuple[RecoveryResult, str],
+        )
+
     def test_reconcile_session_constructor_uses_concrete_owner_types(self) -> None:
         annotations = reconcile_cli._ReconcileSession.__init__.__annotations__
         expected = {

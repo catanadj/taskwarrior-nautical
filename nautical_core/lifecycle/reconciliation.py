@@ -482,7 +482,7 @@ class LifecycleReconciliationService:
         verified_children: dict[str, dict[str, Any]] | None = None,
         generation: ChainGenerationService | None = None,
         hook: object = None,
-    ) -> tuple[Any, str]:
+    ) -> tuple[RecoveryResult, str]:
         """Own locks and action dispatch for one candidate mutation."""
         parent_uuid = str(parent.get("uuid") or "").strip()
         if not parent_uuid:

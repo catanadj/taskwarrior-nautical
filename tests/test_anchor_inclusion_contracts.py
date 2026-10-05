@@ -49,14 +49,18 @@ class AnchorInclusionContractTests(unittest.TestCase):
         self.assertEqual(result.description, "watering")
 
     def test_omission_scheduler_failure_does_not_fail_open(self) -> None:
+        class BrokenScheduler:
+            def next_after_expr(self, *_args, **_kwargs):
+                raise RuntimeError("scheduler invariant failed")
+
         with patch.object(
-            core,
-            "next_after_expr",
-            side_effect=RuntimeError("scheduler unavailable"),
+            anchor_omit,
+            "_scheduler_engine",
+            return_value=BrokenScheduler(),
         ):
-            with self.assertRaisesRegex(ValueError, "Unable to evaluate omit rule"):
+            with self.assertRaisesRegex(RuntimeError, "scheduler invariant failed"):
                 anchor_omit.omit_expr_fires_on_date(
-                    [[{"kind": "w", "value": "mon", "mods": {}}]],
+                    core.validate_anchor_expr_strict("w:mon"),
                     date(2026, 8, 3),
                     date(2026, 8, 1),
                     "omit-fail-closed",

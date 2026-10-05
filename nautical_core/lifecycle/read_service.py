@@ -12,7 +12,7 @@ from datetime import datetime
 from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 import threading
-from typing import Any, Protocol, TypeAlias
+from typing import Protocol, TypeAlias
 
 from ..integration_models import (
     Absent,
@@ -501,8 +501,8 @@ class LifecycleReadService:
         self,
         rows: Sequence[TaskRow],
         *,
-        parent_task: TaskRow | Mapping[str, Any],
-        child_task: TaskRow | Mapping[str, Any],
+        parent_task: TaskRow | Mapping[str, object],
+        child_task: TaskRow | Mapping[str, object],
         child_short: str,
         short_uuid: Callable[[str], str],
     ) -> list[TaskRow]:

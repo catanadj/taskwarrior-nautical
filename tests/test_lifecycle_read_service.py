@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import get_type_hints
 
 from nautical_core.lifecycle import read_service
 from nautical_core.lifecycle.read_service import ChainCacheStore, LifecycleReadService
@@ -31,6 +32,13 @@ class LifecycleReadServiceTests(unittest.TestCase):
             read_service.chain_read_key.__annotations__["return"],
             "tuple[object, ...]",
         )
+
+    def test_spawned_child_merge_accepts_object_valued_task_mappings(self) -> None:
+        hints = get_type_hints(LifecycleReadService.merge_spawned_child)
+        task_input = read_service.TaskRow | Mapping[str, object]
+
+        self.assertEqual(hints["parent_task"], task_input)
+        self.assertEqual(hints["child_task"], task_input)
 
     def test_chain_cache_filters_typed_repository_snapshot_in_memory(self) -> None:
         rows = (

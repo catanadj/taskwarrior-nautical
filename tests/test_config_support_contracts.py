@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from typing import Callable, get_type_hints
+from typing import Callable, Mapping, get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -55,6 +55,37 @@ class ConfigSupportContractTests(unittest.TestCase):
         self.assertEqual(hints["conf_cache"], dict | None)
         self.assertEqual(hints["load_config"], Callable[[], dict])
         self.assertEqual(hints["return"], tuple[dict, dict])
+
+    def test_configuration_values_enter_helpers_as_untrusted_objects(self) -> None:
+        self.assertEqual(
+            get_type_hints(config_support.env_flag_true)["env_map"],
+            Mapping[str, object] | None,
+        )
+        self.assertEqual(
+            get_type_hints(config_support.resolve_task_data_context)["env"],
+            Mapping[str, object] | None,
+        )
+        for owner in (
+            config_support.normalize_preset_table,
+            config_support.normalize_anchor_presets,
+        ):
+            with self.subTest(owner=owner.__name__):
+                self.assertIs(get_type_hints(owner)["value"], object)
+
+        raw_hints = get_type_hints(config_support.conf_raw)
+        self.assertEqual(raw_hints["conf"], Mapping[str, object])
+        self.assertIs(raw_hints["return"], object)
+        self.assertIs(get_type_hints(config_support.trueish)["v"], object)
+
+        for owner in (
+            config_support.conf_str,
+            config_support.conf_int,
+            config_support.conf_bool,
+            config_support.conf_csv_or_list,
+            config_support.conf_uda_field_list,
+        ):
+            with self.subTest(owner=owner.__name__):
+                self.assertEqual(get_type_hints(owner)["conf"], Mapping[str, object])
 
     def test_integer_configuration_does_not_hide_conversion_defects(self) -> None:
         class BrokenString:

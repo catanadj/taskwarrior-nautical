@@ -4,7 +4,7 @@ import copy
 import os
 import re
 import sys
-from typing import Any, BinaryIO, Callable, Literal, Mapping, Protocol
+from typing import BinaryIO, Callable, Literal, Mapping, Protocol
 
 
 _UDA_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -46,7 +46,7 @@ class TomlParserPort(Protocol):
     def load(self, fp: BinaryIO) -> dict: ...
 
 
-def env_flag_true(name: str, env_map: Mapping[str, Any] | None = None) -> bool:
+def env_flag_true(name: str, env_map: Mapping[str, object] | None = None) -> bool:
     src = env_map if env_map is not None else os.environ
     raw = src.get(name, "")
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
@@ -129,7 +129,7 @@ def validated_user_dir(
     *,
     label: str,
     trust_env: str = "",
-    env_map: Mapping[str, Any] | None = None,
+    env_map: Mapping[str, object] | None = None,
     warn_on_error: bool = True,
 ) -> str:
     raw = str(path_value or "").strip()
@@ -173,7 +173,7 @@ def hook_arg_value(argv: list[str], keys: tuple[str, ...]) -> str:
 def resolve_task_data_context(
     *,
     argv: list[str] | None = None,
-    env: Mapping[str, Any] | None = None,
+    env: Mapping[str, object] | None = None,
     tw_dir: str | None = None,
 ) -> tuple[str, bool, str]:
     """Resolve Taskwarrior's Taskdata path and whether it was explicit."""
@@ -328,7 +328,7 @@ def normalize_keys(data: dict) -> dict:
     return out
 
 
-def normalize_preset_table(value: Any) -> dict[str, str]:
+def normalize_preset_table(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
     out: dict[str, str] = {}
@@ -341,7 +341,7 @@ def normalize_preset_table(value: Any) -> dict[str, str]:
     return out
 
 
-def normalize_anchor_presets(value: Any) -> dict[str, str]:
+def normalize_anchor_presets(value: object) -> dict[str, str]:
     return normalize_preset_table(value)
 
 
@@ -493,11 +493,11 @@ def get_config(
     return copy.deepcopy(conf_cache), conf_cache
 
 
-def conf_raw(conf: Mapping[str, Any], key: str) -> Any:
+def conf_raw(conf: Mapping[str, object], key: str) -> object:
     return conf.get(key)
 
 
-def conf_str(conf: Mapping[str, Any], key: str, default: str) -> str:
+def conf_str(conf: Mapping[str, object], key: str, default: str) -> str:
     value = conf_raw(conf, key)
     if value is None:
         return str(default)
@@ -506,7 +506,7 @@ def conf_str(conf: Mapping[str, Any], key: str, default: str) -> str:
 
 
 def conf_int(
-    conf: Mapping[str, Any],
+    conf: Mapping[str, object],
     key: str,
     default: int,
     min_value: int | None = None,
@@ -525,7 +525,7 @@ def conf_int(
 
 
 def conf_bool(
-    conf: Mapping[str, Any],
+    conf: Mapping[str, object],
     key: str,
     default: bool = False,
     true_values: set[str] | None = None,
@@ -548,12 +548,13 @@ def conf_bool(
     return bool(default)
 
 
-def conf_csv_or_list(conf: Mapping[str, Any], key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
+def conf_csv_or_list(conf: Mapping[str, object], key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
     value = conf_raw(conf, key)
     if value is None:
         return list(default or [])
     if isinstance(value, str):
-        raw_items = value.split(",")
+        raw_items: list[object] = []
+        raw_items.extend(value.split(","))
     elif isinstance(value, (list, tuple, set)):
         raw_items = list(value)
     else:
@@ -574,7 +575,7 @@ def conf_csv_or_list(conf: Mapping[str, Any], key: str, default: list[str] | Non
     return out if out else list(default or [])
 
 
-def conf_uda_field_list(conf: Mapping[str, Any], key: str) -> list[str]:
+def conf_uda_field_list(conf: Mapping[str, object], key: str) -> list[str]:
     fields = conf_csv_or_list(conf, key, default=[], lower=True)
     out: list[str] = []
     for field in fields:
@@ -589,7 +590,7 @@ def conf_uda_field_list(conf: Mapping[str, Any], key: str) -> list[str]:
     return out
 
 
-def trueish(v: Any, default: bool = False) -> bool:
+def trueish(v: object, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")

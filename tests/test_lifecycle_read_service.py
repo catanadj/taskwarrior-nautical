@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 import threading
+from collections.abc import Callable
 
+from nautical_core.lifecycle import read_service
 from nautical_core.lifecycle.read_service import ChainCacheStore, LifecycleReadService
 from nautical_core.task_models import TaskObservation
 from nautical_core.integration_models import (
@@ -16,6 +18,20 @@ from nautical_core.integration_models import (
 
 
 class LifecycleReadServiceTests(unittest.TestCase):
+    def test_query_cache_callback_contracts_are_bounded_at_the_service_edge(self) -> None:
+        self.assertEqual(
+            read_service.ReadQuery,
+            Callable[[str, tuple[object, ...]], object],
+        )
+        self.assertEqual(
+            read_service.CoerceInt,
+            Callable[[object, int | None], int | None],
+        )
+        self.assertEqual(
+            read_service.chain_read_key.__annotations__["return"],
+            "tuple[object, ...]",
+        )
+
     def test_chain_cache_filters_typed_repository_snapshot_in_memory(self) -> None:
         rows = (
             TaskObservation.from_mapping(

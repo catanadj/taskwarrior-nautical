@@ -4,7 +4,7 @@ import hashlib
 import os
 import stat
 import sys
-from typing import Any, Mapping, Protocol
+from typing import Mapping, Protocol
 
 
 class ValidatedUserDir(Protocol):
@@ -14,7 +14,7 @@ class ValidatedUserDir(Protocol):
         *,
         label: str,
         trust_env: str = "",
-        env_map: Mapping[str, Any] | None = None,
+        env_map: Mapping[str, object] | None = None,
         warn_on_error: bool = True,
     ) -> str: ...
 

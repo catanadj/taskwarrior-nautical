@@ -17,7 +17,7 @@ import tempfile
 import time
 import unittest
 from contextlib import nullcontext
-from typing import Any, Callable, ContextManager, Iterator, get_type_hints
+from typing import Any, Callable, ContextManager, Iterator, Mapping, get_type_hints
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -51,6 +51,8 @@ class _Clock:
 
 class CacheApiContractTests(unittest.TestCase):
     def test_cache_directory_validation_uses_a_shared_callback_contract(self) -> None:
+        callback_hints = get_type_hints(cache_support.ValidatedUserDir.__call__)
+        self.assertEqual(callback_hints["env_map"], Mapping[str, object] | None)
         for owner in (cache_support.nautical_cache_dir, cache_support.select_cache_dir):
             with self.subTest(owner=owner.__name__):
                 hints = get_type_hints(owner)

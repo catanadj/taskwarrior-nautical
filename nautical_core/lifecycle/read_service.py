@@ -29,11 +29,11 @@ from ..task_models import TaskObservation, TaskStatus
 
 TaskRow: TypeAlias = TaskObservation
 ChainSnapshotValue = AuthoritativeTaskSnapshot | tuple[TaskRow, ...]
-ReadQuery = Callable[[str, tuple[Any, ...]], Any]
+ReadQuery = Callable[[str, tuple[object, ...]], object]
 ChainCache = Callable[[str], Sequence[TaskRow] | None]
 TokenParser = Callable[[str | None], list[str] | None]
 TokenMatcher = Callable[[TaskRow, str], bool]
-CoerceInt = Callable[[Any, int | None], int | None]
+CoerceInt = Callable[[object, int | None], int | None]
 Diagnostic = Callable[[str], None]
 Counter = Callable[[str], None]
 
@@ -56,7 +56,7 @@ def chain_read_key(
     since: datetime | None,
     extra: str | None,
     limit: int,
-) -> tuple[Any, ...]:
+) -> tuple[object, ...]:
     """Build the stable request-cache key for one chain read."""
     return (
         str(chain_id or ""),
@@ -375,7 +375,7 @@ class LifecycleReadService:
         since: datetime | None = None,
         extra: str | None = None,
         read_query_missing: object | None = None,
-        read_query_key: Callable[[str, datetime | None, str | None, int], tuple[Any, ...]] = chain_read_key,
+        read_query_key: Callable[[str, datetime | None, str | None, int], tuple[object, ...]] = chain_read_key,
     ) -> list[TaskRow] | None:
         """Read one chain using the request snapshot, run cache, or exporter."""
         missing = self._read_query_missing if read_query_missing is None else read_query_missing

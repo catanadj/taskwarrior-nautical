@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime
+from collections.abc import Callable
 from typing import Any, get_args, get_type_hints
 import unittest
 
@@ -12,6 +13,24 @@ from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 class ReconcileCallbackContractTests(unittest.TestCase):
+    def test_reconcile_report_enrichment_uses_datetime_callback_contracts(self) -> None:
+        from nautical_core.reconcile_report import describe_plan, describe_recovery_result
+
+        plan_hints = get_type_hints(describe_plan)
+        self.assertEqual(plan_hints["fmt_dt_local"], Callable[[datetime], str] | None)
+        self.assertEqual(
+            plan_hints["parse_until"],
+            Callable[[object], tuple[datetime | None, str | None]] | None,
+        )
+        self.assertEqual(
+            plan_hints["describe_carry"],
+            Callable[[datetime, datetime], str | None] | None,
+        )
+        self.assertEqual(
+            get_type_hints(describe_recovery_result)["fmt_dt_local"],
+            Callable[[datetime], str] | None,
+        )
+
     def test_lifecycle_apply_callbacks_do_not_accept_untyped_signatures(self) -> None:
         hints = get_type_hints(reconciliation.CallbackLifecycleApplyOperations)
 

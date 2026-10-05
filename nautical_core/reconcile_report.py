@@ -82,9 +82,9 @@ def action_style(action: str) -> str:
 def describe_plan(
     plan: RecoveryResult,
     *,
-    fmt_dt_local: Any = None,
-    parse_until: Callable[[object], tuple[Any, str | None]] | None = None,
-    describe_carry: Callable[[Any, Any], str | None] | None = None,
+    fmt_dt_local: Callable[[datetime], str] | None = None,
+    parse_until: Callable[[object], tuple[datetime | None, str | None]] | None = None,
+    describe_carry: Callable[[datetime, datetime], str | None] | None = None,
 ) -> dict[str, Any]:
     """Enrich recovery evidence for human output without owning policy."""
     evidence = describe_recovery_result(plan, fmt_dt_local=fmt_dt_local)
@@ -104,7 +104,11 @@ def describe_plan(
     return evidence
 
 
-def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None) -> dict[str, Any]:
+def describe_recovery_result(
+    result: RecoveryResult,
+    *,
+    fmt_dt_local: Callable[[datetime], str] | None = None,
+) -> dict[str, Any]:
     """Render typed recovery evidence for reconcile output."""
     parent = result.parent.to_mapping()
     if isinstance(result, RecoveryRefusal):

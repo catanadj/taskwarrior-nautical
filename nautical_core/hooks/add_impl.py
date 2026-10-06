@@ -39,7 +39,7 @@ except ModuleNotFoundError:
                 _core_path / 'hook_bootstrap.py',
                 _core_path / 'nautical_core' / 'hook_bootstrap.py',
             ])
-        except Exception:
+        except (OSError, RuntimeError, TypeError):
             pass
     for _bootstrap_path in _bootstrap_paths:
         try:
@@ -51,7 +51,7 @@ except ModuleNotFoundError:
                 _spec.loader.exec_module(_bootstrap_mod)
                 hook_bootstrap = _bootstrap_mod
                 break
-        except Exception:
+        except (AttributeError, ImportError, OSError, SyntaxError):
             continue
     if hook_bootstrap is None:
         raise
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     if _protocol is not None:
         try:
             _EARLY_PROTOCOL_RESULT = _protocol.read_on_add(max_bytes=_MAX_JSON_BYTES)
-        except Exception:
+        except (OSError, TypeError, UnicodeError, ValueError):
             _EARLY_PROTOCOL_RESULT = None
         if (
             _EARLY_PROTOCOL_RESULT is not None

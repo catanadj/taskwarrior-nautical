@@ -33,7 +33,7 @@ except ModuleNotFoundError:
                 _core_path / 'hook_bootstrap.py',
                 _core_path / 'nautical_core' / 'hook_bootstrap.py',
             ])
-        except Exception:
+        except (OSError, RuntimeError, TypeError):
             pass
     for _bootstrap_path in _bootstrap_paths:
         try:
@@ -45,7 +45,7 @@ except ModuleNotFoundError:
                 _spec.loader.exec_module(_bootstrap_mod)
                 hook_bootstrap = _bootstrap_mod
                 break
-        except Exception:
+        except (AttributeError, ImportError, OSError, SyntaxError):
             continue
     if hook_bootstrap is None:
         raise

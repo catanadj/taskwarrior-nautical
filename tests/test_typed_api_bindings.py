@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import hashlib
 import importlib
 import inspect
+from typing import get_type_hints
 from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path
 from types import ModuleType
@@ -366,6 +367,24 @@ class ApiBindingContractTests(unittest.TestCase):
                             for parameter in inspect.signature(method).parameters.values()
                         )
                     )
+
+    def test_root_cp_parser_facade_preserves_concrete_result_types(self) -> None:
+        import nautical_core as facade
+        from nautical_core.cp_parser import CPSequenceToken
+
+        self.assertEqual(get_type_hints(facade.parse_cp_duration)["return"], timedelta | None)
+        self.assertEqual(
+            get_type_hints(facade.parse_cp_sequence_tokens)["return"],
+            list[CPSequenceToken] | None,
+        )
+        self.assertEqual(
+            get_type_hints(facade.parse_cp_sequence)["return"],
+            list[timedelta] | None,
+        )
+        self.assertIs(
+            get_type_hints(facade.cp_sequence_interval_for_token)["token"],
+            CPSequenceToken,
+        )
     def test_parser_scheduler_and_cache_bindings_match_facade_behavior(self) -> None:
         import nautical_core as facade
         cache_api = importlib.import_module("nautical_core.cache_api")

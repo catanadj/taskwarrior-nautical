@@ -7,9 +7,11 @@ Shared core for Taskwarrior Nautical hooks.
 from __future__ import annotations
 import os, re, sys
 from collections import OrderedDict
+from datetime import timedelta
 from typing import Any, Callable, Mapping, Sequence, TYPE_CHECKING
 
 from .integration_models import TaskCommandResult
+from .cp_parser import CPSequenceToken
 
 if TYPE_CHECKING:
     from .core_config import ConfigReloadResult
@@ -713,15 +715,15 @@ def _months_since(seed_local: Any, year: int, month: int) -> int:
 _cp_parser = _LazySibling("cp_parser")
 
 
-def parse_cp_duration(dur: str) -> Any:
+def parse_cp_duration(dur: str) -> timedelta | None:
     return _cp_parser.parse_cp_duration(dur)
 
 
-def parse_cp_sequence_tokens(cp: str) -> Any:
+def parse_cp_sequence_tokens(cp: str) -> list[CPSequenceToken] | None:
     return _cp_parser.parse_cp_sequence_tokens(cp)
 
 
-def parse_cp_sequence(cp: str) -> Any:
+def parse_cp_sequence(cp: str) -> list[timedelta] | None:
     return _cp_parser.parse_cp_sequence(cp)
 
 
@@ -729,7 +731,14 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     return _cp_parser.cp_sequence_parse_error(cp)
 
 
-def cp_sequence_interval_for_token(token: Any, *, cp: str, link_no: int, token_index: int, chain_id: str | None = None) -> Any:
+def cp_sequence_interval_for_token(
+    token: CPSequenceToken,
+    *,
+    cp: str,
+    link_no: int,
+    token_index: int,
+    chain_id: str | None = None,
+) -> timedelta | None:
     return _cp_parser.cp_sequence_interval_for_token(
         token,
         cp=cp,

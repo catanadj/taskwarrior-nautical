@@ -41,6 +41,12 @@ from nautical_core.lifecycle.outbox import (
 
 
 class LifecycleOutboxContractTests(unittest.TestCase):
+    def test_metadata_repair_uses_public_integration_freeze_operation(self) -> None:
+        import inspect
+        import nautical_core.lifecycle.application as application
+
+        self.assertNotIn("_freeze_pairs", inspect.getsource(application))
+
     def test_operations_port_status_matches_repository_retention_contract(self) -> None:
         from inspect import signature
         from nautical_core.lifecycle.outbox_operations import LifecycleOutboxOperationsPort

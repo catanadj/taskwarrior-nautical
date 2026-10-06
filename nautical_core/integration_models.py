@@ -60,6 +60,11 @@ def _freeze_pairs(value: Mapping[str, object]) -> FrozenPairs:
     return tuple(sorted((str(key), _freeze_value(item)) for key, item in value.items()))
 
 
+def freeze_pairs(value: Mapping[str, object]) -> FrozenPairs:
+    """Return immutable, deterministically ordered metadata pairs."""
+    return _freeze_pairs(value)
+
+
 def _thaw(value: FrozenValue) -> object:
     if isinstance(value, tuple):
         if all(isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in value):

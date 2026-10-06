@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 
 class ModifyDiagnosticReadPortTests(unittest.TestCase):
-    def test_tw_get_command_port_exposes_named_retry_and_execution_inputs(self) -> None:
+    def test_tw_get_command_port_exposes_named_attempt_and_execution_inputs(self) -> None:
         from nautical_core.modify_read_effects import TwGetPorts
 
         callback = get_type_hints(TwGetPorts)["run_task"]
@@ -20,7 +20,7 @@ class ModifyDiagnosticReadPortTests(unittest.TestCase):
 
         self.assertEqual(
             list(signature.parameters),
-            ["self", "argv", "env", "input_text", "timeout", "retries", "retry_delay", "use_tempfiles"],
+            ["self", "argv", "env", "input_text", "timeout", "attempts", "retry_delay", "use_tempfiles"],
         )
         self.assertEqual(
             signature.parameters["env"].kind,

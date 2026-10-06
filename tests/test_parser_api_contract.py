@@ -1,5 +1,6 @@
 from datetime import date
 import functools
+import inspect
 import re
 import unittest
 from types import SimpleNamespace
@@ -25,6 +26,10 @@ def split_csv(value):
 
 
 class ParserFrontendContractTests(unittest.TestCase):
+    def test_for_core_delegates_validation_dependency_assembly(self):
+        source = inspect.getsource(parser_api.for_core)
+        self.assertIn("_build_parser_validation_dependencies", source)
+
     def test_split_top_level_respects_parentheses_and_drops_empty_tail(self):
         self.assertEqual(
             parser_frontend.split_top_level("a+(b+c)+", "+"),

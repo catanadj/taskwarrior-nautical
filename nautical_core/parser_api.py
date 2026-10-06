@@ -120,6 +120,37 @@ def _validate_anchor_dnf_atoms_strict(deps: ParserValidationDependencies, dnf: A
     )
 
 
+def _build_parser_validation_dependencies(
+    deps: ParserDependencies,
+    *,
+    context: CoreContext | None,
+    position_selection: Any,
+    validate_yearly_token_format: Callable[..., Any],
+) -> ParserValidationDependencies:
+    """Assemble the strict-validation collaborators at one owner seam."""
+    parse_error = deps.get("ParseError")
+    if parse_error is None:
+        parser_models = (
+            context.import_sibling("parsing.parser_models")
+            if context is not None else deps["_import_sibling"]("parsing.parser_models")
+        )
+        parse_error = parser_models.ParseError
+    return ParserValidationDependencies(
+        strict_validation=(
+            context.import_sibling("strict_validation")
+            if context is not None else deps["_strict_validation"]
+        ),
+        parse_cached=deps["_parse_anchor_expr_to_dnf_cached_impl"],
+        parse_error=parse_error,
+        is_atom_like=deps["_is_atom_like"],
+        validate_weekly_spec=deps["_validate_weekly_spec"],
+        validate_monthly_spec=deps["_validate_monthly_spec"],
+        active_mod_keys=deps["_active_mod_keys"],
+        validate_yearly_token_format=validate_yearly_token_format,
+        position_selection=position_selection,
+    )
+
+
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     """Create parser entry points bound to one deps module instance."""
     if context is not None:
@@ -142,26 +173,11 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def validation_dependencies() -> ParserValidationDependencies:
         bound = validation_deps_state[0]
         if bound is None:
-            parse_error = deps.get("ParseError")
-            if parse_error is None:
-                parser_models = (
-                    context.import_sibling("parsing.parser_models")
-                    if context is not None else deps["_import_sibling"]("parsing.parser_models")
-                )
-                parse_error = parser_models.ParseError
-            bound = ParserValidationDependencies(
-                strict_validation=(
-                    context.import_sibling("strict_validation")
-                    if context is not None else deps["_strict_validation"]
-                ),
-                parse_cached=deps["_parse_anchor_expr_to_dnf_cached_impl"],
-                parse_error=parse_error,
-                is_atom_like=deps["_is_atom_like"],
-                validate_weekly_spec=deps["_validate_weekly_spec"],
-                validate_monthly_spec=deps["_validate_monthly_spec"],
-                active_mod_keys=deps["_active_mod_keys"],
-                validate_yearly_token_format=validate_yearly_token_format,
+            bound = _build_parser_validation_dependencies(
+                deps,
+                context=context,
                 position_selection=position_selection,
+                validate_yearly_token_format=validate_yearly_token_format,
             )
             validation_deps_state[0] = bound
         return bound

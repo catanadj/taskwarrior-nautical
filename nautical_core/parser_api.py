@@ -162,6 +162,85 @@ class ParserPresetBinding:
         return title, f"@{name} → {self.display_value(name, presets, table_name=table_name, label=label)}"
 
 
+@dataclass(frozen=True, slots=True)
+class ParserYearlyBinding:
+    """Bind yearly-token operations to the parser's owner dependencies."""
+
+    deps: ParserDependencies
+
+    def yearly_pair_from_fmt(self, a: int, b: int, fmt: str) -> tuple[int, int]:
+        return self.deps["_yearly_validation"].yearly_pair_from_fmt(a, b, fmt)
+
+    def yearly_mmdd_error(self, mm: int, dd: int) -> str | None:
+        return self.deps["_yearly_validation"].yearly_mmdd_error(mm, dd)
+
+    def validate_yearly_token_allowlist(self, token: str, fmt: str) -> None:
+        self.deps["_yearly_validation"].validate_yearly_token_allowlist(
+            token,
+            fmt,
+            year_token_format_error_cls=self.deps["YearTokenFormatError"],
+            month_from_alias=self.deps["_month_from_alias"],
+        )
+
+    def validate_yearly_token_detailed(self, token: str, fmt: str) -> tuple[str, str] | None:
+        return self.deps["_yearly_validation"].validate_yearly_token_detailed(
+            token,
+            fmt,
+            year_token_format_error_cls=self.deps["YearTokenFormatError"],
+        )
+
+    def validate_yearly_token_format(self, spec: str) -> Any:
+        return self.deps["_yearly_validation"].validate_yearly_token_format(
+            spec,
+            yearfmt=self.deps["_yearfmt"],
+            split_csv_lower=self.deps["_split_csv_lower"],
+            year_token_format_error_cls=self.deps["YearTokenFormatError"],
+            month_from_alias=self.deps["_month_from_alias"],
+        )
+
+    def validate_year_tokens_in_dnf(self, dnf: Any) -> Any:
+        return self.deps["_yearly_validation"].validate_year_tokens_in_dnf(
+            dnf,
+            validate_yearly_token_format=self.validate_yearly_token_format,
+        )
+
+    def validate_yearly_token(self, token: str) -> Any:
+        return self.deps["_yearly_validation"].validate_yearly_token(
+            token,
+            quarters=self.deps["_QUARTERS"],
+            parse_y_token=self.deps["_parse_y_token"],
+            parse_error_cls=self.deps["ParseError"],
+        )
+
+    def yearly_last_day(self, month: int) -> int:
+        return self.deps["_yearly_validation"].yearly_last_day(month)
+
+    def yearly_check_day_month(self, day: int, month: int, label: str, token: str) -> None:
+        self.deps["_yearly_validation"].yearly_check_day_month(
+            day,
+            month,
+            label,
+            token,
+            parse_error_cls=self.deps["ParseError"],
+            month_full=self.deps["_natural_language"]._MONTH_FULL,
+        )
+
+    def validate_yearly_spec_token(self, token: str) -> None:
+        self.deps["_yearly_validation"].validate_yearly_spec_token(
+            token,
+            parse_error_cls=self.deps["ParseError"],
+            month_full=self.deps["_natural_language"]._MONTH_FULL,
+        )
+
+    def validate_yearly_spec(self, spec: str) -> Any:
+        return self.deps["_yearly_validation"].validate_yearly_spec(
+            spec,
+            split_csv_lower=self.deps["_split_csv_lower"],
+            validate_yearly_spec_token=self.validate_yearly_spec_token,
+            parse_error_cls=self.deps["ParseError"],
+        )
+
+
 def _core_module() -> Any:
     package = __package__ or "nautical_core"
     return sys.modules.get(package) or importlib.import_module(package)
@@ -284,6 +363,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     position_selection = context.import_sibling("position_selection") if context is not None else deps["_position_selection"]
     validation_deps_state: list[ParserValidationDependencies | None] = [None]
     preset_binding = ParserPresetBinding(deps)
+    yearly_binding = ParserYearlyBinding(deps)
 
     def validation_dependencies() -> ParserValidationDependencies:
         bound = validation_deps_state[0]
@@ -398,77 +478,17 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             parse_error_cls=deps["ParseError"],
         )
 
-    def yearly_pair_from_fmt(a: int, b: int, fmt: str) -> tuple[int, int]:
-        return deps["_yearly_validation"].yearly_pair_from_fmt(a, b, fmt)
-
-    def yearly_mmdd_error(mm: int, dd: int) -> str | None:
-        return deps["_yearly_validation"].yearly_mmdd_error(mm, dd)
-
-    def validate_yearly_token_allowlist(token: str, fmt: str) -> None:
-        deps["_yearly_validation"].validate_yearly_token_allowlist(
-            token,
-            fmt,
-            year_token_format_error_cls=deps["YearTokenFormatError"],
-            month_from_alias=deps["_month_from_alias"],
-        )
-
-    def validate_yearly_token_detailed(token: str, fmt: str) -> tuple[str, str] | None:
-        return deps["_yearly_validation"].validate_yearly_token_detailed(
-            token,
-            fmt,
-            year_token_format_error_cls=deps["YearTokenFormatError"],
-        )
-
-    def validate_yearly_token_format(spec: str) -> Any:
-        return deps["_yearly_validation"].validate_yearly_token_format(
-            spec,
-            yearfmt=deps["_yearfmt"],
-            split_csv_lower=deps["_split_csv_lower"],
-            year_token_format_error_cls=deps["YearTokenFormatError"],
-            month_from_alias=deps["_month_from_alias"],
-        )
-
-    def validate_year_tokens_in_dnf(dnf: Any) -> Any:
-        return deps["_yearly_validation"].validate_year_tokens_in_dnf(
-            dnf,
-            validate_yearly_token_format=validate_yearly_token_format,
-        )
-
-    def validate_yearly_token(token: str) -> Any:
-        return deps["_yearly_validation"].validate_yearly_token(
-            token,
-            quarters=deps["_QUARTERS"],
-            parse_y_token=deps["_parse_y_token"],
-            parse_error_cls=deps["ParseError"],
-        )
-
-    def yearly_last_day(month: int) -> int:
-        return deps["_yearly_validation"].yearly_last_day(month)
-
-    def yearly_check_day_month(day: int, month: int, label: str, token: str) -> None:
-        deps["_yearly_validation"].yearly_check_day_month(
-            day,
-            month,
-            label,
-            token,
-            parse_error_cls=deps["ParseError"],
-            month_full=deps["_natural_language"]._MONTH_FULL,
-        )
-
-    def validate_yearly_spec_token(token: str) -> None:
-        deps["_yearly_validation"].validate_yearly_spec_token(
-            token,
-            parse_error_cls=deps["ParseError"],
-            month_full=deps["_natural_language"]._MONTH_FULL,
-        )
-
-    def validate_yearly_spec(spec: str) -> Any:
-        return deps["_yearly_validation"].validate_yearly_spec(
-            spec,
-            split_csv_lower=deps["_split_csv_lower"],
-            validate_yearly_spec_token=validate_yearly_spec_token,
-            parse_error_cls=deps["ParseError"],
-        )
+    yearly_pair_from_fmt = yearly_binding.yearly_pair_from_fmt
+    yearly_mmdd_error = yearly_binding.yearly_mmdd_error
+    validate_yearly_token_allowlist = yearly_binding.validate_yearly_token_allowlist
+    validate_yearly_token_detailed = yearly_binding.validate_yearly_token_detailed
+    validate_yearly_token_format = yearly_binding.validate_yearly_token_format
+    validate_year_tokens_in_dnf = yearly_binding.validate_year_tokens_in_dnf
+    validate_yearly_token = yearly_binding.validate_yearly_token
+    yearly_last_day = yearly_binding.yearly_last_day
+    yearly_check_day_month = yearly_binding.yearly_check_day_month
+    validate_yearly_spec_token = yearly_binding.validate_yearly_spec_token
+    validate_yearly_spec = yearly_binding.validate_yearly_spec
 
     leap_year_for_checks = 2028
 

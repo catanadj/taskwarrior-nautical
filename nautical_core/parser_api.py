@@ -48,6 +48,120 @@ class ParserValidationDependencies:
     position_selection: Any
 
 
+@dataclass(frozen=True, slots=True)
+class ParserPresetBinding:
+    """Own configured anchor/omit preset expansion and presentation."""
+
+    deps: ParserDependencies
+    reference_pattern: re.Pattern[str] = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
+
+    def resolve_refs(
+        self,
+        expr: str,
+        *,
+        presets: dict,
+        table_name: str,
+        label: str,
+        _seen: tuple[str, ...] | frozenset[str] | None = None,
+    ) -> str:
+        raw = self.deps["_unwrap_quotes"](expr or "").strip()
+        if not raw:
+            return raw
+        presets = dict(presets or {})
+        seen_chain = tuple(sorted(_seen)) if isinstance(_seen, frozenset) else tuple(_seen or ())
+        seen = set(seen_chain)
+
+        def repl(match: Any) -> str:
+            start = match.start()
+            if start > 0 and raw[start - 1] not in " \t\r\n(|+,":
+                return match.group(0)
+            end = match.end()
+            if end < len(raw) and raw[end] == "=":
+                return match.group(0)
+            name = match.group(1).strip().lower()
+            if name not in presets:
+                available = ", ".join(f"@{item}" for item in sorted(presets))
+                hint = (
+                    f" Available {label} presets: {available}."
+                    if presets else f" No {label} presets are configured."
+                )
+                raise self.deps["ParseError"](
+                    f"Unknown {label} preset '@{name}'.{hint} "
+                    f"Define it under [{table_name}] in config-nautical.toml."
+                )
+            if name in seen:
+                chain = " -> ".join([*(f"@{item}" for item in seen_chain), f"@{name}"])
+                raise self.deps["ParseError"](
+                    f"Recursive {label} preset reference detected: {chain}"
+                )
+            resolved = self.resolve_refs(
+                presets[name],
+                presets=presets,
+                table_name=table_name,
+                label=label,
+                _seen=(*seen_chain, name),
+            )
+            return f"({resolved})"
+
+        return self.reference_pattern.sub(repl, raw)
+
+    def resolve_anchor(self, expr: str, *, _seen: Any = None) -> str:
+        return self.resolve_refs(
+            expr,
+            presets=self.deps["ANCHOR_PRESETS"],
+            table_name="anchor_presets",
+            label="anchor",
+            _seen=_seen,
+        )
+
+    def resolve_omit(self, expr: str, *, _seen: Any = None) -> str:
+        return self.resolve_refs(
+            expr,
+            presets=self.deps["OMIT_PRESETS"],
+            table_name="omit_presets",
+            label="omit",
+            _seen=_seen,
+        )
+
+    def display_value(self, name: str, presets: dict, *, table_name: str, label: str) -> str:
+        raw = str(presets[name] or "").strip()
+        try:
+            resolved = self.resolve_refs(
+                raw,
+                presets=presets,
+                table_name=table_name,
+                label=label,
+                _seen=(name,),
+            ).strip()
+        except self.deps["ParseError"]:
+            return raw
+        return resolved[1:-1].strip() if resolved.startswith("(") and resolved.endswith(")") else resolved
+
+    def display_anchor(self, expr: str) -> tuple[str, str] | None:
+        return self._display(expr, self.deps["ANCHOR_PRESETS"], "anchor_presets", "anchor", "Preset")
+
+    def display_omit(self, expr: str) -> tuple[str, str] | None:
+        return self._display(expr, self.deps["OMIT_PRESETS"], "omit_presets", "omit", "Omit preset")
+
+    def _display(
+        self,
+        expr: str,
+        presets: dict,
+        table_name: str,
+        label: str,
+        title: str,
+    ) -> tuple[str, str] | None:
+        raw = self.deps["_unwrap_quotes"](expr or "").strip()
+        match = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
+        if not match:
+            return None
+        name = match.group(1).strip().lower()
+        presets = dict(presets or {})
+        if name not in presets:
+            return None
+        return title, f"@{name} → {self.display_value(name, presets, table_name=table_name, label=label)}"
+
+
 def _core_module() -> Any:
     package = __package__ or "nautical_core"
     return sys.modules.get(package) or importlib.import_module(package)
@@ -169,6 +283,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     expansion_binding_state: list[Any | None] = [None]
     position_selection = context.import_sibling("position_selection") if context is not None else deps["_position_selection"]
     validation_deps_state: list[ParserValidationDependencies | None] = [None]
+    preset_binding = ParserPresetBinding(deps)
 
     def validation_dependencies() -> ParserValidationDependencies:
         bound = validation_deps_state[0]
@@ -181,104 +296,11 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             )
             validation_deps_state[0] = bound
         return bound
-    preset_ref_re = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
-
-    def resolve_preset_refs(
-        expr: str,
-        *,
-        presets: dict,
-        table_name: str,
-        label: str,
-        _seen: tuple[str, ...] | frozenset[str] | None = None,
-    ) -> str:
-        raw = deps["_unwrap_quotes"](expr or "").strip()
-        if not raw:
-            return raw
-        presets = dict(presets or {})
-        seen_chain = tuple(sorted(_seen)) if isinstance(_seen, frozenset) else tuple(_seen or ())
-        seen = set(seen_chain)
-
-        def repl(match: Any) -> str:
-            start = match.start()
-            if start > 0 and raw[start - 1] not in " \t\r\n(|+,":
-                return match.group(0)
-            end = match.end()
-            if end < len(raw) and raw[end] == "=":
-                return match.group(0)
-            name = match.group(1).strip().lower()
-            if name not in presets:
-                available = ", ".join(f"@{item}" for item in sorted(presets))
-                hint = f" Available {label} presets: {available}." if presets else f" No {label} presets are configured."
-                raise deps["ParseError"](
-                    f"Unknown {label} preset '@{name}'.{hint} Define it under [{table_name}] in config-nautical.toml."
-                )
-            if name in seen:
-                chain = " -> ".join([*(f"@{x}" for x in seen_chain), f"@{name}"])
-                raise deps["ParseError"](f"Recursive {label} preset reference detected: {chain}")
-            resolved = resolve_preset_refs(
-                presets[name],
-                presets=presets,
-                table_name=table_name,
-                label=label,
-                _seen=(*seen_chain, name),
-            )
-            return f"({resolved})"
-
-        return preset_ref_re.sub(repl, raw)
-
-    def resolve_anchor_presets_impl(expr: str, *, _seen: Any = None) -> str:
-        return resolve_preset_refs(
-            expr,
-            presets=deps["ANCHOR_PRESETS"],
-            table_name="anchor_presets",
-            label="anchor",
-            _seen=_seen,
-        )
-
-    def resolve_omit_presets(expr: str, *, _seen: Any = None) -> str:
-        return resolve_preset_refs(
-            expr,
-            presets=deps["OMIT_PRESETS"],
-            table_name="omit_presets",
-            label="omit",
-            _seen=_seen,
-        )
-
-    def preset_display_value(name: str, presets: dict, *, table_name: str, label: str) -> str:
-        raw = str(presets[name] or "").strip()
-        try:
-            resolved = resolve_preset_refs(
-                raw,
-                presets=presets,
-                table_name=table_name,
-                label=label,
-                _seen=(name,),
-            ).strip()
-        except deps["ParseError"]:
-            return raw
-        return resolved[1:-1].strip() if resolved.startswith("(") and resolved.endswith(")") else resolved
-
-    def anchor_preset_display(expr: str) -> tuple[str, str] | None:
-        raw = deps["_unwrap_quotes"](expr or "").strip()
-        match = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
-        if not match:
-            return None
-        name = match.group(1).strip().lower()
-        presets = dict(deps["ANCHOR_PRESETS"] or {})
-        if name not in presets:
-            return None
-        return "Preset", f"@{name} → {preset_display_value(name, presets, table_name='anchor_presets', label='anchor')}"
-
-    def omit_preset_display(expr: str) -> tuple[str, str] | None:
-        raw = deps["_unwrap_quotes"](expr or "").strip()
-        match = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
-        if not match:
-            return None
-        name = match.group(1).strip().lower()
-        presets = dict(deps["OMIT_PRESETS"] or {})
-        if name not in presets:
-            return None
-        return "Omit preset", f"@{name} → {preset_display_value(name, presets, table_name='omit_presets', label='omit')}"
+    resolve_preset_refs = preset_binding.resolve_refs
+    resolve_anchor_presets_impl = preset_binding.resolve_anchor
+    resolve_omit_presets = preset_binding.resolve_omit
+    anchor_preset_display = preset_binding.display_anchor
+    omit_preset_display = preset_binding.display_omit
 
     def normalize_anchor_expr_input(value: str) -> str:
         return parser_frontend.normalize_anchor_expr_input(

@@ -263,7 +263,7 @@ def collect_after(
         for occurrence in batch:
             if not isinstance(occurrence, Occurrence) or occurrence.local_datetime is None:
                 raise TypeError("Batch occurrence provider returned an invalid occurrence.")
-            _require_forward_progress(previous, occurrence.local_datetime)
+            require_forward_progress(previous, occurrence.local_datetime)
             previous = occurrence.local_datetime
             if date_limit is not None and occurrence.day > date_limit:
                 terminal = OccurrenceSearchExhausted(
@@ -320,7 +320,7 @@ def collect_after(
                 raise ValueError("Occurrence provider returned a date before its declared bound.")
             if contract.upper_date is not None and occurrence.day > contract.upper_date:
                 raise ValueError("Occurrence provider returned a date after its declared bound.")
-        _require_forward_progress(cursor, occurrence.local_datetime)
+        require_forward_progress(cursor, occurrence.local_datetime)
         cursor = occurrence.local_datetime
         out.append(occurrence)
         if count_omitted or not occurrence.omitted:
@@ -330,7 +330,7 @@ def collect_after(
     return OccurrenceBatch(out, terminal=terminal_result)
 
 
-def _require_forward_progress(after_local: datetime, value: datetime) -> None:
+def require_forward_progress(after_local: datetime, value: datetime) -> None:
     if not isinstance(after_local, datetime) or not isinstance(value, datetime):
         raise TypeError("Occurrence provider must return datetime values.")
     try:
@@ -356,7 +356,7 @@ def _occurrence_from_datetime(
     local = to_local(value)
     if not isinstance(local, datetime):
         raise TypeError("Occurrence provider returned a non-datetime local value.")
-    _require_forward_progress(after_local, local)
+    require_forward_progress(after_local, local)
     return Occurrence(
         day=local.date(),
         hour=local.hour,
@@ -404,7 +404,7 @@ class AnchorOccurrenceProvider:
         if isinstance(value, Occurrence):
             if value.local_datetime is None:
                 raise ValueError("Occurrence provider returned an event without local datetime.")
-            _require_forward_progress(after_local, value.local_datetime)
+            require_forward_progress(after_local, value.local_datetime)
             return value
         return _occurrence_from_datetime(
             value,
@@ -447,7 +447,7 @@ class AnchorEventOccurrenceProvider:
         if isinstance(event, Occurrence):
             if event.local_datetime is None:
                 raise ValueError("Occurrence event provider returned an event without local datetime.")
-            _require_forward_progress(after_local, event.local_datetime)
+            require_forward_progress(after_local, event.local_datetime)
             return event
         if not isinstance(event, tuple) or len(event) != 2:
             raise TypeError("Occurrence event provider must return a (datetime, omitted) tuple.")

@@ -344,8 +344,8 @@ def anchor_next_occurrence_after_local_dt(
     if default_seed_date is not None:
         interval_seed = default_seed_date
     if norm_t_mod is None:
-        from .anchor_inclusion import _norm_t_mod
-        norm_t_mod = _norm_t_mod
+        from .anchor_inclusion import normalize_time_modifiers
+        norm_t_mod = normalize_time_modifiers
     to_local = getattr(core, "to_local", None)
     if not callable(to_local):
         raise RuntimeError("Anchor scheduler core is missing the timezone conversion callback")

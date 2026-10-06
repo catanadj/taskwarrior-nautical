@@ -17,7 +17,7 @@ def _scheduler_engine(core: Any) -> Any:
     return engine
 
 
-def _norm_t_mod(v: Any) -> list[Any]:
+def normalize_time_modifiers(v: Any) -> list[Any]:
     if v is None:
         return []
     if isinstance(v, tuple) and len(v) == 2:

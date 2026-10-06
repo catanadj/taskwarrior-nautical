@@ -11,6 +11,10 @@ from nautical_core.occurrence_provider import Occurrence
 
 
 class AnchorInclusionContractTests(unittest.TestCase):
+    def test_time_modifier_normalizer_has_a_named_owner(self) -> None:
+        self.assertTrue(callable(anchor_inclusion.normalize_time_modifiers))
+        self.assertFalse(hasattr(anchor_inclusion, "_norm_t_mod"))
+
     def test_datetime_only_compatibility_wrappers_are_absent(self) -> None:
         self.assertFalse(
             hasattr(anchor_inclusion, "_next_anchor_file_occurrence_local")

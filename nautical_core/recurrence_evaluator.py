@@ -492,7 +492,7 @@ class RecurrenceEvaluator:
         if isinstance(max_file_skips, bool) or not isinstance(max_file_skips, int) or max_file_skips <= 0:
             raise ValueError("Anchor-file omission scan limit must be a positive integer.")
         from . import anchor_inclusion
-        from .occurrence_provider import _require_forward_progress
+        from .occurrence_provider import require_forward_progress
         from .timeutil import compare_datetimes
         next_occurrence_after_local_dt = self._default_next_occurrence_after_local_dt
         anchor_file_provider = anchor_file_provider or self._anchor_file_provider_for(fallback_hhmm)
@@ -540,7 +540,7 @@ class RecurrenceEvaluator:
                 cursor = event.local_datetime + timedelta(microseconds=1)
                 first = False
                 continue
-            _require_forward_progress(cursor, event.local_datetime)
+            require_forward_progress(cursor, event.local_datetime)
             cursor = event.local_datetime
             first = False
         raise ValueError(
@@ -863,7 +863,7 @@ class RecurrenceEvaluator:
     def _build_scheduler_binding(self) -> NextOccurrenceCallback:
         """Build the evaluator-bound scheduler once per evaluator session."""
         from .add_anchor_compute import anchor_next_occurrence_after_local_dt
-        from .anchor_inclusion import _norm_t_mod
+        from .anchor_inclusion import normalize_time_modifiers
         from .time_projection import (
             ProjectedTime,
             ProjectionInvalid,
@@ -987,7 +987,7 @@ class RecurrenceEvaluator:
                 omit_dnf=omit_dnf,
                 default_seed_date=default_seed_date,
                 core=scheduler_core,
-                norm_t_mod=_norm_t_mod,
+                norm_t_mod=normalize_time_modifiers,
                 resolve_time_slots=resolve_slots,
                 project_time=self_evaluator.project_time,
             )

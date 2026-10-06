@@ -11,11 +11,16 @@ from nautical_core.occurrence_provider import (
     ProviderCapabilities,
     ProviderContract,
     collect_after,
+    require_forward_progress,
 )
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 
 
 class OccurrenceProviderContractTests(unittest.TestCase):
+    def test_forward_progress_guard_is_a_public_owner_operation(self) -> None:
+        with self.assertRaises(ValueError):
+            require_forward_progress(datetime(2026, 1, 2), datetime(2026, 1, 1))
+
     def test_collection_preserves_valid_prefix_when_date_limit_ends_stream(self) -> None:
         first = datetime(2026, 1, 5, 9, 0)
         terminal = OccurrenceSearchExhausted(

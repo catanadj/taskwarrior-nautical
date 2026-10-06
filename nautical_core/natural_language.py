@@ -6,6 +6,7 @@ from calendar import month_name
 from typing import Any
 
 from .parsing.parser_models import ParseError
+from .stepped_ranges import parse_step_suffix
 from .time_windows import parse_random_time_window_spec
 
 
@@ -233,6 +234,10 @@ def fmt_monthly_atom(
     bd_re: Any,
 ) -> str:
     text = (spec or "").lower().strip()
+    stepped = parse_step_suffix(text)
+    step_phrase = f" in {stepped.step_days}-day steps" if stepped is not None else ""
+    if stepped is not None:
+        text = stepped.range_text
     if text in monthly_alias:
         text = monthly_alias[text]
     if text == "rand":
@@ -267,14 +272,14 @@ def fmt_monthly_atom(
             i_left = int(left)
             i_right = int(right)
             if i_left > 0 and i_right > 0:
-                return f"days {i_left}–{i_right} of each month"
+                return f"days {i_left}–{i_right} of each month{step_phrase}"
 
             def _dword(value: int) -> str:
                 if value == -1:
                     return "last day"
                 return ordinal(value) if value > 0 else f"{ordinal(abs(value))} last day"
 
-            return f"days {_dword(i_left)}–{_dword(i_right)} of each month"
+            return f"days {_dword(i_left)}–{_dword(i_right)} of each month{step_phrase}"
         except ValueError:
             pass
 
@@ -297,6 +302,10 @@ def fmt_yearly_atom(
     yearfmt: Any,
 ) -> str:
     text = (tok or "").strip().lower()
+    stepped = parse_step_suffix(text)
+    step_phrase = f" in {stepped.step_days}-day steps" if stepped is not None else ""
+    if stepped is not None:
+        text = stepped.range_text
 
     if text == "rand":
         return "one random day each year"
@@ -354,20 +363,20 @@ def fmt_yearly_atom(
         d1, m1 = _pair(a, b)
         d2, m2 = _pair(c, d)
         if m1 == m2 and d1 == 1 and 28 <= d2 <= 31:
-            return f"{_MONTH_ABBR[m1 - 1]} each year"
+            return f"{_MONTH_ABBR[m1 - 1]} each year{step_phrase}"
         if m1 == m2:
             if yearfmt() == "DM":
-                return f"{d1}–{d2} {_MONTH_ABBR[m1 - 1]} each year"
-            return f"{_MONTH_ABBR[m1 - 1]} {d1}–{d2} each year"
+                return f"{d1}–{d2} {_MONTH_ABBR[m1 - 1]} each year{step_phrase}"
+            return f"{_MONTH_ABBR[m1 - 1]} {d1}–{d2} each year{step_phrase}"
         if d1 == 1 and 28 <= d2 <= 31:
-            return f"{_MONTH_ABBR[m1 - 1]}–{_MONTH_ABBR[m2 - 1]} each year"
+            return f"{_MONTH_ABBR[m1 - 1]}–{_MONTH_ABBR[m2 - 1]} each year{step_phrase}"
         if yearfmt() == "DM":
             left = f"{d1} {_MONTH_ABBR[m1 - 1]}"
             right = f"{d2} {_MONTH_ABBR[m2 - 1]}"
         else:
             left = f"{_MONTH_ABBR[m1 - 1]} {d1}"
             right = f"{_MONTH_ABBR[m2 - 1]} {d2}"
-        return f"{left}–{right} each year"
+        return f"{left}–{right} each year{step_phrase}"
 
     d1, m1 = _pair(a, b)
     if m1 == 2 and d1 == 29:

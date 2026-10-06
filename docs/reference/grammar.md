@@ -39,6 +39,7 @@
 | --- | --- |
 | `m:1,15,-1` | Day list; `-1` is month end |
 | `m:1..7` | Inclusive day bucket |
+| `m:1..31/3d` | Inclusive day range in three-day steps; invalid month days are skipped |
 | `m:5bd`, `m:lbd` | Business-day ordinal or last business day |
 | `m:2sat`, `m:last-fri` | Positional weekday |
 | `m/3:1` | Every third month on day 1 |
@@ -51,6 +52,7 @@
 | `y:05-20` | Month and day |
 | `y:01-15,04-15` | Date list |
 | `y:04-20..05-15` | Inclusive date range |
+| `y:06-01..08-15/2d` | Inclusive date range in two-day steps |
 | `y:d100`, `y:d-1` | Calendar-day ordinal |
 | `y:w20 + w:mon` | Monday of ISO week 20 |
 | `y:10-rand`, `y:2rand` | Random date selection |

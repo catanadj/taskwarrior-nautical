@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
+
+from ..stepped_ranges import parse_step_suffix
 from ..api_bindings import ApiBinding, core_namespace
 from ..core_context import CoreContext
 from .. import cache_facade
@@ -161,6 +163,12 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         if not tokens:
             raise core["ParseError"]("Empty monthly spec")
         for token in tokens:
+            try:
+                stepped = parse_step_suffix(token)
+            except ValueError as exc:
+                raise core["ParseError"](f"Invalid monthly range '{token}': {exc}.") from None
+            if stepped is not None:
+                token = stepped.range_text
             random_count = core["_cached_expansion"].random_count_from_spec(token)
             if random_count is not None:
                 if random_count > 31:

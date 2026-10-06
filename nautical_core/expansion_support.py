@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from .business_calendar import WEEKDAY_BUSINESS_DAYS
+from .stepped_ranges import parse_step_suffix
 
 
 def _is_random_spec(spec: str) -> bool:
@@ -121,6 +122,9 @@ def doms_for_weekly_spec(
 def y_ranges_from_spec(spec: str, *, split_csv_lower: Any, re_mod: Any, year_pair: Any) -> list[tuple[int, int, int, int]]:
     out = []
     for tok in split_csv_lower(spec):
+        stepped = parse_step_suffix(tok)
+        if stepped is not None:
+            continue
         m_randm = re_mod.fullmatch(r"rand-(\d{2})", tok)
         if m_randm:
             mm = int(m_randm.group(1))

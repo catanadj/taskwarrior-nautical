@@ -14,6 +14,7 @@ from .business_calendar import (
     business_days_in_month,
     nth_business_day_of_month,
 )
+from .stepped_ranges import iter_stepped_dates, parse_step_suffix
 
 RAND_ALGORITHM_VERSION = "nautical-rand-v2"
 
@@ -433,6 +434,9 @@ def expand_yearly(
 
     days = []
     for tok in split_csv_lower(spec):
+        stepped = parse_step_suffix(tok)
+        if stepped is not None:
+            tok = stepped.range_text
         year_day = re_mod.fullmatch(r"d(-?(?:0|[1-9]\d{0,2}))", tok)
         if year_day:
             candidate = _year_day(int(year_day.group(1)))
@@ -489,14 +493,17 @@ def expand_yearly(
             c, d = int(match.group(3)), int(match.group(4))
             d1, m1 = _pair(a, b)
             d2, m2 = _pair(c, d)
-            start = _clamped_date(d1, m1)
-            end = _clamped_date(d2, m2)
+            start = _strict_date(d1, m1) if stepped is not None else _clamped_date(d1, m1)
+            if stepped is not None and start is None:
+                clamped_start = _clamped_date(d1, m1)
+                start = clamped_start + timedelta(days=1) if clamped_start else None
+            end = _strict_date(d2, m2) if stepped is not None else _clamped_date(d2, m2)
+            if stepped is not None and end is None:
+                end = _clamped_date(d2, m2)
             if not start or not end or end < start:
                 continue
-            cur = start
-            while cur <= end:
-                days.append(cur)
-                cur += timedelta(days=1)
+            step_days = stepped.step_days if stepped is not None else 1
+            days.extend(iter_stepped_dates(start, end, step_days))
         else:
             d1, m1 = _pair(a, b)
             dd = _strict_date(d1, m1)
@@ -543,6 +550,9 @@ def expand_monthly(
         return d.day if d.month == m else None
 
     for tok in split_csv_lower(spec):
+        stepped = parse_step_suffix(tok)
+        if stepped is not None:
+            tok = stepped.range_text
         m1 = nth_weekday_re.match(tok)
         if m1:
             n_raw, wd_s = m1.group(1), m1.group(2)
@@ -565,11 +575,24 @@ def expand_monthly(
                 continue
         if ".." in tok:
             a_raw, b_raw = tok.split("..", 1)
-            a = resolve_num(int(a_raw))
-            b = resolve_num(int(b_raw))
+            a_int, b_int = int(a_raw), int(b_raw)
+            a = resolve_num(a_int)
+            b = resolve_num(b_int)
+            if stepped is not None and a_int > 0 and b_int > 0:
+                direction = 1 if a_int <= b_int else -1
+                for raw_day in range(a_int, b_int + direction, direction * stepped.step_days):
+                    resolved = resolve_num(raw_day)
+                    if resolved is not None:
+                        out.add(resolved)
+                continue
+            if a is None and a_int > 0:
+                a = min(a_int, last)
+            if b is None and b_int > 0:
+                b = min(b_int, last)
             if a is None or b is None:
                 continue
-            step = 1 if a <= b else -1
+            step_size = stepped.step_days if stepped is not None else 1
+            step = step_size if a <= b else -step_size
             for r in range(a, b + step, step):
                 out.add(r)
         else:

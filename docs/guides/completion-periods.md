@@ -76,6 +76,19 @@ to the recurrence target. For a task with `due`, that target is `due`. For a
 scheduled-only task, `scheduled` is the target and the child remains
 scheduled-only; `wait` keeps its offset from `scheduled`.
 
+## Stepped date ranges
+
+Monthly and yearly date ranges can advance by a fixed number of calendar days:
+
+```text
+m:1..31/3d
+y:06-01..08-15/2d
+```
+
+The step starts at the first date in the range and restarts with each new
+month or year. Endpoints are inclusive; dates that do not exist in a period
+are skipped rather than clamped or rolled into the next period.
+
 ## Carry custom date UDAs
 
 If a recurrence has another date-valued UDA that should follow the same local

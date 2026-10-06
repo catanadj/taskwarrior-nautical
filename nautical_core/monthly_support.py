@@ -4,6 +4,8 @@ from datetime import date
 import re
 from typing import Any
 
+from .stepped_ranges import parse_step_suffix
+
 
 def _is_random_spec(spec: str) -> bool:
     return bool(re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", str(spec or "").strip().lower()))
@@ -21,6 +23,9 @@ def doms_for_monthly_token(
     wd_idx: Any,
 ) -> set[int]:
     tok = (tok or "").strip().lower()
+    stepped = parse_step_suffix(tok)
+    if stepped is not None:
+        tok = stepped.range_text
     if tok in monthly_alias:
         tok = monthly_alias[tok]
     dim = days_in_month(y, m)
@@ -36,7 +41,8 @@ def doms_for_monthly_token(
         a = max(1, min(dim, a))
         b = max(1, min(dim, b))
         lo, hi = (a, b) if a <= b else (b, a)
-        return set(range(lo, hi + 1))
+        step = stepped.step_days if stepped is not None else 1
+        return set(range(lo, hi + 1, step))
     if re_mod.fullmatch(r"\-?\d{1,2}", tok):
         d = int(tok)
         if d < 0:

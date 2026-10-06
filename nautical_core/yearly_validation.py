@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .stepped_ranges import parse_step_suffix
+
 
 YEARLY_MONTH_MAX = {
     1: 31,
@@ -115,6 +117,17 @@ def validate_yearly_token_allowlist(
     month_from_alias: Any = None,
 ) -> None:
     s = tok
+    if "/" in s:
+        try:
+            stepped = parse_step_suffix(s)
+        except ValueError as exc:
+            raise year_token_format_error_cls(f"Invalid stepped yearly range '{tok}': {exc}.") from None
+        if stepped is not None:
+            s = stepped.range_text
+            if not YEARLY_PADDED_DM_RE.fullmatch(s):
+                raise year_token_format_error_cls(
+                    f"Stepped yearly ranges require month-day dates, not '{tok}'."
+                )
 
     if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", s) or re.fullmatch(r"rand-\d{2}", s):
         return
@@ -253,6 +266,13 @@ def validate_yearly_token_format(
         return
 
     tokens = split_csv_lower(spec)
+    normalized_tokens = []
+    for tok in tokens:
+        try:
+            stepped = parse_step_suffix(tok)
+        except ValueError as exc:
+            raise year_token_format_error_cls(f"Invalid stepped yearly range '{tok}': {exc}.") from None
+        normalized_tokens.append(stepped.range_text if stepped is not None else tok)
     for tok in tokens:
         validate_yearly_token_allowlist(
             tok,
@@ -262,7 +282,7 @@ def validate_yearly_token_format(
         )
 
     bad = None
-    for tok in tokens:
+    for tok in normalized_tokens:
         bad = validate_yearly_token_detailed(tok, fmt, year_token_format_error_cls=year_token_format_error_cls)
         if bad:
             break
@@ -305,6 +325,15 @@ def validate_yearly_token(
     parse_error_cls: Any,
 ) -> None:
     tok = tok.strip().lower()
+    if "/" in tok:
+        try:
+            stepped = parse_step_suffix(tok)
+        except ValueError as exc:
+            raise parse_error_cls(f"Invalid stepped yearly range '{tok}': {exc}.") from None
+        if stepped is not None:
+            tok = stepped.range_text
+            if not YEARLY_PADDED_DM_RE.fullmatch(tok):
+                raise parse_error_cls(f"Stepped yearly ranges require month-day dates, not '{tok}'.")
     if tok in quarters or re.fullmatch(r"q[1-4][sme]", tok):
         return
     if ":" in tok:
@@ -358,6 +387,15 @@ def validate_yearly_spec_token(
     parse_error_cls: Any,
     month_full: Any,
 ) -> None:
+    if "/" in tok:
+        try:
+            stepped = parse_step_suffix(tok)
+        except ValueError as exc:
+            raise parse_error_cls(f"Invalid stepped yearly range '{tok}': {exc}.") from None
+        if stepped is not None:
+            tok = stepped.range_text
+            if not YEARLY_PADDED_DM_RE.fullmatch(tok):
+                raise parse_error_cls(f"Stepped yearly ranges require month-day dates, not '{tok}'.")
     if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand|rand-\d{2})", tok):
         return
     if ":" in tok:

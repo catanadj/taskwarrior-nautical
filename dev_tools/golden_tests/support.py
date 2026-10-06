@@ -60,11 +60,11 @@ def parse_due(value):
     text = str(value).strip()
     try:
         return datetime.fromisoformat(text).replace(tzinfo=None)
-    except Exception:
+    except ValueError:
         pass
     try:
         return datetime.strptime(text, "%Y-%m-%d")
-    except Exception:
+    except ValueError:
         return None
 
 

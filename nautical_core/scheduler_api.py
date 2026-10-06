@@ -156,6 +156,30 @@ def _moon_phase_matches_date(
     )
 
 
+def _build_expansion_binding(
+    *,
+    deps: dict[str, Any],
+    module: Any,
+    namespace: dict[str, Any] | None,
+    context: CoreContext | None,
+    state: list[Any | None],
+) -> Any:
+    """Lazily bind expansion operations once for one scheduler composition."""
+    binding = state[0]
+    if binding is None:
+        expansion_api = (
+            context.import_sibling("expansion_api")
+            if context is not None else deps["_import_sibling"]("expansion_api")
+        )
+        binding = expansion_api.for_core(
+            module=module,
+            namespace=namespace,
+            context=context,
+        )
+        state[0] = binding
+    return binding
+
+
 def _base_next_after_atom_impl(
     atom: Any,
     ref_d: Any,
@@ -465,19 +489,13 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     expansion_binding_state: list[Any | None] = [None]
 
     def expansion_binding() -> Any:
-        binding = expansion_binding_state[0]
-        if binding is None:
-            expansion_api = (
-                context.import_sibling("expansion_api")
-                if context is not None else deps["_import_sibling"]("expansion_api")
-            )
-            binding = expansion_api.for_core(
-                module=module,
-                namespace=namespace,
-                context=context,
-            )
-            expansion_binding_state[0] = binding
-        return binding
+        return _build_expansion_binding(
+            deps=deps,
+            module=module,
+            namespace=namespace,
+            context=context,
+            state=expansion_binding_state,
+        )
 
     def weekly_spec_to_wset(spec: str, mods: dict | None = None) -> set[int]:
         return expansion_binding()._weekly_spec_to_wset(spec, mods)

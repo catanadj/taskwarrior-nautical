@@ -1,4 +1,5 @@
 import unittest
+import inspect
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -230,6 +231,10 @@ class SchedulerAtomContractTests(unittest.TestCase):
 
 
 class SchedulerApiDelegationTests(unittest.TestCase):
+    def test_for_core_delegates_expansion_binding(self) -> None:
+        source = inspect.getsource(scheduler_api.for_core)
+        self.assertIn("_build_expansion_binding", source)
+
     def test_scheduler_api_drops_private_passthrough_aliases(self):
         binding = scheduler_api.for_core(module=core)
 

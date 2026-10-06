@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta
+from collections.abc import Callable
+from typing import get_type_hints
 
 from nautical_core.hook_validation_pipeline import (
     ValidationFinding,
@@ -15,9 +18,11 @@ from nautical_core.hook_validation_pipeline import (
     validate_anchor_expression,
     validate_omit_expression,
     validate_recurrence_files,
+    validate_recurrence_limits,
 )
 from nautical_core.hook_workflow_models import WorkflowRoute
 from nautical_core.parsing.parser_models import ParseError
+from nautical_core.parsing.parser_models import AnchorDNF
 from nautical_core.task_models import TaskObservation
 
 
@@ -36,6 +41,15 @@ def _observation() -> TaskObservation:
 
 
 class ValidationPipelineTests(unittest.TestCase):
+    def test_shared_validation_callbacks_use_domain_types(self) -> None:
+        limits = get_type_hints(validate_recurrence_limits)
+        self.assertEqual(limits["parse_cp_sequence"], Callable[[str], list[timedelta] | None])
+        self.assertEqual(limits["parse_datetime"], Callable[[object], datetime | None])
+        self.assertEqual(limits["return"], tuple[int | None, datetime | None, tuple[ValidationFinding, ...]])
+
+        anchor = get_type_hints(validate_anchor_expression)
+        self.assertEqual(anchor["expr"], str | AnchorDNF)
+
     def test_recurrence_file_validation_wraps_expected_file_errors_only(self) -> None:
         missing = validate_recurrence_files(
             "",

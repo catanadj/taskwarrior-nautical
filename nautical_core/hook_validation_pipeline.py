@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import Mapping, MutableMapping, Protocol, cast, Any, Callable
+from collections.abc import Callable, Mapping, MutableMapping
+from datetime import datetime, timedelta
+from typing import Protocol, cast
 
 from .hook_workflow_models import WorkflowRoute
-from .parsing.parser_models import ParseError
+from .parsing.parser_models import AnchorDNF, ParseError
 from .task_changes import TaskTransition
 from .task_models import ChainID, TaskLink, TaskObservation, TaskTimestamp
 
@@ -157,11 +159,11 @@ def validate_recurrence_limits(
     chain_max_value: object,
     chain_until_value: object,
     *,
-    parse_cp_sequence: Callable[[str], Any],
+    parse_cp_sequence: Callable[[str], list[timedelta] | None],
     cp_sequence_parse_error: Callable[[str], str | None],
     parse_chain_max: Callable[[object], tuple[int | None, str | None]],
-    parse_datetime: Callable[[object], Any],
-) -> tuple[int | None, Any, tuple[ValidationFinding, ...]]:
+    parse_datetime: Callable[[object], datetime | None],
+) -> tuple[int | None, datetime | None, tuple[ValidationFinding, ...]]:
     """Share CP/chain-limit parsing while leaving route policy to callers."""
     findings: list[ValidationFinding] = []
     # CP syntax retains its parser-specific diagnostics and is validated by
@@ -189,10 +191,10 @@ def validate_recurrence_limits(
 
 
 def validate_anchor_expression(
-    expr: str | list[list[dict[str, Any]]],
+    expr: str | AnchorDNF,
     *,
-    parse_anchor_expr: Callable[[str], Any],
-    validate_anchor_expr: Callable[[str | list[list[dict[str, Any]]]], Any],
+    parse_anchor_expr: Callable[[str], AnchorDNF],
+    validate_anchor_expr: Callable[[str | AnchorDNF], AnchorDNF],
 ) -> None:
     """Validate one anchor expression for every workflow route."""
     if not str(expr or "").strip():
@@ -207,7 +209,7 @@ def validate_anchor_expression(
 def validate_omit_expression(
     expr: str,
     *,
-    validate_omit_expr: Callable[[str], Any],
+    validate_omit_expr: Callable[[str], AnchorDNF],
 ) -> None:
     """Validate an optional omission expression at the shared boundary."""
     if not str(expr or "").strip():
@@ -224,8 +226,8 @@ def validate_recurrence_files(
     omit: object,
     omit_file: object,
     *,
-    load_anchor_file: Callable[[str], Any],
-    load_omit_file: Callable[[str], Any],
+    load_anchor_file: Callable[[str], object],
+    load_omit_file: Callable[[str], object],
 ) -> tuple[ValidationFinding, ...]:
     """Validate file-backed recurrence inputs without rendering or mutation."""
     anchor_text = str(anchor or "").strip()

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import nautical_core as core
 import nautical_core.acf_api as acf_api
+import nautical_core.acf_support as acf_support
 import nautical_core.cache_payload as cache_payload
 import nautical_core.description_aliases as description_aliases
 import nautical_core.expansion_api as expansion_api
@@ -82,6 +83,17 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         self.assertTrue(self.acf.is_valid_acf(packed))
         self.assertEqual(self.acf.acf_to_original_format(packed), "w:mon")
         self.assertFalse(self.acf.is_valid_acf(packed[:-1] + ("0" if packed[-1] != "0" else "1")))
+
+    def test_acf_validation_propagates_unexpected_unpacker_failures(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "unpacker invariant failed"):
+            acf_support.is_valid_acf(
+                __import__("hashlib").sha256(b"payload").hexdigest()[:16] + ":payload",
+                hashlib_mod=__import__("hashlib"),
+                acf_checksum_len=16,
+                acf_unpack=lambda _payload: (_ for _ in ()).throw(
+                    RuntimeError("unpacker invariant failed")
+                ),
+            )
 
     def test_acf_builder_contains_expected_parse_errors_only(self) -> None:
         with patch.object(

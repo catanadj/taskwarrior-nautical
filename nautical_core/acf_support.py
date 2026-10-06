@@ -218,7 +218,7 @@ def is_valid_acf(acf_str: str, *, hashlib_mod: Any, acf_checksum_len: int, acf_u
     try:
         obj = acf_unpack(payload)
         return bool(obj and "terms" in obj)
-    except Exception:
+    except (IndexError, KeyError, TypeError, UnicodeError, ValueError):
         return False
 
 

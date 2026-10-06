@@ -39,7 +39,7 @@ from .outbox_schema import (
 from ..taskwarrior_io import JsonObject, is_json_object
 
 if TYPE_CHECKING:
-    from ..integrity_outbox_envelope import IntegrityOutboxRecord
+    from ..integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
 
 
 OUTBOX_ACK_RETENTION_SECONDS = 90.0 * 24.0 * 60.0 * 60.0
@@ -874,7 +874,7 @@ class _LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.CONFLICT, record=current, reason=("deterministic lifecycle intent conflicts with an existing queued transition; run `nautical reconcile --apply` to drain it, then inspect the chain's nextLink and child before retrying; " f"state={current.state.value}, plan_equal={same_plan}, configuration={current.configuration_fingerprint!r}->{config!r}, schedule={current.schedule_fingerprint!r}->{schedule!r}"))
         return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
 
-    def enqueue_integrity(self, envelope: Any) -> OutboxResult:
+    def enqueue_integrity(self, envelope: IntegrityOutboxEnvelope) -> OutboxResult:
         """Persist an integrity envelope in the shared outbox table.
 
         Lifecycle methods deliberately do not decode or claim this work kind;

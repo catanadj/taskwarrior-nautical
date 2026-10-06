@@ -55,6 +55,21 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         parameters = signature(LifecycleOutboxOperationsPort.status).parameters
         self.assertEqual(parameters["retention_seconds"].default, OUTBOX_ACK_RETENTION_SECONDS)
 
+    def test_integrity_enqueue_accepts_the_typed_envelope(self) -> None:
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+
+        annotation = _LifecycleOutboxRepository.enqueue_integrity.__annotations__["envelope"]
+        self.assertEqual(annotation, "IntegrityOutboxEnvelope")
+        namespace = vars(outbox_module).copy()
+        namespace["IntegrityOutboxEnvelope"] = IntegrityOutboxEnvelope
+        self.assertIs(
+            get_type_hints(
+                _LifecycleOutboxRepository.enqueue_integrity,
+                globalns=namespace,
+            )["envelope"],
+            IntegrityOutboxEnvelope,
+        )
+
     def test_claim_lease_adapter_has_concrete_operation_signatures(self) -> None:
         from nautical_core.lifecycle import outbox_claims
         from nautical_core.lifecycle.outbox_claims import LifecycleOutboxClaimPort

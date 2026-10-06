@@ -160,18 +160,18 @@ class TaskCommandContractTests(unittest.TestCase):
         self.assertIs(rejected.kind, CommandFailureKind.REJECTED)
         self.assertEqual(failure_message(rejected, "task export"), "bad command")
 
-    def test_lock_retries_are_opt_in(self) -> None:
+    def test_attempts_are_explicit_for_lock_retries(self) -> None:
         args = [
             "-c",
             "import sys; print('database is locked', file=sys.stderr); sys.exit(1)",
         ]
         retried = run_task_command(
-            sys.executable, args, retry_locks=True, retry_delay=0.0
+            sys.executable, args, attempts=2, retry_delay=0.0
         )
         self.assertIs(retried.kind, CommandFailureKind.BUSY)
         self.assertEqual(retried.attempt, 2)
 
-        single_attempt = run_task_command(sys.executable, args)
+        single_attempt = run_task_command(sys.executable, args, attempts=1)
         self.assertIs(single_attempt.kind, CommandFailureKind.BUSY)
         self.assertEqual(single_attempt.attempt, 1)
 

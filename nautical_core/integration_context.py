@@ -283,7 +283,7 @@ def build_integration_context(
             ("rc.hooks=off", "rc.verbose=nothing", "_get", "rc.data.location"),
             env=env_map,
             timeout=10.0,
-            retry_locks=True,
+            attempts=2,
             purpose="discover Taskdata location",
         )
         if not result.ok:

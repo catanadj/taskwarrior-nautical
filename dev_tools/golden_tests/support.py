@@ -254,22 +254,16 @@ def build_preview(expr, mode="ALL", due=None):
     upcoming = []
     first_due = None
     if hasattr(nautical_core, "build_and_cache_hints"):
-        try:
-            package = nautical_core.build_and_cache_hints(expr, mode, default_due_dt=due_dt)
-            if package:
-                natural = package.get("natural") or natural
-                upcoming = [iso(item) for item in package.get("next_dates") or []]
-                if package.get("first_due"):
-                    first_due = iso(package["first_due"])
-                return {"natural": natural, "upcoming": upcoming, "first_due": first_due}
-        except Exception:
-            pass
+        package = nautical_core.build_and_cache_hints(expr, mode, default_due_dt=due_dt)
+        if package:
+            natural = package.get("natural") or natural
+            upcoming = [iso(item) for item in package.get("next_dates") or []]
+            if package.get("first_due"):
+                first_due = iso(package["first_due"])
+            return {"natural": natural, "upcoming": upcoming, "first_due": first_due}
     nautical_core.validate_anchor_expr_strict(expr)
     if hasattr(nautical_core, "describe_anchor_expr"):
-        try:
-            natural = nautical_core.describe_anchor_expr(expr, default_due_dt=due_dt)
-        except Exception:
-            natural = ""
+        natural = nautical_core.describe_anchor_expr(expr, default_due_dt=due_dt)
     return {"natural": natural, "upcoming": upcoming, "first_due": first_due}
 
 
@@ -285,13 +279,10 @@ def must_preview(expr, due=None):
 def must_natural(expr):
     import nautical_core
 
-    try:
-        if hasattr(nautical_core, "describe_anchor_expr"):
-            natural = nautical_core.describe_anchor_expr(expr)
-            if natural:
-                return natural
-    except Exception:
-        pass
+    if hasattr(nautical_core, "describe_anchor_expr"):
+        natural = nautical_core.describe_anchor_expr(expr)
+        if natural:
+            return natural
     package = build_preview(expr)
     if package and package.get("natural"):
         return package["natural"]
@@ -580,10 +571,7 @@ def load_core_module(path: str, module_name: str, config_path: str):
         )
         refresh = getattr(module, "_refresh_facade_config_exports", None)
         if callable(refresh):
-            try:
-                refresh()
-            except Exception:
-                pass
+            refresh()
         return module
     finally:
         if previous is None:

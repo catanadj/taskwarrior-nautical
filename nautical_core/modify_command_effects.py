@@ -27,7 +27,7 @@ class TaskCommandExecutor(Protocol):
         env: Mapping[str, str] | None = None,
         input_text: str | None = None,
         timeout: float = 3.0,
-        retries: int = 2,
+        attempts: int = 2,
         retry_delay: float = 0.15,
         use_tempfiles: bool = False,
         purpose: str = "Nautical hook command",
@@ -71,7 +71,7 @@ def run_task_result(
     env: Mapping[str, str] | None = None,
     input_text: str | None = None,
     timeout: float = 3.0,
-    retries: int = 2,
+    attempts: int = 2,
     retry_delay: float = 0.15,
     use_tempfiles: bool = False,
 ) -> TaskCommandResult:
@@ -82,7 +82,7 @@ def run_task_result(
         env=env,
         input_text=input_text,
         timeout=timeout,
-        retries=retries,
+        attempts=attempts,
         retry_delay=retry_delay,
         use_tempfiles=use_tempfiles,
     )
@@ -105,7 +105,7 @@ def generate_child_uuid_candidate(
             ports.task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{candidate}", "count"],
             env=env,
             timeout=2.5,
-            retries=2,
+            attempts=2,
         )
         if result.ok:
             if (result.stdout or "").strip() == "0":

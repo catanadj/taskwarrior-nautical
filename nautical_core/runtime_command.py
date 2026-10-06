@@ -27,7 +27,7 @@ def run_task_result(
     env: Mapping[str, str] | None = None,
     input_text: str | None = None,
     timeout: float = 3.0,
-    retries: int = 2,
+    attempts: int = 2,
     retry_delay: float = 0.15,
     use_tempfiles: bool = False,
     purpose: str = "Nautical hook command",
@@ -40,7 +40,7 @@ def run_task_result(
         purpose=purpose,
         timeout=timeout,
         input_text=input_text,
-        attempts=max(1, int(retries)),
+        attempts=max(1, int(attempts)),
         retry_delay=max(0.0, float(retry_delay)),
         use_tempfiles=use_tempfiles,
     )

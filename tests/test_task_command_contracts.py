@@ -3,6 +3,7 @@
 import sys
 import unittest
 from collections import abc
+from inspect import signature
 from typing import Any, get_type_hints
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -19,6 +20,21 @@ from nautical_core.task_command import failure_message, run_task_command
 
 
 class TaskCommandContractTests(unittest.TestCase):
+    def test_command_runner_vocabulary_uses_attempts_everywhere(self) -> None:
+        import nautical_core
+
+        runners = (
+            runtime_command.run_task_result,
+            hook_support.run_task_result,
+            modify_command_effects.run_task_result,
+            nautical_core.run_task_result,
+        )
+        for runner in runners:
+            with self.subTest(runner=runner):
+                params = signature(runner).parameters
+                self.assertIn("attempts", params)
+                self.assertNotIn("retries", params)
+
     def test_modify_command_ports_have_typed_task_and_diagnostic_contracts(self) -> None:
         from nautical_core.modify_command_effects import (
             CommandPorts,
@@ -54,7 +70,7 @@ class TaskCommandContractTests(unittest.TestCase):
                 "env": Mapping[str, str] | None,
                 "input_text": str | None,
                 "timeout": float,
-                "retries": int,
+                "attempts": int,
                 "retry_delay": float,
                 "use_tempfiles": bool,
                 "return": TaskCommandResult,
@@ -182,7 +198,7 @@ class RuntimeCommandTests(unittest.TestCase):
             [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
             input_text="hello\n",
             timeout=2.0,
-            retries=1,
+            attempts=1,
             use_tempfiles=True,
         )
 
@@ -193,7 +209,7 @@ class RuntimeCommandTests(unittest.TestCase):
         result = runtime_command.run_task_result(
             [sys.executable, "-c", "import time; time.sleep(0.25); print('late')"],
             timeout=0.05,
-            retries=1,
+            attempts=1,
             use_tempfiles=True,
         )
 
@@ -204,7 +220,7 @@ class RuntimeCommandTests(unittest.TestCase):
         result = runtime_command.run_task_result(
             [sys.executable, "-c", "import time; time.sleep(2)"],
             timeout=0.02,
-            retries=1,
+            attempts=1,
         )
 
         self.assertFalse(result.ok)
@@ -212,7 +228,7 @@ class RuntimeCommandTests(unittest.TestCase):
 
     def test_run_task_result_preserves_metadata_and_retry_policy(self) -> None:
         success = runtime_command.run_task_result(
-            [sys.executable, "-c", "print('typed')"], timeout=2.0, retries=1
+            [sys.executable, "-c", "print('typed')"], timeout=2.0, attempts=1
         )
         self.assertTrue(success.ok, success)
         self.assertEqual(success.stdout.strip(), "typed")
@@ -222,7 +238,7 @@ class RuntimeCommandTests(unittest.TestCase):
         busy = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(3)"],
             timeout=1.0,
-            retries=3,
+            attempts=3,
             retry_delay=0.0,
         )
         self.assertFalse(busy.ok)
@@ -232,7 +248,7 @@ class RuntimeCommandTests(unittest.TestCase):
         rejected = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; print('invalid task', file=sys.stderr); sys.exit(3)"],
             timeout=1.0,
-            retries=3,
+            attempts=3,
             retry_delay=0.0,
         )
         self.assertFalse(rejected.ok)
@@ -248,7 +264,7 @@ class RuntimeCommandTests(unittest.TestCase):
                 [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
                 input_text="abc ✓\n",
                 timeout=1.0,
-                retries=1,
+                attempts=1,
                 use_tempfiles=True,
             )
 
@@ -278,19 +294,19 @@ class HookCommandBoundaryTests(unittest.TestCase):
             run_task=runner,
             cmd=["task", "export"],
             timeout=3.0,
-            retries=2,
+            attempts=2,
             use_tempfiles=True,
         )
 
         self.assertIs(result, expected)
         self.assertEqual(received["command"], ["task", "export"])
         self.assertEqual(received["kwargs"]["timeout"], 3.0)
-        self.assertEqual(received["kwargs"]["retries"], 2)
+        self.assertEqual(received["kwargs"]["attempts"], 2)
         self.assertTrue(received["kwargs"]["use_tempfiles"])
 
     def test_shared_runtime_runner_preserves_utf8_output_and_failure_status(self) -> None:
         success = runtime_command.run_task_result(
-            [sys.executable, "-c", "print('shared ✓')"], timeout=2.0, retries=1
+            [sys.executable, "-c", "print('shared ✓')"], timeout=2.0, attempts=1
         )
         self.assertTrue(success.ok, success)
         self.assertEqual(success.stdout.strip(), "shared ✓")
@@ -298,7 +314,7 @@ class HookCommandBoundaryTests(unittest.TestCase):
         failed = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; sys.exit(3)"],
             timeout=2.0,
-            retries=1,
+            attempts=1,
         )
         self.assertFalse(failed.ok)
         self.assertEqual(failed.returncode, 3)
@@ -316,19 +332,19 @@ class HookCommandBoundaryTests(unittest.TestCase):
         ports = modify_command_effects.command_ports_for(host)
 
         succeeded = modify_command_effects.run_task_result(
-            ports, [sys.executable, "-c", "print('ok')"], timeout=2.0, retries=1
+            ports, [sys.executable, "-c", "print('ok')"], timeout=2.0, attempts=1
         )
         failed = modify_command_effects.run_task_result(
             ports,
             [sys.executable, "-c", "import sys; sys.exit(2)"],
             timeout=2.0,
-            retries=1,
+            attempts=1,
         )
         timed_out = modify_command_effects.run_task_result(
             ports,
             [sys.executable, "-c", "import time; time.sleep(2)"],
             timeout=0.02,
-            retries=1,
+            attempts=1,
         )
 
         self.assertTrue(succeeded.ok)

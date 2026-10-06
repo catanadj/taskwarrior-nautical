@@ -96,7 +96,7 @@ class TwGetTaskCommand(Protocol):
         env: Mapping[str, str] | None = None,
         input_text: str | None = None,
         timeout: float = 3.0,
-        retries: int = 2,
+        attempts: int = 2,
         retry_delay: float = 0.15,
         use_tempfiles: bool = False,
     ) -> TaskCommandResult: ...
@@ -113,7 +113,7 @@ class _TwGetCommandEffects(Protocol):
         env: Mapping[str, str] | None = None,
         input_text: str | None = None,
         timeout: float = 3.0,
-        retries: int = 2,
+        attempts: int = 2,
         retry_delay: float = 0.15,
         use_tempfiles: bool = False,
     ) -> TaskCommandResult: ...
@@ -243,7 +243,7 @@ def tw_get_ports_for(host: TwGetHost) -> TwGetPorts:
         env: Mapping[str, str] | None = None,
         input_text: str | None = None,
         timeout: float = 3.0,
-        retries: int = 2,
+        attempts: int = 2,
         retry_delay: float = 0.15,
         use_tempfiles: bool = False,
     ) -> TaskCommandResult:
@@ -253,7 +253,7 @@ def tw_get_ports_for(host: TwGetHost) -> TwGetPorts:
             env=env,
             input_text=input_text,
             timeout=timeout,
-            retries=retries,
+            attempts=attempts,
             retry_delay=retry_delay,
             use_tempfiles=use_tempfiles,
         )
@@ -290,7 +290,7 @@ def tw_get_cached(ports: TwGetPorts, ref: str) -> str:
         ports.command_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],
         env=ports.environment(),
         timeout=3.0,
-        retries=2,
+        attempts=2,
     )
     out = (result.stdout or "").strip() if result.ok else ""
     ports.cache_set("tw_get", ref, out or "")

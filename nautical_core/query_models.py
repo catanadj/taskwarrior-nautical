@@ -34,6 +34,7 @@ HARD_MAX_ITERATIONS = 10000
 HARD_MAX_FILE_SKIPS = 10000
 
 QueryStatus = Literal["found", "empty", "exhausted", "absent", "unavailable", "invalid"]
+QUERY_STATUSES = frozenset(("found", "empty", "exhausted", "absent", "unavailable", "invalid"))
 OmissionPolicy = Literal["exclude", "include", "report"]
 OMISSION_POLICIES = frozenset(("exclude", "include", "report"))
 
@@ -488,7 +489,7 @@ class TaskOccurrenceResult:
     def __post_init__(self) -> None:
         if self.task is not None and not isinstance(self.task, TaskIdentity):
             raise QueryContractError("task occurrence result identity is invalid")
-        if self.status not in {"found", "empty", "exhausted", "absent", "unavailable", "invalid"}:
+        if self.status not in QUERY_STATUSES:
             raise QueryContractError(f"invalid query status: {self.status!r}")
         if any(not isinstance(item, OccurrenceRecord) for item in (*self.occurrences, *self.omitted_occurrences)):
             raise QueryContractError("task occurrence result contains an invalid occurrence")
@@ -534,7 +535,7 @@ class OccurrenceQueryResponse:
         if not isinstance(self.request, OccurrenceQueryRequest):
             raise QueryContractError("query response requires its request")
         object.__setattr__(self, "timezone", _text(self.timezone, "response timezone"))
-        if self.status not in {"found", "empty", "exhausted", "absent", "unavailable", "invalid"}:
+        if self.status not in QUERY_STATUSES:
             raise QueryContractError(f"invalid query response status: {self.status!r}")
         if any(not isinstance(item, TaskOccurrenceResult) for item in self.results):
             raise QueryContractError("query response contains an invalid task result")

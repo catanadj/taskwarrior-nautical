@@ -556,6 +556,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         "parsing/parser_dnf.py",
         "parsing/parser_models.py",
         "parsing/parser_support_api.py",
+        "stepped_ranges.py",
         "strict_validation.py",
         "scheduler_api.py",
         "scheduler_atom.py",
@@ -748,6 +749,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             "parser_api",
             "parsing.parser_support_api",
             "parsing.parser_models",
+            "stepped_ranges",
             "strict_validation",
         ):
             try:

@@ -61,7 +61,7 @@ _CONTEXT_SCRIPT = textwrap.dedent(
 
 class OnAddTaskdataContextTests(HookSubprocessFixture):
     def test_runtime_context_builder_uses_uow_context_as_authority(self) -> None:
-        from nautical_core import hook_context
+        import nautical_core.hook_context as hook_context
 
         self.assertNotIn(
             "integration",

@@ -448,26 +448,25 @@ def anchor_until_summary(
         return None, None
     if evaluator is None:
         raise TypeError("anchor_until_summary requires the evaluator contract")
-    if evaluator is not None:
-        start_local = core.build_local_datetime(first_date_local, first_hhmm)
-        end_local = to_local_cached(until_dt)
-        events = evaluator.events_between(
-            start_local,
-            end_local,
-            limit=max_iterations,
-            fallback_hhmm=first_hhmm,
-            default_seed_date=interval_seed,
-            inclusive=True,
-            max_iterations=max_iterations,
-            include_omitted=False,
-        )
-        count = len(events)
-        if count <= 0:
-            return 0, None
-        last = events[-1].local_datetime
-        if last is None:
-            return max(0, count - 1), None
-        return max(0, count - 1), last.astimezone(timezone.utc)
+    start_local = core.build_local_datetime(first_date_local, first_hhmm)
+    end_local = to_local_cached(until_dt)
+    events = evaluator.events_between(
+        start_local,
+        end_local,
+        limit=max_iterations,
+        fallback_hhmm=first_hhmm,
+        default_seed_date=interval_seed,
+        inclusive=True,
+        max_iterations=max_iterations,
+        include_omitted=False,
+    )
+    count = len(events)
+    if count <= 0:
+        return 0, None
+    last = events[-1].local_datetime
+    if last is None:
+        return max(0, count - 1), None
+    return max(0, count - 1), last.astimezone(timezone.utc)
 
 
 def anchor_build_preview(
@@ -485,22 +484,21 @@ def anchor_build_preview(
 ) -> Any:
     if evaluator is None:
         raise TypeError("anchor_build_preview requires the evaluator contract")
-    if evaluator is not None:
-        events = evaluator.collect_after(
-            first_due_local_dt,
-            limit=preview_limit,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=interval_seed,
-            inclusive=False,
-        )
-        preview = []
-        colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
-        for i, event in enumerate(events):
-            if event.local_datetime is None:
-                continue
-            dt_utc = event.local_datetime.astimezone(timezone.utc)
-            if until_dt and compare_datetimes(dt_utc, until_dt) > 0:
-                break
-            color = colors[min(i, len(colors) - 1)]
-            preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
-        return OccurrenceBatch(preview, terminal=getattr(events, "terminal", None))
+    events = evaluator.collect_after(
+        first_due_local_dt,
+        limit=preview_limit,
+        fallback_hhmm=fallback_hhmm,
+        default_seed_date=interval_seed,
+        inclusive=False,
+    )
+    preview = []
+    colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
+    for i, event in enumerate(events):
+        if event.local_datetime is None:
+            continue
+        dt_utc = event.local_datetime.astimezone(timezone.utc)
+        if until_dt and compare_datetimes(dt_utc, until_dt) > 0:
+            break
+        color = colors[min(i, len(colors) - 1)]
+        preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
+    return OccurrenceBatch(preview, terminal=getattr(events, "terminal", None))

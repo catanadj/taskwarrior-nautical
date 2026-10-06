@@ -89,7 +89,6 @@ class OnAddContext:
 def build_hook_runtime_context(
     *,
     hook_name: str,
-    integration: IntegrationContext,
     uow: TaskwarriorUnitOfWork,
     hook_dir: str,
     profile_level: int = 0,
@@ -97,6 +96,7 @@ def build_hook_runtime_context(
     workflow: WorkflowInvocationContext | None = None,
     business_calendar: BusinessCalendar | None = None,
 ) -> HookRuntimeContext:
+    integration = uow.context
     if workflow is None:
         workflow = WorkflowInvocationContext.capture(
             integration,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import inspect
 from pathlib import Path
 import tempfile
 import textwrap
@@ -59,6 +60,14 @@ _CONTEXT_SCRIPT = textwrap.dedent(
 
 
 class OnAddTaskdataContextTests(HookSubprocessFixture):
+    def test_runtime_context_builder_uses_uow_context_as_authority(self) -> None:
+        from nautical_core import hook_context
+
+        self.assertNotIn(
+            "integration",
+            inspect.signature(hook_context.build_hook_runtime_context).parameters,
+        )
+
     def _resolve(
         self,
         hook_name: str,

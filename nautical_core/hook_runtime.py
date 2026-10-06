@@ -199,7 +199,6 @@ def build_hook_runtime_context(
     uow = build_taskwarrior_uow(integration_context, env=os.environ)
     return hook_context.build_hook_runtime_context(
         hook_name=hook_name,
-        integration=integration_context,
         uow=uow,
         hook_dir=hook_dir,
         profile_level=profile_level,

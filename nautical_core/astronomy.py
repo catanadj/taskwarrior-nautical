@@ -197,7 +197,7 @@ def phase_matches_date(
 @lru_cache(maxsize=1024)
 def _phase_matches_date_cached(phase: str, day: date, selected: str, timezone: str) -> bool:
     try:
-        from astral import moon  # type: ignore[import-untyped]  # astral 3.x does not publish typing metadata.
+        from astral import moon
     except ImportError as exc:
         raise AstronomyUnavailableError(
             "moon phase anchors require the 'astral' package"

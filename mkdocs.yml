@@ -82,7 +82,7 @@ nav:
       - Documentation Development: contributing-docs.md
 
 exclude_docs: |
-  superpowers/plans/**
+  superpowers/**
 
 markdown_extensions:
   - admonition

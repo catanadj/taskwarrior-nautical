@@ -6,10 +6,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Mapping
 
 from .models import LifecyclePlan
 from ..task_models import TaskObservation
+from ..taskwarrior_io import JsonValue
 
 
 class RecoveryStatus(str, Enum):
@@ -66,7 +67,7 @@ class RecoveryRefusal:
     parent: TaskObservation
     status: RecoveryStatus
     reason: str
-    evidence: Mapping[str, Any] = field(default_factory=dict)
+    evidence: Mapping[str, JsonValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.parent, TaskObservation):

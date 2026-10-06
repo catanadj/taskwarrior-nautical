@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta
 import importlib
 from typing import Any, Callable
+from .taskwarrior_io import JsonValue
 
 from . import astronomy, native_until
 from .business_calendar_config import BusinessCalendarConfigError
@@ -48,7 +49,7 @@ def _recovery_refusal(
     status: RecoveryStatus,
     reason: str,
     *,
-    evidence: dict[str, Any] | None = None,
+    evidence: dict[str, JsonValue] | None = None,
 ) -> RecoveryRefusal:
     return RecoveryRefusal(parent, status, reason, evidence or {})
 
@@ -758,14 +759,14 @@ def _plan_recovery_decision_unscoped(
                     decision_parent,
                     RecoveryStatus.ERROR,
                     f"failed to build child: {scheduling_error_message(fallback_exc)}",
-                    evidence={"child_due": child_due},
+                    evidence={"child_due": child_due.isoformat() if child_due else None},
                 )
         else:
             return _recovery_refusal(
                 decision_parent,
                 RecoveryStatus.ERROR,
                 f"failed to build child: {scheduling_error_message(exc)}",
-                evidence={"child_due": child_due},
+                evidence={"child_due": child_due.isoformat() if child_due else None},
             )
     if recovery_plan is None:
         try:
@@ -797,7 +798,7 @@ def _plan_recovery_decision_unscoped(
                 decision_parent,
                 RecoveryStatus.ERROR,
                 f"failed to build lifecycle plan: {scheduling_error_message(exc)}",
-                evidence={"child_due": child_due},
+                evidence={"child_due": child_due.isoformat() if child_due else None},
             )
     reason = "expired link missing next link" if is_expiration else "missing next link"
     if recovery_plan is None:

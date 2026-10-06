@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from typing import get_type_hints
 
 from nautical_core.lifecycle.models import (
     DeletionDisposition,
@@ -29,6 +30,7 @@ from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import NauticalTask, TaskDraft
 from nautical_core.integration_models import GuardTimestamp, GuardTimestampField, MutationGuard
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+from nautical_core.taskwarrior_io import JsonObject
 
 
 def task_snapshot(row: dict[str, object]) -> TaskSnapshot:
@@ -84,6 +86,10 @@ class ExhaustedService:
 
 
 class LifecycleTerminalPlanTests(unittest.TestCase):
+    def test_recovery_refusal_evidence_uses_json_boundary(self) -> None:
+        evidence = get_type_hints(RecoveryRefusal)["evidence"]
+        self.assertIn("JsonValue", repr(evidence))
+
     def test_lifecycle_generation_adapters_declare_the_generation_service(self) -> None:
         from typing import get_type_hints
 

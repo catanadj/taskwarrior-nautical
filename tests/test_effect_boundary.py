@@ -26,6 +26,7 @@ from nautical_core.integration_models import (
 from nautical_core.taskwarrior_uow import InvocationReadCache, QueryScope, QueryScopeKind
 from nautical_core.modify_feedback import lifecycle_result_feedback_facts
 from nautical_core.hook_workflow_models import FeedbackFacts, FeedbackFactKind
+from nautical_core.taskwarrior_io import JsonObject
 from nautical_core.feedback_renderer import PanelView, panel_view_from_facts, render_panel_view
 from nautical_core.lifecycle.application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
 from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
@@ -57,6 +58,12 @@ FORBIDDEN_IMPORTS = {
 
 
 class EffectBoundaryTests(unittest.TestCase):
+    def test_feedback_contract_is_typed_json(self) -> None:
+        return_type = get_type_hints(FeedbackFacts.to_contract)["return"]
+        self.assertIs(getattr(return_type, "__origin__", None), dict)
+        self.assertNotIn("Any", repr(return_type))
+        self.assertIn("JsonValue", repr(JsonObject))
+
     def test_read_only_mutation_gateway_rejects_before_dispatch(self) -> None:
         task_uuid = "11111111-1111-4111-8111-111111111111"
         guard = MutationGuard(

@@ -33,7 +33,15 @@ def doms_for_monthly_token(
         return set(range(1, dim + 1))
     match = re_mod.fullmatch(r"(\-?\d{1,2})\.\.(\-?\d{1,2})", tok)
     if match:
-        a, b = int(match.group(1)), int(match.group(2))
+        a_raw, b_raw = int(match.group(1)), int(match.group(2))
+        if stepped is not None and a_raw > 0 and b_raw > 0:
+            direction = 1 if a_raw <= b_raw else -1
+            return {
+                raw
+                for raw in range(a_raw, b_raw + direction, direction * stepped.step_days)
+                if 1 <= raw <= dim
+            }
+        a, b = a_raw, b_raw
         if a < 0:
             a = dim + 1 + a
         if b < 0:

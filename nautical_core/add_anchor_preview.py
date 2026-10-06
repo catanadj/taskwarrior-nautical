@@ -13,6 +13,7 @@ from .occurrence_outcomes import OccurrenceCollectionResult, OccurrenceOutcome
 from .parsing.parser_models import AnchorDNF
 from .scheduler_cursor import OccurrenceCursor
 from .scheduler_models import occurrence_exhaustion_message
+from .recurrence_protocols import PickOccurrenceCallback
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
 
@@ -175,7 +176,16 @@ class PreviewSchedulerSession(Protocol):
 class AnchorPreviewSchedulerService(Protocol):
     session: PreviewSchedulerSession
 
-    def next(self, cursor: OccurrenceCursor, **kwargs: Any) -> OccurrenceOutcome: ...
+    def next(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_file_skips: int = 512,
+    ) -> OccurrenceOutcome: ...
 
     def collect(
         self,
@@ -183,7 +193,13 @@ class AnchorPreviewSchedulerService(Protocol):
         *,
         limit: int,
         count_omitted: bool | None = None,
-        **kwargs: Any,
+        omission_policy: str = "exclude",
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
     ) -> OccurrenceCollectionResult: ...
 
 

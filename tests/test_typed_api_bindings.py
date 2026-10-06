@@ -341,10 +341,11 @@ class ApiBindingContractTests(unittest.TestCase):
 
     def test_scheduler_public_entry_points_do_not_hide_options_behind_kwargs(self) -> None:
         from nautical_core.evaluation_session import EvaluationSession
+        from nautical_core.compiled_schedule import CompiledSchedule
         from nautical_core.recurrence_evaluator import RecurrenceEvaluator
         from nautical_core.scheduler_service import SchedulerService
 
-        owners = (SchedulerService, EvaluationSession, RecurrenceEvaluator)
+        owners = (SchedulerService, EvaluationSession, RecurrenceEvaluator, CompiledSchedule)
         names = (
             "next",
             "next_outcome",
@@ -354,6 +355,8 @@ class ApiBindingContractTests(unittest.TestCase):
             "collect_after_cursor",
             "collect_events_after_cursor",
             "preview",
+            "from_task",
+            "from_observation",
         )
         for owner in owners:
             for name in names:

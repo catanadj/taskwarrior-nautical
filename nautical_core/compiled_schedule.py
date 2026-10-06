@@ -14,6 +14,7 @@ import json
 from typing import Any, Mapping
 
 from .recurrence_spec import RecurrenceSpec
+from .recurrence_context import RecurrenceContext
 from .task_models import NauticalTask, TaskObservation
 
 
@@ -281,14 +282,24 @@ class CompiledSchedule:
         )
 
     @classmethod
-    def from_observation(cls, observation: TaskObservation, **kwargs: Any) -> "CompiledSchedule":
+    def from_observation(
+        cls,
+        observation: TaskObservation,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "CompiledSchedule":
         """Compile one validated Taskwarrior observation without thawing it."""
-        return cls.from_spec(RecurrenceSpec.from_observation(observation, **kwargs))
+        return cls.from_spec(RecurrenceSpec.from_observation(observation, context=context))
 
     @classmethod
-    def from_task(cls, task: NauticalTask, **kwargs: Any) -> "CompiledSchedule":
+    def from_task(
+        cls,
+        task: NauticalTask,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "CompiledSchedule":
         """Compile an already validated domain task."""
-        return cls.from_spec(RecurrenceSpec.from_task(task, **kwargs))
+        return cls.from_spec(RecurrenceSpec.from_task(task, context=context))
 
     def to_dict(self) -> dict[str, Any]:
         return {

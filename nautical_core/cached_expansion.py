@@ -493,14 +493,18 @@ def expand_yearly(
             c, d = int(match.group(3)), int(match.group(4))
             d1, m1 = _pair(a, b)
             d2, m2 = _pair(c, d)
+            ascending = (m1, d1) <= (m2, d2)
             start = _strict_date(d1, m1) if stepped is not None else _clamped_date(d1, m1)
             if stepped is not None and start is None:
                 clamped_start = _clamped_date(d1, m1)
-                start = clamped_start + timedelta(days=1) if clamped_start else None
+                if clamped_start:
+                    start = clamped_start + timedelta(days=1) if ascending else clamped_start
             end = _strict_date(d2, m2) if stepped is not None else _clamped_date(d2, m2)
             if stepped is not None and end is None:
-                end = _clamped_date(d2, m2)
-            if not start or not end or end < start:
+                clamped_end = _clamped_date(d2, m2)
+                if clamped_end:
+                    end = clamped_end if ascending else clamped_end - timedelta(days=1)
+            if not start or not end or (ascending and end < start) or (not ascending and start < end):
                 continue
             step_days = stepped.step_days if stepped is not None else 1
             days.extend(iter_stepped_dates(start, end, step_days))

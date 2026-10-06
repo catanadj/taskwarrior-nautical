@@ -36,13 +36,18 @@ def parse_step_suffix(token: str) -> SteppedRange | None:
 
 def iter_stepped_dates(start: date, end: date, step_days: int) -> Iterator[date]:
     """Yield inclusive dates from ``start`` through ``end`` at ``step_days``."""
-    if step_days < 1 or end < start:
+    if step_days < 1:
         return
     current = start
     stride = timedelta(days=step_days)
-    while current <= end:
-        yield current
-        current += stride
+    if start <= end:
+        while current <= end:
+            yield current
+            current += stride
+    else:
+        while current >= end:
+            yield current
+            current -= stride
 
 
 __all__ = ("MAX_STEP_DAYS", "SteppedRange", "iter_stepped_dates", "parse_step_suffix")

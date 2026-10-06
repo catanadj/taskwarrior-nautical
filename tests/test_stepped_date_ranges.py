@@ -60,6 +60,22 @@ class SteppedDateRangeTests(unittest.TestCase):
         self.assertEqual(non_leap, [date(2025, 3, 1), date(2025, 3, 3)])
         self.assertEqual(leap, [date(2024, 2, 29), date(2024, 3, 2)])
 
+    def test_descending_stepped_ranges_expand_from_their_start(self) -> None:
+        self.assertEqual(
+            core.expand_monthly_cached("31..1/3d", 2026, 1),
+            [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31],
+        )
+        descending = core.expand_yearly_cached("08-15..06-01/2d", 2026)
+        self.assertEqual(descending[0], date(2026, 6, 2))
+        self.assertEqual(descending[-1], date(2026, 8, 15))
+        self.assertEqual(len(descending), 38)
+
+    def test_direct_expansion_rejects_oversized_steps(self) -> None:
+        with self.assertRaises(ValueError):
+            core.expand_monthly_cached("1..31/367d", 2026, 1)
+        with self.assertRaises(ValueError):
+            core.expand_yearly_cached("06-01..08-15/367d", 2026)
+
     def test_step_suffix_requires_positive_calendar_days(self) -> None:
         for expression in (
             "m:1..31/0d",

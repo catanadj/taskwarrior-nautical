@@ -7,6 +7,7 @@ import builtins
 from dataclasses import fields, is_dataclass
 import fcntl
 import importlib
+import inspect
 import io
 import json
 import os
@@ -143,7 +144,17 @@ class CacheApiContractTests(unittest.TestCase):
 
     def test_cache_binding_context_uses_a_narrow_payload_owner(self) -> None:
         hints = get_type_hints(cache_api._CacheBindingContext)
-        self.assertIs(hints["cache_payload"], cache_api.CachePayloadPort)
+        self.assertIs(hints["cache_payload_module"], cache_api.CachePayloadModulePort)
+
+    def test_bound_cache_payload_port_exposes_only_cache_operations(self) -> None:
+        self.assertEqual(
+            list(inspect.signature(cache_api.CachePayloadPort.cache_load).parameters),
+            ["self", "key"],
+        )
+        self.assertEqual(
+            list(inspect.signature(cache_api.CachePayloadPort.cache_save).parameters),
+            ["self", "key", "obj"],
+        )
 
     def test_cache_runtime_clock_and_random_ports_are_narrow(self) -> None:
         hints = get_type_hints(cache_api.CacheRuntimeDependencies)

@@ -10,7 +10,7 @@ import random
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, ContextManager, Protocol
+from typing import Any, Callable, ContextManager, Protocol, cast
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
@@ -26,7 +26,7 @@ from .cache_ports import (
     RandomPort,
     TemporaryFilePort,
 )
-from .core_context import CacheDependencies, CacheState, CoreContext
+from .core_context import CacheDependencies, CacheState, CoreContext, cache_dependencies
 from .cache_support import ValidatedUserDir
 
 
@@ -177,7 +177,7 @@ class CacheKeyBuilderPort(Protocol):
     ) -> str: ...
 
 
-class CachePayloadPort(Protocol):
+class CachePayloadModulePort(Protocol):
     def is_factor_like(self, value: object) -> bool: ...
 
     def is_dnf_like(
@@ -269,6 +269,50 @@ class CachePayloadPort(Protocol):
     ) -> str: ...
 
 
+class CachePayloadPort(Protocol):
+    """Per-binding cache operations with their collaborators already bound."""
+
+    def cache_load(self, key: str) -> dict | None: ...
+
+    def cache_save(self, key: str, obj: dict) -> bool: ...
+
+    def cache_gc(
+        self,
+        *,
+        max_entries: int = 512,
+        stale_tmp_age: float = 86400.0,
+        stale_lock_age: float = 86400.0,
+    ) -> dict: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundCachePayloadService:
+    """Cache operations composed once from a core binding's dependencies."""
+
+    load_operation: Callable[[str], dict | None]
+    save_operation: Callable[[str, dict], bool]
+    gc_operation: Callable[..., dict]
+
+    def cache_load(self, key: str) -> dict | None:
+        return self.load_operation(key)
+
+    def cache_save(self, key: str, obj: dict) -> bool:
+        return self.save_operation(key, obj)
+
+    def cache_gc(
+        self,
+        *,
+        max_entries: int = 512,
+        stale_tmp_age: float = 86400.0,
+        stale_lock_age: float = 86400.0,
+    ) -> dict:
+        return self.gc_operation(
+            max_entries=max_entries,
+            stale_tmp_age=stale_tmp_age,
+            stale_lock_age=stale_lock_age,
+        )
+
+
 fcntl: FcntlPort | None
 try:
     import fcntl
@@ -285,7 +329,7 @@ class _CacheBindingContext:
     import_sibling: Callable[[str], Any]
     cache_support: CacheSupportPort
     cache_locking: CacheLockingPort
-    cache_payload: CachePayloadPort
+    cache_payload_module: CachePayloadModulePort
     cache_dir_state: list[str | None]
     source_file: str
 
@@ -319,28 +363,36 @@ def _binding_context(
     context: CoreContext | None,
 ) -> _CacheBindingContext:
     """Resolve dependency state without mixing it into cache operation binding."""
-    deps = CacheDependencies.from_mapping(
+    deps = cache_dependencies(
         context.namespace if context is not None
         else core_namespace(module, namespace, context, "cache_api")
     )
     if context is not None:
         import_sibling = context.import_sibling
     else:
-        import_sibling = deps.get("_import_sibling")
-        if not callable(import_sibling):
+        import_sibling_candidate = deps.get("_import_sibling")
+        if import_sibling_candidate is None or not callable(import_sibling_candidate):
             raise TypeError("cache_api.for_core requires _import_sibling in its dependency snapshot")
+        import_sibling = import_sibling_candidate
     cache_state = CacheState(
         memory=deps["_CACHE_LOAD_MEM"],
         max_entries=int(deps["_CACHE_LOAD_MEM_MAX"]),
         ttl=float(deps["_CACHE_LOAD_MEM_TTL"]),
+    )
+    json_dependency = deps.get("json")
+    json_port = cast(JsonPort, json if json_dependency is None else json_dependency)
+    compression_dependency = deps.get("zlib")
+    compression_port = cast(
+        CompressionPort,
+        zlib if compression_dependency is None else compression_dependency,
     )
     runtime = CacheRuntimeDependencies(
         filesystem=deps["os"],
         clock=deps.get("time", time),
         random=deps.get("random", random),
         fcntl=deps.get("fcntl", fcntl),
-        json=deps.get("json", json),
-        compression=deps.get("zlib", zlib),
+        json=json_port,
+        compression=compression_port,
         base64=deps.get("base64", base64),
         tempfile=tempfile,
         cache_state=cache_state,
@@ -358,7 +410,7 @@ def _binding_context(
         import_sibling=import_sibling,
         cache_support=import_sibling("cache_support"),
         cache_locking=import_sibling("cache_locking"),
-        cache_payload=import_sibling("cache_payload"),
+        cache_payload_module=import_sibling("cache_payload"),
         cache_dir_state=[None],
         source_file=(context.source_file if context is not None else deps.get("__file__", "")) or "",
     )
@@ -372,7 +424,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     import_sibling = binding.import_sibling
     cache_support = binding.cache_support
     cache_locking = binding.cache_locking
-    cache_payload = binding.cache_payload
+    cache_payload = binding.cache_payload_module
     cache_dir_state = binding.cache_dir_state
     cache_state = runtime.cache_state
 
@@ -639,6 +691,12 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             os_mod=runtime.filesystem,
         )
 
+    bound_cache_payload: CachePayloadPort = _BoundCachePayloadService(
+        load_operation=cache_load_impl,
+        save_operation=cache_save_impl,
+        gc_operation=cache_gc_impl,
+    )
+
     ttl_lru_cache = deps["_ttl_lru_cache"]
 
     @ttl_lru_cache(maxsize=1024)
@@ -720,7 +778,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         if not _dnf_cache_enabled():
             return None
         key = dnf_cache_key(expr)
-        payload = cache_load_impl(key)
+        payload = bound_cache_payload.cache_load(key)
         if not isinstance(payload, dict) or payload.get("kind") != "anchor-dnf":
             if payload is not None:
                 quarantine_cache(key, cache_path(key))
@@ -734,7 +792,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def dnf_cache_save(expr: str, dnf: Any) -> bool:
         if not _dnf_cache_enabled() or not is_dnf_like(dnf):
             return False
-        return cache_save_impl(
+        return bound_cache_payload.cache_save(
             dnf_cache_key(expr),
             {"kind": "anchor-dnf", "dnf": clone_dnf(dnf)},
         )
@@ -779,15 +837,15 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         _cache_path=cache_path,
         _cache_lock_path=cache_lock_path,
         _quarantine_cache=quarantine_cache,
-        _cache_load_impl=cache_load_impl,
-        _cache_save_impl=cache_save_impl,
-        _cache_gc_impl=cache_gc_impl,
+        _cache_load_impl=bound_cache_payload.cache_load,
+        _cache_save_impl=bound_cache_payload.cache_save,
+        _cache_gc_impl=bound_cache_payload.cache_gc,
         _cache_key_for_task_cached=cache_key_for_task_cached,
         _cache_key_for_task_impl=cache_key_for_task_impl,
         _cache_semantic_fingerprint=cache_semantic_fingerprint,
-        cache_load=cache_load_impl,
-        cache_save=cache_save_impl,
-        cache_gc=cache_gc_impl,
+        cache_load=bound_cache_payload.cache_load,
+        cache_save=bound_cache_payload.cache_save,
+        cache_gc=bound_cache_payload.cache_gc,
         cache_key_for_task=cache_key_for_task_impl,
         _dnf_cache_fingerprint=dnf_cache_fingerprint,
         _dnf_cache_key=dnf_cache_key,

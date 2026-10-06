@@ -888,7 +888,6 @@ _scheduler_api = _LazyApiBundle(
         "apply_day_offset",
         "base_next_after_atom",
         ("_advance_probe_for_interval_bucket", "advance_probe_for_interval_bucket"),
-        ("_accept_roll_candidate", "accept_roll_candidate"),
         "next_after_atom_with_mods",
         "atom_matches_on",
         "next_after_factor",

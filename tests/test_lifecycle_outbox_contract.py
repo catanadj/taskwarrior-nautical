@@ -42,7 +42,8 @@ from nautical_core.lifecycle.outbox import (
 
 class LifecycleOutboxContractTests(unittest.TestCase):
     def test_claim_lease_adapter_has_concrete_operation_signatures(self) -> None:
-        from nautical_core.lifecycle.outbox_claims import RepositoryClaimLeasePort
+        from nautical_core.lifecycle import outbox_claims
+        from nautical_core.lifecycle.outbox_claims import LifecycleOutboxClaimPort
 
         expected = {
             "claim_batch": {"self", "owner", "lease_seconds", "limit"},
@@ -51,9 +52,10 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             "renew_leases": {"self", "intent_ids", "owner", "lease_seconds"},
             "advance_stages": {"self", "stages", "owner"},
         }
+        self.assertFalse(hasattr(outbox_claims, "RepositoryClaimLeasePort"))
         for name, parameters in expected.items():
             with self.subTest(operation=name):
-                method = getattr(RepositoryClaimLeasePort, name)
+                method = getattr(LifecycleOutboxClaimPort, name)
                 self.assertEqual(set(signature(method).parameters), parameters)
                 hints = get_type_hints(method)
                 self.assertNotIn(Any, hints.values())
@@ -1142,10 +1144,10 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             self.assertEqual(payload["states"].get("acknowledged"), 1)
 
     def test_claim_lease_port_exposes_only_cas_operations(self) -> None:
-        from nautical_core.lifecycle.outbox_claims import RepositoryClaimLeasePort
+        from nautical_core.lifecycle.outbox_claims import LifecycleOutboxClaimPort
 
         with TemporaryDirectory() as directory:
-            port = RepositoryClaimLeasePort(_LifecycleOutboxRepository(Path(directory)))
+            port: LifecycleOutboxClaimPort = _LifecycleOutboxRepository(Path(directory))
             self.assertEqual(
                 port.claim_batch(owner="", lease_seconds=0, limit=0)[0].kind,
                 OutboxResultKind.REJECTED,

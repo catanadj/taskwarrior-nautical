@@ -8,13 +8,20 @@ import unittest
 from unittest.mock import patch
 
 from nautical_core.common import coerce_int, sanitize_text, short_uuid
-from nautical_core.scheduler_api import _weeks_between
+import nautical_core.scheduler_api as scheduler_api
+from nautical_core.schedule_utils import weeks_between
 
 
 class CoreUtilityContractTests(unittest.TestCase):
     def test_week_count_uses_iso_week_boundaries(self) -> None:
-        self.assertEqual(_weeks_between(date(2024, 12, 31), date(2025, 1, 1)), 0)
-        self.assertEqual(_weeks_between(date(2024, 12, 29), date(2024, 12, 30)), 1)
+        self.assertEqual(weeks_between(date(2024, 12, 31), date(2025, 1, 1)), 0)
+        self.assertEqual(weeks_between(date(2024, 12, 29), date(2024, 12, 30)), 1)
+
+    def test_scheduler_api_does_not_own_a_week_count_forwarder(self) -> None:
+        self.assertFalse(hasattr(scheduler_api, "_weeks_between"))
+
+    def test_scheduler_api_does_not_own_a_roll_acceptance_forwarder(self) -> None:
+        self.assertFalse(hasattr(scheduler_api, "_accept_roll_candidate"))
 
     def test_short_uuid_handles_invalid_and_short_values(self) -> None:
         self.assertEqual(short_uuid(None), "")

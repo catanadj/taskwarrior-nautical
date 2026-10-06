@@ -8,13 +8,29 @@ from functools import lru_cache, partial as _partial
 from typing import Any, Callable, Protocol
 from .api_bindings import ApiBinding, core_namespace
 
-from .core_context import CoreContext, SchedulerDependencies
+from .core_context import CoreContext
 
 
 class SchedulerCallback(Protocol):
     """Callable service port shared by scheduler dependency bundles."""
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulerAtomBindingDependencies:
+    """Named collaborators needed to bind base atom scheduling."""
+
+    scheduler_atom: Any
+    astronomy: Any
+    astronomy_config: Any
+    expand_weekly_cached_mods: SchedulerCallback
+    split_csv_tokens: SchedulerCallback
+    with_business_calendar: Callable[..., Any]
+    expand_monthly_cached: SchedulerCallback
+    expand_yearly_cached: SchedulerCallback
+    weekly_rand_pick: SchedulerCallback
+    week_monday: SchedulerCallback
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,12 +128,6 @@ def _apply_day_offset_impl(
     )
 
 
-def _weeks_between(d1: Any, d2: Any) -> int:
-    from .schedule_utils import weeks_between
-
-    return weeks_between(d1, d2)
-
-
 def _resolve_moon_phase_date(
     phase: str,
     reference_day: Any,
@@ -152,40 +162,40 @@ def _base_next_after_atom_impl(
     seed_base: Any = None,
     business_calendar: Any = None,
     *,
-    owner_deps: SchedulerDependencies,
+    bindings: SchedulerAtomBindingDependencies,
 ) -> Any:
-    scheduler_atom = owner_deps["_scheduler_atom"]
+    scheduler_atom = bindings.scheduler_atom
     resolve_moon = lambda phase, reference_day: _resolve_moon_phase_date(
         phase,
         reference_day,
-        astronomy=owner_deps["_astronomy"],
-        astronomy_config=owner_deps["ASTRONOMY_CONFIG"],
+        astronomy=bindings.astronomy,
+        astronomy_config=bindings.astronomy_config,
     )
-    deps = SchedulerAtomDependencies(
-        expand_weekly=owner_deps["expand_weekly_cached_mods"],
-        split_csv=owner_deps["_split_csv_tokens"],
-        expand_monthly=owner_deps["_with_business_calendar"](
-            owner_deps["expand_monthly_cached"], business_calendar
+    atom_deps = SchedulerAtomDependencies(
+        expand_weekly=bindings.expand_weekly_cached_mods,
+        split_csv=bindings.split_csv_tokens,
+        expand_monthly=bindings.with_business_calendar(
+            bindings.expand_monthly_cached, business_calendar
         ),
-        expand_yearly=owner_deps["expand_yearly_cached"],
-        weekly_random=owner_deps["_with_business_calendar"](
-            owner_deps["_weekly_rand_pick"], business_calendar
+        expand_yearly=bindings.expand_yearly_cached,
+        weekly_random=bindings.with_business_calendar(
+            bindings.weekly_rand_pick, business_calendar
         ),
-        week_monday=owner_deps["_week_monday"],
+        week_monday=bindings.week_monday,
         resolve_moon=resolve_moon,
     )
     return scheduler_atom.base_next_after_atom(
         atom,
         ref_d,
         seed_base=seed_base,
-        expand_weekly_cached_mods=deps.expand_weekly,
-        split_csv_tokens=deps.split_csv,
-        expand_monthly_cached=deps.expand_monthly,
-        expand_yearly_cached=deps.expand_yearly,
-        weekly_rand_pick=deps.weekly_random,
-        week_monday=deps.week_monday,
+        expand_weekly_cached_mods=atom_deps.expand_weekly,
+        split_csv_tokens=atom_deps.split_csv,
+        expand_monthly_cached=atom_deps.expand_monthly,
+        expand_yearly_cached=atom_deps.expand_yearly,
+        weekly_rand_pick=atom_deps.weekly_random,
+        week_monday=atom_deps.week_monday,
         date_cls=date,
-        resolve_moon_phase_date=deps.resolve_moon,
+        resolve_moon_phase_date=atom_deps.resolve_moon,
     )
 
 
@@ -230,17 +240,6 @@ def _advance_probe_for_interval_bucket(
         date_cls=date,
         spec=spec,
     )
-
-
-def _accept_roll_candidate(
-    ref_d: Any,
-    base: Any,
-    cand: Any,
-    roll_kind: Any,
-    *,
-    scheduler_atom: Any,
-) -> Any:
-    return scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
 def _next_after_atom_with_mods_impl(
@@ -438,12 +437,22 @@ def _next_after_expr_impl(
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     """Create scheduler APIs without sharing state between deps loaders."""
     if context is not None:
-        deps = SchedulerDependencies.from_mapping(context.namespace)
+        deps = context.namespace
         module = context
     else:
-        deps = SchedulerDependencies.from_mapping(
-            core_namespace(module, namespace, context, "scheduler_api")
-        )
+        deps = core_namespace(module, namespace, context, "scheduler_api")
+    base_atom_deps = SchedulerAtomBindingDependencies(
+        scheduler_atom=deps["_scheduler_atom"],
+        astronomy=deps["_astronomy"],
+        astronomy_config=deps["ASTRONOMY_CONFIG"],
+        expand_weekly_cached_mods=deps["expand_weekly_cached_mods"],
+        split_csv_tokens=deps["_split_csv_tokens"],
+        with_business_calendar=deps["_with_business_calendar"],
+        expand_monthly_cached=deps["expand_monthly_cached"],
+        expand_yearly_cached=deps["expand_yearly_cached"],
+        weekly_rand_pick=deps["_weekly_rand_pick"],
+        week_monday=deps["_week_monday"],
+    )
     core_config = (
         context.import_sibling("core_config")
         if context is not None
@@ -480,7 +489,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return expansion_binding()._doms_for_weekly_spec(spec, year, month)
 
     interval_deps = SchedulerIntervalDependencies(
-        weeks_between=_weeks_between,
+        weeks_between=deps["_schedule_utils"].weeks_between,
         year_index=deps["_year_index"],
     )
 
@@ -812,7 +821,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             atom,
             ref_d,
             seed_base=seed_base,
-            owner_deps=deps,
+            bindings=base_atom_deps,
             business_calendar=business_calendar,
         )
 
@@ -833,11 +842,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def advance_probe_for_interval_bucket(typ: Any, ival: Any, seed: Any, cand: Any, spec: str = "") -> Any:
         return _advance_probe_for_interval_bucket(
             typ, ival, seed, cand, spec=spec, deps=interval_deps, scheduler_atom=deps["_scheduler_atom"]
-        )
-
-    def accept_roll_candidate(ref_d: Any, base: Any, cand: Any, roll_kind: Any) -> Any:
-        return _accept_roll_candidate(
-            ref_d, base, cand, roll_kind, scheduler_atom=deps["_scheduler_atom"]
         )
 
     def atom_matches_on(atom: Any, d: Any, default_seed: Any, seed_base: Any = None, business_calendar: Any = None) -> Any:
@@ -912,9 +916,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             runtime_deps=runtime_deps,
         )
 
-    def weeks_between(d1: Any, d2: Any) -> int:
-        return _weeks_between(d1, d2)
-
     def resolve_moon_phase_date(phase: str, reference_day: Any) -> Any:
         return _resolve_moon_phase_date(
             phase,
@@ -942,7 +943,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         monthly_align=monthly_align_base_for_interval,
         roll_apply=roll_apply_impl,
         day_offset=apply_day_offset,
-        accept_roll=accept_roll_candidate,
+        accept_roll=deps["_scheduler_atom"].accept_roll_candidate,
         max_anchor_iter=deps["MAX_ANCHOR_ITER"],
         warn_once=warn_once_per_day,
         os_mod=deps["os"],
@@ -1008,14 +1009,13 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         base_next_after_atom=base_next_after_atom,
         interval_allowed_for_atom=interval_allowed_for_atom,
         advance_probe_for_interval_bucket=advance_probe_for_interval_bucket,
-        accept_roll_candidate=accept_roll_candidate,
+        accept_roll_candidate=deps["_scheduler_atom"].accept_roll_candidate,
         next_after_atom_with_mods=next_after_atom_with_mods,
         atom_matches_on=atom_matches_on,
         next_after_factor=next_after_factor,
         factor_matches_on=factor_matches_on,
         next_after_term=next_after_term,
         next_after_expr=next_after_expr,
-        _weeks_between=weeks_between,
         _resolve_moon_phase_date=resolve_moon_phase_date,
         _moon_phase_matches_date=moon_phase_matches_date,
     )

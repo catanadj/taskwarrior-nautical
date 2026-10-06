@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import types
 import unittest
+from typing import is_typeddict
 
-from nautical_core.core_context import CacheState, CoreContext, ParserDependencies
+from nautical_core.core_context import (
+    CacheState,
+    CoreContext,
+    ParserDependencies,
+    parser_dependencies,
+)
 import nautical_core.parser_api as parser_api
 
 
@@ -16,25 +22,32 @@ class CoreContextTests(unittest.TestCase):
 
     def test_scheduler_and_cache_dependencies_are_immutable_snapshots(self) -> None:
         source = {"clock": object(), "limit": 8}
-        from nautical_core.core_context import CacheDependencies, SchedulerDependencies
+        from nautical_core.core_context import CacheDependencies, cache_dependencies
 
-        scheduler = SchedulerDependencies.from_mapping(source)
-        cache = CacheDependencies.from_mapping(source)
+        cache = cache_dependencies({"ENABLE_ANCHOR_CACHE": True, **source})
         source["limit"] = 0
-        self.assertEqual(scheduler["limit"], 8)
-        self.assertEqual(cache["limit"], 8)
+        self.assertTrue(cache["ENABLE_ANCHOR_CACHE"])
         with self.assertRaises(TypeError):
-            scheduler.values["limit"] = 1
-        with self.assertRaises(TypeError):
-            cache.values["limit"] = 1
+            cache["ENABLE_ANCHOR_CACHE"] = False
+
+    def test_scheduler_owner_no_longer_uses_a_generic_dependency_snapshot(self) -> None:
+        import nautical_core.core_context as core_context
+
+        self.assertFalse(hasattr(core_context, "SchedulerDependencies"))
+
+    def test_parser_and_cache_dependencies_declare_named_keys(self) -> None:
+        from nautical_core.core_context import CacheDependencies
+
+        self.assertTrue(is_typeddict(ParserDependencies))
+        self.assertTrue(is_typeddict(CacheDependencies))
 
     def test_parser_dependencies_are_immutable_snapshots(self) -> None:
-        source = {"value": 1}
-        dependencies = ParserDependencies.from_mapping(source)
-        source["value"] = 2
-        self.assertEqual(dependencies["value"], 1)
+        source = {"ANCHOR_PRESETS": {"weekly": "w:mon"}}
+        dependencies = parser_dependencies(source)
+        source["ANCHOR_PRESETS"] = {}
+        self.assertEqual(dependencies["ANCHOR_PRESETS"], {"weekly": "w:mon"})
         with self.assertRaises(TypeError):
-            dependencies.values["value"] = 3
+            dependencies["ANCHOR_PRESETS"] = {}
 
     def test_context_owns_one_namespace(self) -> None:
         module = types.SimpleNamespace(_import_sibling=lambda _name: object(), value=1)

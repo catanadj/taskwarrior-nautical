@@ -7,7 +7,6 @@ import nautical_core.natural_language_api as natural_language_api
 import nautical_core.scheduler_atom as scheduler_atom
 import nautical_core.scheduler_api as scheduler_api
 import nautical_core.scheduler_expr as scheduler_expr
-from nautical_core.core_context import SchedulerDependencies
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.parsing.parser_models import ParseError
 from nautical_core.schedule_utils import roll_apply
@@ -335,25 +334,23 @@ class SchedulerApiDelegationTests(unittest.TestCase):
         seen = {}
         calendars = []
         atom_module = SimpleNamespace(base_next_after_atom=lambda atom, ref, **kwargs: seen.update(kwargs) or date(2026, 2, 1))
-        owner = SchedulerDependencies.from_mapping(
-            {
-                "_scheduler_atom": atom_module,
-                "expand_weekly_cached_mods": "weekly",
-                "_split_csv_tokens": "split",
-                "_with_business_calendar": lambda fn, cal: (calendars.append(cal) or fn),
-                "expand_monthly_cached": "monthly",
-                "expand_yearly_cached": "yearly",
-                "_weekly_rand_pick": "random",
-                "_week_monday": "monday",
-                "_astronomy": SimpleNamespace(),
-                "ASTRONOMY_CONFIG": {},
-            }
+        owner = scheduler_api.SchedulerAtomBindingDependencies(
+            scheduler_atom=atom_module,
+            expand_weekly_cached_mods="weekly",
+            split_csv_tokens="split",
+            with_business_calendar=lambda fn, cal: (calendars.append(cal) or fn),
+            expand_monthly_cached="monthly",
+            expand_yearly_cached="yearly",
+            weekly_rand_pick="random",
+            week_monday="monday",
+            astronomy=SimpleNamespace(),
+            astronomy_config={},
         )
         calendar = object()
         self.assertEqual(
             scheduler_api._base_next_after_atom_impl(
                 {"typ": "w"}, date(2026, 1, 1), business_calendar=calendar,
-                owner_deps=owner,
+                bindings=owner,
             ),
             date(2026, 2, 1),
         )

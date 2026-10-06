@@ -435,7 +435,12 @@ class RecurrenceEvaluator:
     def next_after_cursor(
         self,
         cursor: OccurrenceCursor,
-        **kwargs: Any,
+        *,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_file_skips: int = 512,
     ) -> Occurrence | None:
         """Resolve an explicit cursor without caller-side time arithmetic."""
         if not isinstance(cursor, OccurrenceCursor):
@@ -448,17 +453,35 @@ class RecurrenceEvaluator:
         return self.next_after(
             cursor.local_datetime,
             inclusive=cursor.inclusive,
-            **kwargs,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_file_skips=max_file_skips,
         )
 
     def next_outcome(
         self,
         cursor: OccurrenceCursor,
-        **kwargs: Any,
+        *,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_file_skips: int = 512,
     ) -> OccurrenceOutcome:
         """Return a typed lookup outcome without collapsing terminal states."""
         try:
-            return outcome_from_occurrence(self.next_after_cursor(cursor, **kwargs))
+            return outcome_from_occurrence(
+                self.next_after_cursor(
+                    cursor,
+                    fallback_hhmm=fallback_hhmm,
+                    default_seed_date=default_seed_date,
+                    pick_occurrence_local=pick_occurrence_local,
+                    anchor_file_provider=anchor_file_provider,
+                    max_file_skips=max_file_skips,
+                )
+            )
         except OccurrenceSearchExhausted as exc:
             return ExhaustedOccurrence(exc)
         except LookupError as exc:
@@ -645,6 +668,8 @@ class RecurrenceEvaluator:
         count_omitted: bool = False,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
         max_iterations: int = 512,
         max_file_skips: int = 512,
     ) -> OccurrenceBatch[Occurrence]:
@@ -663,6 +688,8 @@ class RecurrenceEvaluator:
                 fallback_hhmm=fallback_hhmm,
                 default_seed_date=default_seed_date,
                 inclusive=False,
+                pick_occurrence_local=pick_occurrence_local,
+                anchor_file_provider=anchor_file_provider,
                 include_omitted=True,
                 max_file_skips=max_file_skips,
             ),
@@ -820,7 +847,12 @@ class RecurrenceEvaluator:
         cursor: OccurrenceCursor,
         *,
         limit: int,
-        **kwargs: Any,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
     ) -> OccurrenceBatch[Occurrence]:
         """Collect occurrences from an explicit cursor contract."""
         if not isinstance(cursor, OccurrenceCursor):
@@ -833,7 +865,12 @@ class RecurrenceEvaluator:
         values = self.collect_after(
             cursor,
             limit=limit,
-            **kwargs,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_iterations=max_iterations,
+            max_file_skips=max_file_skips,
         )
         return OccurrenceBatch(values, terminal=getattr(values, "terminal", None))
 
@@ -864,18 +901,32 @@ class RecurrenceEvaluator:
             fallback_hhmm=fallback_hhmm,
         )
 
-    def project_time(self, value: Any, selected_date: date, **kwargs: Any) -> Any:
+    def project_time(
+        self,
+        value: Any,
+        selected_date: date,
+        *,
+        config: dict[str, Any] | None = None,
+        to_local: Any | None = None,
+        seed_base: str = "",
+    ) -> Any:
         """Project a time modifier against a selected date through one service."""
         from .time_projection import TimeProjectionService
 
         # Anchor scheduling passes this callback without repeating the full
         # context. Keep astronomical projections task-scoped instead of
         # silently falling back to an empty global configuration.
-        if kwargs.get("config") is None and self.context.astronomy_config is not None:
-            kwargs = dict(kwargs)
-            kwargs["config"] = dict(self.context.astronomy_config)
+        if config is None and self.context.astronomy_config is not None:
+            config = dict(self.context.astronomy_config)
         service = self._get_cached("time_projection_service", TimeProjectionService)
-        return service.project(value, selected_date, context=self.context, **kwargs)
+        return service.project(
+            value,
+            selected_date,
+            config=config,
+            to_local=to_local,
+            seed_base=seed_base,
+            context=self.context,
+        )
 
     def _build_scheduler_binding(self) -> NextOccurrenceCallback:
         """Build the evaluator-bound scheduler once per evaluator session."""

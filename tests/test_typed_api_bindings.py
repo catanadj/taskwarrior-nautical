@@ -338,6 +338,34 @@ class ApiBindingContractTests(unittest.TestCase):
             facade.parse_anchor_expr_to_dnf_cached("w:mon"),
         )
 
+    def test_scheduler_public_entry_points_do_not_hide_options_behind_kwargs(self) -> None:
+        from nautical_core.evaluation_session import EvaluationSession
+        from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+        from nautical_core.scheduler_service import SchedulerService
+
+        owners = (SchedulerService, EvaluationSession, RecurrenceEvaluator)
+        names = (
+            "next",
+            "next_outcome",
+            "select_mode",
+            "project_time",
+            "collect",
+            "collect_after_cursor",
+            "collect_events_after_cursor",
+            "preview",
+        )
+        for owner in owners:
+            for name in names:
+                method = getattr(owner, name, None)
+                if method is None:
+                    continue
+                with self.subTest(owner=owner.__name__, method=name):
+                    self.assertFalse(
+                        any(
+                            parameter.kind is inspect.Parameter.VAR_KEYWORD
+                            for parameter in inspect.signature(method).parameters.values()
+                        )
+                    )
     def test_parser_scheduler_and_cache_bindings_match_facade_behavior(self) -> None:
         import nautical_core as facade
         cache_api = importlib.import_module("nautical_core.cache_api")

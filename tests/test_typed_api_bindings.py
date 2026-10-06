@@ -198,6 +198,16 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertNotIn("_weeks_between", compat_api.PUBLIC_OWNER_MODULES)
         self.assertNotIn("_weeks_between", compat_api.PUBLIC_EXPORT_CATEGORIES)
         self.assertFalse(hasattr(facade, "_weeks_between"))
+
+    def test_supported_facade_wrappers_have_explicit_signatures(self) -> None:
+        import inspect
+        import nautical_core as facade
+
+        for name in ("render_panel", "resolve_task_data_context", "diag_log_redact", "diag_log", "diag", "run_task_result"):
+            with self.subTest(name=name):
+                parameters = inspect.signature(getattr(facade, name)).parameters.values()
+                self.assertFalse(any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters))
+                self.assertFalse(any(parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in parameters))
         for name in (
             "_interval_allowed_for_atom",
             "_first_hit_after_probe_in_month",

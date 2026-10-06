@@ -7,7 +7,9 @@ Shared core for Taskwarrior Nautical hooks.
 from __future__ import annotations
 import os, re, sys
 from collections import OrderedDict
-from typing import Any, Callable, Mapping, TYPE_CHECKING
+from typing import Any, Callable, Mapping, Sequence, TYPE_CHECKING
+
+from .integration_models import TaskCommandResult
 
 if TYPE_CHECKING:
     from .core_config import ConfigReloadResult
@@ -170,11 +172,38 @@ panel_line_from_rows = _lazy_ui_call("panel_line_from_rows")
 panel_line = _lazy_ui_call("panel_line")
 panel_themes = _lazy_ui_call("panel_themes")
 
-def render_panel(*args: Any, **kwargs: Any) -> Any:
+def render_panel(
+    title: Any,
+    rows: Any,
+    *,
+    kind: str = "info",
+    panel_mode: str = "rich",
+    live_duration_ms: int | float = 160,
+    live_footer: str = "NAUTICAL",
+    fast_color: bool = True,
+    themes: dict | None = None,
+    allow_line: bool = True,
+    line_force_rich_kinds: set[str] | None = None,
+    label_width_min: int = 6,
+    label_width_max: int = 14,
+) -> None:
     ui = _ui._resolve()
     ui.panel_line = panel_line
     ui.text_line = text_line
-    return ui.render_panel(*args, **kwargs)
+    return ui.render_panel(
+        title,
+        rows,
+        kind=kind,
+        panel_mode=panel_mode,
+        live_duration_ms=live_duration_ms,
+        live_footer=live_footer,
+        fast_color=fast_color,
+        themes=themes,
+        allow_line=allow_line,
+        line_force_rich_kinds=line_force_rich_kinds,
+        label_width_min=label_width_min,
+        label_width_max=label_width_max,
+    )
 
 ANCHOR_YEAR_FMT = "MD"
 WRAND_SALT = "nautical|wrand|v4"
@@ -562,20 +591,25 @@ def _hook_arg_value(*args: Any, **kwargs: Any) -> Any:
     return _runtime.hook_arg_value(*args, **kwargs)
 
 
-def resolve_task_data_context(*args: Any, **kwargs: Any) -> Any:
-    return _runtime.resolve_task_data_context(*args, **kwargs)
+def resolve_task_data_context(
+    *,
+    argv: list[str] | None = None,
+    env: Mapping[str, Any] | None = None,
+    tw_dir: str | None = None,
+) -> tuple[str, bool, str]:
+    return _runtime.resolve_task_data_context(argv=argv, env=env, tw_dir=tw_dir)
 
 
-def diag_log_redact(*args: Any, **kwargs: Any) -> Any:
-    return _runtime.diag_log_redact(*args, **kwargs)
+def diag_log_redact(msg: str, redact_keys: frozenset | None = None) -> Any:
+    return _runtime.diag_log_redact(msg, redact_keys)
 
 
-def diag_log(*args: Any, **kwargs: Any) -> Any:
-    return _runtime.diag_log(*args, **kwargs)
+def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
+    return _runtime.diag_log(msg, hook_name, data_dir)
 
 
-def diag(*args: Any, **kwargs: Any) -> Any:
-    return _runtime.diag(*args, **kwargs)
+def diag(msg: Any, hook_name: str = "nautical", data_dir: str | None = None) -> None:
+    return _runtime.diag(msg, hook_name, data_dir)
 
 
 def _runtime_command_module() -> Any:
@@ -583,8 +617,27 @@ def _runtime_command_module() -> Any:
     return _import_sibling("runtime_command")
 
 
-def run_task_result(*args: Any, **kwargs: Any) -> Any:
-    return _runtime_command_module().run_task_result(*args, **kwargs)
+def run_task_result(
+    cmd: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    retry_delay: float = 0.15,
+    use_tempfiles: bool = False,
+    purpose: str = "Nautical hook command",
+) -> TaskCommandResult:
+    return _runtime_command_module().run_task_result(
+        cmd,
+        env=env,
+        input_text=input_text,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+        use_tempfiles=use_tempfiles,
+        purpose=purpose,
+    )
 
 
 # ---- Core iterator over DNF ---------------------------------------------------

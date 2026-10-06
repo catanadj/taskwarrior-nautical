@@ -25,6 +25,7 @@ class LifecycleOutboxOperationsPort(Protocol):
         *,
         limit: int = 20,
         stale_after: float = OUTBOX_STATUS_STALE_AFTER_SECONDS,
+        retention_seconds: float = OUTBOX_ACK_RETENTION_SECONDS,
         intent_id: str | None = None,
     ) -> tuple[OutboxResult, dict[str, Any]]: ...
     def resolve_manual_review(self, *, intent_id: str, reason: str) -> OutboxResult: ...

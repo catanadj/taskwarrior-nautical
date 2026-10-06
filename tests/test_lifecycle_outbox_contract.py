@@ -41,6 +41,14 @@ from nautical_core.lifecycle.outbox import (
 
 
 class LifecycleOutboxContractTests(unittest.TestCase):
+    def test_operations_port_status_matches_repository_retention_contract(self) -> None:
+        from inspect import signature
+        from nautical_core.lifecycle.outbox_operations import LifecycleOutboxOperationsPort
+        from nautical_core.lifecycle.outbox import OUTBOX_ACK_RETENTION_SECONDS
+
+        parameters = signature(LifecycleOutboxOperationsPort.status).parameters
+        self.assertEqual(parameters["retention_seconds"].default, OUTBOX_ACK_RETENTION_SECONDS)
+
     def test_claim_lease_adapter_has_concrete_operation_signatures(self) -> None:
         from nautical_core.lifecycle import outbox_claims
         from nautical_core.lifecycle.outbox_claims import LifecycleOutboxClaimPort

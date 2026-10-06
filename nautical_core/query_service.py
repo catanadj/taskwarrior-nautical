@@ -41,7 +41,7 @@ from .query_models import (
 )
 from .operator_models import OperatorCursor, OperatorContractError, OperatorLimits
 from .operator_context import OperatorInvocationBudget
-from .parser_models import ParseError
+from .parsing.parser_models import ParseError
 from .hook_validation_pipeline import ValidationStatus, validate_task_mapping
 from .hook_workflow_models import WorkflowRoute
 

@@ -1,10 +1,12 @@
 """Direct read-only query-service contracts migrated from golden coverage."""
 
+import inspect
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import nautical_core as core
+import nautical_core.query_service as query_service_module
 from nautical_core.integration_context import IntegrationAccess
 from nautical_core.integration_models import (
     Absent, CommandFailureKind, FailureEvidence, Found, TaskCommand, Unavailable,
@@ -41,6 +43,9 @@ def _scheduler(task: dict[str, object], context: RecurrenceContext) -> Scheduler
 
 
 class QueryServiceContractsTests(unittest.TestCase):
+    def test_query_service_imports_parser_types_from_canonical_package(self) -> None:
+        self.assertNotIn("from .parser_models import ParseError", inspect.getsource(query_service_module))
+
     def test_projects_schedule_read_only_with_omissions_cap_and_scheduler_parity(self) -> None:
         task = {
             "uuid": "00000000-0000-4000-8000-000000000002", "chainID": "query-chain",

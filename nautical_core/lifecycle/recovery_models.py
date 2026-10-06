@@ -10,7 +10,6 @@ from typing import Mapping
 
 from .models import LifecyclePlan
 from ..task_models import TaskObservation
-from ..taskwarrior_io import JsonValue
 
 
 class RecoveryStatus(str, Enum):
@@ -67,7 +66,7 @@ class RecoveryRefusal:
     parent: TaskObservation
     status: RecoveryStatus
     reason: str
-    evidence: Mapping[str, JsonValue] = field(default_factory=dict)
+    evidence: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.parent, TaskObservation):

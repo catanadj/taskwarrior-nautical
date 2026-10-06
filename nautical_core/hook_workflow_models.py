@@ -13,7 +13,6 @@ from typing import Any, TypeAlias
 
 from .lifecycle.models import LifecyclePlan, TaskLifecycleState
 from .task_models import FrozenValue, TaskObservation, TaskTimestamp
-from .taskwarrior_io import JsonObject, JsonValue
 
 
 class HookKind(str, Enum):
@@ -424,7 +423,7 @@ class FeedbackFacts:
         object.__setattr__(self, "fact_kinds", kinds)
         object.__setattr__(self, "chain_completed", bool(self.chain_completed))
 
-    def to_contract(self) -> JsonObject:
+    def to_contract(self) -> dict[str, object]:
         """Return a stable, JSON-ready representation for diagnostics/tools."""
         return {
             "recurrence_kind": self.recurrence_kind,

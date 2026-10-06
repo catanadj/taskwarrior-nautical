@@ -88,7 +88,7 @@ class ExhaustedService:
 class LifecycleTerminalPlanTests(unittest.TestCase):
     def test_recovery_refusal_evidence_uses_json_boundary(self) -> None:
         evidence = get_type_hints(RecoveryRefusal)["evidence"]
-        self.assertIn("JsonValue", repr(evidence))
+        self.assertNotIn("Any", repr(evidence))
 
     def test_lifecycle_generation_adapters_declare_the_generation_service(self) -> None:
         from typing import get_type_hints

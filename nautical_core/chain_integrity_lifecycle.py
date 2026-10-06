@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta
 import importlib
 from typing import Any, Callable
-from .taskwarrior_io import JsonValue
 
 from . import astronomy, native_until
 from .business_calendar_config import BusinessCalendarConfigError
@@ -49,7 +48,7 @@ def _recovery_refusal(
     status: RecoveryStatus,
     reason: str,
     *,
-    evidence: dict[str, JsonValue] | None = None,
+    evidence: dict[str, object] | None = None,
 ) -> RecoveryRefusal:
     return RecoveryRefusal(parent, status, reason, evidence or {})
 

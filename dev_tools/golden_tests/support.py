@@ -10,12 +10,12 @@ import importlib.machinery
 import sys
 import sqlite3
 import subprocess
-import sys
 import os
 import re
 import time as _time
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def expect(condition: bool, message: str) -> None:
@@ -60,11 +60,11 @@ def parse_due(value):
     text = str(value).strip()
     try:
         return datetime.fromisoformat(text).replace(tzinfo=None)
-    except Exception:
+    except ValueError:
         pass
     try:
         return datetime.strptime(text, "%Y-%m-%d")
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -108,7 +108,7 @@ def task_observation(row):
 
 def task_snapshot(row):
     """Build lifecycle snapshots through the observation boundary."""
-    from nautical_core.lifecycle_models import TaskSnapshot
+    from nautical_core.lifecycle.models import TaskSnapshot
 
     return TaskSnapshot.from_observation(task_observations((row,))[0])
 
@@ -153,7 +153,7 @@ def task_draft(row):
 
 def recovery_action(result):
     """Project typed recovery results for characterization assertions."""
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+    from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
 
     if not isinstance(result, RecoveryPlanResult):
         return result.status.value
@@ -166,7 +166,7 @@ def recovery_action(result):
 
 
 def recovery_child(result):
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+    from nautical_core.lifecycle.recovery_models import RecoveryPlanResult
 
     return result.plan.child_dict() if isinstance(result, RecoveryPlanResult) else None
 
@@ -188,8 +188,8 @@ def must_parse(expr):
 
 def new_lifecycle_read_service():
     import nautical_core
+    import nautical_core.lifecycle.read_service as read_service
 
-    read_service = nautical_core._import_sibling("lifecycle_read_service")
     missing = object()
     return read_service.LifecycleReadService(
         coerce_int=nautical_core.coerce_int,
@@ -254,22 +254,16 @@ def build_preview(expr, mode="ALL", due=None):
     upcoming = []
     first_due = None
     if hasattr(nautical_core, "build_and_cache_hints"):
-        try:
-            package = nautical_core.build_and_cache_hints(expr, mode, default_due_dt=due_dt)
-            if package:
-                natural = package.get("natural") or natural
-                upcoming = [iso(item) for item in package.get("next_dates") or []]
-                if package.get("first_due"):
-                    first_due = iso(package["first_due"])
-                return {"natural": natural, "upcoming": upcoming, "first_due": first_due}
-        except Exception:
-            pass
+        package = nautical_core.build_and_cache_hints(expr, mode, default_due_dt=due_dt)
+        if package:
+            natural = package.get("natural") or natural
+            upcoming = [iso(item) for item in package.get("next_dates") or []]
+            if package.get("first_due"):
+                first_due = iso(package["first_due"])
+            return {"natural": natural, "upcoming": upcoming, "first_due": first_due}
     nautical_core.validate_anchor_expr_strict(expr)
     if hasattr(nautical_core, "describe_anchor_expr"):
-        try:
-            natural = nautical_core.describe_anchor_expr(expr, default_due_dt=due_dt)
-        except Exception:
-            natural = ""
+        natural = nautical_core.describe_anchor_expr(expr, default_due_dt=due_dt)
     return {"natural": natural, "upcoming": upcoming, "first_due": first_due}
 
 
@@ -285,13 +279,10 @@ def must_preview(expr, due=None):
 def must_natural(expr):
     import nautical_core
 
-    try:
-        if hasattr(nautical_core, "describe_anchor_expr"):
-            natural = nautical_core.describe_anchor_expr(expr)
-            if natural:
-                return natural
-    except Exception:
-        pass
+    if hasattr(nautical_core, "describe_anchor_expr"):
+        natural = nautical_core.describe_anchor_expr(expr)
+        if natural:
+            return natural
     package = build_preview(expr)
     if package and package.get("natural"):
         return package["natural"]
@@ -361,7 +352,7 @@ def fixture_task(task, *, context=None):
 
 
 def plan_from_values(**kwargs):
-    from nautical_core.lifecycle_models import LifecyclePlan, _freeze_pairs
+    from nautical_core.lifecycle.models import LifecyclePlan, _freeze_pairs
 
     child_payload = kwargs.pop("child_payload", None)
     parent_patch = kwargs.pop("parent_patch", None)
@@ -486,6 +477,59 @@ def doctor_hook_installation(mod, findings, *, hooks_dir, env):
     return validated
 
 
+def write_fake_task_for_doctor(path: Path) -> None:
+    path.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+if args and args[-1] == "--version":
+    print("3.4.2")
+    raise SystemExit(0)
+if len(args) >= 2 and args[-2] == "_get":
+    key = args[-1]
+    if key == "rc.hooks.location":
+        print(os.environ.get("FAKE_HOOKS", ""))
+        raise SystemExit(0)
+    if key == "rc.data.location":
+        print(os.environ.get("FAKE_DATA_DIR", ""))
+        raise SystemExit(0)
+    if key.startswith("rc.uda.") and key.endswith(".type"):
+        name = key[len("rc.uda."):-len(".type")]
+        expected = {
+            "cp": "string", "chain": "string", "anchor": "string", "bc": "string",
+            "anchor_file": "string", "anchor_mode": "string",
+            "omit": "string", "omit_file": "string",
+            "chainMax": "numeric", "chainUntil": "date",
+            "prevLink": "string", "nextLink": "string",
+            "link": "numeric", "chainID": "string",
+        }
+        if name == os.environ.get("FAKE_WRONG_UDA"):
+            print("date")
+        else:
+            print(expected.get(name, ""))
+        raise SystemExit(0)
+if "export" in args:
+    print(os.environ.get("FAKE_EXPORT", "[]"))
+    raise SystemExit(0)
+print("unsupported", file=sys.stderr)
+raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def install_doctor_hook_wrappers(hooks_dir: Path, root: Path | None = None) -> None:
+    import shutil
+
+    root = root or Path(__file__).resolve().parents[2]
+    for name in ("on-add.nautical", "on-modify.nautical", "on-exit.nautical"):
+        shutil.copy2(root / name, hooks_dir / name)
+
+
 def doctor_obsolete_queue_state(mod, findings, taskdata):
     paths = sorted(str(root / name) for root in (taskdata, taskdata / ".nautical-state") for name in mod._OBSOLETE_QUEUE_STATE_NAMES if os.path.lexists(root / name))
     findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.obsolete_queue_findings(taskdata, mod._OBSOLETE_QUEUE_STATE_NAMES))
@@ -522,12 +566,12 @@ def load_core_module(path: str, module_name: str, config_path: str):
             sys.path.insert(0, root)
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
+        module.timezone_facade = importlib.import_module(
+            f"{module_name}.timezone_facade"
+        )
         refresh = getattr(module, "_refresh_facade_config_exports", None)
         if callable(refresh):
-            try:
-                refresh()
-            except Exception:
-                pass
+            refresh()
         return module
     finally:
         if previous is None:
@@ -536,20 +580,190 @@ def load_core_module(path: str, module_name: str, config_path: str):
             os.environ["NAUTICAL_CONFIG"] = previous
 
 
+class _BoundCompletionEffects:
+    """Test-only bound view of the extracted completion-effects module."""
+
+    _PORT_FACTORIES = {
+        "preflight_context": "completion_preflight_context_ports_for",
+        "compute_next_and_limits": "completion_compute_ports_for",
+        "build_and_spawn_child": "completion_spawn_ports_for",
+    }
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_completion_effects"))
+        originals = getattr(type(self), "_originals", None)
+        if originals is None:
+            originals = {
+                name: getattr(self._module, name)
+                for name in (
+                    "chain_snapshot", "existing_next_or_fail", "preflight_context",
+                    "compute_child_due", "until_or_fail", "until_guard_or_stop",
+                    "require_child_due_or_fail", "warn_unreasonable_duration", "caps",
+                    "cap_guard_or_stop", "compute_next_and_limits", "build_and_spawn_child",
+                )
+            }
+            setattr(type(self), "_originals", originals)
+        else:
+            for name, fn in originals.items():
+                setattr(self._module, name, fn)
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        factory_name = self._PORT_FACTORIES.get(name)
+        if factory_name:
+            return lambda *args, **kwargs: fn(
+                getattr(self._module, factory_name)(self._hook), *args, **kwargs
+            )
+        if name == "chain_snapshot":
+            def bound_chain_snapshot(chain_id, base_no, next_no, repository):
+                context_ports = self._module.completion_preflight_context_ports_for(self._hook)
+                ports = self._module.SnapshotPorts(
+                    repository=repository,
+                    mode=context_ports.snapshot_mode,
+                    snapshot_type=context_ports.snapshot_type,
+                )
+                return fn(ports, chain_id, base_no, next_no)
+            return bound_chain_snapshot
+        if name == "existing_next_or_fail":
+            def bound_existing_next(new, next_no, snapshot, repository):
+                context = self._module.completion_preflight_context_ports_for(self._hook)
+                ports = self._module.CompletionPreflightPorts(
+                    preflight=context.preflight,
+                    coerce_int=context.coerce_int,
+                    max_link_number=context.max_link_number,
+                    short_uuid=context.short_uuid,
+                    panel=context.panel,
+                    print_task=context.print_task,
+                    end_chain_summary=context.end_chain_summary,
+                    existing_next_lookup=lambda task, link: repository.exact_child_slot(
+                        str(task.get("chainID") or ""), link
+                    ),
+                )
+                return fn(ports, new, next_no, snapshot)
+            return bound_existing_next
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
+
+
+class _BoundTransitionEffects:
+    """Test-only bound view of the extracted transition-effects module."""
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_transition_effects"))
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        if name in {
+            "preserve_cp_relative_offsets_on_due_change",
+            "preserve_native_until_on_target_change",
+            "validate_completion_cp_and_anchor",
+        }:
+            def bound(*args, **kwargs):
+                composition = self._hook._module("modify_composition")
+                capabilities = composition.capabilities_for(self._hook)
+                ports_for = {
+                    "preserve_cp_relative_offsets_on_due_change": composition._cp_carry_ports,
+                    "preserve_native_until_on_target_change": composition._native_preserve_ports,
+                    "validate_completion_cp_and_anchor": composition._completion_validation_ports,
+                }[name]
+                return fn(ports_for(self._hook, capabilities), *args, **kwargs)
+            return bound
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
+
+
+class _BoundPresentationEffects:
+    """Test-only bound view of the extracted presentation-effects module."""
+
+    _RENAMED = {
+        "render_anchor_completion_feedback": "render_anchor_completion_feedback_for",
+        "render_cp_completion_feedback": "render_cp_completion_feedback_for",
+        "render_recurrence_updated_panel": "render_recurrence_updated_panel_for",
+        "first_recurrence_target": "first_recurrence_target_for",
+        "recurrence_enabled_rows": "recurrence_enabled_rows_for",
+        "render_cp_schedule_adjusted_panel": "render_cp_schedule_adjusted_panel_for",
+        "render_explicit_timing_order_warning": "render_explicit_timing_order_warning_for",
+        "render_disabled_chain_summary": "render_disabled_chain_summary_for",
+        "ensure_terminal_chain_off": "ensure_terminal_chain_off_for",
+        "timeline_lines": "timeline_lines_for",
+    }
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        module = importlib.import_module("nautical_core.modify_composition_adapters")
+        object.__setattr__(self, "_module", module)
+        originals = getattr(type(self), "_originals", None)
+        if originals is None:
+            originals = {
+                current_name: getattr(module, current_name)
+                for current_name in (
+                    "render_anchor_completion_feedback_for",
+                    "render_cp_completion_feedback_for",
+                    "render_recurrence_updated_panel_for",
+                )
+            }
+            setattr(type(self), "_originals", originals)
+        else:
+            for name, fn in originals.items():
+                setattr(module, name, fn)
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, self._RENAMED.get(name, name))
+        if name in {"render_anchor_completion_feedback", "render_cp_completion_feedback"}:
+            def bound_feedback(*args, **kwargs):
+                kwargs.setdefault("lifecycle_result", None)
+                return fn(self._hook, request=SimpleNamespace(**kwargs))
+            return bound_feedback
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(
+            self._module,
+            self._RENAMED.get(name, name),
+            lambda _host, *args, **kwargs: value(*args, **kwargs),
+        )
+
+
+class _BoundDiagnosticsEffects:
+    """Test-only bound view of the extracted diagnostics-effects module."""
+
+    _PORT_FACTORIES = {
+        "last_n_timeline": "timeline_summary_ports_for",
+        "span_fields": "span_fields_ports_for",
+        "end_chain_summary": "end_chain_summary_ports_for",
+    }
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_diagnostics_effects"))
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        factory = self._PORT_FACTORIES.get(name)
+        if factory:
+            ports = getattr(self._module, factory)(self._hook)
+            return lambda *args, **kwargs: fn(ports, *args, **kwargs)
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
 def load_hook_protocol_module(module_name: str):
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return legacy._load_hook_module(os.path.join(root, "nautical_core", "hook_protocol.py"), module_name)
+    return load_hook_module(os.path.join(root, "nautical_core", "hook_protocol.py"), module_name)
 
 
 def load_exit_probe_module(module_name: str):
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return legacy._load_hook_module(os.path.join(root, "nautical_core", "exit_probe.py"), module_name)
+    return load_hook_module(os.path.join(root, "nautical_core", "exit_probe.py"), module_name)
 
 
 def load_hook_module(path: str, module_name: str):
-    legacy = importlib.import_module("dev_tools.nautical_golden_tests")
     force_tz_utc()
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if os.path.basename(path) in {"on-add.nautical", "on-modify.nautical", "on-exit.nautical"}:
@@ -570,11 +784,16 @@ def load_hook_module(path: str, module_name: str):
     load_core = getattr(module, "_load_core", None)
     if callable(load_core) and os.path.basename(path) in {"add_impl.py", "modify_impl.py", "exit_impl.py"}:
         load_core()
+    core_module = getattr(module, "core", None)
+    if core_module is not None:
+        module.timezone_facade = importlib.import_module(
+            f"{core_module.__package__}.timezone_facade"
+        )
     if os.path.basename(path) == "modify_impl.py":
-        module._completion_effects = legacy._BoundCompletionEffects(module)
-        module._transition_effects = legacy._BoundTransitionEffects(module)
-        module._presentation_effects = legacy._BoundPresentationEffects(module)
-        module._diagnostics_effects = legacy._BoundDiagnosticsEffects(module)
+        module._completion_effects = _BoundCompletionEffects(module)
+        module._transition_effects = _BoundTransitionEffects(module)
+        module._presentation_effects = _BoundPresentationEffects(module)
+        module._diagnostics_effects = _BoundDiagnosticsEffects(module)
         schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
         cp_ports = schedule_effects.cp_completion_ports_for(module)
         anchor_ports = schedule_effects.anchor_completion_ports_for(module)

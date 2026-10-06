@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import inspect
 from datetime import datetime
 
 from nautical_core.modify_models import CompletionSpawnResult, CompletionSpawnServices
-from nautical_core.lifecycle_models import LifecyclePlan
+from nautical_core.lifecycle.models import LifecyclePlan
 from nautical_core.task_models import TaskDraft, TaskPayload
 
 
@@ -25,6 +24,8 @@ def completion_build_and_spawn_child(
     build_child_draft = services.build_child_draft
     spawn_child_atomic = services.spawn_child_atomic
     diag = services.diag
+    # Child planning is a recoverable lifecycle step. Preserve its failure as
+    # a typed retryable result so completion can proceed without linking a child.
     try:
         if lifecycle_plan is not None:
             if getattr(getattr(lifecycle_plan, "action", None), "value", "") != "spawn_child":
@@ -33,6 +34,10 @@ def completion_build_and_spawn_child(
             if child_draft is None:
                 raise ValueError("completion lifecycle plan has no child draft")
         else:
+            if child_due is None:
+                raise ValueError(
+                    "completion child due is required before building a child draft"
+                )
             child_draft = build_child_draft(
                 task_row, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
             )
@@ -56,25 +61,14 @@ def completion_build_and_spawn_child(
 
     deferred_spawn = False
     spawn_intent_id = None
+    # A failed staging callback has not verified or durably linked a child;
+    # return retryable evidence and leave the parent's nextLink untouched.
     try:
-        accepts_plan = False
-        try:
-            parameters = inspect.signature(spawn_child_atomic).parameters.values()
-            accepts_plan = any(
-                parameter.name == "lifecycle_plan"
-                or parameter.kind is inspect.Parameter.VAR_KEYWORD
-                for parameter in parameters
-            )
-        except (TypeError, ValueError):
-            accepts_plan = lifecycle_plan is not None
-        if lifecycle_plan is None or not accepts_plan:
-            spawn_result = spawn_child_atomic(child_draft or child, task_row)
-        else:
-            spawn_result = spawn_child_atomic(
-                child_draft or child,
-                task_row,
-                lifecycle_plan=lifecycle_plan,
-            )
+        spawn_result = spawn_child_atomic(
+            child_draft or child,
+            task_row,
+            lifecycle_plan=lifecycle_plan,
+        )
         (
             child_short,
             stripped_attrs,

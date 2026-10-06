@@ -70,7 +70,7 @@ def trusted_core_base(default_base: Path, *, env: Mapping[str, str] | None = Non
 
     try:
         cand = Path(raw).expanduser().resolve()
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return default_base
     if (env_map.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on"):
         return cand
@@ -82,11 +82,13 @@ def trusted_core_base(default_base: Path, *, env: Mapping[str, str] | None = Non
         if (st.st_mode & 0o002) != 0:
             raise PermissionError("path is world-writable")
         return cand
-    except Exception as exc:
+    except OSError as exc:
         if diag_enabled:
             try:
                 sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CORE_PATH '{raw}': {exc}\n")
             except Exception:
+                # Diagnostic output is optional; retain the safe default even
+                # when an injected or broken stderr writer fails unexpectedly.
                 pass
         return default_base
 
@@ -113,7 +115,7 @@ def bootstrap_candidates(
         if trusted.resolve() != requested:
             return tuple(candidates)
         candidates.extend((requested / "hook_bootstrap.py", requested / "nautical_core" / "hook_bootstrap.py"))
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return tuple(candidates)
     return tuple(candidates)
 
@@ -124,7 +126,7 @@ def core_target_from_base(base: Path) -> Path | None:
             if base.name == "__init__.py" and base.parent.name == "nautical_core":
                 return base
             return None
-    except Exception:
+    except OSError:
         return None
     pkg_init = base / "nautical_core" / "__init__.py"
     return pkg_init if pkg_init.is_file() else None
@@ -142,6 +144,8 @@ def import_core_package(base: Path) -> tuple[Any | None, Path | None, Exception 
         try:
             existing_file = Path(str(getattr(existing, "__file__", ""))).resolve() if existing is not None else None
         except Exception:
+            # This identity check is only a reuse optimization; if stale
+            # module metadata fails, discard it and import the validated target.
             existing_file = None
         if existing is not None and existing_file == target.resolve():
             return existing, target, None
@@ -151,6 +155,8 @@ def import_core_package(base: Path) -> tuple[Any | None, Path | None, Exception 
         module = importlib.import_module("nautical_core")
         return module, target, None
     except Exception as exc:
+        # Return import-time failures intact so hook composition can decide
+        # whether the selected core module is required or optional.
         return None, target, exc
 
 
@@ -168,7 +174,7 @@ def load_core_helper_module(
             candidates.append(base.parent / filename)
         else:
             candidates.extend((base / "nautical_core" / filename, base / filename))
-    except Exception:
+    except OSError:
         pass
     helper_path = next((path for path in candidates if path.is_file()), None)
     if helper_path is None:
@@ -200,22 +206,9 @@ def load_core_helper_module(
         spec.loader.exec_module(module)
         return module, helper_path, None
     except Exception as exc:
+        # Helper initialization can execute arbitrary import-time code; retain
+        # its failure detail for the same optional/required loader policy.
         return None, helper_path, exc
-
-
-def hook_arg_value(argv: list[str], keys: tuple[str, ...]) -> str:
-    for token in argv:
-        text = str(token or "").strip()
-        if not text:
-            continue
-        for key in keys:
-            for separator in (":", "="):
-                prefix = f"{key}{separator}"
-                if text.startswith(prefix):
-                    value = text[len(prefix):].strip()
-                    if value:
-                        return value
-    return ""
 
 
 def resolve_task_data_context_light(
@@ -225,32 +218,10 @@ def resolve_task_data_context_light(
     env: dict[str, str],
     tw_dir: str,
 ) -> tuple[str, bool, str] | None:
-    validated_user_dir = getattr(path_support, "validated_user_dir", None)
-    normalized_abspath = getattr(path_support, "normalized_abspath", None)
-    if not callable(validated_user_dir) or not callable(normalized_abspath):
+    resolver = getattr(path_support, "resolve_task_data_context", None)
+    if not callable(resolver):
         return None
-    taskdata_env = str(env.get("TASKDATA") or "").strip()
-    taskdata_arg = hook_arg_value(argv, ("data", "data.location"))
-    explicit = taskdata_arg or taskdata_env
-    if explicit:
-        source = "argv" if taskdata_arg else "env"
-        safe_explicit = validated_user_dir(
-            str(explicit),
-            label=("rc.data.location" if taskdata_arg else "TASKDATA"),
-            trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
-            env_map=env,
-        )
-        if safe_explicit:
-            return str(safe_explicit), True, source
-    base = str(tw_dir or "~/.task")
-    safe_fallback = validated_user_dir(
-        base,
-        label="fallback task data dir",
-        trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
-        env_map=env,
-        warn_on_error=False,
-    )
-    return str(safe_fallback or normalized_abspath(base)), False, "fallback"
+    return resolver(argv=argv, env=env, tw_dir=tw_dir)
 
 
 def resolve_task_data_context(*, core: Any, core_import_error: Exception | None, core_import_target: Path | None, core_base: Path, tw_dir: str, argv: list[str], env: dict[str, str]) -> tuple[str, bool]:

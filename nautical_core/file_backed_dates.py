@@ -65,7 +65,7 @@ def _expand_date_spec(spec: str, *, label: str) -> set[date]:
         left, right = text.split("..", 1)
         start = date.fromisoformat(left.strip())
         end = date.fromisoformat(right.strip())
-    except Exception:
+    except ValueError:
         raise ValueError(f"{label} contains an invalid date or range.")
     if end < start:
         raise ValueError(f"{label} contains a backward date range.")
@@ -92,7 +92,7 @@ def _looks_like_csv(non_comment_lines: list[tuple[int, str]]) -> bool:
     _line_no, first = non_comment_lines[0]
     try:
         header = next(csv.reader([first]))
-    except Exception:
+    except csv.Error:
         return False
     norm = {str(col or "").strip().strip('"').lower() for col in header}
     return "date" in norm or len(header) > 1

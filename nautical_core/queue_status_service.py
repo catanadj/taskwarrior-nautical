@@ -8,7 +8,7 @@ import hashlib
 import os
 from typing import Any
 
-from .lifecycle_outbox import (
+from .lifecycle.outbox import (
     OUTBOX_ACK_RETENTION_SECONDS,
     OUTBOX_SCHEMA_VERSION,
     lifecycle_outbox_path,
@@ -17,7 +17,7 @@ from .lifecycle_outbox import (
 from .operator_context import OperatorBudgetLedger
 from .taskwarrior_client import TaskwarriorClient
 from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
-from .lifecycle_models import recurrence_fingerprint
+from .lifecycle.models import recurrence_fingerprint
 from .integrity_query_service import IntegrityQueryService
 from .chain_snapshot import IntegritySnapshotRequest
 from .integration_context import IntegrationRuntime
@@ -137,7 +137,18 @@ class QueueStatusService:
             if record.get("state") in {"manual_review", "quarantined", "poison"}
         ]
         if not records and task_binary and runtime is not None and (not intent_id or str(intent_id).startswith("integrity:")):
-            integrity_records = self._integrity_review_records(resolved, task_binary, max(0, int(limit)), runtime)
+            integrity_records, integrity_failure = self._integrity_review_records(
+                resolved, task_binary, max(0, int(limit)), runtime
+            )
+            if integrity_failure is not None:
+                return {
+                    "schema": "nautical.lifecycle_outbox_review",
+                    "version": 1,
+                    "status": "unavailable",
+                    "taskdata": str(resolved),
+                    "intents": [],
+                    "failure": integrity_failure,
+                }
             records = [
                 record for record in integrity_records
                 if not intent_id or record.get("intent_id") == intent_id
@@ -204,7 +215,7 @@ class QueueStatusService:
                             if expected_identity:
                                 try:
                                     actual_identity = recurrence_fingerprint(current)
-                                except Exception as exc:
+                                except (TypeError, ValueError) as exc:
                                     comparisons.append({"field": "recurrence_identity", "expected": expected_identity, "actual": f"unavailable: {exc}"})
                                 else:
                                     if actual_identity != expected_identity:
@@ -314,19 +325,27 @@ class QueueStatusService:
         return {}
 
     @staticmethod
-    def _integrity_review_records(taskdata: Path, task_binary: str, limit: int, runtime: IntegrationRuntime) -> list[dict[str, Any]]:
+    def _integrity_review_records(
+        taskdata: Path,
+        task_binary: str,
+        limit: int,
+        runtime: IntegrationRuntime,
+    ) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
         """Project authoritative integrity findings into review records."""
         environment = dict(os.environ)
         environment["TASKDATA"] = str(taskdata)
-        try:
-            service = IntegrityQueryService(
-                runtime=runtime,
-                task_binary=task_binary,
-                env=environment,
-            )
-            payload, _exit_code = service.query(IntegritySnapshotRequest.candidates(complete_chain_history=True))
-        except Exception:
-            return []
+        service = IntegrityQueryService(
+            runtime=runtime,
+            task_binary=task_binary,
+            env=environment,
+        )
+        payload, exit_code = service.query(IntegritySnapshotRequest.candidates(complete_chain_history=True))
+        if exit_code != 0 or payload.get("status") == "unavailable":
+            failure = payload.get("failure") or {}
+            return [], {
+                "code": str(failure.get("code") or "integrity_review_unavailable"),
+                "message": str(failure.get("message") or "integrity query is unavailable"),
+            }
         records: list[dict[str, Any]] = []
         for finding in payload.get("findings") or ():
             if str(finding.get("status") or "") not in {"manual_review", "repairable"}:
@@ -351,7 +370,7 @@ class QueueStatusService:
             })
             if limit and len(records) >= limit:
                 break
-        return records
+        return records, None
 
     def build_review_item(
         self,

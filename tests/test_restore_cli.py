@@ -1,15 +1,15 @@
 import json
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from nautical_core.backup_service import create_manifest, publish_manifest
+from tests.support.hook_process import HookSubprocessFixture
 
 
-class RestoreCliTests(unittest.TestCase):
+class RestoreCliTests(HookSubprocessFixture):
     def _backup(self, root: Path) -> Path:
         backup = root / "backup"
         backup.mkdir()
@@ -28,7 +28,7 @@ class RestoreCliTests(unittest.TestCase):
             root = Path(td)
             source = self._backup(root)
             target = root / "target"
-            result = subprocess.run([sys.executable, str(script), "--source", str(source), "--target", str(target)], capture_output=True, text=True, check=False)
+            result = self.run_python_command([sys.executable, str(script), "--source", str(source), "--target", str(target)], capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(json.loads(result.stdout)["status"], "validated")
             self.assertFalse(target.exists())
@@ -39,14 +39,14 @@ class RestoreCliTests(unittest.TestCase):
             root = Path(td)
             source = self._backup(root)
             target = root / "target"
-            result = subprocess.run([sys.executable, str(script), "--source", str(source), "--target", str(target), "--apply", "--json"], capture_output=True, text=True, check=False)
+            result = self.run_python_command([sys.executable, str(script), "--source", str(source), "--target", str(target), "--apply", "--json"], capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(json.loads(result.stdout)["status"], "restored")
             self.assertTrue((target / "manifest.json").is_file())
 
     def test_missing_source_is_actionable_json_error(self):
         script = Path(__file__).parents[1] / "nautical_core" / "tools" / "nautical_restore.py"
-        result = subprocess.run([sys.executable, str(script), "--source", "/tmp/no-such-nautical-backup"], capture_output=True, text=True, check=False)
+        result = self.run_python_command([sys.executable, str(script), "--source", "/tmp/no-such-nautical-backup"], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stdout)["status"], "rejected")
         self.assertIn("backup source", json.loads(result.stdout)["errors"][0])

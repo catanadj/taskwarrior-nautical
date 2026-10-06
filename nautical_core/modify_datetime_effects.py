@@ -3,23 +3,32 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
-from .callback_ports import CallbackPort
+from typing import Callable, Protocol
+
+from .task_datetime import datetime_value, parser_for_host
 
 
 @dataclass(frozen=True, slots=True)
 class DatetimeEffectPorts:
-    parse_datetime: CallbackPort
-    utc_to_local: CallbackPort
-    local_to_utc: CallbackPort
+    parse_datetime: Callable[[object], datetime | None]
+    utc_to_local: Callable[[datetime], datetime]
+    local_to_utc: Callable[[datetime], datetime]
 
 
-def safe_dt(ports: DatetimeEffectPorts, value: Any) -> datetime | None:
+class _DatetimeEffectsCore(Protocol):
+    utc_to_local_naive: Callable[[datetime], datetime]
+    local_naive_to_utc: Callable[[datetime], datetime]
+
+
+class DatetimeEffectsHost(Protocol):
+    core: _DatetimeEffectsCore
+
+
+def safe_dt(ports: DatetimeEffectPorts, value: object) -> datetime | None:
     try:
         return value if isinstance(value, datetime) else ports.parse_datetime(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -35,7 +44,7 @@ def local_naive_to_utc(ports: DatetimeEffectPorts, value: datetime) -> datetime:
     return ports.local_to_utc(value.replace(microsecond=0))
 
 
-def datetime_effect_ports_for(host: Any) -> DatetimeEffectPorts:
+def datetime_effect_ports_for(host: DatetimeEffectsHost) -> DatetimeEffectPorts:
     return DatetimeEffectPorts(
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         utc_to_local=host.core.utc_to_local_naive,

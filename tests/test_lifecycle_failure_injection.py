@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import unittest
 import json
+import io
 import os
 import sqlite3
 import subprocess
@@ -17,14 +18,15 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
+from contextlib import redirect_stderr
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from nautical_core.lifecycle_application import LifecycleApplicationService
-from nautical_core.lifecycle_models import ExecutionStage, LifecycleDrainProgress, LifecycleDrainStage
-from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import (
+from nautical_core.lifecycle.application import LifecycleApplicationService
+from nautical_core.lifecycle.models import ExecutionStage, LifecycleDrainProgress, LifecycleDrainStage
+from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.lifecycle.outbox import (
     LifecycleOutboxRecord,
     _LifecycleOutboxRepository,
     OutboxFailure,
@@ -45,7 +47,92 @@ from dev_tools.golden_tests.lifecycle import (
 from tests.support.lifecycle_execution import LifecycleExecutionFixture
 
 
+class _PreflightFailureExecution(LifecycleExecutionFixture):
+    def preflight_lifecycle_batch(self, *_args, **_kwargs) -> None:
+        raise OSError("prefetch unavailable")
+
+
 class LifecycleFailureInjectionTests(unittest.TestCase):
+    def test_stage_does_not_relabel_unexpected_outbox_defects_as_retryable(self) -> None:
+        plan = self._bulk_plan(
+            "unexpected-outbox",
+            "00000000-0000-4000-8000-000000000101",
+            "00000000-0000-4000-8000-000000000102",
+            1,
+        )
+
+        class BrokenOutbox:
+            def enqueue(self, *_args, **_kwargs):
+                raise RuntimeError("outbox implementation defect")
+
+        service = LifecycleApplicationService(outbox=BrokenOutbox(), owner="failure-test")
+
+        with self.assertRaisesRegex(RuntimeError, "outbox implementation defect"):
+            service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+
+    def test_drain_does_not_relabel_unexpected_claim_defects_as_retryable(self) -> None:
+        class BrokenClaimOutbox(_LifecycleOutboxRepository):
+            def claim_batch(self, **_kwargs):
+                raise RuntimeError("claim implementation defect")
+
+        with TemporaryDirectory() as directory:
+            outbox = BrokenClaimOutbox(Path(directory))
+            execution = LifecycleExecutionFixture(object())
+            service = LifecycleApplicationService(
+                unit_of_work=type("UnitOfWork", (), {"mutation_epoch": 0})(),
+                mutations=execution,
+                execution=execution,
+                outbox=outbox,
+                owner="failure-test",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "claim implementation defect"):
+                service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+
+    def test_budget_retry_does_not_hide_unexpected_outbox_release_defect(self) -> None:
+        with TemporaryDirectory() as directory:
+            outbox = _LifecycleOutboxRepository(Path(directory))
+            plan = self._bulk_plan(
+                "unexpected-release",
+                "00000000-0000-4000-8000-000000000111",
+                "00000000-0000-4000-8000-000000000112",
+                1,
+            )
+            record = outbox.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).record
+            self.assertIsNotNone(record)
+            assert record is not None
+            outbox.release_retry = lambda **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("retry release defect")
+            )
+            service = LifecycleApplicationService(outbox=outbox, owner="failure-test")
+
+            with self.assertRaisesRegex(RuntimeError, "retry release defect"):
+                service._budget_retry(record, "budget exhausted", ())
+
+    def test_manual_review_does_not_hide_unexpected_persistence_defect(self) -> None:
+        with TemporaryDirectory() as directory:
+            outbox = _LifecycleOutboxRepository(Path(directory))
+            plan = self._bulk_plan(
+                "unexpected-review",
+                "00000000-0000-4000-8000-000000000121",
+                "00000000-0000-4000-8000-000000000122",
+                1,
+            )
+            record = outbox.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).record
+            self.assertIsNotNone(record)
+            assert record is not None
+            outbox.manual_review = lambda **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("manual review persistence defect")
+            )
+            service = LifecycleApplicationService(outbox=outbox, owner="failure-test")
+
+            with self.assertRaisesRegex(RuntimeError, "manual review persistence defect"):
+                service._manual_review(record, "invalid intent")
+
     def test_outbox_session_reuses_one_connection_and_closes_at_boundary(self) -> None:
         with TemporaryDirectory() as directory:
             repo = _LifecycleOutboxRepository(Path(directory))
@@ -184,7 +271,7 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
 import json
 import sys
 from pathlib import Path
-from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 
 repo = _LifecycleOutboxRepository(Path(sys.argv[1]))
 ids = tuple(json.loads(sys.argv[3]))
@@ -261,7 +348,7 @@ print(json.dumps(payload, sort_keys=True))
 
     @staticmethod
     def _bulk_plan(chain: str, parent: str, child: str, link: int) -> LifecyclePlan:
-        from dev_tools.nautical_golden_tests import _task_draft
+        from dev_tools.golden_tests.support import task_draft as _task_draft
 
         return LifecyclePlan.from_draft(
             identity=LifecycleIdentity(chain, parent, link, link + 1, LifecycleEvent.COMPLETE),
@@ -533,15 +620,15 @@ print(json.dumps(payload, sort_keys=True))
                     self.claimed_records = tuple(records)
                     return DrainResult(claim=OutboxResult(OutboxResultKind.APPLIED), outcomes=())
 
-            from nautical_core.lifecycle_application import DrainResult
-            from nautical_core.lifecycle_outbox import OutboxResult, OutboxResultKind
+            from nautical_core.lifecycle.application import DrainResult
+            from nautical_core.lifecycle.outbox import OutboxResult, OutboxResultKind
 
             class MutationGateway:
                 def apply(self, _request):
                     raise AssertionError("the overridden wave drain must not mutate")
 
             gateway = MutationGateway()
-            gateway_adapter = LifecycleExecutionFixture(gateway)
+            gateway_adapter = _PreflightFailureExecution(gateway)
             service = WaveService(
                 unit_of_work=type("UnitOfWork", (), {"mutation_epoch": 0})(),
                 mutations=gateway_adapter,
@@ -554,6 +641,52 @@ print(json.dumps(payload, sort_keys=True))
             claimed_ids: set[str] = {record.intent_id for record in service.claimed_records}
             self.assertEqual(claimed_ids, {plan.identity.idempotency_key for plan in plans})
             self.assertEqual(len(transaction_metrics), 2)
+
+    def test_drain_continues_to_batch_path_when_prefetch_is_unavailable(self) -> None:
+        from nautical_core.lifecycle.application import DrainResult
+
+        with TemporaryDirectory() as directory:
+            outbox = _LifecycleOutboxRepository(Path(directory))
+            plans = tuple(
+                self._bulk_plan(
+                    f"prefetch-{index}",
+                    f"00000000-0000-4000-8000-0000000006{index:02d}",
+                    f"00000000-0000-4000-8000-0000000007{index:02d}",
+                    1,
+                )
+                for index in (1, 2)
+            )
+            for plan in plans:
+                staged = outbox.enqueue(
+                    plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+                )
+                self.assertTrue(staged.ok)
+
+            class BatchService(LifecycleApplicationService):
+                def _drain_batched(self, claim, records, **_kwargs):
+                    self.drained_records = tuple(records)
+                    return DrainResult(claim=claim, outcomes=())
+
+            execution = _PreflightFailureExecution(object())
+            service = BatchService(
+                unit_of_work=type("UnitOfWork", (), {"mutation_epoch": 0})(),
+                mutations=execution,
+                execution=execution,
+                outbox=outbox,
+                owner="prefetch-test",
+            )
+
+            stderr = io.StringIO()
+            with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stderr(stderr):
+                result = service.drain(
+                    limit=2, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+                )
+
+            self.assertEqual(result.claim.kind.value, "applied")
+            claimed_ids = {record.intent_id for record in service.drained_records}
+            self.assertEqual(claimed_ids, {plan.identity.idempotency_key for plan in plans})
+            self.assertIn("lifecycle batch preflight failed (OSError)", stderr.getvalue())
+            self.assertNotIn("prefetch unavailable", stderr.getvalue())
 
     def test_outbox_failures_are_retryable(self) -> None:
         test_lifecycle_application_outbox_faults_are_retryable()
@@ -578,7 +711,24 @@ print(json.dumps(payload, sort_keys=True))
 
         # Progress is presentation-only and must never interrupt lifecycle
         # application or turn a successful drain into an error.
-        LifecycleApplicationService._report_drain_progress(failing_observer, event)
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": ""}), redirect_stderr(stderr):
+            LifecycleApplicationService._report_drain_progress(failing_observer, event)
+        self.assertEqual("", stderr.getvalue())
+
+    def test_progress_observer_failure_is_redacted_and_diagnostic_only(self) -> None:
+        event = LifecycleDrainProgress(LifecycleDrainStage.PROCESSING, 1, 2, intent_id="intent-1")
+
+        def failing_observer(_event):
+            raise RuntimeError("task description must not leak")
+
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stderr(stderr):
+            LifecycleApplicationService._report_drain_progress(failing_observer, event)
+
+        self.assertIn("lifecycle progress observer failed", stderr.getvalue())
+        self.assertIn("RuntimeError", stderr.getvalue())
+        self.assertNotIn("task description must not leak", stderr.getvalue())
 
     def test_budget_interrupt_after_child_import_resumes_at_parent_link(self) -> None:
         class Uow:
@@ -599,7 +749,7 @@ print(json.dumps(payload, sort_keys=True))
 
         parent = "00000000-0000-4000-8000-000000000201"
         child = "00000000-0000-4000-8000-000000000202"
-        from dev_tools.nautical_golden_tests import _task_draft
+        from dev_tools.golden_tests.support import task_draft as _task_draft
 
         plan = LifecyclePlan.from_draft(
             identity=LifecycleIdentity("budget-chain", parent, 1, 2, LifecycleEvent.COMPLETE),

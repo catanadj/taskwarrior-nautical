@@ -18,7 +18,7 @@ _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
 HOOK_DIR = _IMPL_CORE_DIR.parent
 _TW_DIR_BOOT = _IMPL_CORE_DIR.parent
 try:
-    import hook_bootstrap
+    import hook_bootstrap  # type: ignore[import-not-found]  # standalone hook fallback
 except ModuleNotFoundError:
     hook_bootstrap = None
     _bootstrap_paths = [
@@ -33,7 +33,7 @@ except ModuleNotFoundError:
                 _core_path / 'hook_bootstrap.py',
                 _core_path / 'nautical_core' / 'hook_bootstrap.py',
             ])
-        except Exception:
+        except (OSError, RuntimeError, TypeError):
             pass
     for _bootstrap_path in _bootstrap_paths:
         try:
@@ -45,7 +45,7 @@ except ModuleNotFoundError:
                 _spec.loader.exec_module(_bootstrap_mod)
                 hook_bootstrap = _bootstrap_mod
                 break
-        except Exception:
+        except (AttributeError, ImportError, OSError, SyntaxError):
             continue
     if hook_bootstrap is None:
         raise
@@ -129,20 +129,20 @@ _MODULE_SPECS = {
     "lifecycle_application": (
         "_LIFECYCLE_APPLICATION",
         "_LIFECYCLE_APPLICATION_LOAD_FAILED",
-        "lifecycle_application.py",
-        "nautical_core.lifecycle_application",
+        "lifecycle/application.py",
+        "nautical_core.lifecycle.application",
     ),
     "lifecycle_outbox": (
         "_LIFECYCLE_OUTBOX",
         "_LIFECYCLE_OUTBOX_LOAD_FAILED",
-        "lifecycle_outbox.py",
-        "nautical_core.lifecycle_outbox",
+        "lifecycle/outbox.py",
+        "nautical_core.lifecycle.outbox",
     ),
     "lifecycle_outbox_operations": (
         "_LIFECYCLE_OUTBOX_OPERATIONS",
         "_LIFECYCLE_OUTBOX_OPERATIONS_LOAD_FAILED",
-        "lifecycle_outbox_operations.py",
-        "nautical_core.lifecycle_outbox_operations",
+        "lifecycle/outbox_operations.py",
+        "nautical_core.lifecycle.outbox_operations",
     ),
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -202,18 +202,6 @@ _MODULE_SPECS = {
 core = None
 _CORE_IMPORT_TARGET = None
 _CORE_IMPORT_ERROR = None
-
-
-def _resolve_task_data_context() -> tuple[str, bool]:
-    return hook_bootstrap.resolve_task_data_context_lazy(
-        core=core,
-        core_import_error=_CORE_IMPORT_ERROR,
-        core_import_target=_CORE_IMPORT_TARGET,
-        core_base=_CORE_BASE,
-        tw_dir=str(TW_DIR),
-        argv=sys.argv[1:],
-        env=os.environ,
-    )
 
 _TASKDATA_RAW = ""
 _USE_RC_DATA_LOCATION = False
@@ -462,7 +450,7 @@ def _emit_exit_feedback(msg: str) -> None:
         try:
             stream.write(msg + "\n")
             stream.flush()
-        except Exception:
+        except (OSError, ValueError):
             pass
 
 
@@ -618,7 +606,6 @@ def main() -> int:
             result = hook_engine.handle_on_exit(
                 request,
                 services=_module("exit_composition").ExitServices(
-                    hook_results.ExitHookResponse,
                     redirect_stdout=_redirect_stdout_to_devnull,
                     drain_outbox=_drain_outbox_result,
                     strict_feedback=lambda stats: _module("exit_diagnostics").strict_feedback(

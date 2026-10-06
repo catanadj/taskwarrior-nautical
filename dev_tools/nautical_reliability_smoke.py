@@ -88,7 +88,7 @@ def _export_one(cmd_args, env):
         return None
 
 def _run_chain_until_failure(env, max_iters: int, settle_s: float) -> tuple[int, str | None]:
-    tid = _add_task(["nautical chain limit", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
+    _add_task(["nautical chain limit", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
     parent = _export_one(["rc.json.array=off", "status:pending", "sort:entry-", "limit:1", "export"], env=env)
     if not parent:
         try:
@@ -177,16 +177,6 @@ def _outbox_rows(td_path: Path) -> list[tuple[str, str, str]]:
 
 def _check_failure(td_path: Path) -> bool:
     return any(state in {"manual_review", "quarantined", "unavailable"} for state, _failure, _plan in _outbox_rows(td_path))
-
-
-def _read_queue_sample(td_path: Path) -> str | None:
-    rows = _outbox_rows(td_path)
-    if not rows:
-        return None
-    states: dict[str, int] = {}
-    for state, _failure, _plan in rows:
-        states[state] = states.get(state, 0) + 1
-    return "outbox: " + ", ".join(f"{state}={count}" for state, count in sorted(states.items()))
 
 
 def _read_queue_child_uuid(td_path: Path) -> str | None:

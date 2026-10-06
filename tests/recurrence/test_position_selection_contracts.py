@@ -4,7 +4,7 @@ from datetime import date, timedelta
 import unittest
 
 import nautical_core as core
-from nautical_core import position_selection
+import nautical_core.position_selection as position_selection
 
 
 class PositionSelectionContracts(unittest.TestCase):

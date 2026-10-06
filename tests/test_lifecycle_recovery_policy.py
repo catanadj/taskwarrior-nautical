@@ -1,8 +1,8 @@
 import unittest
 from datetime import datetime, timezone
 
-from nautical_core.lifecycle_reconciliation import LifecycleRecoveryPolicy
-from nautical_core.lifecycle_models import LifecycleAction
+from nautical_core.lifecycle.reconciliation import LifecycleRecoveryPolicy
+from nautical_core.lifecycle.models import LifecycleAction
 from nautical_core.task_models import TaskObservation
 
 
@@ -15,6 +15,33 @@ class LifecycleRecoveryPolicyTests(unittest.TestCase):
             validate_child=lambda _parent, _child: "",
             virtual_uuid=lambda _plan: "dryrun-chain-2",
         )
+
+    def _pending_child(self):
+        return TaskObservation.from_mapping(
+            {
+                "uuid": "child",
+                "status": "pending",
+                "due": "2030-01-01T09:00:00+00:00",
+                "until": "2030-01-01T10:00:00+00:00",
+            },
+            source_query="test",
+        )
+
+    def _expired_plan(self):
+        return type(
+            "Plan",
+            (),
+            {
+                "action": LifecycleAction.SPAWN_CHILD,
+                "identity": type("Identity", (), {"chain_id": "chain", "target_link": 2})(),
+                "child_dict": lambda _self: {
+                    "chainID": "chain",
+                    "link": 2,
+                    "status": "pending",
+                    "until": "2020-01-01T00:00:00+00:00",
+                },
+            },
+        )()
 
     def test_terminal_error_accepts_future_until_after_target(self):
         child = TaskObservation.from_mapping({
@@ -108,6 +135,72 @@ class LifecycleRecoveryPolicyTests(unittest.TestCase):
         )
         self.assertIsNone(virtual)
         self.assertEqual(error, "planned child expiration could not be parsed")
+
+    def test_terminal_error_does_not_hide_unexpected_parser_errors(self):
+        def broken_parse(_value):
+            raise RuntimeError("datetime parser invariant failed")
+
+        policy = LifecycleRecoveryPolicy(
+            parse_datetime=broken_parse,
+            compare_datetimes=self.policy.compare_datetimes,
+            validate_child=self.policy.validate_child,
+            virtual_uuid=self.policy.virtual_uuid,
+        )
+        with self.assertRaisesRegex(RuntimeError, "datetime parser invariant failed"):
+            policy.terminal_error(self._pending_child(), datetime(2029, 1, 1, tzinfo=timezone.utc))
+
+    def test_terminal_error_does_not_hide_unexpected_comparison_errors(self):
+        def broken_compare(_left, _right):
+            raise RuntimeError("datetime comparison invariant failed")
+
+        policy = LifecycleRecoveryPolicy(
+            parse_datetime=self.parse,
+            compare_datetimes=broken_compare,
+            validate_child=self.policy.validate_child,
+            virtual_uuid=self.policy.virtual_uuid,
+        )
+        with self.assertRaisesRegex(RuntimeError, "datetime comparison invariant failed"):
+            policy.terminal_error(self._pending_child(), datetime(2029, 1, 1, tzinfo=timezone.utc))
+
+    def test_virtual_expiration_does_not_hide_unexpected_parser_errors(self):
+        def broken_parse(_value):
+            raise RuntimeError("datetime parser invariant failed")
+
+        policy = LifecycleRecoveryPolicy(
+            parse_datetime=broken_parse,
+            compare_datetimes=self.policy.compare_datetimes,
+            validate_child=self.policy.validate_child,
+            virtual_uuid=self.policy.virtual_uuid,
+        )
+        parent = TaskObservation.from_mapping(
+            {"uuid": "parent", "chainID": "chain", "link": 1}, source_query="test"
+        )
+        with self.assertRaisesRegex(RuntimeError, "datetime parser invariant failed"):
+            policy.virtual_expired_child(
+                self._expired_plan(),
+                parent=parent,
+                recovery_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+            )
+
+    def test_virtual_expiration_does_not_hide_unexpected_comparison_errors(self):
+        def broken_compare(_left, _right):
+            raise RuntimeError("datetime comparison invariant failed")
+
+        policy = LifecycleRecoveryPolicy(
+            parse_datetime=self.parse,
+            compare_datetimes=broken_compare,
+            validate_child=self.policy.validate_child,
+            virtual_uuid=self.policy.virtual_uuid,
+        )
+        parent = TaskObservation.from_mapping(
+            {"uuid": "parent", "chainID": "chain", "link": 1}, source_query="test"
+        )
+        with self.assertRaisesRegex(RuntimeError, "datetime comparison invariant failed"):
+            policy.virtual_expired_child(
+                self._expired_plan(),
+                parent=parent,
+                recovery_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+            )
 
 
 if __name__ == "__main__":

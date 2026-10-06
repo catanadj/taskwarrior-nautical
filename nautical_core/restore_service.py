@@ -137,7 +137,7 @@ def validate_backup(source: Path) -> RestoreReport:
         if not source.is_dir() or source.is_symlink():
             raise BackupRestoreError(f"backup source is not a directory: {source}")
         manifest = _load_manifest(source)
-        records = _validate_restore_inventory(source, manifest)
+        _validate_restore_inventory(source, manifest)
         verification = verify_manifest(source, manifest)
         if verification.status != "verified":
             raise BackupRestoreError("; ".join(verification.errors) or "backup checksum verification failed")

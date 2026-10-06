@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Callable
+from datetime import date, datetime
+from typing import Any, Callable, ContextManager, Protocol, TypeAlias
 
 from .integration_context import IntegrationContext
 from .hook_workflow_context import BusinessCalendar, SnapshotLease, WorkflowInvocationContext
 from .taskwarrior_uow import TaskwarriorUnitOfWork
 from .task_models import TaskObservation, TaskPayload
 from .task_changes import TaskTransition
+from .modify_models import CompletionLifecycleResult
+
+
+DueContext: TypeAlias = tuple[bool, str, datetime, str | None, date, tuple[int, int]]
+
+
+class ProfilerPort(Protocol):
+    """The hook engine capabilities it consumes from an optional profiler."""
+
+    enabled: bool
+    import_ms: float | None
+
+    def section(self, name: str) -> ContextManager[None]: ...
+
+    def add_ms(self, name: str, ms: float) -> None: ...
 
 
 @dataclass(slots=True)
@@ -19,7 +34,7 @@ class HookRuntimeContext:
     hook_dir: str
     profile_level: int = 0
     import_ms: float | None = None
-    lifecycle_result: Any | None = None
+    lifecycle_result: CompletionLifecycleResult | None = None
     workflow: WorkflowInvocationContext | None = None
 
     def close(self) -> None:
@@ -31,8 +46,8 @@ class HookRuntimeContext:
 class OnAddRequest:
     runtime: HookRuntimeContext
     task: TaskPayload
+    prof: ProfilerPort
     observation: TaskObservation | None = None
-    prof: Any | None = None
 
 
 @dataclass(slots=True)
@@ -43,7 +58,7 @@ class OnModifyRequest:
     old_observation: TaskObservation | None = None
     new_observation: TaskObservation | None = None
     transition: TaskTransition | None = None
-    terminal_decision: Any | None = None
+    terminal_decision: object | None = None
 
 
 @dataclass(slots=True)
@@ -67,14 +82,13 @@ class OnAddContext:
     recurrence_field: str
     due_dt: datetime
     past_due_warning: str | None
-    due_day: Any
+    due_day: date
     due_hhmm: tuple[int, int]
 
 
 def build_hook_runtime_context(
     *,
     hook_name: str,
-    integration: IntegrationContext,
     uow: TaskwarriorUnitOfWork,
     hook_dir: str,
     profile_level: int = 0,
@@ -82,6 +96,7 @@ def build_hook_runtime_context(
     workflow: WorkflowInvocationContext | None = None,
     business_calendar: BusinessCalendar | None = None,
 ) -> HookRuntimeContext:
+    integration = uow.context
     if workflow is None:
         workflow = WorkflowInvocationContext.capture(
             integration,
@@ -110,7 +125,7 @@ def build_on_add_context(
     validate_chain_limits_on_add: Callable[[TaskPayload, datetime], datetime | None],
     due_context_on_add: Callable[
         [TaskPayload, datetime],
-        tuple[bool, str, datetime, str | None, Any, tuple[int, int]],
+        DueContext,
     ],
     observation: TaskObservation | None = None,
 ) -> OnAddContext:
@@ -162,7 +177,8 @@ def build_on_add_context(
 
 
 def build_on_add_request(
-    *, runtime: HookRuntimeContext, task: TaskPayload, observation: TaskObservation | None = None, prof: Any = None,
+    *, runtime: HookRuntimeContext, task: TaskPayload, observation: TaskObservation | None = None,
+    prof: ProfilerPort,
 ) -> OnAddRequest:
     return OnAddRequest(runtime=runtime, task=task, observation=observation, prof=prof)
 

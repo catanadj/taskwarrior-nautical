@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from typing import get_type_hints
 
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.models import (
     DeletionDisposition,
     ExecutionStage,
     LifecycleAction,
@@ -16,15 +17,20 @@ from nautical_core.lifecycle_models import (
     TaskLifecycleState,
     TaskSnapshot,
 )
-from nautical_core.lifecycle_outbox import OutboxProcessingState
-from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
-from nautical_core.lifecycle_planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
-from nautical_core.chain_integrity_lifecycle import deleted_chain_disposition
+from nautical_core.lifecycle.outbox import OutboxProcessingState
+from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
+from nautical_core.lifecycle.planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
+from nautical_core.chain_integrity_lifecycle import (
+    deleted_chain_disposition,
+    int_or_default,
+    is_orphan_expiration_candidate,
+)
 from nautical_core.reconcile_report import describe_recovery_result
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import NauticalTask, TaskDraft
 from nautical_core.integration_models import GuardTimestamp, GuardTimestampField, MutationGuard
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+from nautical_core.taskwarrior_io import JsonObject
 
 
 def task_snapshot(row: dict[str, object]) -> TaskSnapshot:
@@ -80,6 +86,190 @@ class ExhaustedService:
 
 
 class LifecycleTerminalPlanTests(unittest.TestCase):
+    def test_recovery_refusal_evidence_uses_json_boundary(self) -> None:
+        evidence = get_type_hints(RecoveryRefusal)["evidence"]
+        self.assertNotIn("Any", repr(evidence))
+
+    def test_lifecycle_generation_adapters_declare_the_generation_service(self) -> None:
+        from typing import get_type_hints
+
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.lifecycle import planner
+        from datetime import datetime
+        from typing import Callable
+
+        self.assertIs(
+            get_type_hints(planner.ChainGenerationPlanningService)["generation"],
+            ChainGenerationService,
+        )
+        self.assertIs(
+            get_type_hints(planner.expiration_candidate)["generation"],
+            ChainGenerationService,
+        )
+        self.assertIs(
+            get_type_hints(planner.plan_candidate_successor)["generation"],
+            ChainGenerationService,
+        )
+        self.assertIs(
+            get_type_hints(planner.plan_expiration_successor)["generation"],
+            ChainGenerationService,
+        )
+        self.assertIs(get_type_hints(planner.LifecyclePlanner)["validated_configuration"], object)
+        self.assertEqual(
+            get_type_hints(planner.ChainGenerationLimitPolicy)["compare_datetimes"],
+            Callable[[datetime, datetime], int],
+        )
+        candidate_hints = get_type_hints(planner.plan_candidate_successor)
+        self.assertIs(candidate_hints["validated_configuration"], object)
+        self.assertEqual(candidate_hints["compare_datetimes"], Callable[[datetime, datetime], int])
+        preflight_hints = get_type_hints(planner.LifecyclePreflight.from_context)
+        self.assertIs(preflight_hints["base_link"], object)
+        self.assertIs(preflight_hints["chain_id"], object)
+        self.assertIs(get_type_hints(planner._link)["value"], object)
+
+    def test_recurrence_candidate_requires_datetime_values(self) -> None:
+        from datetime import datetime
+        from typing import get_type_hints
+
+        candidate_hints = get_type_hints(RecurrenceCandidate)
+        self.assertEqual(candidate_hints["child_due"], datetime | None)
+        self.assertEqual(
+            candidate_hints["metadata"], tuple[tuple[str, object], ...]
+        )
+        self.assertEqual(candidate_hints["until"], datetime | None)
+        with self.assertRaisesRegex(TypeError, "child_due must be a datetime"):
+            RecurrenceCandidate(child_due="20260825T090000Z")
+        with self.assertRaisesRegex(TypeError, "until must be a datetime"):
+            RecurrenceCandidate(child_due=None, until="20260825T090000Z")
+        with self.assertRaisesRegex(TypeError, "metadata keys must be strings"):
+            RecurrenceCandidate(child_due=None, metadata=((1, "target_field"),))
+
+    def test_recovery_plan_result_requires_datetime_for_child_due(self) -> None:
+        from datetime import datetime
+        from typing import get_type_hints
+
+        self.assertEqual(
+            get_type_hints(RecoveryPlanResult)["child_due"],
+            datetime | None,
+        )
+        plan = terminal_plan_for_snapshot(snapshot(), LifecycleEvent.COMPLETE)
+        with self.assertRaisesRegex(TypeError, "child_due must be a datetime"):
+            RecoveryPlanResult(
+                snapshot().observation,
+                plan,
+                child_due="20260825T090000Z",
+            )
+
+    def test_link_conversion_does_not_hide_unexpected_integer_adapter_errors(self) -> None:
+        class BrokenFloat(float):
+            def __int__(self) -> int:
+                raise RuntimeError("integer adapter defect")
+
+        with self.assertRaisesRegex(RuntimeError, "integer adapter defect"):
+            int_or_default(BrokenFloat(4.0), 1)
+
+    def test_deleted_chain_classification_propagates_unexpected_parser_errors(self) -> None:
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+
+        observation = DEFAULT_TASK_CODEC.decode_row(
+            {
+                "uuid": "11111111-0000-0000-0000-000000000071",
+                "status": "deleted",
+                "description": "expired occurrence",
+                "cp": "P7D",
+                "chain": "on",
+                "chainID": "11111111",
+                "link": 2,
+                "due": "20260720T060000Z",
+                "until": "20260726T205959Z",
+                "end": "20260726T205959Z",
+            },
+            source_query="deleted-chain-parser-failure",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "datetime parser defect"):
+            deleted_chain_disposition(
+                observation,
+                safe_parse_datetime=lambda _value: (_ for _ in ()).throw(
+                    RuntimeError("datetime parser defect")
+                ),
+            )
+
+    def test_planner_preserves_successor_limit_error_context(self) -> None:
+        from datetime import datetime, timezone
+        from nautical_core.lifecycle.planner import LifecyclePlanningError
+
+        source = task_snapshot({
+            "uuid": "00000000-0000-4000-8000-000000000931",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "planner-errors",
+            "link": 4,
+            "cp": "1d",
+        })
+
+        class Recurrence:
+            def next_candidate(self, *_args: object) -> RecurrenceCandidate:
+                return RecurrenceCandidate(datetime(2026, 8, 13, 9, tzinfo=timezone.utc))
+
+            def build_child(self, *_args: object) -> None:
+                raise AssertionError("limit failure must prevent child construction")
+
+        def fail_limit(*_args: object) -> str | None:
+            raise RuntimeError("limit callback invariant failed")
+
+        with self.assertRaisesRegex(
+            LifecyclePlanningError,
+            "^successor limit evaluation failed: RuntimeError: limit callback invariant failed$",
+        ) as raised:
+            LifecyclePlanner(
+                {"scheduler_fingerprint": "planner-errors"},
+                recurrence_service=Recurrence(),
+                successor_limit_policy=fail_limit,
+            ).plan(source, LifecycleEvent.COMPLETE)
+
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
+    def test_planner_treats_candidate_without_due_as_terminal(self) -> None:
+        source = task_snapshot({
+            "uuid": "00000000-0000-4000-8000-000000000932",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "planner-empty-candidate",
+            "link": 4,
+            "cp": "1d",
+        })
+
+        class Recurrence:
+            def next_candidate(self, *_args: object) -> RecurrenceCandidate:
+                return RecurrenceCandidate(child_due=None)
+
+            def build_child(self, *_args: object) -> None:
+                raise AssertionError("candidate without a due date must not build a child")
+
+        plan = LifecyclePlanner(
+            {"scheduler_fingerprint": "planner-empty-candidate"},
+            recurrence_service=Recurrence(),
+        ).plan(source, LifecycleEvent.COMPLETE)
+
+        self.assertIs(plan.action, LifecycleAction.FINALIZE_CHAIN)
+
+    def test_limit_policy_rejects_until_without_candidate_due(self) -> None:
+        from datetime import datetime, timezone
+        from nautical_core.lifecycle.planner import ChainGenerationLimitPolicy, LifecyclePlanningError
+
+        policy = ChainGenerationLimitPolicy(lambda left, right: (left > right) - (left < right))
+        with self.assertRaisesRegex(LifecyclePlanningError, "until date but no child due date"):
+            policy(
+                snapshot(),
+                LifecycleEvent.COMPLETE,
+                RecurrenceCandidate(
+                    child_due=None,
+                    until=datetime(2026, 8, 25, 9, tzinfo=timezone.utc),
+                ),
+                5,
+            )
+
     def test_parent_mutation_guard_uses_stable_terminal_timestamp(self) -> None:
         guard = MutationGuard(
             task_uuid="00000000-0000-4000-8000-000000000777",
@@ -100,7 +290,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
     def test_recurrence_fingerprint_ignores_formatting_but_tracks_schedule_changes(self) -> None:
         from datetime import datetime, timezone
-        from nautical_core.lifecycle_models import recurrence_fingerprint
+        from nautical_core.lifecycle.models import recurrence_fingerprint
 
         def parse_datetime(value: object):
             text = str(value).strip()
@@ -135,8 +325,20 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             recurrence_fingerprint(changed, parse_datetime=parse_datetime),
         )
 
+    def test_recurrence_fingerprint_does_not_hide_unexpected_datetime_parser_errors(self) -> None:
+        from nautical_core.lifecycle.models import recurrence_fingerprint
+
+        def broken_parser(_value: object):
+            raise RuntimeError("datetime parser invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "datetime parser invariant failed"):
+            recurrence_fingerprint(
+                {"due": "20260813T090000Z"}, parse_datetime=broken_parser
+            )
+
     def test_lifecycle_planner_is_pure_and_deterministic(self) -> None:
-        from nautical_core.lifecycle_planner import (
+        from datetime import datetime, timezone
+        from nautical_core.lifecycle.planner import (
             LifecyclePlanningError,
             LifecyclePreflight,
         )
@@ -166,7 +368,10 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
         class Recurrence:
             def next_candidate(self, _snapshot: TaskSnapshot, _event: LifecycleEvent, _kind: str, _next_link: int) -> RecurrenceCandidate:
-                return RecurrenceCandidate(child_due="20260824T090000Z", metadata=(("target_field", "due"),))
+                return RecurrenceCandidate(
+                    child_due=datetime(2026, 8, 24, 9, tzinfo=timezone.utc),
+                    metadata=(("target_field", "due"),),
+                )
 
             def build_child(self, child_snapshot: TaskSnapshot, event: LifecycleEvent, _candidate: RecurrenceCandidate, _next_link: int) -> TaskDraft:
                 return build_child(child_snapshot, event)
@@ -236,7 +441,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             )
 
     def test_lifecycle_terminal_policy_routes_all_terminal_events_through_one_patch(self) -> None:
-        from nautical_core.lifecycle_planner import LifecyclePlanningError
+        from nautical_core.lifecycle.planner import LifecyclePlanningError
         from nautical_core.modify_lifecycle import apply_terminal_transition
 
         events = (
@@ -412,19 +617,74 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
                 self.assertEqual(evidence["status"], status.value)
                 self.assertEqual(evidence["reason"], f"{status.value} reason")
 
-    def test_malformed_expiration_evidence_is_ambiguous(self) -> None:
-        task = snapshot().observation.to_mapping()
-        task.update({"status": "deleted", "until": "not-a-date", "end": "20260825T200000Z"})
-        malformed = DEFAULT_TASK_CODEC.decode_row(task, source_query="malformed-expiration-test")
+    def test_deleted_chain_candidate_requires_reliable_expiration_evidence(self) -> None:
+        from datetime import datetime, timezone
+
+        parent = {
+            "uuid": "11111111-0000-0000-0000-000000000001",
+            "status": "deleted",
+            "description": "expired occurrence",
+            "cp": "7d",
+            "chain": "on",
+            "chainID": "11111111",
+            "link": 2,
+            "due": "20260720T060000Z",
+            "until": "20260726T205959Z",
+            "end": "20260726T205959Z",
+        }
 
         def parse(value: object):
-            if value == "not-a-date":
+            try:
+                parsed = datetime.strptime(str(value), "%Y%m%dT%H%M%SZ")
+            except ValueError:
                 return None, "invalid timestamp"
-            return value, None
+            return parsed.replace(tzinfo=timezone.utc), None
 
-        evidence = deleted_chain_disposition(malformed, safe_parse_datetime=parse)
-        self.assertEqual(evidence.disposition, DeletionDisposition.AMBIGUOUS)
-        self.assertIn("reliable native-until", evidence.reason)
+        def disposition(row: dict[str, object]):
+            observation = DEFAULT_TASK_CODEC.decode_row(
+                row, source_query="deleted-chain-evidence-contract"
+            )
+            return deleted_chain_disposition(
+                observation, safe_parse_datetime=parse
+            )
+
+        expired = DEFAULT_TASK_CODEC.decode_row(
+            parent, source_query="expired-chain-candidate"
+        )
+        self.assertTrue(is_orphan_expiration_candidate(expired, safe_parse_datetime=parse))
+        self.assertEqual(disposition(parent).disposition, DeletionDisposition.EXPIRATION)
+
+        manual = {**parent, "end": "20260726T205958Z"}
+        self.assertFalse(
+            is_orphan_expiration_candidate(
+                DEFAULT_TASK_CODEC.decode_row(manual, source_query="manual-delete"),
+                safe_parse_datetime=parse,
+            )
+        )
+        self.assertEqual(disposition(manual).disposition, DeletionDisposition.MANUAL)
+
+        no_until = {key: value for key, value in parent.items() if key != "until"}
+        self.assertEqual(disposition(no_until).disposition, DeletionDisposition.MANUAL)
+
+        malformed = {**parent, "until": "not-a-date"}
+        malformed_evidence = disposition(malformed)
+        self.assertEqual(malformed_evidence.disposition, DeletionDisposition.AMBIGUOUS)
+        self.assertIn("reliable native-until", malformed_evidence.reason)
+
+        completed = {**parent, "status": "completed"}
+        linked = {**parent, "nextLink": "22222222"}
+        self.assertFalse(
+            is_orphan_expiration_candidate(
+                DEFAULT_TASK_CODEC.decode_row(completed, source_query="completed-chain"),
+                safe_parse_datetime=parse,
+            )
+        )
+        self.assertFalse(
+            is_orphan_expiration_candidate(
+                DEFAULT_TASK_CODEC.decode_row(linked, source_query="linked-chain"),
+                safe_parse_datetime=parse,
+            )
+        )
 
     def test_deleted_without_until_builds_chain_disable_terminal_plan(self) -> None:
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
@@ -449,7 +709,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
     def test_planner_owns_recurrence_candidate_and_terminal_policy(self) -> None:
         from datetime import datetime, timezone
 
-        from nautical_core.lifecycle_planner import (
+        from nautical_core.lifecycle.planner import (
             ChainGenerationLimitPolicy,
             ChainGenerationPlanningService,
             LifecyclePlanningError,
@@ -461,7 +721,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             "cp": "1d",
         }
         source = task_snapshot(source_values)
-        candidate = RecurrenceCandidate("2026-08-13T09:00:00Z")
+        candidate = RecurrenceCandidate(datetime(2026, 8, 13, 9, tzinfo=timezone.utc))
 
         class Recurrence:
             def __init__(self, value: RecurrenceCandidate) -> None:
@@ -477,7 +737,8 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
                 return task_draft({
                     **values, "uuid": "00000000-0000-4000-8000-000000000505",
                     "description": "next", "status": "pending", "link": next_link,
-                    "prevLink": values["uuid"][:8], "due": selected_candidate.child_due,
+                    "prevLink": values["uuid"][:8],
+                    "due": selected_candidate.child_due.isoformat().replace("+00:00", "Z"),
                 })
 
         service = Recurrence(candidate)
@@ -547,7 +808,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         from types import SimpleNamespace
 
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
-        from nautical_core.lifecycle_planner import plan_candidate_successor
+        from nautical_core.lifecycle.planner import plan_candidate_successor
 
         due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
         parent = {
@@ -600,6 +861,8 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
     def test_reconcile_planning_uses_and_releases_task_business_calendar(self) -> None:
         from contextlib import contextmanager
+        from datetime import datetime, timezone
+        from nautical_core.business_calendar_config import BusinessCalendarConfigError
         from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
         from nautical_core.chain_generation import ChainGenerationService
 
@@ -610,7 +873,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             @classmethod
             def use_task_business_calendar(cls, task):
                 if task.get("bc") == "missing":
-                    raise ValueError("Unknown business calendar 'missing'")
+                    raise BusinessCalendarConfigError("Unknown business calendar 'missing'")
 
                 @contextmanager
                 def context():
@@ -640,7 +903,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             def compute_cp_child_due(self, _parent):
                 if not CalendarCore.active:
                     raise AssertionError("reconcile computed outside the task calendar")
-                return "20260102T090000Z", {"target_field": "due"}
+                return datetime(2026, 1, 2, 9, tzinfo=timezone.utc), {"target_field": "due"}
 
             def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, _kind, _cpmax, _until):
                 values = parent.observation.to_mapping()
@@ -648,7 +911,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
                     "uuid": "22222222-0000-4000-8000-000000000002",
                     "description": "calendar child", "status": "pending", "chain": "on",
                     "chainID": values["chainID"], "link": next_link, "prevLink": parent_short,
-                    "cp": "1d", child_field: child_due,
+                    "cp": "1d", child_field: child_due.isoformat().replace("+00:00", "Z"),
                 })
 
         parent = task_snapshot({
@@ -675,7 +938,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
     def test_expiration_candidate_uses_scheduled_recurrence_basis(self) -> None:
         from datetime import datetime, timezone
 
-        from nautical_core.lifecycle_planner import LifecyclePreflight, expiration_candidate, plan_candidate_successor
+        from nautical_core.lifecycle.planner import LifecyclePreflight, expiration_candidate, plan_candidate_successor
 
         scheduled = "2026-08-16T09:00:00Z"
         parent = {
@@ -727,7 +990,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
     def test_lifecycle_plan_matrix_preserves_expected_recurrence_fields(self) -> None:
         from datetime import datetime, timezone
 
-        from nautical_core.lifecycle_planner import LifecyclePreflight, plan_candidate_successor
+        from nautical_core.lifecycle.planner import LifecyclePreflight, plan_candidate_successor
 
         due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
 

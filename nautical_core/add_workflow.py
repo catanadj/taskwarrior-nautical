@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
 import json
-from typing import Any, Callable, MutableMapping
+from typing import TYPE_CHECKING, Any, Callable, MutableMapping, Protocol
 
 from .hook_workflow_models import (
     AddWorkflowRequest,
@@ -16,6 +17,25 @@ from .hook_workflow_models import (
     WorkflowRoute,
 )
 from .task_models import TaskObservation, TaskTimestamp
+
+if TYPE_CHECKING:
+    from .hook_context import OnAddContext, ProfilerPort
+
+
+class BuildAddContext(Protocol):
+    def __call__(
+        self,
+        task: MutableMapping[str, Any],
+        now_utc: datetime,
+        now_local: datetime,
+        *,
+        observation: TaskObservation | None,
+        prof: ProfilerPort,
+    ) -> OnAddContext: ...
+
+
+class RenderAddPreview(Protocol):
+    def __call__(self, context: OnAddContext, *, prof: ProfilerPort) -> None: ...
 
 
 class AddScheduleFailure(RuntimeError):
@@ -152,12 +172,14 @@ class AddWorkflowApplication:
     """Typed coordinator for one add decision and its presentation metadata."""
 
     record_schedule_fn: Callable[[AddWorkflowPlan, MutableMapping[str, Any], str], AddWorkflowPlan]
-    record_limits_fn: Callable[[AddWorkflowPlan, MutableMapping[str, Any], Any], AddWorkflowPlan]
+    record_limits_fn: Callable[
+        [AddWorkflowPlan, MutableMapping[str, Any], OnAddContext], AddWorkflowPlan
+    ]
     record_preview_fn: Callable[[AddWorkflowPlan], AddWorkflowPlan]
-    build_context_fn: Callable[..., Any]
+    build_context_fn: BuildAddContext
     stamp_chain_id_fn: Callable[[MutableMapping[str, Any]], None]
-    render_anchor_preview_fn: Callable[..., None]
-    render_cp_preview_fn: Callable[..., None]
+    render_anchor_preview_fn: RenderAddPreview
+    render_cp_preview_fn: RenderAddPreview
 
     def prepare(self, task: MutableMapping[str, Any], observation: TaskObservation) -> AddWorkflowPlan:
         plan = plan_add(observation)
@@ -167,22 +189,30 @@ class AddWorkflowApplication:
     def record_schedule(self, plan: AddWorkflowPlan, task: MutableMapping[str, Any], target_field: str) -> AddWorkflowPlan:
         return self.record_schedule_fn(plan, task, target_field)
 
-    def record_limits(self, plan: AddWorkflowPlan, task: MutableMapping[str, Any], context: Any) -> AddWorkflowPlan:
+    def record_limits(self, plan: AddWorkflowPlan, task: MutableMapping[str, Any], context: OnAddContext) -> AddWorkflowPlan:
         return self.record_limits_fn(plan, task, context)
 
     def record_preview(self, plan: AddWorkflowPlan) -> AddWorkflowPlan:
         return self.record_preview_fn(plan)
 
-    def build_context(self, task: MutableMapping[str, Any], now_utc: Any, now_local: Any, *, observation: TaskObservation, prof: Any) -> Any:
+    def build_context(
+        self,
+        task: MutableMapping[str, Any],
+        now_utc: datetime,
+        now_local: datetime,
+        *,
+        observation: TaskObservation | None,
+        prof: ProfilerPort,
+    ) -> OnAddContext:
         return self.build_context_fn(task, now_utc, now_local, observation=observation, prof=prof)
 
     def stamp_chain_id(self, task: MutableMapping[str, Any]) -> None:
         self.stamp_chain_id_fn(task)
 
-    def render_anchor_preview(self, context: Any, *, prof: Any) -> None:
+    def render_anchor_preview(self, context: OnAddContext, *, prof: ProfilerPort) -> None:
         self.render_anchor_preview_fn(context, prof=prof)
 
-    def render_cp_preview(self, context: Any, *, prof: Any) -> None:
+    def render_cp_preview(self, context: OnAddContext, *, prof: ProfilerPort) -> None:
         self.render_cp_preview_fn(context, prof=prof)
 
 
@@ -284,7 +314,7 @@ def schedule_patch(
     plan: AddWorkflowPlan,
     *,
     first_occurrence: TaskTimestamp,
-    encode_timestamp: Any,
+    encode_timestamp: Callable[[TaskTimestamp], object],
 ) -> TaskPatch:
     """Build the target-field patch after a successful scheduler decision.
 

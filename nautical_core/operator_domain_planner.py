@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
-
+from .chain_integrity_context import IntegrityContext
 from .chain_integrity_models import IntegrityFinding, IntegrityRepairPlan
 from .chain_repair_planner import IntegrityPlanningResult, IntegrityRepairPlanner
-from .lifecycle_models import LifecycleEvent, LifecyclePlan, TaskSnapshot
-from .lifecycle_planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
+from .lifecycle.models import LifecycleEvent, LifecyclePlan, TaskSnapshot
+from .lifecycle.planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
 from .operator_domain_plans import DomainEffectPlan, require_domain_effect_plan
 
 
@@ -31,7 +30,13 @@ class OperatorDomainPlanner:
             raise TypeError("lifecycle planner returned an untyped plan")
         return plan
 
-    def plan_integrity(self, context: Any, findings: tuple[IntegrityFinding, ...]) -> IntegrityPlanningResult:
+    def plan_integrity(
+        self,
+        context: IntegrityContext,
+        findings: tuple[IntegrityFinding, ...],
+    ) -> IntegrityPlanningResult:
+        if not isinstance(context, IntegrityContext):
+            raise TypeError("integrity planner requires an IntegrityContext")
         result = self._integrity.plan(context, findings)
         if not isinstance(result, IntegrityPlanningResult):
             raise TypeError("integrity planner returned an untyped result")

@@ -8,8 +8,8 @@ import json
 import os
 import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 # When invoked directly from a staging directory, Python only places the
 # ``tools`` directory on sys.path. Add the packaged core root explicitly.
@@ -17,30 +17,35 @@ CORE_ROOT = Path(__file__).resolve().parents[1].parent
 if str(CORE_ROOT) not in sys.path:
     sys.path.insert(0, str(CORE_ROOT))
 
+from nautical_core.installation_report import InstallationVerificationReport
 from nautical_core.operator_presentation import bounded_text, finding_status, ordered_findings, render_json_document
-def _findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+
+
+def _findings(payload: Mapping[str, object]) -> list[Mapping[str, object]]:
     """Return canonical finding mappings from a Doctor payload."""
-    source = payload.get("operator_findings") or []
-    return [item for item in source if isinstance(item, dict) and "code" in item]
+    source = payload.get("operator_findings")
+    if not isinstance(source, list):
+        return []
+    return [item for item in source if isinstance(item, Mapping) and "code" in item]
 
 
-def _items(payload: dict[str, Any], prefix: str) -> list[dict[str, Any]]:
+def _items(payload: Mapping[str, object], prefix: str) -> list[Mapping[str, object]]:
     return [
         item for item in _findings(payload)
         if str(item.get("code") or "").startswith(prefix)
     ]
 
 
-def _group_status(items: list[dict[str, Any]], *, empty_status: str = "failed") -> str:
+def _group_status(items: list[Mapping[str, object]], *, empty_status: str = "failed") -> str:
     return finding_status(items, empty=empty_status)
 
 
 def build_report(
-    payload: dict[str, Any],
+    payload: Mapping[str, object],
     *,
     platform: str,
     launcher: Path,
-) -> dict[str, Any]:
+) -> InstallationVerificationReport:
     findings = list(ordered_findings(_findings(payload)))
     checks = [
         {"name": "Platform", "status": "passed", "detail": platform},
@@ -95,17 +100,17 @@ def build_report(
     # Optional environment hints must not make an otherwise valid install
     # appear unhealthy.  Only failed checks or required manual actions block.
     status = "failed" if failed else "attention" if required else "passed"
-    return {
+    return InstallationVerificationReport({
         "schema": "nautical.install.verification",
         "version": 1,
         "status": status,
         "checks": checks,
         "manual_actions": required,
         "optional_actions": optional,
-    }
+    })
 
 
-def render(report: dict[str, Any]) -> None:
+def render(report: InstallationVerificationReport) -> None:
     symbols = {"passed": "+", "attention": "!", "failed": "x"}
     color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     styles = {

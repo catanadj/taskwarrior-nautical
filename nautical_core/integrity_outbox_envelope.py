@@ -7,8 +7,8 @@ from enum import Enum
 import json
 
 from .chain_integrity_models import IntegrityRepairPlan
-from .lifecycle_models import ExecutionStage
-from .lifecycle_outbox import OutboxProcessingState
+from .lifecycle.models import ExecutionStage
+from .lifecycle.outbox import OutboxProcessingState
 
 INTEGRITY_OUTBOX_SCHEMA_VERSION = 1
 

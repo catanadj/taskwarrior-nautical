@@ -8,8 +8,8 @@ from typing import Any, cast
 
 from .operator_presentation import bounded_text, key_value_lines
 from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
-from .lifecycle_models import LifecycleAction, LifecycleEvent
-from .lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
+from .lifecycle.models import LifecycleAction, LifecycleEvent
+from .lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
 
 
 _JSON_SCHEMA = "nautical.reconcile"
@@ -82,9 +82,9 @@ def action_style(action: str) -> str:
 def describe_plan(
     plan: RecoveryResult,
     *,
-    fmt_dt_local: Any = None,
-    parse_until: Callable[[object], tuple[Any, str | None]] | None = None,
-    describe_carry: Callable[[Any, Any], str | None] | None = None,
+    fmt_dt_local: Callable[[datetime], str] | None = None,
+    parse_until: Callable[[object], tuple[datetime | None, str | None]] | None = None,
+    describe_carry: Callable[[datetime, datetime], str | None] | None = None,
 ) -> dict[str, Any]:
     """Enrich recovery evidence for human output without owning policy."""
     evidence = describe_recovery_result(plan, fmt_dt_local=fmt_dt_local)
@@ -93,24 +93,22 @@ def describe_plan(
     child_until = plan.plan.child_dict().get("until")
     if not child_until or not callable(parse_until):
         return evidence
-    try:
-        until_dt, until_err = parse_until(child_until)
-    except Exception:
-        return evidence
+    until_dt, until_err = parse_until(child_until)
     if until_err or until_dt is None:
         return evidence
     evidence["child_expires"] = str(fmt_dt_local(until_dt)) if callable(fmt_dt_local) else str(child_until)
     if plan.child_due is not None and callable(describe_carry):
-        try:
-            carry = describe_carry(until_dt, plan.child_due)
-        except Exception:
-            carry = None
+        carry = describe_carry(until_dt, plan.child_due)
         if carry:
             evidence["expiration"] = carry
     return evidence
 
 
-def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None) -> dict[str, Any]:
+def describe_recovery_result(
+    result: RecoveryResult,
+    *,
+    fmt_dt_local: Callable[[datetime], str] | None = None,
+) -> dict[str, Any]:
     """Render typed recovery evidence for reconcile output."""
     parent = result.parent.to_mapping()
     if isinstance(result, RecoveryRefusal):
@@ -143,6 +141,7 @@ def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None
             try:
                 evidence["child_local"] = str(fmt_dt_local(result.child_due))
             except Exception:
+                # Keep the authoritative UTC value; local time is optional display enrichment.
                 pass
     if result.child_short:
         evidence["existing_child"] = result.child_short
@@ -225,6 +224,7 @@ def _style(style: Callable[[str, str], str], text: str, color: str) -> str:
     try:
         return str(style(text, color))
     except Exception:
+        # Styling is optional; preserve the complete plain-text report.
         return text
 
 

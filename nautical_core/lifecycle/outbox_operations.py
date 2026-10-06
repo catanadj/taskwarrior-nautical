@@ -1,0 +1,78 @@
+"""Narrow queue-status/manual-review ports over the lifecycle outbox."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ContextManager, Protocol
+
+from .models import ExecutionStage, LifecyclePlan
+from .outbox import (
+    OUTBOX_ACK_RETENTION_SECONDS,
+    OUTBOX_STATUS_STALE_AFTER_SECONDS,
+    LifecycleOutboxRecord,
+    OutboxFailure,
+    OutboxMaintenanceResult,
+    OutboxResult,
+)
+
+if TYPE_CHECKING:
+    from ..integrity_outbox_envelope import IntegrityOutboxRecord
+
+
+class LifecycleOutboxOperationsPort(Protocol):
+    def status(
+        self,
+        *,
+        limit: int = 20,
+        stale_after: float = OUTBOX_STATUS_STALE_AFTER_SECONDS,
+        retention_seconds: float = OUTBOX_ACK_RETENTION_SECONDS,
+        intent_id: str | None = None,
+    ) -> tuple[OutboxResult, dict[str, Any]]: ...
+    def resolve_manual_review(self, *, intent_id: str, reason: str) -> OutboxResult: ...
+    def prune_acknowledged(
+        self,
+        *,
+        retention_seconds: float = OUTBOX_ACK_RETENTION_SECONDS,
+        limit: int = 1000,
+        checkpoint: bool = False,
+    ) -> OutboxMaintenanceResult: ...
+    def opportunistic_housekeeping(self) -> OutboxMaintenanceResult: ...
+
+
+class LifecycleOutboxEvidencePort(Protocol):
+    def snapshot_records(
+        self,
+    ) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord | IntegrityOutboxRecord, ...]]: ...
+
+
+class LifecycleExecutionOutboxPort(Protocol):
+    """Explicit operation contract for application-owned execution."""
+
+    def enqueue(self, plan: LifecyclePlan, *, configuration_fingerprint: str, schedule_fingerprint: str) -> OutboxResult: ...
+    def enqueue_many(self, plans: Sequence[LifecyclePlan], *, configuration_fingerprint: str, schedule_fingerprint: str) -> tuple[OutboxResult, Mapping[str, OutboxResult]]: ...
+    def claim_intent(self, *, owner: str, lease_seconds: float, intent_id: str) -> OutboxResult: ...
+    def claim_intents(self, *, intent_ids: Sequence[str], owner: str, lease_seconds: float) -> tuple[OutboxResult, Mapping[str, OutboxResult]]: ...
+    def claim_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord, ...]]: ...
+    def claim_integrity_batch(
+        self, *, owner: str, lease_seconds: float, limit: int
+    ) -> tuple[OutboxResult, tuple[IntegrityOutboxRecord, ...]]: ...
+    def renew_lease(self, *, intent_id: str, owner: str, lease_seconds: float) -> OutboxResult: ...
+    def renew_leases(self, *, intent_ids: Sequence[str], owner: str, lease_seconds: float) -> tuple[OutboxResult, Mapping[str, OutboxResult]]: ...
+    def advance_stage(self, *, intent_id: str, owner: str, stage: ExecutionStage) -> OutboxResult: ...
+    def advance_stages(self, *, stages: Mapping[str, ExecutionStage], owner: str) -> tuple[OutboxResult, Mapping[str, OutboxResult]]: ...
+    def acknowledge(self, *, intent_id: str, owner: str) -> OutboxResult: ...
+    def acknowledge_many(self, *, intent_ids: Sequence[str], owner: str) -> tuple[OutboxResult, Mapping[str, OutboxResult]]: ...
+    def release_retry(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult: ...
+    def manual_review(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult: ...
+    def acknowledge_integrity(self, *, intent_id: str, owner: str) -> OutboxResult: ...
+    def manual_review_integrity(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult: ...
+    def session(self) -> ContextManager["LifecycleExecutionOutboxPort"]: ...
+    def snapshot_records(
+        self,
+    ) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord | IntegrityOutboxRecord, ...]]: ...
+
+
+__all__ = (
+    "LifecycleOutboxOperationsPort", "LifecycleOutboxEvidencePort",
+    "LifecycleExecutionOutboxPort",
+)

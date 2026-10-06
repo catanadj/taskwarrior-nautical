@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from ..api_bindings import ApiBinding, core_namespace
 from ..core_context import CoreContext
+from .. import cache_facade
 
 
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
@@ -91,9 +92,30 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         result = core["_clone_dnf"](
             parse_anchor_expr_to_dnf_cached_obj(key, core["_yearfmt"]())
         )
-        core["_emit_cache_metrics"]()
+        cache_facade.emit_metrics(
+            (
+                ("normalize_acf", core["_acf_api"]._normalize_spec_for_acf_cached),
+                ("year_pair", core["_acf_api"]._year_pair_cached),
+                ("parse_y_token", parse_y_token_cached),
+                ("expand_monthly", core["_scheduler_api"].expand_monthly_cached),
+                ("expand_weekly", core["_scheduler_api"].expand_weekly_cached),
+            ),
+            core["_core_config"].warn_once_per_day,
+        )
         if core["os"].environ.get("NAUTICAL_CLEAR_CACHES") == "1":
-            core["_clear_all_caches"]()
+            cache_facade.clear_all(
+                core["_CACHE_LOAD_MEM"],
+                (
+                    core["_acf_api"]._normalize_spec_for_acf_cached,
+                    core["_acf_api"]._year_pair_cached,
+                    parse_y_token_cached,
+                    core["_scheduler_api"].expand_monthly_cached,
+                    core["_scheduler_api"].expand_weekly_cached,
+                    core["_cache_api"]._cache_key_for_task_cached,
+                ),
+                position_selection=core["_position_selection"],
+                selection_matcher=core["_scheduler_api"]._selection_inner_matcher,
+            )
         return result
 
     def validate_weekly_spec(spec: str) -> Any:
@@ -279,7 +301,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             else:
                 item_spec, item_mods_str = token, ""
             item_spec = item_spec.strip().lower()
-            item_mods = core["_parse_atom_mods"](item_mods_str.strip())
+            item_mods = parse_atom_mods(item_mods_str.strip())
             if item_mods_str.strip() and (
                 item_mods.get("roll")
                 or item_mods.get("wd") is not None

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 import json
-from typing import Any, Protocol, Sequence
+from typing import Protocol, Sequence
 
 from .chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
 from .integration_models import (
@@ -17,6 +17,7 @@ from .integration_models import (
     TaskRead,
     Unavailable,
 )
+from .integration_context import IntegrationContext
 from .task_read_repository import ALL_TASK_STATUSES, AuthoritativeTaskSnapshot
 from .task_models import TaskObservation
 
@@ -35,7 +36,12 @@ class _SnapshotRepository(Protocol):
 
 
 class _SnapshotUnitOfWork(Protocol):
-    repository: Any
+    @property
+    def context(self) -> IntegrationContext | None: ...
+
+    @property
+    def repository(self) -> _SnapshotRepository: ...
+
     mutation_epoch: int
 
 
@@ -138,8 +144,8 @@ class ChainSnapshotService:
         self._uow = unit_of_work
         self._repository = unit_of_work.repository
         self._configuration_fingerprint = str(configuration_fingerprint or "").strip()
-        context = getattr(unit_of_work, "context", None)
-        validated = getattr(getattr(context, "configuration", None), "fingerprint", "")
+        context = unit_of_work.context
+        validated = context.configuration.fingerprint if context is not None else ""
         if validated and self._configuration_fingerprint and validated != self._configuration_fingerprint:
             raise ValueError("integrity snapshot configuration fingerprint differs from invocation context")
         if not self._configuration_fingerprint and validated:
@@ -163,7 +169,7 @@ class ChainSnapshotService:
             return Unavailable(self._query(request), self._invalid_response(
                 read.value, "authoritative chain export was truncated",
             ))
-        validation_error = self._validate_rows(request, read.value)
+        validation_error = self._validate_rows(request, read.value.rows)
         if validation_error:
             return Unavailable(self._query(request), self._invalid_response(read.value, validation_error))
         normalized_snapshot = self.from_rows(request, read.value.rows, source="taskwarrior.authoritative_export")
@@ -217,7 +223,7 @@ class ChainSnapshotService:
     @staticmethod
     def _validate_rows(
         request: IntegritySnapshotRequest,
-        snapshot: Any,
+        rows: Sequence[TaskObservation],
     ) -> str:
         """Reject impossible identity evidence before graph construction.
 
@@ -228,7 +234,7 @@ class ChainSnapshotService:
         """
         seen: set[str] = set()
         allowed_statuses = frozenset(request.statuses)
-        for row in snapshot.rows:
+        for row in rows:
             uuid_state = row.field("uuid")
             uuid_value = str(getattr(uuid_state.value, "value", uuid_state.value) or "").strip().lower()
             if not uuid_value:
@@ -257,10 +263,7 @@ class ChainSnapshotService:
         request: IntegritySnapshotRequest,
         rows: Sequence[TaskObservation],
     ) -> str:
-        class _Rows:
-            def __init__(self, values: Sequence[TaskObservation]) -> None:
-                self.rows = tuple(values)
-        return ChainSnapshotService._validate_rows(request, _Rows(rows))
+        return ChainSnapshotService._validate_rows(request, rows)
 
     def _read(self, request: IntegritySnapshotRequest) -> TaskRead[AuthoritativeTaskSnapshot]:
         if request.kind is IntegritySnapshotKind.CHAIN:

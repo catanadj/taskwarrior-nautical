@@ -1,23 +1,43 @@
 from __future__ import annotations
 
+from datetime import datetime
 import importlib
-from typing import Any, NoReturn, Protocol
+from typing import TYPE_CHECKING, NoReturn, Protocol
 
+from .modify_models import CompletionLifecycleResult
+from .task_changes import TaskTransition
 from .task_models import TaskPayload
-from .hook_context import HookRuntimeContext
+from .taskwarrior_uow import TaskwarriorUnitOfWork
+from .hook_context import (
+    HookRuntimeContext,
+    OnAddRequest,
+    OnExitRequest,
+    OnModifyRequest,
+    ProfilerPort,
+)
 from .on_exit_models import ExitDrainStats
+
+if TYPE_CHECKING:
+    from .add_workflow import AddWorkflowApplication
+
+
+class OnAddCoreClock(Protocol):
+    """Clock capabilities used by the on-add engine when no workflow is bound."""
+
+    def now_utc(self) -> datetime: ...
+    def to_local(self, value: datetime) -> datetime: ...
 
 
 class OnAddServices(Protocol):
     """Typed services owned by the on-add implementation."""
 
-    def result(self, task: TaskPayload, *, sanitize: bool, prof: Any) -> object: ...
+    def result(self, task: TaskPayload, *, sanitize: bool, prof: ProfilerPort | None) -> object: ...
     def has_nautical_fields(self, task: TaskPayload) -> bool: ...
     def load_core(self) -> None: ...
-    def core(self) -> Any: ...
+    def core(self) -> OnAddCoreClock: ...
     def diag(self, message: str) -> None: ...
     def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
-    def workflow_application(self) -> Any: ...
+    def workflow_application(self) -> AddWorkflowApplication: ...
 
 
 class OnModifyServices(Protocol):
@@ -29,18 +49,20 @@ class OnModifyServices(Protocol):
     def diag(self, message: str) -> None: ...
     def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
     def handle_non_completion(
-        self, old: TaskPayload, new: TaskPayload, unit_of_work: Any, transition: Any
+        self, old: TaskPayload, new: TaskPayload, unit_of_work: TaskwarriorUnitOfWork,
+        transition: TaskTransition,
     ) -> None: ...
     def handle_completion(
-        self, old: TaskPayload, new: TaskPayload, unit_of_work: Any, transition: Any
-    ) -> Any: ...
+        self, old: TaskPayload, new: TaskPayload, unit_of_work: TaskwarriorUnitOfWork,
+        transition: TaskTransition,
+    ) -> CompletionLifecycleResult | None: ...
     def handle_deleted(
         self,
         old: TaskPayload,
         new: TaskPayload,
-        unit_of_work: Any,
-        transition: Any,
-        terminal_decision: Any | None = None,
+        unit_of_work: TaskwarriorUnitOfWork,
+        transition: TaskTransition,
+        terminal_decision: object | None = None,
     ) -> None: ...
 
 
@@ -54,7 +76,7 @@ class OnExitServices(Protocol):
 
 
 def handle_on_add(
-    request: Any,
+    request: OnAddRequest,
     services: OnAddServices,
 ) -> object:
     task = request.task
@@ -68,11 +90,8 @@ def handle_on_add(
     except Exception as exc:
         services.diag(f'core load failed: {exc}')
         services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
-    try:
-        if getattr(prof, 'enabled', False) and runtime.import_ms is not None:
-            prof.import_ms = runtime.import_ms
-    except Exception:
-        pass
+    if prof.enabled and runtime.import_ms is not None:
+        prof.import_ms = runtime.import_ms
 
     with prof.section('clock:now'):
         core = services.core()
@@ -84,13 +103,12 @@ def handle_on_add(
             now_utc = core.now_utc()
             now_local = core.to_local(now_utc)
 
-    observation = getattr(request, "observation", None)
     application = services.workflow_application()
     ctx = application.build_context(
         task,
         now_utc,
         now_local,
-        observation=getattr(request, "observation", None),
+        observation=request.observation,
         prof=prof,
     )
     if not ctx.kind:
@@ -108,7 +126,7 @@ def handle_on_add(
 
 
 def handle_on_exit(
-    request: Any,
+    request: OnExitRequest,
     services: OnExitServices,
 ) -> object:
     _ = request.runtime
@@ -122,11 +140,11 @@ def handle_on_exit(
 
 
 def handle_on_modify(
-    request: Any,
+    request: OnModifyRequest,
     services: OnModifyServices,
-) -> Any:
+) -> object | None:
     old, new = request.old, request.new
-    transition = getattr(request, "transition", None)
+    transition = request.transition
     if transition is None:
         from .task_changes import TaskTransition
         from .task_models import TaskObservation
@@ -139,18 +157,6 @@ def handle_on_modify(
     terminal_decision = workflow.terminal_decision_for_route(typed_route)
     if terminal_decision is not None:
         request.terminal_decision = terminal_decision
-    def invoke(handler_name: str) -> Any:
-        handler = getattr(services, handler_name)
-        if handler_name == "handle_deleted":
-            return handler(
-                old,
-                new,
-                request.runtime.uow,
-                transition,
-                request.terminal_decision,
-            )
-        return handler(old, new, request.runtime.uow, transition)
-
     if typed_route.kind is workflow.ModifyRouteKind.INVALID_IDENTITY_EDIT:
         services.fail_and_exit(
             "Invalid Nautical edit",
@@ -159,7 +165,13 @@ def handle_on_modify(
     if typed_route.kind is workflow.ModifyRouteKind.DELETION:
         if typed_route.has_nautical_fields:
             services.load_core()
-            invoke("handle_deleted")
+            services.handle_deleted(
+                old,
+                new,
+                request.runtime.uow,
+                transition,
+                request.terminal_decision,
+            )
         return services.result(task=new, sanitize=False)
     if not typed_route.has_nautical_fields or typed_route.kind is workflow.ModifyRouteKind.ORDINARY:
         return services.result(task=new, sanitize=False)
@@ -167,15 +179,21 @@ def handle_on_modify(
         return services.result(task=new, sanitize=False)
     if typed_route.kind is workflow.ModifyRouteKind.COMPLETION:
         services.load_core()
-        lifecycle_result = invoke("handle_completion")
+        lifecycle_result = services.handle_completion(
+            old,
+            new,
+            request.runtime.uow,
+            transition,
+        )
         request.runtime.lifecycle_result = lifecycle_result
-        diagnostic = getattr(lifecycle_result, "diagnostic", None)
-        if getattr(diagnostic, "failure_kind", "") == "scheduler_error":
-            services.fail_and_exit(
-                "Completion blocked",
-                str(getattr(lifecycle_result, "reason", "recurrence could not be computed")),
-            )
+        if lifecycle_result is not None:
+            diagnostic = lifecycle_result.diagnostic
+            if diagnostic is not None and diagnostic.failure_kind == "scheduler_error":
+                services.fail_and_exit(
+                    "Completion blocked",
+                    lifecycle_result.reason or "recurrence could not be computed",
+                )
         return None
     services.load_core()
-    invoke("handle_non_completion")
+    services.handle_non_completion(old, new, request.runtime.uow, transition)
     return None

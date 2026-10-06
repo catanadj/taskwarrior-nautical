@@ -1,0 +1,316 @@
+"""Static callback contracts for completion-effect adapters."""
+
+from __future__ import annotations
+
+import unittest
+from collections.abc import Sequence
+from typing import Any, Literal, get_type_hints
+
+
+class ModifyCompletionEffectPortTests(unittest.TestCase):
+    def test_preflight_helpers_retain_service_result_types(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            kind_or_stop,
+            link_numbers_or_fail,
+        )
+
+        hints = {
+            link_numbers_or_fail.__name__: get_type_hints(link_numbers_or_fail)["return"],
+            kind_or_stop.__name__: get_type_hints(kind_or_stop)["return"],
+        }
+        self.assertEqual(
+            hints,
+            {
+                "link_numbers_or_fail": tuple[int, int] | None,
+                "kind_or_stop": str | None,
+            },
+        )
+
+    def test_completion_snapshot_operations_use_their_result_models(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            chain_snapshot,
+            existing_next_or_fail,
+            preflight_context,
+        )
+        from nautical_core.modify_completion_effects import CompletionPreflightRepository
+        from nautical_core.modify_models import CompletionChainSnapshot, CompletionPreflightContext
+
+        self.assertIs(
+            get_type_hints(chain_snapshot)["return"], CompletionChainSnapshot
+        )
+        self.assertEqual(
+            get_type_hints(existing_next_or_fail)["chain_snapshot"],
+            CompletionChainSnapshot | None,
+        )
+        preflight_hints = get_type_hints(preflight_context)
+        self.assertIs(preflight_hints["repository"], CompletionPreflightRepository)
+        self.assertEqual(
+            preflight_hints["return"], CompletionPreflightContext | None
+        )
+
+    def test_completion_preflight_factory_has_typed_host_contract(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            completion_preflight_context_ports_for,
+        )
+
+        self.assertIsNot(
+            get_type_hints(completion_preflight_context_ports_for)["host"], Any
+        )
+
+    def test_completion_spawn_factory_has_typed_host_contract(self) -> None:
+        from nautical_core.modify_completion_effects import completion_spawn_ports_for
+
+        self.assertIsNot(get_type_hints(completion_spawn_ports_for)["host"], Any)
+
+    def test_completion_compute_factory_has_typed_host_contract(self) -> None:
+        from nautical_core.modify_completion_effects import completion_compute_ports_for
+
+        self.assertIsNot(get_type_hints(completion_compute_ports_for)["host"], Any)
+
+    def test_completion_compute_host_uses_existing_human_delta_contract(self) -> None:
+        from nautical_core.modify_completion_effects import _CompletionComputeCore
+
+        self.assertEqual(
+            _CompletionComputeCore.__annotations__["humanize_delta"],
+            "HumanizeUntilDelta",
+        )
+
+    def test_completion_runtime_state_uses_workflow_context_model(self) -> None:
+        from nautical_core.hook_workflow_context import WorkflowInvocationContext
+        from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
+        from nautical_core.modify_runtime import ModifyRuntimeState
+
+        expected = f"{WorkflowInvocationContext.__name__} | None"
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["workflow_context"], expected
+        )
+        self.assertEqual(
+            _CompletionComputeRuntimeState.__annotations__["workflow_context"],
+            expected,
+        )
+
+    def test_modify_runtime_state_uses_generation_service_protocol(self) -> None:
+        from nautical_core.modify_generation_effects import GenerationStatePort
+        from nautical_core.modify_runtime import ModifyRuntimeState
+
+        expected = "ChainGenerationServicePort | None"
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["chain_generation_service"],
+            expected,
+        )
+        self.assertEqual(
+            GenerationStatePort.__annotations__["chain_generation_service"],
+            expected,
+        )
+
+    def test_scheduler_runtime_state_uses_workflow_context_model(self) -> None:
+        from nautical_core.hook_workflow_context import WorkflowInvocationContext
+        from nautical_core.modify_schedule_effects import _SchedulerRuntimeState
+
+        self.assertEqual(
+            _SchedulerRuntimeState.__annotations__["workflow_context"],
+            f"{WorkflowInvocationContext.__name__} | None",
+        )
+
+    def test_modify_runtime_state_uses_task_read_repository(self) -> None:
+        from nautical_core.modify_runtime import ModifyRuntimeState
+        from nautical_core.task_read_repository import TaskReadRepository
+
+        expected = f"{TaskReadRepository.__name__} | None"
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["task_repository"], expected
+        )
+
+    def test_modify_runtime_state_uses_lifecycle_read_owner_types(self) -> None:
+        from nautical_core.lifecycle.read_service import ChainCacheStore, LifecycleReadService
+        from nautical_core.modify_runtime import ModifyRuntimeState
+
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["lifecycle_read_service"],
+            f"{LifecycleReadService.__name__} | None",
+        )
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["chain_cache_store"],
+            f"{ChainCacheStore.__name__} | None",
+        )
+
+    def test_anchor_file_provider_cache_uses_provider_contract(self) -> None:
+        from nautical_core.modify_runtime import (
+            ModifyRuntimeState,
+            anchor_file_provider_for,
+        )
+        from nautical_core.occurrence_provider import OccurrenceProvider
+
+        expected_cache = (
+            f"dict[tuple[str, str, tuple[int, int], str], {OccurrenceProvider.__name__}]"
+        )
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["anchor_file_providers"],
+            expected_cache,
+        )
+        self.assertEqual(
+            anchor_file_provider_for.__annotations__["return"],
+            f"{OccurrenceProvider.__name__} | None",
+        )
+
+    def test_modify_runtime_chain_indexes_use_task_observations(self) -> None:
+        from nautical_core.modify_runtime import ModifyRuntimeState
+        from nautical_core.task_models import TaskObservation
+
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["panel_chain_by_link"],
+            f"dict[int, list[{TaskObservation.__name__}]] | None",
+        )
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["panel_chain_by_short"],
+            f"dict[str, {TaskObservation.__name__}] | None",
+        )
+
+    def test_modify_diagnostic_stats_use_numeric_values(self) -> None:
+        from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
+        from nautical_core.modify_runtime import ModifyRuntimeState
+        from nautical_core.modify_schedule_effects import _SchedulerRuntimeState
+
+        expected = "dict[str, int | float]"
+        self.assertEqual(ModifyRuntimeState.__annotations__["diag_stats"], expected)
+        self.assertEqual(_SchedulerRuntimeState.__annotations__["diag_stats"], expected)
+        self.assertEqual(
+            _CompletionComputeRuntimeState.__annotations__["diag_stats"], expected
+        )
+
+    def test_scheduler_runtime_state_uses_scheduler_service_cache_contract(self) -> None:
+        from nautical_core.modify_completion_effects import _CompletionComputeRuntimeState
+        from nautical_core.modify_runtime import ModifyRuntimeState, scheduler_service_for_task
+        from nautical_core.modify_schedule_effects import _SchedulerRuntimeState
+
+        expected_cache = "dict[tuple[object, ...], SchedulerService]"
+        self.assertEqual(
+            ModifyRuntimeState.__annotations__["scheduler_services"],
+            expected_cache,
+        )
+        self.assertEqual(
+            _SchedulerRuntimeState.__annotations__["scheduler_services"],
+            expected_cache,
+        )
+        self.assertEqual(
+            _CompletionComputeRuntimeState.__annotations__["scheduler_services"],
+            expected_cache,
+        )
+        self.assertEqual(
+            scheduler_service_for_task.__annotations__["return"],
+            "SchedulerService",
+        )
+
+    def test_generation_service_contract_includes_completion_draft_builder(self) -> None:
+        from nautical_core.modify_generation_effects import ChainGenerationServicePort
+
+        self.assertTrue(hasattr(ChainGenerationServicePort, "build_child_draft"))
+
+    def test_completion_spawn_adapter_orders_set_valued_stripped_fields(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            _normalize_completion_spawn_result,
+        )
+
+        self.assertEqual(
+            _normalize_completion_spawn_result(
+                ("child123", {"zeta", "alpha"}, True, False, None, "intent-1")
+            ),
+            ("child123", ["alpha", "zeta"], True, False, None, "intent-1"),
+        )
+
+    def test_completion_adapter_helpers_have_concrete_callback_returns(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            _end_summary_port_for,
+            _feedback_ports_for,
+            _panel_port_for,
+            _print_task_port_for,
+            _ui_ports_for,
+        )
+
+        for adapter in (
+            _end_summary_port_for,
+            _feedback_ports_for,
+            _panel_port_for,
+            _print_task_port_for,
+            _ui_ports_for,
+        ):
+            self.assertIsNot(get_type_hints(adapter)["return"], Any, adapter.__name__)
+        for adapter in (
+            _ui_ports_for,
+            _print_task_port_for,
+            _panel_port_for,
+            _end_summary_port_for,
+            _feedback_ports_for,
+        ):
+            self.assertIsNot(get_type_hints(adapter)["host"], Any, adapter.__name__)
+
+    def test_ui_adapter_accepts_only_completion_host_contracts(self) -> None:
+        from nautical_core.modify_completion_effects import (
+            CompletionComputeHost,
+            CompletionPreflightHost,
+            CompletionSpawnHost,
+            _ui_ports_for,
+        )
+
+        self.assertEqual(
+            get_type_hints(_ui_ports_for)["host"],
+            CompletionComputeHost | CompletionSpawnHost | CompletionPreflightHost,
+        )
+
+    def test_completion_ui_panel_owner_has_narrow_render_arguments(self) -> None:
+        from nautical_core.modify_completion_effects import _CompletionUIModule
+
+        hints = get_type_hints(_CompletionUIModule.panel)
+        self.assertIs(hints["title"], str)
+        self.assertEqual(hints["rows"], Sequence[tuple[str | None, Any]])
+        for style in ("border_style", "title_style", "label_style"):
+            self.assertEqual(hints[style], str | None)
+
+    def test_completion_compute_adapters_match_service_contracts(self) -> None:
+        from datetime import datetime
+
+        from nautical_core.modify_completion_effects import (
+            caps,
+            compute_child_due,
+            require_child_due_or_fail,
+            until_guard_or_stop,
+            until_or_fail,
+            warn_unreasonable_duration,
+        )
+        from nautical_core.modify_models import AnchorDNF
+
+        due_result = tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None
+        self.assertEqual(get_type_hints(compute_child_due)["return"], due_result)
+        self.assertEqual(
+            get_type_hints(until_or_fail)["return"], datetime | None | Literal[False]
+        )
+        self.assertEqual(
+            get_type_hints(until_guard_or_stop)["child_due"], datetime | None
+        )
+        self.assertEqual(
+            get_type_hints(until_guard_or_stop)["until_dt"], datetime | None
+        )
+        self.assertEqual(
+            get_type_hints(require_child_due_or_fail)["child_due"], datetime | None
+        )
+        self.assertEqual(get_type_hints(caps)["child_due"], datetime | None)
+        warning_hints = get_type_hints(warn_unreasonable_duration)
+        self.assertEqual(warning_hints["child_due"], datetime | None)
+        self.assertEqual(warning_hints["until_dt"], datetime | None)
+
+    def test_first_recurrence_target_has_typed_callbacks_and_result(self) -> None:
+        from datetime import datetime
+        from typing import Callable, Mapping
+
+        from nautical_core.modify_completion_compute import first_recurrence_target
+        from nautical_core.modify_generation_effects import ChainGenerationServicePort
+        from nautical_core.modify_models import DatetimeParserCallback
+
+        hints = get_type_hints(first_recurrence_target)
+        self.assertIs(hints["parse_datetime"], DatetimeParserCallback)
+        self.assertEqual(hints["format_datetime"], Callable[[datetime], str])
+        self.assertEqual(
+            hints["generation_service"], Callable[[], ChainGenerationServicePort]
+        )
+        self.assertEqual(hints["return"], datetime | None)
+        self.assertEqual(hints["task"], Mapping[str, Any])

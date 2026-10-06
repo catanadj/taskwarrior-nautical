@@ -16,6 +16,7 @@ from nautical_core.cache_payload import (
     cache_load,
     cache_save,
 )
+from nautical_core.core_context import CacheState
 
 
 class CacheResourceLimitTests(unittest.TestCase):
@@ -24,10 +25,11 @@ class CacheResourceLimitTests(unittest.TestCase):
         path.write_bytes(blob)
         return cache_load(
             "key", enable_anchor_cache=True, cache_path=lambda _key: str(path),
-            anchor_cache_ttl=0, time_mod=time, cache_load_mem=OrderedDict(),
-            cache_load_mem_ttl=0, clone_cache_payload=lambda value: value,
+            anchor_cache_ttl=0, time_mod=time,
+            cache_state=CacheState(memory=OrderedDict(), max_entries=4, ttl=0),
+            clone_cache_payload=lambda value: value,
             normalize_dnf_cached=lambda value: value, cache_payload_shape_ok=lambda _value: True,
-            cache_load_mem_max=4, diag=lambda _message: None, os_mod=os,
+            diag=lambda _message: None, os_mod=os,
             json_mod=json, zlib_mod=zlib, base64_mod=base64,
         )
 
@@ -67,7 +69,7 @@ class CacheResourceLimitTests(unittest.TestCase):
                 base64_mod=base64, cache_path=lambda _key: str(root / "entry.cache"),
                 cache_dir=lambda: str(root), cache_lock=lock, diag=lambda _message: None,
                 os_mod=os, tempfile_mod=tempfile, cache_atomic_replace=os.replace,
-                cache_load_mem=OrderedDict(),
+                cache_state=CacheState(memory=OrderedDict(), max_entries=4, ttl=0),
             )
             self.assertFalse(saved)
             self.assertFalse((root / "entry.cache").exists())

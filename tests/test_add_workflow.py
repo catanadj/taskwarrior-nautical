@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from typing import get_type_hints
 
 from datetime import datetime, timezone
 
@@ -34,6 +35,360 @@ def observation(values: dict[str, object]) -> TaskObservation:
 
 
 class AddWorkflowTests(unittest.TestCase):
+    def test_application_context_and_preview_ports_use_named_contracts(self) -> None:
+        from datetime import date
+        from typing import Callable
+        from nautical_core.add_composition import (
+            AddHookResultFactory,
+            AddDatetimeParserHost,
+            AddCompositionHost,
+            AddCompositionServices,
+            _due_matches_entry,
+            _datetime_parser,
+            apply_description_uda_aliases,
+            build_on_add_context as build_add_composition_context,
+            due_context,
+            kind_and_defaults,
+            render_anchor_preview,
+            render_cp_preview,
+            validate_chain_limits,
+            validate_task,
+        )
+        from nautical_core.add_workflow import (
+            AddWorkflowApplication,
+            AddWorkflowPlan,
+            BuildAddContext,
+            RenderAddPreview,
+        )
+        from nautical_core.hook_context import (
+            DueContext,
+            OnAddContext,
+            ProfilerPort,
+            build_on_add_context as build_hook_add_context,
+        )
+        from nautical_core.hook_engine import OnAddServices
+        from nautical_core.task_models import TaskPayload
+
+        localns = {
+            "OnAddContext": OnAddContext,
+            "ProfilerPort": ProfilerPort,
+            "AddWorkflowPlan": AddWorkflowPlan,
+        }
+        self.assertIs(get_type_hints(OnAddContext)["due_day"], date)
+        self.assertIs(
+            get_type_hints(_datetime_parser)["host"],
+            AddDatetimeParserHost,
+        )
+        for owner in (
+            apply_description_uda_aliases,
+            kind_and_defaults,
+            validate_chain_limits,
+            due_context,
+            _due_matches_entry,
+            validate_task,
+            build_add_composition_context,
+            render_anchor_preview,
+            render_cp_preview,
+        ):
+            with self.subTest(owner=owner.__name__):
+                self.assertIs(
+                    get_type_hints(
+                        owner,
+                        localns={
+                            **localns,
+                            "AddCompositionHost": AddCompositionHost,
+                            "TaskObservation": TaskObservation,
+                            "TaskPayload": TaskPayload,
+                            "DueContext": DueContext,
+                        },
+                    )["host"],
+                    AddCompositionHost,
+                )
+        self.assertEqual(
+            get_type_hints(
+                AddCompositionServices.__init__,
+                localns={"AddHookResultFactory": AddHookResultFactory},
+            )["result_cls"],
+            AddHookResultFactory | None,
+        )
+        self.assertIs(
+            get_type_hints(
+                AddCompositionServices.workflow_application,
+                localns={"AddWorkflowApplication": AddWorkflowApplication},
+            )["return"],
+            AddWorkflowApplication,
+        )
+        self.assertIs(
+            get_type_hints(
+                OnAddServices.workflow_application,
+                localns={"AddWorkflowApplication": AddWorkflowApplication},
+            )["return"],
+            AddWorkflowApplication,
+        )
+        self.assertEqual(
+            get_type_hints(
+                AddWorkflowApplication.build_context,
+                localns={
+                    "TaskObservation": TaskObservation,
+                    "ProfilerPort": ProfilerPort,
+                    "OnAddContext": OnAddContext,
+                },
+            )["observation"],
+            TaskObservation | None,
+        )
+        self.assertEqual(
+            get_type_hints(due_context, localns={"DueContext": DueContext})["return"],
+            DueContext,
+        )
+        self.assertEqual(
+            get_type_hints(build_hook_add_context)["due_context_on_add"],
+            Callable[[TaskPayload, datetime], DueContext],
+        )
+        composition_hints = get_type_hints(
+            AddCompositionServices.build_context,
+            localns={**localns, "TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
+        )
+        self.assertIs(composition_hints["return"], OnAddContext)
+        self.assertEqual(composition_hints["prof"], ProfilerPort | None)
+        result_hints = get_type_hints(
+            AddCompositionServices.result,
+            localns={"TaskPayload": TaskPayload, "ProfilerPort": ProfilerPort},
+        )
+        self.assertIs(result_hints["task"], TaskPayload)
+        self.assertEqual(result_hints["prof"], ProfilerPort | None)
+        self.assertIs(result_hints["return"], object)
+        validator_hints = get_type_hints(
+            AddCompositionServices.validate_task,
+            localns={"TaskPayload": TaskPayload, "TaskObservation": TaskObservation},
+        )
+        self.assertIs(validator_hints["task"], TaskPayload)
+        self.assertIs(validator_hints["return"], TaskObservation)
+        for owner in (
+            AddCompositionServices.record_limits,
+            AddCompositionServices.render_anchor_preview,
+            AddCompositionServices.render_cp_preview,
+        ):
+            owner_hints = get_type_hints(
+                owner,
+                localns={**localns, "TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
+            )
+            self.assertIs(owner_hints["context"], OnAddContext)
+            if "prof" in owner_hints:
+                self.assertIs(owner_hints["prof"], ProfilerPort)
+        plan_namespace = {
+            **localns,
+            "AddWorkflowPlan": AddWorkflowPlan,
+            "TaskPayload": TaskPayload,
+            "TaskObservation": TaskObservation,
+        }
+        for owner in (
+            AddCompositionServices.record_schedule,
+            AddCompositionServices.record_limits,
+            AddCompositionServices.record_preview,
+        ):
+            owner_hints = get_type_hints(owner, localns=plan_namespace)
+            self.assertIs(owner_hints["plan"], AddWorkflowPlan)
+
+            self.assertIs(owner_hints["return"], AddWorkflowPlan)
+        self.assertIs(
+            get_type_hints(AddCompositionServices.stamp_chain_id)["task"],
+            TaskPayload,
+        )
+        validate_hints = get_type_hints(
+            validate_task,
+            localns={"TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
+        )
+        self.assertIs(validate_hints["task"], TaskPayload)
+        self.assertIs(validate_hints["return"], TaskObservation)
+        context_hints = get_type_hints(
+            build_add_composition_context,
+            localns={**localns, "TaskObservation": TaskObservation, "TaskPayload": TaskPayload},
+        )
+        self.assertIs(context_hints["return"], OnAddContext)
+        annotations = get_type_hints(AddWorkflowApplication, localns=localns)
+        self.assertIs(annotations["build_context_fn"], BuildAddContext)
+        self.assertIs(annotations["render_anchor_preview_fn"], RenderAddPreview)
+        self.assertIs(annotations["render_cp_preview_fn"], RenderAddPreview)
+        self.assertIs(
+            get_type_hints(BuildAddContext.__call__, localns=localns)["return"],
+            OnAddContext,
+        )
+        context_callback = get_type_hints(BuildAddContext.__call__, localns=localns)
+        self.assertIs(context_callback["now_utc"], datetime)
+        self.assertIs(context_callback["now_local"], datetime)
+        self.assertIs(context_callback["prof"], ProfilerPort)
+        self.assertIs(get_type_hints(RenderAddPreview.__call__, localns=localns)["prof"], ProfilerPort)
+        self.assertEqual(
+            get_type_hints(ProfilerPort.add_ms),
+            {"name": str, "ms": float, "return": type(None)},
+        )
+        self.assertIs(
+            get_type_hints(AddWorkflowApplication.build_context, localns=localns)["return"],
+            OnAddContext,
+        )
+
+    def test_schedule_recording_does_not_hide_unexpected_parser_failures(self) -> None:
+        from types import SimpleNamespace
+        from nautical_core.add_composition import AddCompositionServices
+
+        class BrokenParser:
+            @staticmethod
+            def parse(_value):
+                raise RuntimeError("parser invariant failed")
+
+        failures = []
+
+        def fail_and_exit(title, message):
+            failures.append((title, message))
+            raise RuntimeError(f"misclassified: {message}")
+
+        services = object.__new__(AddCompositionServices)
+        services._host = SimpleNamespace(
+            _TASK_DATETIME_PARSER=BrokenParser(),
+            core=SimpleNamespace(_import_sibling=lambda _name: SimpleNamespace()),
+            _fail_and_exit=fail_and_exit,
+        )
+        plan = plan_add(observation({"anchor": "w:mon"}))
+        with self.assertRaisesRegex(RuntimeError, "parser invariant failed"):
+            services.record_schedule(plan, {"due": "20260831T060000Z"}, "due")
+        self.assertEqual(failures, [])
+
+    def test_schedule_patch_encoder_uses_a_narrow_callable_contract(self) -> None:
+        from typing import Callable
+
+        self.assertEqual(
+            get_type_hints(schedule_patch)["encode_timestamp"],
+            Callable[[TaskTimestamp], object],
+        )
+
+    def test_result_requires_an_explicit_hook_response_factory(self) -> None:
+        from nautical_core.add_composition import AddCompositionServices
+
+        services = object.__new__(AddCompositionServices)
+        services._result_cls = None
+        with self.assertRaisesRegex(RuntimeError, "result factory is not configured"):
+            services.result({}, sanitize=False, prof=None)
+
+    def test_composition_service_host_is_not_an_unbounded_dependency_bag(self) -> None:
+        from nautical_core.add_composition import AddCompositionHost, AddCompositionServices
+
+        self.assertIs(
+            get_type_hints(
+                AddCompositionServices.__init__,
+                localns={"AddCompositionHost": AddCompositionHost},
+            )["host"],
+            AddCompositionHost,
+        )
+
+    def test_core_bootstrap_helpers_have_a_named_host_contract(self) -> None:
+        from nautical_core.add_composition import (
+            AddCoreBootstrapHost,
+            initialize_core,
+            load_core,
+        )
+
+        self.assertIs(get_type_hints(initialize_core)["host"], AddCoreBootstrapHost)
+        self.assertIs(get_type_hints(load_core)["host"], AddCoreBootstrapHost)
+
+    def test_optional_core_loaded_warning_failure_does_not_block_hook_init(self) -> None:
+        import io
+        import os
+        from contextlib import redirect_stderr
+        from datetime import timezone
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from nautical_core.add_composition import load_core
+        from nautical_core.task_datetime import ConfiguredTaskDatetimeParser
+
+        class Core:
+            @staticmethod
+            def parse_dt_any(_value):
+                return datetime(2026, 10, 5, tzinfo=timezone.utc)
+
+            @staticmethod
+            def _import_sibling(name):
+                if name != "core_config":
+                    raise AssertionError(f"unexpected sibling: {name}")
+
+                def fail_warning(*_args):
+                    raise RuntimeError("optional warning failed")
+
+                return SimpleNamespace(warn_once_per_day_any=fail_warning)
+
+        def host_with_uninitialized_core():
+            return SimpleNamespace(
+                _INTEGRATION_CONTEXT=object(),
+                _TASK_DATETIME_PARSER=ConfiguredTaskDatetimeParser(Core.parse_dt_any),
+                core=Core(),
+                _CORE_READY=False,
+                _MAX_JSON_BYTES=1024,
+                _IMPORT_T0=0.0,
+                time=SimpleNamespace(perf_counter=lambda: 1.0),
+            )
+
+        for diagnostic_env, expected_stderr in (
+            ({"NAUTICAL_DIAG": "1"}, "[nautical] on-add core-loaded warning failed (RuntimeError)\n"),
+            ({}, ""),
+        ):
+            with self.subTest(diagnostics=bool(diagnostic_env)):
+                host = host_with_uninitialized_core()
+                stderr = io.StringIO()
+                with patch.dict(os.environ, diagnostic_env, clear=True), redirect_stderr(stderr):
+                    load_core(host)
+
+                self.assertTrue(host._CORE_READY)
+                self.assertEqual(stderr.getvalue(), expected_stderr)
+
+    def test_invalid_core_json_limit_fallback_is_diagnosed_only_when_enabled(self) -> None:
+        import io
+        import os
+        from contextlib import redirect_stderr
+        from datetime import timezone
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from nautical_core.add_composition import load_core
+        from nautical_core.task_datetime import ConfiguredTaskDatetimeParser
+
+        class Core:
+            MAX_JSON_BYTES = "sensitive-invalid-limit"
+
+            @staticmethod
+            def parse_dt_any(_value):
+                return datetime(2026, 10, 5, tzinfo=timezone.utc)
+
+            @staticmethod
+            def _import_sibling(name):
+                if name != "core_config":
+                    raise AssertionError(f"unexpected sibling: {name}")
+                return SimpleNamespace(warn_once_per_day_any=lambda *_args: None)
+
+        def host_with_invalid_limit():
+            return SimpleNamespace(
+                _INTEGRATION_CONTEXT=object(),
+                _TASK_DATETIME_PARSER=ConfiguredTaskDatetimeParser(Core.parse_dt_any),
+                core=Core(),
+                _CORE_READY=False,
+                _MAX_JSON_BYTES=1024,
+                _IMPORT_T0=0.0,
+                time=SimpleNamespace(perf_counter=lambda: 1.0),
+            )
+
+        expected_diagnostic = "[nautical] on-add MAX_JSON_BYTES fallback (ValueError)\n"
+        for diagnostic_env, expected_stderr in (
+            ({"NAUTICAL_DIAG": "1"}, expected_diagnostic),
+            ({}, ""),
+        ):
+            with self.subTest(diagnostics=bool(diagnostic_env)):
+                host = host_with_invalid_limit()
+                stderr = io.StringIO()
+                with patch.dict(os.environ, diagnostic_env, clear=True), redirect_stderr(stderr):
+                    load_core(host)
+
+                self.assertEqual(host._MAX_JSON_BYTES, 1024)
+                self.assertTrue(host._CORE_READY)
+                self.assertEqual(stderr.getvalue(), expected_stderr)
+                self.assertNotIn("sensitive-invalid-limit", stderr.getvalue())
+
     def test_application_prepares_and_attaches_typed_plan(self) -> None:
         application = AddWorkflowApplication(
             record_schedule_fn=lambda plan, _task, _field: plan,
@@ -91,6 +446,7 @@ class AddWorkflowTests(unittest.TestCase):
     def test_combined_anchor_sources_keep_anchor_route(self) -> None:
         task = observation({"anchor": "w:mon", "anchor_file": "calendar.csv"})
         self.assertEqual(classify_add_route(task), WorkflowRoute.ANCHOR_ACTIVATION)
+        self.assertEqual(plan_add(task).recurrence_kind, "anchor")
 
     def test_target_field_prefers_scheduled_when_due_is_implicit(self) -> None:
         plan = plan_add(observation({"cp": "P1D", "scheduled": "20260825T090000Z"}))

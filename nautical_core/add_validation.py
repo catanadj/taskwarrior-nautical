@@ -3,12 +3,18 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
-from . import astronomy, native_until
+from . import native_until
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_context import RecurrenceContext
 from nautical_core.task_datetime import TaskDatetimeParser
+
+
+class DurationParserPort(Protocol):
+    def parse_cp_sequence(self, value: str) -> list[timedelta] | None: ...
+
+    def cp_sequence_parse_error(self, value: str) -> str | None: ...
 
 
 def validate_until_not_past(until_dt: Any, now_utc: datetime, *, core: Any) -> tuple[bool, str | None]:
@@ -67,21 +73,16 @@ def collect_anchor_time_slots(
 ) -> tuple[tuple[int, int], ...]:
     """Return every effective clock time that an anchor or anchor_file can produce."""
     out: set[tuple[int, int]] = set()
-    try:
-        for term in dnf or ():
-            term_slots: set[tuple[int, int]] = set()
-            for atom in term or ():
-                mods = atom.get("mods") or {} if isinstance(atom, dict) else {}
-                value = mods.get("t")
-                if resolve_time_slots is not None and target_date is not None:
-                    term_slots.update(resolve_time_slots(mods, target_date))
-                else:
-                    term_slots.update(normalize_time_slots(value))
-            out.update(term_slots or {fallback_hhmm})
-    except Exception as exc:
-        if astronomy.is_astronomy_error(exc):
-            raise
-        pass
+    for term in dnf or ():
+        term_slots: set[tuple[int, int]] = set()
+        for atom in term or ():
+            mods = atom.get("mods") or {} if isinstance(atom, dict) else {}
+            value = mods.get("t")
+            if resolve_time_slots is not None and target_date is not None:
+                term_slots.update(resolve_time_slots(mods, target_date))
+            else:
+                term_slots.update(normalize_time_slots(value))
+        out.update(term_slots or {fallback_hhmm})
 
     if str(anchor_file_value or "").strip():
         from . import anchor_files
@@ -213,7 +214,7 @@ def safe_parse_duration(
     s: Any,
     field_name: str,
     *,
-    core: Any,
+    core: DurationParserPort,
     diag: Callable[[str], None],
 ) -> tuple[timedelta | None, str | None]:
     if not s:
@@ -230,47 +231,9 @@ def safe_parse_duration(
     except ValueError as e:
         diag(f"{field_name} duration parse value error: {e}")
         return (None, f"{field_name}: Invalid duration value")
-    except Exception as e:
+    except (TypeError, OverflowError) as e:
         diag(f"{field_name} duration parse unexpected error: {e}")
         return (None, f"{field_name}: Unexpected parsing error")
-
-
-def validate_anchor_syntax_strict(
-    expr: str | list[list[dict[str, Any]]],
-    *,
-    validate_anchor_expr_cached: Callable[[str | list[list[dict[str, Any]]]], list[list[dict[str, Any]]]],
-    core: Any,
-    diag: Callable[[str], None],
-) -> tuple[list[list[dict[str, Any]]] | None, str | None]:
-    try:
-        dnf = validate_anchor_expr_cached(expr)
-        return dnf, None
-    except Exception as e:
-        parse_err_t = getattr(core, "ParseError", None)
-        if parse_err_t is not None and isinstance(e, parse_err_t):
-            return None, str(e)
-        diag(f"anchor validation unexpected error: {e}")
-        return None, "anchor syntax error"
-
-
-def validate_omit_syntax_strict(
-    expr: str | list[list[dict[str, Any]]],
-    *,
-    validate_omit_expr_cached: Callable[[str | list[list[dict[str, Any]]]], list[list[dict[str, Any]]]],
-    core: Any,
-    diag: Callable[[str], None],
-) -> tuple[list[list[dict[str, Any]]] | None, str | None]:
-    try:
-        dnf = validate_omit_expr_cached(expr)
-        return dnf, None
-    except ValueError as e:
-        return None, str(e)
-    except Exception as e:
-        parse_err_t = getattr(core, "ParseError", None)
-        if parse_err_t is not None and isinstance(e, parse_err_t):
-            return None, str(e)
-        diag(f"omit validation unexpected error: {e}")
-        return None, "omit syntax error"
 
 
 def validate_anchor_mode(mode_str: Any) -> tuple[str, str | None]:

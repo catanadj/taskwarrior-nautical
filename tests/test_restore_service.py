@@ -7,9 +7,9 @@ from pathlib import Path
 
 from nautical_core.backup_service import StorageIO, create_manifest, publish_manifest
 from nautical_core.restore_service import restore_backup, validate_backup
-from nautical_core.lifecycle_models import ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
-from dev_tools.nautical_golden_tests import _task_draft
+from nautical_core.lifecycle.models import ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+from dev_tools.golden_tests.support import task_draft as _task_draft
 
 
 class RestoreServiceTests(unittest.TestCase):
@@ -271,7 +271,6 @@ class RestoreServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source = self._backup(root)
-            manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
             (source / "taskwarrior-export.json").write_text('[{"uuid":"u2"}]\n', encoding="utf-8")
             result = validate_backup(source)
             self.assertEqual(result.status, "rejected")

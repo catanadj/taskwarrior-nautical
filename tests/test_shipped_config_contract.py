@@ -8,7 +8,7 @@ try:
 except ImportError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib
 
-from nautical_core import config_schema
+import nautical_core.config_schema as config_schema
 
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config-nautical.toml"

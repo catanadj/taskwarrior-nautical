@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import importlib.util
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
+from typing import Callable, Literal, Mapping, get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -13,10 +17,204 @@ try:
 except ImportError:  # pragma: no cover - supported Python 3.10 fallback
     import tomli as tomllib
 
-from nautical_core import config_support
+import nautical_core.config_support as config_support
+import nautical_core.core_config as core_config
 
 
 class ConfigSupportContractTests(unittest.TestCase):
+    def test_core_configuration_cache_uses_a_typed_support_owner(self) -> None:
+        hints = get_type_hints(core_config)
+        self.assertEqual(
+            hints["config_support"],
+            core_config.ConfigSupportPort | None,
+        )
+        self.assertIs(
+            get_type_hints(core_config._read_toml_result)["return"],
+            core_config.ConfigReadResultPort,
+        )
+
+    def test_core_configuration_cache_owner_uses_its_directory_capability(self) -> None:
+        hints = get_type_hints(core_config)
+        self.assertEqual(
+            hints["cache_support"],
+            core_config.CacheDirectorySupportPort | None,
+        )
+
+    def test_core_configuration_cache_uses_typed_diagnostic_support(self) -> None:
+        hints = get_type_hints(core_config)
+        self.assertEqual(
+            hints["diagnostic_warnings"],
+            core_config.DiagnosticWarningsPort | None,
+        )
+
+    def test_core_configuration_loader_restricts_module_names_and_results(self) -> None:
+        hints = get_type_hints(core_config._load_support_module)
+        self.assertEqual(
+            hints["name"],
+            Literal["config_support", "cache_support", "diagnostic_warnings"],
+        )
+        self.assertEqual(
+            hints["return"],
+            core_config.ConfigSupportPort
+            | core_config.CacheDirectorySupportPort
+            | core_config.DiagnosticWarningsPort,
+        )
+
+    def test_toml_reader_declares_parser_and_diagnostic_callback_contracts(self) -> None:
+        expected = {
+            "tomllib_mod": config_support.TomlParserPort | None,
+            "warn_missing_toml_parser": Callable[[str], None],
+            "warn_toml_parse_error": Callable[[str, Exception], None],
+            "error_sink": Callable[[str], None] | None,
+        }
+        for owner in (config_support.read_toml_result, config_support.read_toml):
+            hints = get_type_hints(owner)
+            with self.subTest(owner=owner.__name__):
+                for name, contract in expected.items():
+                    self.assertEqual(hints[name], contract)
+
+    def test_config_path_diagnostics_use_callable_contracts(self) -> None:
+        hints = get_type_hints(config_support.config_paths)
+        self.assertEqual(
+            hints["warn_env_config_missing"],
+            Callable[[str], None],
+        )
+        self.assertEqual(hints["error_sink"], Callable[[str], None] | None)
+
+    def test_config_loader_uses_typed_source_callbacks(self) -> None:
+        hints = get_type_hints(config_support.load_config)
+        self.assertEqual(hints["config_paths"], Callable[[], list[str]])
+        self.assertEqual(
+            hints["read_toml_result"],
+            Callable[[str], config_support.ConfigReadResultPort],
+        )
+        self.assertEqual(hints["normalize_keys"], Callable[[dict], dict])
+
+    def test_config_cache_uses_typed_cache_and_loader_contracts(self) -> None:
+        hints = get_type_hints(config_support.get_config)
+        self.assertEqual(hints["conf_cache"], dict | None)
+        self.assertEqual(hints["load_config"], Callable[[], dict])
+        self.assertEqual(hints["return"], tuple[dict, dict])
+
+    def test_configuration_values_enter_helpers_as_untrusted_objects(self) -> None:
+        self.assertEqual(
+            get_type_hints(config_support.env_flag_true)["env_map"],
+            Mapping[str, object] | None,
+        )
+        self.assertEqual(
+            get_type_hints(config_support.resolve_task_data_context)["env"],
+            Mapping[str, object] | None,
+        )
+        for owner in (
+            config_support.normalize_preset_table,
+            config_support.normalize_anchor_presets,
+        ):
+            with self.subTest(owner=owner.__name__):
+                self.assertIs(get_type_hints(owner)["value"], object)
+
+        raw_hints = get_type_hints(config_support.conf_raw)
+        self.assertEqual(raw_hints["conf"], Mapping[str, object])
+        self.assertIs(raw_hints["return"], object)
+        self.assertIs(get_type_hints(config_support.trueish)["v"], object)
+
+        for owner in (
+            config_support.conf_str,
+            config_support.conf_int,
+            config_support.conf_bool,
+            config_support.conf_csv_or_list,
+            config_support.conf_uda_field_list,
+        ):
+            with self.subTest(owner=owner.__name__):
+                self.assertEqual(get_type_hints(owner)["conf"], Mapping[str, object])
+
+    def test_unexpected_stderr_failure_is_not_misclassified_as_best_effort_io(self) -> None:
+        class BrokenStderr:
+            def write(self, _value: str) -> int:
+                raise RuntimeError("diagnostic writer invariant failed")
+
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), patch.object(
+            config_support.sys,
+            "stderr",
+            BrokenStderr(),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "writer invariant"):
+                config_support.validated_user_dir(
+                    "unsafe\0path",
+                    label="cache directory",
+                    env_map={"NAUTICAL_DIAG": "1"},
+                )
+
+    def test_integer_configuration_does_not_hide_conversion_defects(self) -> None:
+        class BrokenString:
+            def __str__(self) -> str:
+                raise RuntimeError("configuration conversion invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "conversion invariant"):
+            config_support.conf_int({"limit": BrokenString()}, "limit", 7)
+
+    def test_integer_configuration_defaults_only_for_invalid_values(self) -> None:
+        for value in ("not-an-int", None, object()):
+            with self.subTest(value=type(value).__name__):
+                self.assertEqual(config_support.conf_int({"limit": value}, "limit", 7), 7)
+
+    def test_environment_flag_lookup_does_not_hide_mapping_defects(self) -> None:
+        class BrokenEnvironment:
+            def get(self, _name: str, _default: str) -> str:
+                raise RuntimeError("environment mapping defect")
+
+        with self.assertRaisesRegex(RuntimeError, "environment mapping defect"):
+            config_support.env_flag_true("NAUTICAL_DIAG", BrokenEnvironment())
+
+    def test_toml_loader_uses_tomli_when_tomllib_is_unavailable(self) -> None:
+        parser = object()
+        with (
+            patch.object(core_config, "tomllib", None),
+            patch.object(
+                core_config.importlib,
+                "import_module",
+                side_effect=[ModuleNotFoundError("tomllib"), parser],
+            ) as import_module,
+        ):
+            self.assertIs(core_config._load_tomllib(), parser)
+
+        self.assertEqual(
+            [call.args[0] for call in import_module.call_args_list],
+            ["tomllib", "tomli"],
+        )
+
+    def test_lazy_toml_loader_declares_the_shared_parser_capability(self) -> None:
+        self.assertEqual(
+            get_type_hints(core_config._load_tomllib)["return"],
+            core_config.TomlParserPort | None,
+        )
+
+    def test_config_support_remains_loadable_without_package_context(self) -> None:
+        source = Path(config_support.__file__)
+        spec = importlib.util.spec_from_file_location(
+            "_standalone_config_support_contract", source
+        )
+        self.assertIsNotNone(spec)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+
+        spec.loader.exec_module(module)
+
+        self.assertEqual(module.path_input_error("/tmp/safe"), None)
+
+    def test_toml_loader_does_not_hide_parser_initialization_failure(self) -> None:
+        with (
+            patch.object(core_config, "tomllib", None),
+            patch.object(
+                core_config.importlib,
+                "import_module",
+                side_effect=RuntimeError("parser initialization defect"),
+            ) as import_module,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "parser initialization defect"):
+                core_config._load_tomllib()
+
+        import_module.assert_called_once_with("tomllib")
+
     def _read_result(self, path: str, *, error_sink=None):
         return config_support.read_toml_result(
             path,
@@ -43,6 +241,47 @@ class ConfigSupportContractTests(unittest.TestCase):
             self.assertEqual(data, {})
             self.assertTrue(errors)
             self.assertIn(str(path), errors[0])
+
+    def test_toml_loader_does_not_hide_unexpected_parser_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nautical.toml"
+            path.write_text('tz = "UTC"\n', encoding="utf-8")
+            parser = SimpleNamespace(
+                load=lambda _stream: (_ for _ in ()).throw(
+                    RuntimeError("unexpected parser defect")
+                )
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "unexpected parser defect"):
+                config_support.read_toml_result(
+                    str(path),
+                    tomllib_mod=parser,
+                    warn_missing_toml_parser=lambda _path: None,
+                    warn_toml_parse_error=lambda _path, _err: None,
+                )
+
+    def test_config_existence_probe_does_not_hide_unexpected_failure(self) -> None:
+        with patch.object(
+            config_support.os.path,
+            "exists",
+            side_effect=RuntimeError("unexpected filesystem defect"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected filesystem defect"):
+                config_support.read_toml_result(
+                    "config-nautical.toml",
+                    tomllib_mod=tomllib,
+                    warn_missing_toml_parser=lambda _path: None,
+                    warn_toml_parse_error=lambda _path, _err: None,
+                )
+
+    def test_path_safety_probe_does_not_hide_unexpected_failure(self) -> None:
+        with patch.object(
+            config_support.os.path,
+            "exists",
+            side_effect=RuntimeError("unexpected path-probe defect"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected path-probe defect"):
+                config_support.path_safety_error("/tmp/nautical-config")
 
     def test_world_writable_file_is_rejected_with_path_reason(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

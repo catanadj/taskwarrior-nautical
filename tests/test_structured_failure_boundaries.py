@@ -9,16 +9,38 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from nautical_core.lifecycle_outbox import (
+from nautical_core.lifecycle.outbox import (
     LifecycleOutboxError,
     _LifecycleOutboxRepository,
     OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE,
+    OutboxResult,
     OutboxResultKind,
 )
 from nautical_core.panel_diagnostics import file_source_warnings
 
 
 class StructuredFailureBoundaryTests(unittest.TestCase):
+    def test_outbox_transaction_rolls_back_on_keyboard_interrupt(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with repository.session():
+                connection = repository._session_conn
+                self.assertIsNotNone(connection)
+                connection.execute("CREATE TABLE transaction_probe (value TEXT)")
+
+                with self.assertRaises(KeyboardInterrupt):
+                    with repository._transaction(connection):
+                        connection.execute(
+                            "INSERT INTO transaction_probe (value) VALUES ('partial')"
+                        )
+                        raise KeyboardInterrupt()
+
+                self.assertFalse(connection.in_transaction)
+                self.assertEqual(
+                    connection.execute("SELECT value FROM transaction_probe").fetchall(),
+                    [],
+                )
+
     def test_outbox_integrity_check_accepts_healthy_database(self) -> None:
         repository = _LifecycleOutboxRepository(Path("/tmp/nautical-integrity-test"))
         connection = Mock()
@@ -55,11 +77,27 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
                 1,
             )
 
+    def test_outbox_quarantine_does_not_hide_unexpected_replace_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            state = Path(directory) / ".nautical-state"
+            state.mkdir()
+            database = state / ".nautical_lifecycle_outbox.db"
+            database.write_bytes(b"corrupt")
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch(
+                "nautical_core.lifecycle.outbox.os.replace",
+                side_effect=RuntimeError("injected quarantine defect"),
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository._quarantine_corrupt_state("corrupt database")
+            self.assertIs(type(raised.exception), RuntimeError)
+            self.assertFalse((state / ".nautical_outbox_recovery.lock").exists())
+
     def test_stale_outbox_recovery_marker_is_reclaimed_only_after_process_exit(self) -> None:
         with TemporaryDirectory() as directory:
             marker = Path(directory) / ".nautical_outbox_recovery.lock"
             marker.write_text('{"created_at": 1, "pid": 12345}', encoding="utf-8")
-            with patch("nautical_core.lifecycle_outbox.os.kill", side_effect=ProcessLookupError):
+            with patch("nautical_core.lifecycle.outbox.os.kill", side_effect=ProcessLookupError):
                 self.assertTrue(_LifecycleOutboxRepository._reclaim_stale_recovery_lock(marker))
             self.assertFalse(marker.exists())
 
@@ -87,7 +125,8 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
         )
 
     def test_panel_file_warnings_report_empty_sources_and_unmatched_patterns(self) -> None:
-        from nautical_core import anchor_files, omit_files
+        import nautical_core.anchor_files as anchor_files
+        import nautical_core.omit_files as omit_files
 
         with TemporaryDirectory() as directory:
             Path(directory, "weekend.csv").write_text(
@@ -183,7 +222,7 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
                 opened.append(connection)
                 return connection
 
-            with patch("nautical_core.lifecycle_outbox.sqlite3.connect", side_effect=tracked_connect):
+            with patch("nautical_core.lifecycle.outbox.sqlite3.connect", side_effect=tracked_connect):
                 with self.assertRaises(LifecycleOutboxError):
                     repository._connect()
 
@@ -218,6 +257,43 @@ class StructuredFailureBoundaryTests(unittest.TestCase):
             self.assertEqual(result.kind, OutboxResultKind.REJECTED)
             self.assertTrue(result.reason.startswith(f"{OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE}:"))
             connection.close.assert_called_once_with()
+
+    def test_bulk_outbox_cleanup_failure_preserves_result_and_closes_connection(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            connection = Mock()
+            operation_result = {"intent-1": OutboxResult(OutboxResultKind.APPLIED)}
+            with patch.object(repository, "_connect", return_value=connection), \
+                    patch.object(repository, "_initialize"), \
+                    patch.object(repository, "_secure_state_files", side_effect=RuntimeError("cleanup defect")):
+                result = repository._with_bulk_connection(lambda _connection: operation_result)
+
+            self.assertEqual(result, (OutboxResult(OutboxResultKind.APPLIED), operation_result))
+            connection.close.assert_called_once_with()
+
+    def test_prune_does_not_convert_unexpected_maintenance_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            with patch(
+                "nautical_core.lifecycle.outbox_maintenance.prune_acknowledged_rows",
+                side_effect=RuntimeError("injected prune defect"),
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.prune_acknowledged()
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_housekeeping_does_not_convert_unexpected_maintenance_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            with patch(
+                "nautical_core.lifecycle.outbox_maintenance.housekeeping_rows",
+                side_effect=RuntimeError("injected housekeeping defect"),
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.opportunistic_housekeeping(size_threshold_bytes=0)
+            self.assertIs(type(raised.exception), RuntimeError)
 
     def test_panel_source_missing_file_is_optional(self) -> None:
         loader = SimpleNamespace(

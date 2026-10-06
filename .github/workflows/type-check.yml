@@ -46,7 +46,7 @@ jobs:
           --enable-error-code=arg-type
           --enable-error-code=return-value
           --enable-error-code=operator
-          nautical_core/lifecycle_outbox.py
+          nautical_core/lifecycle/outbox.py
           nautical_core/hook_protocol.py
           nautical_core/task_command.py
           nautical_core/runtime.py
@@ -58,28 +58,11 @@ jobs:
           nautical_core/modify_completion_compute.py
           nautical_core/modify_completion_spawn.py
           nautical_core/exit_runtime.py
-          nautical_core/lifecycle_application.py
+          nautical_core/lifecycle/application.py
           nautical_core/taskwarrior_mutations.py
           nautical_core/occurrence_provider.py
           nautical_core/scheduler_trace.py
           nautical_core/scheduler_service.py
-
-      - name: Run normal-import facade and query boundary mypy
-        run: >-
-          python3 -m mypy --config-file mypy.ini --follow-imports=normal
-          nautical_core/task_datetime.py
-          nautical_core/api_bindings.py
-          nautical_core/compat_api.py
-          nautical_core/architecture_contract.py
-          nautical_core/integration_context.py
-          nautical_core/query_service.py
-          nautical_core/parser_api.py
-          nautical_core/scheduler_api.py
-          nautical_core/cache_api.py
-          nautical_core/core_context.py
-          nautical_core/recurrence_context.py
-          nautical_core/hook_bootstrap.py
-          nautical_core/occurrence_provider.py
 
       - name: Run full strict package mypy
         run: >-
@@ -123,17 +106,34 @@ jobs:
 
       - name: Run unit suite with branch-coverage floor
         env:
-          COVERAGE_FILE: /tmp/nautical-coverage-data
+          COVERAGE_FILE: ${{ runner.temp }}/nautical-coverage-data
+          NAUTICAL_SUBPROCESS_COVERAGE_DIR: ${{ runner.temp }}/nautical-subprocess-coverage
         run: >-
           PYTHONPATH=.
           PYTHONPYCACHEPREFIX=/tmp/nautical-readiness-pycache
           python3 -m coverage run -m unittest discover -s tests -q
 
-      - name: Enforce branch-coverage floor and write XML report
+      - name: Combine hook subprocess coverage
+        if: always()
         env:
-          COVERAGE_FILE: /tmp/nautical-coverage-data
+          COVERAGE_FILE: ${{ runner.temp }}/nautical-coverage-data
+          NAUTICAL_SUBPROCESS_COVERAGE_DIR: ${{ runner.temp }}/nautical-subprocess-coverage
         run: |
-          python3 -m coverage report --fail-under=60 --show-missing
+          if [ -d "$NAUTICAL_SUBPROCESS_COVERAGE_DIR" ]; then
+            coverage_prefix="${COVERAGE_FILE##*/}"
+            coverage_files=("$NAUTICAL_SUBPROCESS_COVERAGE_DIR/${coverage_prefix}".*)
+            if [ -e "${coverage_files[0]}" ]; then
+              python3 -m coverage combine --append "${coverage_files[@]}"
+            fi
+          fi
+
+      - name: Enforce branch-coverage floor and write XML report
+        if: always()
+        env:
+          COVERAGE_FILE: ${{ runner.temp }}/nautical-coverage-data
+        run: |
+          test -f "$COVERAGE_FILE" || exit 0
+          python3 -m coverage report --fail-under=75 --show-missing
           python3 -m coverage xml -o coverage.xml
 
       - name: Upload branch-coverage report

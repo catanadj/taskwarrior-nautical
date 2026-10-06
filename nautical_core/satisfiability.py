@@ -16,10 +16,7 @@ def weekday_set_from_weekly_atom(atom: dict[str, Any], *, weekly_spec_to_wset: A
 def md_pairs_from_yearly_spec(spec: str, *, expand_yearly_cached: Any, leap_year_for_checks: int) -> set[tuple[int, int]]:
     if not spec:
         return set()
-    try:
-        dates = expand_yearly_cached(spec, leap_year_for_checks)
-    except Exception:
-        return set()
+    dates = expand_yearly_cached(spec, leap_year_for_checks)
     return {(d.month, d.day) for d in dates}
 
 
@@ -158,7 +155,9 @@ def validate_and_terms_satisfiable(
                 if typ in ("w", "m"):
                     try:
                         spec = normalize_spec_for_acf(typ, spec) or spec
-                    except Exception:
+                    except (TypeError, ValueError):
+                        # Normalization only decorates the error hint; retain
+                        # the raw spec when a malformed value cannot normalize.
                         pass
                 if typ == "m" and spec:
                     m = re.fullmatch(r"([a-z]{3,9}|\d{2})(\.\.([a-z]{3,9}|\d{2}))?", spec.lower())

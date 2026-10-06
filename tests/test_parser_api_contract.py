@@ -1,12 +1,20 @@
+from datetime import date
 import functools
+import inspect
 import re
 import unittest
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import nautical_core as core
-from nautical_core import parser_api
+import nautical_core.anchor_omit as anchor_omit
+import nautical_core.parser_api as parser_api
+import nautical_core.modify_anchor_effects as modify_anchor_effects
+from nautical_core.parser_api import ParserOwnerDependencies, _parse_anchor_expr_to_dnf_impl
 from nautical_core.parsing import parser_frontend
+from nautical_core.parsing import parser_dnf
 from nautical_core.parsing import parser_support_api
+from nautical_core.parsing.parser_models import YearTokenFormatError
 
 
 class ParseError(ValueError):
@@ -18,6 +26,10 @@ def split_csv(value):
 
 
 class ParserFrontendContractTests(unittest.TestCase):
+    def test_for_core_delegates_validation_dependency_assembly(self):
+        source = inspect.getsource(parser_api.for_core)
+        self.assertIn("_build_parser_validation_dependencies", source)
+
     def test_split_top_level_respects_parentheses_and_drops_empty_tail(self):
         self.assertEqual(
             parser_frontend.split_top_level("a+(b+c)+", "+"),
@@ -160,10 +172,57 @@ class ParserPresetContractTests(unittest.TestCase):
         namespace = {
             **vars(core),
             "ParseError": core.ParseError,
+            "YearTokenFormatError": YearTokenFormatError,
             "ANCHOR_PRESETS": anchors or {},
             "OMIT_PRESETS": omits or {},
         }
         return parser_api.for_core(module=core, namespace=namespace)
+
+    def _omit_ports(self, validate_omit, load_omit_file_data):
+        return modify_anchor_effects.OmitPorts(
+            validate_omit=validate_omit,
+            load_omit_file_data=load_omit_file_data,
+            omit_file_dir="/tmp/omit",
+            combine_omit_state=anchor_omit.combine_omit_state,
+        )
+
+    def test_omit_parent_wraps_parse_errors_but_surfaces_validator_defects(self):
+        def reject_expression(_expression):
+            raise core.ParseError("invalid omit syntax")
+
+        with self.assertRaisesRegex(ValueError, "Invalid omit expression 'bad': invalid omit syntax"):
+            modify_anchor_effects.omit_dnf_from_parent(
+                self._omit_ports(reject_expression, lambda *_args: (frozenset(), {})),
+                {"omit": "bad"},
+            )
+
+        def broken_validator(_expression):
+            raise RuntimeError("validator defect")
+
+        with self.assertRaisesRegex(RuntimeError, "validator defect"):
+            modify_anchor_effects.omit_dnf_from_parent(
+                self._omit_ports(broken_validator, lambda *_args: (frozenset(), {})),
+                {"omit": "bad"},
+            )
+
+    def test_omit_parent_wraps_file_read_errors_but_surfaces_loader_defects(self):
+        def missing_file(*_args):
+            raise FileNotFoundError("calendar missing")
+
+        with self.assertRaisesRegex(ValueError, "Invalid omit_file 'dates.csv': calendar missing"):
+            modify_anchor_effects.omit_dnf_from_parent(
+                self._omit_ports(lambda _expression: [], missing_file),
+                {"omit_file": "dates.csv"},
+            )
+
+        def broken_loader(*_args):
+            raise RuntimeError("omit loader defect")
+
+        with self.assertRaisesRegex(RuntimeError, "omit loader defect"):
+            modify_anchor_effects.omit_dnf_from_parent(
+                self._omit_ports(lambda _expression: [], broken_loader),
+                {"omit_file": "dates.csv"},
+            )
 
     def test_unknown_presets_list_available_aliases_and_config_table(self):
         binding = self._binding(
@@ -202,6 +261,71 @@ class ParserPresetContractTests(unittest.TestCase):
             binding.omit_preset_display("@spring"),
             ("Omit preset", "@spring → y:apr"),
         )
+
+    def test_configured_anchor_and_omit_presets_validate_without_hook_bootstrap(self):
+        binding = self._binding(
+            anchors={"payday": "m:15,-1bd"},
+            omits={"april": "y:apr"},
+        )
+
+        anchor_dnf = binding.validate_anchor_expr_strict("@payday")
+        omit_dnf = anchor_omit.validate_omit_expr_strict(
+            "@april",
+            validate_anchor_expr_cached=binding.validate_anchor_expr_strict,
+            resolve_omit_presets=binding.resolve_omit_presets,
+        )
+        omit_ports = modify_anchor_effects.OmitPorts(
+            validate_omit=lambda expr: anchor_omit.validate_omit_expr_strict(
+                expr,
+                validate_anchor_expr_cached=binding.validate_anchor_expr_strict,
+                resolve_omit_presets=binding.resolve_omit_presets,
+            ),
+            load_omit_file_data=lambda *_args: (frozenset(), {}),
+            omit_file_dir="",
+            combine_omit_state=anchor_omit.combine_omit_state,
+        )
+        source_expr, parent_omit_dnf = modify_anchor_effects.omit_dnf_from_parent(
+            omit_ports, {"omit": "@april"}
+        )
+
+        self.assertTrue(anchor_dnf)
+        self.assertTrue(omit_dnf)
+        self.assertEqual(source_expr, "@april")
+        self.assertTrue(parent_omit_dnf)
+
+
+class ParserOwnerDNFContractTests(unittest.TestCase):
+    def test_omit_port_factory_uses_narrow_host_protocol(self):
+        self.assertIs(
+            get_type_hints(modify_anchor_effects.omit_ports_for)["host"],
+            modify_anchor_effects.OmitHost,
+        )
+
+    def test_dnf_owner_parses_with_explicit_dependencies_and_no_facade(self):
+        def parse_atom(expression, index, length):
+            self.assertEqual(expression[index:length], "w:mon")
+            return [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {}}]], length
+
+        dependencies = ParserOwnerDependencies(
+            normalize_input=lambda expression: expression,
+            raise_bad_year_colons=lambda _expression: None,
+            parse_atom=parse_atom,
+            parse_mods=lambda _mods: {},
+            skip_ws=lambda _expression, index, _length: index,
+            rewrite_quarters=lambda dnf: dnf,
+            rewrite_year_month=lambda dnf: dnf,
+            validate_year_tokens=lambda dnf: dnf,
+            validate_satisfiable=lambda _dnf, *, ref_d: None,
+            max_terms=10,
+            parse_error=ValueError,
+            today=lambda: date(2026, 9, 28),
+            parser_dnf=parser_dnf,
+            resolve_presets=lambda expression: expression,
+        )
+
+        actual = _parse_anchor_expr_to_dnf_impl("w:mon", dependencies)
+
+        self.assertEqual(actual, [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {}}]])
 
 
 if __name__ == "__main__":

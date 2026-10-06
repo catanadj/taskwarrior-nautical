@@ -9,10 +9,34 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import nautical_core as core
-from nautical_core import anchor_files, omit_files
+import nautical_core.anchor_files as anchor_files
+import nautical_core.omit_files as omit_files
 
 
 class FileBackedRecurrenceContractTests(unittest.TestCase):
+    def test_date_range_parser_does_not_hide_unexpected_datetime_failures(self) -> None:
+        import nautical_core.file_backed_dates as file_backed_dates
+
+        class BrokenDateParser:
+            @staticmethod
+            def fromisoformat(_value: str) -> date:
+                raise RuntimeError("date parser implementation failed")
+
+        with patch.object(file_backed_dates, "date", BrokenDateParser):
+            with self.assertRaisesRegex(RuntimeError, "date parser implementation failed"):
+                file_backed_dates._expand_date_spec("2026-01-01", label="calendar")
+
+    def test_csv_sniffing_does_not_hide_unexpected_reader_failures(self) -> None:
+        import nautical_core.file_backed_dates as file_backed_dates
+
+        with patch.object(
+            file_backed_dates.csv,
+            "reader",
+            side_effect=RuntimeError("CSV reader implementation failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "CSV reader implementation failed"):
+                file_backed_dates._looks_like_csv([(1, "date,description")])
+
     def test_csv_without_date_column_reports_available_columns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "calendar.csv").write_text(
@@ -48,7 +72,7 @@ class FileBackedRecurrenceContractTests(unittest.TestCase):
                 self.assertIn("1 data row(s), 0 non-empty date value(s)", str(raised.exception))
 
     def test_same_size_rewrite_does_not_return_stale_cached_dates(self) -> None:
-        from nautical_core import file_backed_dates
+        import nautical_core.file_backed_dates as file_backed_dates
 
         for label, loader in (
             ("anchor_file", anchor_files.load_anchor_file_dates),
@@ -82,7 +106,7 @@ class FileBackedRecurrenceContractTests(unittest.TestCase):
         file_backed_dates._CACHE_BY_PATH.clear()
 
     def test_file_date_cache_uses_metadata_and_enforces_lru_bound(self) -> None:
-        from nautical_core import file_backed_dates
+        import nautical_core.file_backed_dates as file_backed_dates
 
         saved_limit = file_backed_dates._FILE_CACHE_MAX_ENTRIES
         file_backed_dates._CACHE_BY_PATH.clear()
@@ -115,7 +139,7 @@ class FileBackedRecurrenceContractTests(unittest.TestCase):
             file_backed_dates._CACHE_BY_PATH.clear()
 
     def test_file_date_cache_reuses_identical_digest_after_metadata_change(self) -> None:
-        from nautical_core import file_backed_dates
+        import nautical_core.file_backed_dates as file_backed_dates
 
         file_backed_dates._CACHE_BY_PATH.clear()
         with tempfile.TemporaryDirectory() as directory:
@@ -145,7 +169,8 @@ class FileBackedRecurrenceContractTests(unittest.TestCase):
         self.assertEqual(len(parse_calls), 1)
 
     def test_file_date_resources_bound_bytes_lines_ranges_and_dates(self) -> None:
-        from nautical_core import file_backed_dates, file_resource_limits
+        import nautical_core.file_backed_dates as file_backed_dates
+        import nautical_core.file_resource_limits as file_resource_limits
 
         limits = file_resource_limits
         original = (
@@ -193,7 +218,7 @@ class FileBackedRecurrenceContractTests(unittest.TestCase):
             file_backed_dates._CACHE_BY_PATH.clear()
 
     def test_wildcard_resolution_bounds_directory_and_file_fanout(self) -> None:
-        from nautical_core import file_resource_limits
+        import nautical_core.file_resource_limits as file_resource_limits
 
         limits = file_resource_limits
         original = (limits.MAX_DIRECTORY_ENTRIES, limits.MAX_RESOLVED_FILES)
@@ -215,7 +240,7 @@ class FileBackedRecurrenceContractTests(unittest.TestCase):
             limits.MAX_DIRECTORY_ENTRIES, limits.MAX_RESOLVED_FILES = original
 
     def test_aggregate_file_limits_cover_anchor_omit_occurrences_and_calendars(self) -> None:
-        from nautical_core import file_resource_limits
+        import nautical_core.file_resource_limits as file_resource_limits
 
         original = file_resource_limits.MAX_RESOLVED_DATES
         try:
@@ -272,7 +297,7 @@ class FileBackedRecurrenceContractTests(unittest.TestCase):
             )
 
     def test_file_wildcards_are_ordered_bounded_and_single_scan(self) -> None:
-        from nautical_core import file_source_expr
+        import nautical_core.file_source_expr as file_source_expr
 
         with tempfile.TemporaryDirectory() as directory:
             anchor_dir = Path(directory)

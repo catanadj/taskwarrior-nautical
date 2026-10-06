@@ -23,6 +23,7 @@ from .scheduler_trace import SchedulerTrace, activate
 from .task_models import NauticalTask, TaskObservation
 from .operator_context import OperatorBudgetLedger
 from .query_models import OmissionPolicy, validate_omission_policy
+from .recurrence_protocols import PickOccurrenceCallback
 
 
 @dataclass(slots=True)
@@ -111,24 +112,80 @@ class SchedulerService:
     def refresh(self, spec: RecurrenceSpec) -> bool:
         return self.session.refresh(spec)
 
-    def next(self, cursor: OccurrenceCursor, **kwargs: Any) -> OccurrenceOutcome:
+    def next(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_file_skips: int = 512,
+    ) -> OccurrenceOutcome:
         try:
             with self._trace_scope():
-                outcome = self.session.next_outcome(cursor, **kwargs)
+                outcome = self.session.next_outcome(
+                    cursor,
+                    fallback_hhmm=fallback_hhmm,
+                    default_seed_date=default_seed_date,
+                    pick_occurrence_local=pick_occurrence_local,
+                    anchor_file_provider=anchor_file_provider,
+                    max_file_skips=max_file_skips,
+                )
             self._record_outcome("next", outcome, cursor=cursor)
             return outcome
         finally:
             self._flush_trace()
 
-    def select_mode(self, mode: str, **kwargs: Any) -> Any:
+    def select_mode(
+        self,
+        mode: str,
+        *,
+        due_local: datetime,
+        end_local: datetime,
+        due_explicit: bool = True,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        missed_limit: int = 25,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
+    ) -> Any:
         """Select a recurrence-mode successor through the shared session."""
-        return self.session.evaluator.select_mode(mode, **kwargs)
+        return self.session.evaluator.select_mode(
+            mode,
+            due_local=due_local,
+            end_local=end_local,
+            due_explicit=due_explicit,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            missed_limit=missed_limit,
+            max_iterations=max_iterations,
+            max_file_skips=max_file_skips,
+        )
 
-    def project_time(self, value: Any, selected_date: Any, **kwargs: Any) -> ProjectionResult:
+    def project_time(
+        self,
+        value: Any,
+        selected_date: date,
+        *,
+        config: dict[str, Any] | None = None,
+        to_local: Any | None = None,
+        seed_base: str = "",
+    ) -> ProjectionResult:
         """Project ``@t`` on an already selected calendar date."""
         try:
             with self._trace_scope():
-                result = self.session.project_time(value, selected_date, **kwargs)
+                result = self.session.project_time(
+                    value,
+                    selected_date,
+                    config=config,
+                    to_local=to_local,
+                    seed_base=seed_base,
+                )
             if self.trace is not None and self.trace.enabled:
                 self.trace.record(
                     "projection",
@@ -147,7 +204,12 @@ class SchedulerService:
         limit: int,
         omission_policy: OmissionPolicy = "exclude",
         count_omitted: bool | None = None,
-        **kwargs: Any,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
     ) -> OccurrenceCollectionResult:
         try:
             validate_omission_policy(omission_policy)
@@ -163,10 +225,27 @@ class SchedulerService:
             with self._trace_scope():
                 if omission_policy in {"include", "report"}:
                     batch = self.session.collect_events_after_cursor(
-                        cursor, limit=limit, count_omitted=True, **kwargs
+                        cursor,
+                        limit=limit,
+                        count_omitted=True,
+                        fallback_hhmm=fallback_hhmm,
+                        default_seed_date=default_seed_date,
+                        pick_occurrence_local=pick_occurrence_local,
+                        anchor_file_provider=anchor_file_provider,
+                        max_iterations=max_iterations,
+                        max_file_skips=max_file_skips,
                     )
                 else:
-                    batch = self.session.collect_after_cursor(cursor, limit=limit, **kwargs)
+                    batch = self.session.collect_after_cursor(
+                        cursor,
+                        limit=limit,
+                        fallback_hhmm=fallback_hhmm,
+                        default_seed_date=default_seed_date,
+                        pick_occurrence_local=pick_occurrence_local,
+                        anchor_file_provider=anchor_file_provider,
+                        max_iterations=max_iterations,
+                        max_file_skips=max_file_skips,
+                    )
             if not isinstance(batch, OccurrenceBatch):
                 batch = OccurrenceBatch(batch)
             # Providers normally deduplicate their own candidates, but keep
@@ -297,10 +376,10 @@ class SchedulerService:
                     max_file_skips=request.max_file_skips,
                 )
             else:
-                batch = self.session.collect_events_after_cursor(
-                    request.cursor,
-                    limit=request.limit,
-                    count_omitted=count_omitted,
+                    batch = self.session.collect_events_after_cursor(
+                        request.cursor,
+                        limit=request.limit,
+                        count_omitted=count_omitted,
                     max_iterations=iteration_limit,
                     max_file_skips=request.max_file_skips,
                 )
@@ -387,14 +466,32 @@ class SchedulerService:
         limit: int = 5,
         inclusive: bool = True,
         timezone: Any | None = None,
-        **kwargs: Any,
+        omission_policy: OmissionPolicy = "exclude",
+        count_omitted: bool | None = None,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
     ) -> OccurrenceCollectionResult:
         cursor = OccurrenceCursor(
             start,
             inclusive=inclusive,
             timezone=timezone,
         )
-        return self.collect(cursor, limit=limit, **kwargs)
+        return self.collect(
+            cursor,
+            limit=limit,
+            omission_policy=omission_policy,
+            count_omitted=count_omitted,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_iterations=max_iterations,
+            max_file_skips=max_file_skips,
+        )
 
 
 __all__ = ("SchedulerService",)

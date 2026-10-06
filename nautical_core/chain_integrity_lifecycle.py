@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 import importlib
-from typing import Any
+from typing import Any, Callable
 
 from . import astronomy, native_until
+from .business_calendar_config import BusinessCalendarConfigError
 from .common import short_uuid
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from nautical_core.task_codec import TaskCodec
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.models import (
     LifecycleAction,
     LifecycleEvent,
     LifecycleIdentity,
@@ -20,7 +21,7 @@ from nautical_core.lifecycle_models import (
     TaskSnapshot,
     recurrence_fingerprint,
 )
-from nautical_core.lifecycle_planner import (
+from nautical_core.lifecycle.planner import (
     LifecyclePreflight,
     RecurrenceCandidate,
     expiration_candidate,
@@ -29,8 +30,8 @@ from nautical_core.lifecycle_planner import (
 )
 from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
-from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
-from nautical_core.lifecycle_recovery_models import (
+from nautical_core.lifecycle.models import DeletionDisposition, DeletionEvidence
+from nautical_core.lifecycle.recovery_models import (
     RecoveryPlanResult,
     RecoveryRefusal,
     RecoveryResult,
@@ -39,6 +40,7 @@ from nautical_core.lifecycle_recovery_models import (
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
+_SafeParseDatetimeCallback = Callable[[object], tuple[datetime | None, str | None]]
 
 
 def _recovery_refusal(
@@ -46,7 +48,7 @@ def _recovery_refusal(
     status: RecoveryStatus,
     reason: str,
     *,
-    evidence: dict[str, Any] | None = None,
+    evidence: dict[str, object] | None = None,
 ) -> RecoveryRefusal:
     return RecoveryRefusal(parent, status, reason, evidence or {})
 
@@ -57,7 +59,7 @@ def _recovery_plan_result(
     *,
     reason: str = "",
     child_short: str = "",
-    child_due: Any = None,
+    child_due: datetime | None = None,
     child_observation: TaskObservation | None = None,
     terminal_kind: str | None = None,
 ) -> RecoveryPlanResult:
@@ -158,7 +160,7 @@ def int_or_default(value: object, default: int = 0) -> int:
         return default
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -189,7 +191,7 @@ def is_orphan_deleted_chain_candidate(task: TaskObservation) -> bool:
 def deleted_chain_disposition(
     task: TaskObservation,
     *,
-    safe_parse_datetime: Any,
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
 ) -> DeletionEvidence:
     """Classify an unlinked deleted chain as expiration, manual stop, or ambiguous."""
     if not is_orphan_deleted_chain_candidate(task):
@@ -201,7 +203,7 @@ def deleted_chain_disposition(
     try:
         until_dt, until_err = safe_parse_datetime(until_raw)
         end_dt, end_err = safe_parse_datetime(end_raw)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return DeletionEvidence(
             DeletionDisposition.AMBIGUOUS,
             "deleted task has no reliable native-until expiration evidence",
@@ -215,14 +217,18 @@ def deleted_chain_disposition(
         if compare_datetimes(until_dt, end_dt) <= 0:
             return DeletionEvidence(DeletionDisposition.EXPIRATION, "native until elapsed")
         return DeletionEvidence(DeletionDisposition.MANUAL, "deleted before native until")
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return DeletionEvidence(
             DeletionDisposition.AMBIGUOUS,
             "deleted task has no reliable native-until expiration evidence",
         )
 
 
-def is_orphan_expiration_candidate(task: TaskObservation, *, safe_parse_datetime: Any) -> bool:
+def is_orphan_expiration_candidate(
+    task: TaskObservation,
+    *,
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+) -> bool:
     """Return whether a deleted link has strong evidence of native until expiration."""
     evidence = deleted_chain_disposition(
         task,
@@ -232,8 +238,8 @@ def is_orphan_expiration_candidate(task: TaskObservation, *, safe_parse_datetime
 
 
 def compute_expiration_child_due(
-    parent: TaskPayload, *, hook: Any = None, generation: ChainGenerationService | None = None
-) -> tuple[Any, dict[str, Any]]:
+    parent: TaskPayload, *, hook: object | None = None, generation: ChainGenerationService | None = None
+) -> tuple[datetime | None, dict[str, Any]]:
     """Compute the next recurrence target after an expired link without mutating it."""
     generation = generation or _generation_service(hook)
     candidate = expiration_candidate(
@@ -260,11 +266,9 @@ def invalid_relative_carry_reason(
     child: TaskDraft,
     *,
     child_field: str,
-    hook: Any = None,
-    generation: ChainGenerationService | None = None,
+    generation: ChainGenerationService,
 ) -> str | None:
     """Verify that scheduled/wait retain their local offset from the recurrence target."""
-    generation = generation or _generation_service(hook)
     core = generation.core
     utc_to_local_naive = getattr(core, "utc_to_local_naive", None)
     if not callable(utc_to_local_naive):
@@ -291,7 +295,7 @@ def invalid_relative_carry_reason(
                 return f"{field} carry contains an unparseable timestamp"
             parent_delta = utc_to_local_naive(parent_value) - utc_to_local_naive(parent_target)
             child_delta = utc_to_local_naive(child_value) - utc_to_local_naive(child_target)
-        except Exception as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             return f"{field} carry could not be verified: {exc}"
         if child_delta != parent_delta:
             return f"{field} carry changed its recurrence-target offset"
@@ -301,7 +305,7 @@ def invalid_relative_carry_reason(
 def invalid_native_until_reason(
     task: TaskObservation,
     *,
-    safe_parse_datetime: Any,
+    safe_parse_datetime: _SafeParseDatetimeCallback,
 ) -> str | None:
     """Describe an invalid native expiration window, if one is present."""
     until_raw = _observation_value(task, "until")
@@ -323,10 +327,10 @@ def repair_native_until_from_previous(
     current: TaskObservation,
     *,
     kind: str,
-    safe_parse_datetime: Any,
-    fmt_isoz: Any,
-    utc_to_local_naive: Any,
-    local_naive_to_utc: Any,
+    safe_parse_datetime: _SafeParseDatetimeCallback,
+    fmt_isoz: Callable[[datetime], str],
+    utc_to_local_naive: Callable[[datetime], datetime],
+    local_naive_to_utc: Callable[[datetime], datetime],
 ) -> tuple[str | None, str | None]:
     """Carry the previous link's native expiration policy onto the current target."""
     parent_field = native_until_target_field(previous)
@@ -336,7 +340,7 @@ def repair_native_until_from_previous(
     child_target, child_target_err = safe_parse_datetime(_observation_value(current, child_field))
     if parent_target_err or parent_until_err or child_target_err:
         return None, "previous link lacks parseable target/until state"
-    if not all((parent_target, parent_until, child_target)):
+    if parent_target is None or parent_until is None or child_target is None:
         return None, "previous link lacks target or native until"
     try:
         repaired = native_until.carry(
@@ -355,10 +359,10 @@ def repair_native_until_from_previous(
 def fallback_native_until_at_day_end(
     current: TaskObservation,
     *,
-    safe_parse_datetime: Any,
-    fmt_isoz: Any,
-    utc_to_local_naive: Any,
-    local_naive_to_utc: Any,
+    safe_parse_datetime: _SafeParseDatetimeCallback,
+    fmt_isoz: Callable[[datetime], str],
+    utc_to_local_naive: Callable[[datetime], datetime],
+    local_naive_to_utc: Callable[[datetime], datetime],
 ) -> tuple[str | None, str | None]:
     """Use local 23:00 when a prior link cannot provide an expiration policy."""
     target_field = native_until_target_field(current)
@@ -371,7 +375,7 @@ def fallback_native_until_at_day_end(
         if fallback_local <= target_local:
             return None, f"cannot infer native until: {target_field} is at or after local 23:00"
         return fmt_isoz(local_naive_to_utc(fallback_local)), None
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None, "cannot infer native until at local 23:00"
 
 
@@ -455,14 +459,14 @@ def recurrence_kind(task: TaskObservation | NauticalTask) -> str:
 def _build_expiration_child_with_day_end(
     parent: TaskPayload,
     *,
-    child_due: Any,
+    child_due: datetime,
     child_field: str,
     next_link: int,
     parent_short: str,
     kind: str,
     cpmax: int,
-    until_dt: Any,
-    hook: Any,
+    until_dt: datetime | None,
+    hook: object,
     generation: ChainGenerationService | None = None,
 ) -> dict[str, Any]:
     generation = generation or _generation_service(hook)
@@ -681,7 +685,6 @@ def _plan_recovery_decision_unscoped(
         candidate = RecurrenceCandidate(
             child_due=child_due,
             metadata=tuple(sorted(dict(meta or {}).items())),
-            dnf=None,
             until=until_dt,
         )
         preflight = LifecyclePreflight.from_context(
@@ -755,14 +758,14 @@ def _plan_recovery_decision_unscoped(
                     decision_parent,
                     RecoveryStatus.ERROR,
                     f"failed to build child: {scheduling_error_message(fallback_exc)}",
-                    evidence={"child_due": child_due},
+                    evidence={"child_due": child_due.isoformat() if child_due else None},
                 )
         else:
             return _recovery_refusal(
                 decision_parent,
                 RecoveryStatus.ERROR,
                 f"failed to build child: {scheduling_error_message(exc)}",
-                evidence={"child_due": child_due},
+                evidence={"child_due": child_due.isoformat() if child_due else None},
             )
     if recovery_plan is None:
         try:
@@ -794,7 +797,7 @@ def _plan_recovery_decision_unscoped(
                 decision_parent,
                 RecoveryStatus.ERROR,
                 f"failed to build lifecycle plan: {scheduling_error_message(exc)}",
-                evidence={"child_due": child_due},
+                evidence={"child_due": child_due.isoformat() if child_due else None},
             )
     reason = "expired link missing next link" if is_expiration else "missing next link"
     if recovery_plan is None:
@@ -833,10 +836,9 @@ def plan_recovery_decision(
             generation=generation,
         )
 
-    next_link = int_or_default(parent_values.get("link"), 1) + 1
     try:
         calendar_context = use_task_calendar(parent_values)
-    except Exception as exc:
+    except BusinessCalendarConfigError as exc:
         return _recovery_refusal(parent, RecoveryStatus.ERROR, f"invalid business calendar: {exc}")
     with calendar_context:
         return _plan_recovery_decision_unscoped(

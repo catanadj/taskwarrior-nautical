@@ -36,7 +36,6 @@ from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, Snaps
 from nautical_core.operator_models import (
     OperatorContractError,
     OperatorCapabilities,
-    CoverageRequirement,
     CoverageKind,
     OperatorFailure,
     OperatorLimits,

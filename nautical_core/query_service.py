@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from collections.abc import Iterable
 import hashlib
 import json
-from typing import Any, Callable, Literal, Mapping, TypeAlias, cast
+from typing import Any, Callable, Literal, Mapping, Protocol, TypeAlias, cast
 
 from .integration_models import Absent, Found
-from .integration_context import IntegrationAccess
+from .integration_context import IntegrationAccess, IntegrationContext
 from .business_calendar import BusinessCalendar
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .recurrence_context import RecurrenceContext
@@ -17,8 +18,13 @@ from .task_codec import TaskCodec
 from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from .scheduler_service import SchedulerService
 from .chain_generation import ChainGenerationService
-from .task_read_repository import ACTIVE_TASK_STATUSES, ALL_TASK_STATUSES
+from .task_read_repository import (
+    ACTIVE_TASK_STATUSES,
+    ALL_TASK_STATUSES,
+    TaskReadRepository,
+)
 from .task_models import FieldPresence, NauticalTask, TaskObservation
+from .occurrence_provider import Occurrence
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_datetime import TaskDatetimeParser, parser_for_core
 from .query_models import (
@@ -35,13 +41,19 @@ from .query_models import (
 )
 from .operator_models import OperatorCursor, OperatorContractError, OperatorLimits
 from .operator_context import OperatorInvocationBudget
-from .parser_models import ParseError
+from .parsing.parser_models import ParseError
 from .hook_validation_pipeline import ValidationStatus, validate_task_mapping
 from .hook_workflow_models import WorkflowRoute
 
 
 class QueryServiceError(RuntimeError):
     """Raised when a query cannot be safely constructed or executed."""
+
+
+class _OccurrenceQueryUnitOfWork(Protocol):
+    context: IntegrationContext
+    repository: TaskReadRepository
+    mutation_epoch: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,15 +230,26 @@ def _terminal(result: OccurrenceCollectionResult) -> Mapping[str, Any] | None:
 class OccurrenceQueryService:
     """Resolve bounded occurrence queries without mutation or subprocesses."""
 
-    def __init__(self, unit_of_work: Any, *, runtime: OccurrenceQueryRuntime) -> None:
-        context = getattr(unit_of_work, "context", None)
-        if context is None or getattr(context, "access", None) is not IntegrationAccess.READ_ONLY:
+    def __init__(
+        self,
+        unit_of_work: _OccurrenceQueryUnitOfWork,
+        *,
+        runtime: OccurrenceQueryRuntime,
+    ) -> None:
+        try:
+            context = unit_of_work.context
+            access = context.access
+            local_timezone = context.local_timezone
+        except AttributeError as exc:
+            raise QueryServiceError(
+                "occurrence queries require a read-only Taskwarrior unit of work"
+            ) from exc
+        if access is not IntegrationAccess.READ_ONLY:
             raise QueryServiceError("occurrence queries require a read-only Taskwarrior unit of work")
         if not isinstance(runtime, OccurrenceQueryRuntime):
             raise TypeError("occurrence queries require explicit recurrence runtime services")
         self._uow = unit_of_work
         self._runtime = runtime
-        local_timezone = getattr(context, "local_timezone", None)
         if not isinstance(local_timezone, tzinfo):
             raise QueryServiceError("validated local timezone is unavailable")
         self._timezone: tzinfo = local_timezone
@@ -320,14 +343,25 @@ class OccurrenceQueryService:
                 return ()
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
         if selector.chain_id:
-            read = repository.chain_snapshot(selector.chain_id, statuses=ALL_TASK_STATUSES, complete_history=True)
-            if isinstance(read, Found):
+            chain_read = repository.chain_snapshot(
+                selector.chain_id,
+                statuses=ALL_TASK_STATUSES,
+                complete_history=True,
+            )
+            if isinstance(chain_read, Found):
                 return _ordered_rows(
-                    tuple(_decode_repository_row(row, source_query="query chain") for row in read.value)
+                    tuple(
+                        _decode_repository_row(row, source_query="query chain")
+                        for row in chain_read.value
+                    )
                 )
-            if isinstance(read, Absent):
-                return _failure("chain_absent", read.reason)
-            return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
+            if isinstance(chain_read, Absent):
+                return _failure("chain_absent", chain_read.reason)
+            return _failure(
+                "task_read_unavailable",
+                chain_read.evidence.detail,
+                retryable=chain_read.retryable,
+            )
         if len(selector.uuids) > 1:
             read = repository.broad_snapshot(
                 identity="query:uuids",
@@ -351,18 +385,18 @@ class OccurrenceQueryService:
             return tuple(uuid_rows)
         single_rows: list[TaskRow] = []
         for uuid_value in selector.uuids:
-            read = repository.by_uuid(uuid_value, statuses=ALL_TASK_STATUSES)
-            if isinstance(read, Found):
-                single_rows.append(_decode_repository_row(read.value, source_query="query UUID"))
+            uuid_read = repository.by_uuid(uuid_value, statuses=ALL_TASK_STATUSES)
+            if isinstance(uuid_read, Found):
+                single_rows.append(_decode_repository_row(uuid_read.value, source_query="query UUID"))
                 continue
-            if isinstance(read, Absent):
+            if isinstance(uuid_read, Absent):
                 single_rows.append(_AbsentTask(uuid_value))
                 continue
             return _failure(
                 "task_read_unavailable",
-                read.evidence.detail,
+                uuid_read.evidence.detail,
                 task_uuid=uuid_value,
-                retryable=read.retryable,
+                retryable=uuid_read.retryable,
             )
         return tuple(single_rows)
 
@@ -377,8 +411,8 @@ class OccurrenceQueryService:
                 raise QueryServiceError("query cursors are supported only for --all task queries")
             return rows, None, True
         snapshot_id = self._snapshot_id(rows)
-        configuration = str(getattr(self._uow.context.configuration, "fingerprint", ""))
-        epoch = str(getattr(self._uow, "mutation_epoch", 0))
+        configuration = self._uow.context.configuration.fingerprint
+        epoch = str(self._uow.mutation_epoch)
         if request.cursor is not None:
             try:
                 request.cursor.assert_compatible(snapshot_id, configuration, epoch)
@@ -410,7 +444,7 @@ class OccurrenceQueryService:
             json.dumps(evidence, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
         ).hexdigest()[:32]
 
-    def _records(self, items: Any, timezone_name: str) -> tuple[OccurrenceRecord, ...]:
+    def _records(self, items: Iterable[Occurrence], timezone_name: str) -> tuple[OccurrenceRecord, ...]:
         records: list[OccurrenceRecord] = []
         for item in items:
             if item.local_datetime is None:
@@ -598,7 +632,7 @@ class OccurrenceQueryService:
                 request=request,
                 timezone=_timezone_name(self._timezone),
                 status="unavailable",
-                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                configuration_fingerprint=self._uow.context.configuration.fingerprint,
                 failure=rows,
             )
         try:
@@ -608,7 +642,7 @@ class OccurrenceQueryService:
                 request=request,
                 timezone=_timezone_name(self._timezone),
                 status="unavailable",
-                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                configuration_fingerprint=self._uow.context.configuration.fingerprint,
                 failure=_failure("cursor_unavailable", str(exc), retryable=False),
                 coverage={"kind": "unavailable", "reason": str(exc)},
             )
@@ -672,7 +706,7 @@ class OccurrenceQueryService:
                 Literal["found", "empty", "exhausted", "absent", "unavailable", "invalid"],
                 status,
             ),
-            configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+            configuration_fingerprint=self._uow.context.configuration.fingerprint,
             cursor=next_cursor,
             complete=complete,
             coverage={
@@ -685,7 +719,7 @@ class OccurrenceQueryService:
                 ),
                 "omitted_count": max(0, len(rows) - len(page_rows)),
                 "snapshot_id": self._snapshot_id(rows),
-                "mutation_epoch": str(getattr(self._uow, "mutation_epoch", 0)),
+                "mutation_epoch": str(self._uow.mutation_epoch),
             },
         )
 
@@ -929,7 +963,7 @@ class OccurrenceQueryService:
                 request=request,
                 timezone=_timezone_name(self._timezone),
                 status="unavailable",
-                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                configuration_fingerprint=self._uow.context.configuration.fingerprint,
                 failure=rows,
                 schema="nautical.query.next",
             )
@@ -944,7 +978,7 @@ class OccurrenceQueryService:
                 Literal["found", "empty", "exhausted", "absent", "unavailable", "invalid"],
                 status,
             ),
-            configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+            configuration_fingerprint=self._uow.context.configuration.fingerprint,
             schema="nautical.query.next",
         )
 

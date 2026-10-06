@@ -10,7 +10,7 @@ from typing import Any
 
 from .operator_models import OperatorResult, OperatorV2Result
 from .operator_context import OperatorBudgetLedger
-from .lifecycle_models import LifecycleDrainProgress
+from .lifecycle.models import LifecycleDrainProgress
 
 
 def bounded_text(value: object, *, width: int = 120) -> str:

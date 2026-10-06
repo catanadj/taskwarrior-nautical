@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-import inspect
-import importlib
-from dataclasses import FrozenInstanceError, is_dataclass
+from datetime import date, timedelta
 import hashlib
-from types import ModuleType
+import importlib
+import inspect
+from typing import get_type_hints
+from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path
+from types import ModuleType
 import unittest
 
 from nautical_core.api_bindings import ApiBinding, core_namespace
-from nautical_core import compat_api
+import nautical_core.compat_api as compat_api
 from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES
 
 
@@ -88,6 +90,19 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertIn("ApiBinding", str(annotation))
                 self.assertNotIn("SimpleNamespace", source)
 
+    def test_parser_owner_has_no_legacy_root_bridge_functions(self) -> None:
+        parser_owner = importlib.import_module("nautical_core.parser_api")
+        for name in (
+            "build_acf",
+            "resolve_anchor_presets",
+            "resolve_omit_presets",
+            "parse_anchor_expr_to_dnf",
+            "parse_anchor_expr_to_dnf_cached",
+            "validate_anchor_expr_strict",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(parser_owner, name))
+
     def test_core_namespace_rejects_missing_binding_source_explicitly(self) -> None:
         with self.assertRaisesRegex(TypeError, "time_api.for_core"):
             core_namespace(None, None, None, "time_api")
@@ -104,14 +119,27 @@ class ApiBindingContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(files))
 
     def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
-        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 130)
-        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 130)
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 78)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 78)
         self.assertEqual(
             hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
-            "d246ffa075edc62eca043d324d362443217883880f9473e55e7d3b6e27e0d96d",
+            "4e095b6a77cbcadfd929e09d3fe99666a84d199a630fbf554aad1bd36f7faf55",
         )
         self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
         self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("tempfile", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("fcntl", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("chain_colour_root", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("safe_lock", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("TaskDict", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("AnchorValidationResult", compat_api.PUBLIC_EXPORTS)
+        for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
+            self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)
+        for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):
+            self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("_fatal_bad_colon_in_year_tail", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("_warn_rate_limited_any", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("validate_scheduling_configuration", compat_api.PUBLIC_EXPORTS)
 
         import nautical_core as facade
 
@@ -120,42 +148,138 @@ class ApiBindingContractTests(unittest.TestCase):
         wildcard: dict[str, object] = {}
         exec("from nautical_core import *", {}, wildcard)
         self.assertEqual(set(wildcard), set(compat_api.PUBLIC_EXPORTS))
-        self.assertTrue(callable(facade.normalize_task_business_calendar))
         self.assertTrue(callable(facade.normalize_task_business_calendar_in_place))
-        self.assertEqual(
-            inspect.signature(facade.normalize_task_business_calendar),
-            inspect.signature(facade.normalize_task_business_calendar_in_place),
-        )
+        self.assertFalse(hasattr(facade, "normalize_task_business_calendar"))
+        self.assertFalse(hasattr(facade, "fcntl"))
+        self.assertFalse(hasattr(facade, "chain_colour_root"))
+        self.assertFalse(hasattr(facade, "safe_lock"))
+        self.assertFalse(hasattr(facade, "TaskDict"))
+        self.assertFalse(hasattr(facade, "AnchorValidationResult"))
+        for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
+            self.assertFalse(hasattr(facade, name))
+        hint_models = importlib.import_module("nautical_core.hint_models")
+        for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):
+            self.assertFalse(hasattr(facade, name))
+            self.assertTrue(hasattr(hint_models, name))
+        self.assertFalse(hasattr(facade, "_fatal_bad_colon_in_year_tail"))
+        self.assertFalse(hasattr(facade, "_warn_rate_limited_any"))
+        self.assertFalse(hasattr(facade, "validate_scheduling_configuration"))
+
+    def test_root_facade_exposes_no_test_seam_exports(self) -> None:
+        import nautical_core as facade
+
+        test_seams = {
+            name
+            for name, category in compat_api.PUBLIC_EXPORT_CATEGORIES.items()
+            if category == "test_seam"
+        }
+        self.assertEqual(test_seams, set())
+        for name in (
+            "_LOCAL_TZ",
+            "_cache_atomic_replace",
+            "_cache_lock",
+            "_cache_path",
+            "_clear_all_caches",
+            "_emit_cache_metrics",
+            "_normalize_spec_for_acf_cached",
+            "_warn_once_per_day",
+            "_warn_once_per_day_any",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(facade, name))
+
+    def test_root_facade_does_not_export_unconsumed_owner_helpers(self) -> None:
+        import nautical_core as facade
+
+        self.assertNotIn("_build_anchor_atom_dnf", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("_build_anchor_atom_dnf", compat_api.PUBLIC_OWNER_MODULES)
+        self.assertNotIn("_build_anchor_atom_dnf", compat_api.PUBLIC_EXPORT_CATEGORIES)
+        self.assertFalse(hasattr(facade, "_build_anchor_atom_dnf"))
+        self.assertNotIn("_weeks_between", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("_weeks_between", compat_api.PUBLIC_OWNER_MODULES)
+        self.assertNotIn("_weeks_between", compat_api.PUBLIC_EXPORT_CATEGORIES)
+        self.assertFalse(hasattr(facade, "_weeks_between"))
+
+    def test_supported_facade_wrappers_have_explicit_signatures(self) -> None:
+        import inspect
+        import nautical_core as facade
+
+        for name in ("render_panel", "resolve_task_data_context", "diag_log_redact", "diag_log", "diag", "run_task_result"):
+            with self.subTest(name=name):
+                parameters = inspect.signature(getattr(facade, name)).parameters.values()
+                self.assertFalse(any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters))
+                self.assertFalse(any(parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in parameters))
+        for name in (
+            "_interval_allowed_for_atom",
+            "_first_hit_after_probe_in_month",
+            "_month_has_hit",
+            "_normalize_anchor_expr_input",
+            "_parse_anchor_atom_at",
+            "_rand_bucket_signature",
+            "_quick_weekly_and_check",
+            "_quick_yearly_and_check",
+            "_term_has_any_match_within",
+            "_raise_on_bad_colon_year_tokens",
+            "_quarter_month_selector_mode",
+            "_term_quarter_rewrite_mode",
+            "_rewrite_quarter_spec_mode",
+            "_rewrite_quarters_in_context",
+            "_doms_for_monthly_token",
+            "_y_ranges_from_spec",
+            "_weekly_spec_to_wset",
+            "_doms_allowed_by_year",
+            "_doms_for_weekly_spec",
+            "_validate_yearly_spec_token",
+            "_validate_yearly_token_format",
+            "_parse_hhmm",
+            "_parse_atom_head",
+            "_parse_atom_mods",
+            "_DIAG_LOG_REDACT_KEYS",
+        ):
+            with self.subTest(name=name):
+                self.assertNotIn(name, compat_api.PUBLIC_EXPORTS)
+                self.assertNotIn(name, compat_api.PUBLIC_OWNER_MODULES)
+                self.assertNotIn(name, compat_api.PUBLIC_EXPORT_CATEGORIES)
+                self.assertFalse(hasattr(facade, name))
 
     def test_public_owner_registry_covers_surface_and_parser_group(self) -> None:
         owners = compat_api.PUBLIC_OWNER_MODULES
         self.assertEqual(set(owners), set(compat_api.PUBLIC_EXPORTS))
         self.assertEqual(owners["parse_anchor_expr_to_dnf"], "nautical_core.parser_api")
-        self.assertEqual(owners["AnchorDNF"], "nautical_core.parsing.parser_models")
+        self.assertEqual(owners["parse_anchor_expr_to_dnf_cached"], "nautical_core.parser_api")
+        for name in ("AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF"):
+            self.assertNotIn(name, owners)
+        for name in ("HintMetaCfg", "HintMeta", "HintPerYear", "HintLimits", "AnchorHintsPayload"):
+            self.assertNotIn(name, owners)
+        self.assertNotIn("_fatal_bad_colon_in_year_tail", owners)
+        self.assertNotIn("_warn_rate_limited_any", owners)
+        self.assertNotIn("validate_scheduling_configuration", owners)
         self.assertEqual(owners["OccurrenceSearchExhausted"], "nautical_core.scheduler_models")
         self.assertEqual(owners["effective_config_snapshot"], "nautical_core.core_config")
         self.assertEqual(owners["cache_load"], "nautical_core.cache_api")
         self.assertEqual(owners["business_calendar_for_task"], "nautical_core.business_calendar_api")
         self.assertEqual(owners["business_calendar_displacement_for_date"], "nautical_core.business_calendar")
         self.assertEqual(owners["build_local_datetime"], "nautical_core.time_api")
-        self.assertEqual(owners["TaskDict"], "nautical_core.task_models")
+        self.assertNotIn("TaskDict", owners)
+        self.assertNotIn("AnchorValidationResult", owners)
         self.assertEqual(owners["render_panel"], "nautical_core.ui")
-        self.assertEqual(owners["_build_anchor_atom_dnf"], "nautical_core.parser_api")
-        self.assertEqual(owners["_weeks_between"], "nautical_core.scheduler_api")
+        self.assertNotIn("_build_anchor_atom_dnf", owners)
+        self.assertNotIn("_weeks_between", owners)
         self.assertEqual(owners["resolve_task_data_context"], "nautical_core.runtime")
-        self.assertEqual(owners["fcntl"], "fcntl")
-        self.assertEqual(owners["tempfile"], "tempfile")
+        self.assertNotIn("fcntl", owners)
+        self.assertNotIn("chain_colour_root", owners)
+        self.assertNotIn("safe_lock", owners)
+        self.assertNotIn("TaskDict", owners)
+        self.assertNotIn("tempfile", owners)
 
-    def test_public_surface_categories_cover_exports_and_legacy_alias(self) -> None:
+    def test_public_surface_categories_cover_exports_without_legacy_aliases(self) -> None:
         categories = compat_api.PUBLIC_EXPORT_CATEGORIES
-        self.assertEqual(set(categories), set(compat_api.PUBLIC_EXPORTS) | {
-            "normalize_task_business_calendar",
-        })
-        allowed = {"supported_public_api", "installed_runtime", "test_seam", "legacy_compatibility_alias"}
+        self.assertEqual(set(categories), set(compat_api.PUBLIC_EXPORTS))
+        allowed = {"supported_public_api", "installed_runtime", "test_seam"}
         self.assertTrue(set(categories.values()) <= allowed)
-        self.assertEqual(categories["normalize_task_business_calendar"], "legacy_compatibility_alias")
+        self.assertNotIn("normalize_task_business_calendar", categories)
         self.assertEqual(categories["diag"], "installed_runtime")
-        self.assertEqual(categories["_build_anchor_atom_dnf"], "test_seam")
+        self.assertNotIn("_build_anchor_atom_dnf", categories)
 
     def test_canonical_owner_modules_are_importable(self) -> None:
         owners = set(compat_api.PUBLIC_OWNER_MODULES.values())
@@ -163,7 +287,7 @@ class ApiBindingContractTests(unittest.TestCase):
             with self.subTest(module=module_name):
                 self.assertIsNotNone(importlib.import_module(module_name))
 
-    def test_legacy_alias_and_public_wrappers_preserve_callable_contracts(self) -> None:
+    def test_public_wrappers_preserve_callable_contracts_without_legacy_aliases(self) -> None:
         import nautical_core as facade
 
         for name in (
@@ -175,10 +299,8 @@ class ApiBindingContractTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(facade, name)))
-        self.assertEqual(
-            inspect.signature(facade.normalize_task_business_calendar),
-            inspect.signature(facade.normalize_task_business_calendar_in_place),
-        )
+        self.assertFalse(hasattr(facade, "normalize_task_business_calendar"))
+        self.assertFalse(hasattr(facade, "tempfile"))
 
     def test_public_facade_exports_only_supported_symbols_with_stable_signatures(self) -> None:
         import nautical_core as facade
@@ -215,6 +337,85 @@ class ApiBindingContractTests(unittest.TestCase):
         self.assertEqual(
             facade.parse_anchor_expr_to_dnf("w:mon"),
             facade.parse_anchor_expr_to_dnf_cached("w:mon"),
+        )
+
+    def test_scheduler_public_entry_points_do_not_hide_options_behind_kwargs(self) -> None:
+        from nautical_core.evaluation_session import EvaluationSession
+        from nautical_core.compiled_schedule import CompiledSchedule
+        from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+        from nautical_core.scheduler_service import SchedulerService
+
+        owners = (SchedulerService, EvaluationSession, RecurrenceEvaluator, CompiledSchedule)
+        names = (
+            "next",
+            "next_outcome",
+            "select_mode",
+            "project_time",
+            "collect",
+            "collect_after_cursor",
+            "collect_events_after_cursor",
+            "preview",
+            "from_task",
+            "from_observation",
+        )
+        for owner in owners:
+            for name in names:
+                method = getattr(owner, name, None)
+                if method is None:
+                    continue
+                with self.subTest(owner=owner.__name__, method=name):
+                    self.assertFalse(
+                        any(
+                            parameter.kind is inspect.Parameter.VAR_KEYWORD
+                            for parameter in inspect.signature(method).parameters.values()
+                        )
+                    )
+
+    def test_root_cp_parser_facade_preserves_concrete_result_types(self) -> None:
+        import nautical_core as facade
+        from nautical_core.cp_parser import CPSequenceToken
+
+        self.assertEqual(get_type_hints(facade.parse_cp_duration)["return"], timedelta | None)
+        self.assertEqual(
+            get_type_hints(facade.parse_cp_sequence_tokens)["return"],
+            list[CPSequenceToken] | None,
+        )
+        self.assertEqual(
+            get_type_hints(facade.parse_cp_sequence)["return"],
+            list[timedelta] | None,
+        )
+        self.assertIs(
+            get_type_hints(facade.cp_sequence_interval_for_token)["token"],
+            CPSequenceToken,
+        )
+    def test_parser_scheduler_and_cache_bindings_match_facade_behavior(self) -> None:
+        import nautical_core as facade
+        cache_api = importlib.import_module("nautical_core.cache_api")
+        parser_api = importlib.import_module("nautical_core.parser_api")
+        scheduler_api = importlib.import_module("nautical_core.scheduler_api")
+
+        # Resolve the facade's configuration-backed key before building an
+        # owner snapshot so both calls observe the same runtime configuration.
+        facade_cache_key = facade.cache_key_for_task("w:mon", "skip")
+        public_dnf = facade.parse_anchor_expr_to_dnf("w:mon")
+        parser = parser_api.for_core(module=facade)
+        scheduler = scheduler_api.for_core(module=facade)
+        cache = cache_api.for_core(module=facade)
+
+        dnf = parser.parse_anchor_expr_to_dnf("w:mon")
+        self.assertEqual(dnf, public_dnf)
+        self.assertEqual(
+            parser.validate_anchor_expr_strict("w:mon"),
+            facade.validate_anchor_expr_strict("w:mon"),
+        )
+        reference = date(2026, 9, 28)
+        self.assertEqual(
+            scheduler.next_after_expr(dnf, reference),
+            facade.next_after_expr(dnf, reference),
+        )
+        self.assertEqual(
+            cache.cache_key_for_task("w:mon", "skip"),
+            facade_cache_key,
         )
 
 

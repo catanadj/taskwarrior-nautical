@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Callable
+from typing import Any, Protocol
 
+from .modify_models import PanelCallback
 from .task_models import TaskPayload
+
+
+class CalendarFeedbackCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        occurrence: date | datetime,
+        *,
+        core: Any,
+        panel: PanelCallback,
+    ) -> bool: ...
 
 
 def render_business_calendar_displacement(
@@ -11,7 +23,7 @@ def render_business_calendar_displacement(
     occurrence: date | datetime,
     *,
     core: Any,
-    panel: Callable[..., None],
+    panel: PanelCallback,
 ) -> bool:
     calendar_name = str(task.get("bc") or "").strip().lower()
     if not calendar_name:
@@ -22,7 +34,7 @@ def render_business_calendar_displacement(
             adjusted,
             calendar_name=calendar_name,
         )
-    except Exception:
+    except (OverflowError, OSError, TypeError, ValueError):
         return False
     if displacement is None:
         return False
@@ -43,4 +55,4 @@ def render_business_calendar_displacement(
     return True
 
 
-__all__ = ("render_business_calendar_displacement",)
+__all__ = ("CalendarFeedbackCallback", "render_business_calendar_displacement")

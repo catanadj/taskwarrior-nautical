@@ -25,6 +25,7 @@ from .operator_models import OperatorStatus
 from .config_schema import CONFIG_SPECS, validate_config
 from .description_aliases import ALIAS_TO_FIELD
 from .support_policy import policy_document
+from .install_filesystem import InstallError
 
 
 def _json_safe(value: object) -> object:
@@ -75,7 +76,7 @@ class ConfigurationDiagnosisRequest:
     config_dir: object
     timezone_factory: Callable[[str], object] | None
     seasonal_events: Callable[[int], dict[str, Any]]
-    astronomy_preflight: Callable[[object], dict[str, Any]]
+    astronomy_preflight: Callable[[dict[str, Any] | None], dict[str, Any]]
     source_path: str
     drift_loader: Callable[[], dict[str, Any]]
     dependency_available: Callable[[str], bool]
@@ -146,7 +147,7 @@ class OperatorHealthService:
                         "total_inodes": total_inodes,
                     },
                 ))
-            except Exception as exc:
+            except (AttributeError, OSError, OverflowError, TypeError, ValueError) as exc:
                 findings.append(OperatorFinding(
                     f"storage.{label}", "installation", FindingSeverity.ERROR,
                     FindingActionability.BLOCKING,
@@ -173,50 +174,63 @@ class OperatorHealthService:
         manifest: Mapping[str, Any] = manifest_value if isinstance(manifest_value, Mapping) else {}
         expected_digest = str(manifest.get("content_sha256") or "")
         release_path = runtime_root / "releases" / release_id if release_id else Path("")
+        digest_error = ""
         try:
             if digest_factory is None:
                 from .install_runtime import source_digest
                 digest_factory = source_digest
             if not release_id or not expected_digest or not release_path.is_dir():
-                raise ValueError("active release or manifest digest is unavailable")
-            actual_digest = digest_factory(release_path)
-            if actual_digest != expected_digest:
-                raise ValueError(f"digest mismatch (expected {expected_digest}, got {actual_digest})")
+                digest_error = "active release or manifest digest is unavailable"
+            else:
+                actual_digest = digest_factory(release_path)
+                if actual_digest != expected_digest:
+                    digest_error = f"digest mismatch (expected {expected_digest}, got {actual_digest})"
+        except (ImportError, InstallError, OSError, ValueError) as exc:
+            digest_error = str(exc).strip() or type(exc).__name__
+        if digest_error:
+            findings.append(OperatorFinding(
+                "install.release_digest", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Active managed release content could not be verified.",
+                observed={"release_id": release_id, "path": str(release_path), "error": digest_error},
+                guidance="Reinstall from a verified local kit or roll back to a retained release.",
+            ))
+        else:
             findings.append(OperatorFinding(
                 "install.release_digest", "installation", FindingSeverity.INFO,
                 FindingActionability.INFORMATIONAL,
                 f"Active managed release content is verified: {release_id}.",
                 observed={"release_id": release_id, "content_sha256": actual_digest, "path": str(release_path)},
             ))
-        except Exception as exc:
-            findings.append(OperatorFinding(
-                "install.release_digest", "installation", FindingSeverity.ERROR,
-                FindingActionability.BLOCKING,
-                "Active managed release content could not be verified.",
-                observed={"release_id": release_id, "path": str(release_path), "error": str(exc)},
-                guidance="Reinstall from a verified local kit or roll back to a retained release.",
-            ))
 
         probe = version_probe or OperatorHealthService._probe_executable
         for label, executable, code in (("Taskwarrior", task_binary, "taskwarrior.identity"), ("Python", python_executable, "python.identity")):
+            probe_error = ""
             try:
                 path = str(Path(executable).expanduser().resolve(strict=True))
-                ok, version = probe(path)
-                if not ok:
-                    raise RuntimeError(version or "version probe failed")
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                probe_error = str(exc).strip() or type(exc).__name__
+            if not probe_error:
+                try:
+                    ok, version = probe(path)
+                    if not ok:
+                        probe_error = version or "version probe failed"
+                except (OSError, subprocess.SubprocessError) as exc:
+                    probe_error = str(exc).strip() or type(exc).__name__
+            if probe_error:
+                findings.append(OperatorFinding(
+                    code, "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"{label} executable identity could not be verified.",
+                    observed={"path": str(executable), "error": probe_error},
+                    guidance=f"Verify the offline-kit {label} executable and retry deep Doctor.",
+                ))
+            else:
                 findings.append(OperatorFinding(
                     code, "installation", FindingSeverity.INFO,
                     FindingActionability.INFORMATIONAL,
                     f"{label} executable is usable: {path}.",
                     observed={"path": path, "version": version},
-                ))
-            except Exception as exc:
-                findings.append(OperatorFinding(
-                    code, "installation", FindingSeverity.ERROR,
-                    FindingActionability.BLOCKING,
-                    f"{label} executable identity could not be verified.",
-                    observed={"path": str(executable), "error": str(exc)},
-                    guidance=f"Verify the offline-kit {label} executable and retry deep Doctor.",
                 ))
         return tuple(findings)
 
@@ -239,7 +253,7 @@ class OperatorHealthService:
                 f"Configured timezone is available: {timezone_name}.",
                 observed={"timezone": str(timezone_name)},
             ))
-        except Exception as exc:
+        except (KeyError, OSError, TypeError, ValueError) as exc:
             findings.append(OperatorFinding(
                 "config.timezone.deep", "configuration", FindingSeverity.ERROR,
                 FindingActionability.BLOCKING,
@@ -259,7 +273,7 @@ class OperatorHealthService:
                     f"Configured resource is readable: {label}.",
                     observed={"path": str(resolved), "kind": "directory" if resolved.is_dir() else "file"},
                 ))
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 findings.append(OperatorFinding(
                     f"resource.{label}", "configuration", FindingSeverity.ERROR,
                     FindingActionability.BLOCKING,
@@ -281,57 +295,75 @@ class OperatorHealthService:
         """Check outbox integrity and the newest optional backup generation."""
         findings: list[OperatorFinding] = []
         path = Path(str(outbox_path)).expanduser()
+        quick_check_error = ""
         try:
             checker = quick_check or OperatorHealthService._quick_check_sqlite
             result = checker(path)
+            if not isinstance(result, str):
+                raise TypeError("outbox quick check returned a non-text result")
             if result.lower() != "ok":
-                raise RuntimeError(result)
+                quick_check_error = result
+        except (OSError, sqlite3.Error) as exc:
+            quick_check_error = str(exc).strip() or type(exc).__name__
+        if quick_check_error:
+            findings.append(OperatorFinding(
+                "outbox.quick_check.deep", "lifecycle", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Lifecycle outbox integrity could not be verified.",
+                observed={"path": str(path), "error": quick_check_error},
+                guidance="Stop Nautical processes and restore or repair the outbox from a verified local backup.",
+            ))
+        else:
             findings.append(OperatorFinding(
                 "outbox.quick_check.deep", "lifecycle", FindingSeverity.INFO,
                 FindingActionability.INFORMATIONAL,
                 "Lifecycle outbox integrity is verified.",
                 observed={"path": str(path), "quick_check": result},
             ))
-        except Exception as exc:
-            findings.append(OperatorFinding(
-                "outbox.quick_check.deep", "lifecycle", FindingSeverity.ERROR,
-                FindingActionability.BLOCKING,
-                "Lifecycle outbox integrity could not be verified.",
-                observed={"path": str(path), "error": str(exc)},
-                guidance="Stop Nautical processes and restore or repair the outbox from a verified local backup.",
-            ))
         if backup_root is None:
             return tuple(findings)
         root = Path(str(backup_root)).expanduser()
+        backup_error = ""
         try:
             generations = [item for item in root.iterdir() if item.is_dir() and not item.is_symlink()]
             if not generations:
-                raise FileNotFoundError("no backup generations found")
-            newest = max(generations, key=lambda item: (item.stat().st_mtime_ns, item.name))
-            backup_checker_fn: Callable[[Path], bool] = backup_checker or OperatorHealthService._verify_backup_generation
-            if not backup_checker_fn(newest):
-                raise RuntimeError("manifest or artifact verification failed")
-            manifest = json.loads((newest / "manifest.json").read_text(encoding="utf-8"))
-            metadata = manifest.get("metadata") if isinstance(manifest, Mapping) else None
-            if not isinstance(metadata, Mapping) or metadata.get("restore_tool_schema") != 1:
-                raise RuntimeError("backup restore-tool schema is missing or unsupported")
-            created_at = metadata.get("created_at")
-            if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
-                raise RuntimeError("backup creation timestamp is missing or invalid")
-            age_seconds = max(0.0, float(clock()) - float(created_at))
+                backup_error = "no backup generations found"
+            else:
+                newest = max(generations, key=lambda item: (item.stat().st_mtime_ns, item.name))
+                backup_checker_fn: Callable[[Path], bool] = backup_checker or OperatorHealthService._verify_backup_generation
+                if not backup_checker_fn(newest):
+                    backup_error = "manifest or artifact verification failed"
+                else:
+                    manifest = json.loads((newest / "manifest.json").read_text(encoding="utf-8"))
+                    metadata = manifest.get("metadata") if isinstance(manifest, Mapping) else None
+                    if not isinstance(metadata, Mapping) or metadata.get("restore_tool_schema") != 1:
+                        backup_error = "backup restore-tool schema is missing or unsupported"
+                    else:
+                        created_at = metadata.get("created_at")
+                        if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
+                            backup_error = "backup creation timestamp is missing or invalid"
+                        else:
+                            try:
+                                created_at_seconds = float(created_at)
+                            except (OverflowError, ValueError):
+                                backup_error = "backup creation timestamp is outside the supported range"
+        except (OSError, UnicodeError, ValueError) as exc:
+            backup_error = str(exc).strip() or type(exc).__name__
+        if backup_error:
+            findings.append(OperatorFinding(
+                "backup.newest.deep", "backup", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Newest configured backup generation could not be verified.",
+                observed={"root": str(root), "error": backup_error},
+                guidance="Create or select a verified local backup generation before relying on offline recovery.",
+            ))
+        else:
+            age_seconds = max(0.0, float(clock()) - created_at_seconds)
             findings.append(OperatorFinding(
                 "backup.newest.deep", "backup", FindingSeverity.INFO,
                 FindingActionability.INFORMATIONAL,
                 "Newest configured backup generation is verified.",
                 observed={"root": str(root), "generation": newest.name, "age_seconds": age_seconds, "restore_tool_schema": 1},
-            ))
-        except Exception as exc:
-            findings.append(OperatorFinding(
-                "backup.newest.deep", "backup", FindingSeverity.ERROR,
-                FindingActionability.BLOCKING,
-                "Newest configured backup generation could not be verified.",
-                observed={"root": str(root), "error": str(exc)},
-                guidance="Create or select a verified local backup generation before relying on offline recovery.",
             ))
         return tuple(findings)
 
@@ -404,7 +436,7 @@ class OperatorHealthService:
                 mode = int(getattr(stat_factory(path), "st_mode"))
                 if mode & required_bits != required_bits:
                     errors.append(f"{label} lacks required permissions")
-            except Exception as exc:
+            except (AttributeError, OSError, OverflowError, TypeError, ValueError) as exc:
                 errors.append(f"{label}: {exc}")
         release_resolved = release.resolve() if release_id else Path("")
         for event, record in (hook_runtimes or {}).items():
@@ -414,7 +446,7 @@ class OperatorHealthService:
                 continue
             try:
                 Path(str(implementation)).resolve(strict=True).relative_to(release_resolved)
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 errors.append(f"{event} implementation is outside the active release")
         if errors:
             findings.append(OperatorFinding(
@@ -485,7 +517,7 @@ class OperatorHealthService:
         config_dir: object,
         timezone_factory: Callable[[str], object] | None,
         seasonal_events: Callable[[int], dict[str, Any]],
-        astronomy_preflight: Callable[[object], dict[str, Any]],
+        astronomy_preflight: Callable[[dict[str, Any] | None], dict[str, Any]],
         source_path: str,
         drift_loader: Callable[[], dict[str, Any]],
         dependency_available: Callable[[str], bool],
@@ -730,7 +762,7 @@ class OperatorHealthService:
             ),)
         try:
             zoneinfo_factory(tz_name)
-        except Exception as exc:
+        except (KeyError, OSError, TypeError, ValueError) as exc:
             return (OperatorFinding(
                 "config.timezone.invalid", "configuration", FindingSeverity.WARNING,
                 FindingActionability.ACTIONABLE,
@@ -757,7 +789,7 @@ class OperatorHealthService:
         valid = True
         try:
             configured = int(str(raw).strip())
-        except Exception:
+        except (TypeError, ValueError):
             configured, valid = default, False
         effective = max(minimum, min(maximum, configured))
         result: list[OperatorFinding] = []
@@ -781,7 +813,7 @@ class OperatorHealthService:
             return tuple(result)
         try:
             rich_available = rich_factory("rich") is not None
-        except Exception:
+        except (ImportError, ValueError):
             rich_available = False
         motion = "disabled" if effective == 0 else f"{effective} ms"
         state = "available" if rich_available else "unavailable"
@@ -810,7 +842,6 @@ class OperatorHealthService:
         """Validate configured file-provider directories without performing writes."""
         from pathlib import Path
         import os
-        import os
         base = Path(str(config_dir)).expanduser()
         result: list[OperatorFinding] = []
         for key in ("anchor_file_dir", "omit_file_dir"):
@@ -837,10 +868,11 @@ class OperatorHealthService:
         *,
         effective_timezone: object,
         source_hint: str,
-        preflight: Callable[[object], dict[str, Any]],
+        preflight: Callable[[dict[str, Any] | None], dict[str, Any]],
     ) -> tuple[OperatorFinding, ...]:
         """Project astronomy-provider preflight into typed findings."""
-        result = preflight(config)
+        astronomy_config = config if isinstance(config, dict) else None
+        result = preflight(astronomy_config)
         status = str(result.get("status") or "error")
         if status == "not_configured":
             return (OperatorFinding(
@@ -1056,7 +1088,7 @@ class OperatorHealthService:
                 continue
             try:
                 Path(str(implementation)).resolve().relative_to(current_root.resolve())
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 errors.append(f"{event} implementation is outside the active release")
         evidence = {
             "release_id": release_id,
@@ -1086,6 +1118,8 @@ class OperatorHealthService:
         try:
             status = runtime_loader()
         except Exception as exc:
+            # This is the diagnostic containment boundary: preserve arbitrary
+            # runtime-loader failures as actionable Doctor evidence.
             status = {"managed": True, "errors": [str(exc)]}
         return OperatorHealthService.report(
             OperatorHealthService.runtime_findings(status, runtime_root, hook_runtimes)
@@ -1129,19 +1163,24 @@ class OperatorHealthService:
                 observed={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
             ),)
         event_year = date.today().year if year is None else year
-        try:
-            if zoneinfo_factory is None:
-                raise RuntimeError("zoneinfo support is unavailable")
-            events = events_provider(event_year)
-            local_events = {
-                name: event.astimezone(zoneinfo_factory(timezone_name)).date().isoformat()
-                for name, event in events.items()
-            }
-        except Exception as exc:
+        local_events: dict[str, str] = {}
+        calculation_error = ""
+        if zoneinfo_factory is None:
+            calculation_error = "zoneinfo support is unavailable"
+        else:
+            try:
+                events = events_provider(event_year)
+                local_events = {
+                    name: event.astimezone(zoneinfo_factory(timezone_name)).date().isoformat()
+                    for name, event in events.items()
+                }
+            except (KeyError, OSError, OverflowError, TypeError, ValueError) as exc:
+                calculation_error = str(exc).strip() or type(exc).__name__
+        if calculation_error:
             return (OperatorFinding(
                 "config.season_mode.astronomical_invalid", "configuration", FindingSeverity.ERROR,
                 FindingActionability.BLOCKING,
-                f"Astronomical seasonal boundaries are unavailable for {event_year}: {exc}",
+                f"Astronomical seasonal boundaries are unavailable for {event_year}: {calculation_error}",
                 observed={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
                 guidance="Verify timezone data and use a supported season year/backend, then rerun doctor.",
             ),)

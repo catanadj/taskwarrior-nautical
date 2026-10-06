@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import unittest
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 from unittest.mock import patch
 
+import nautical_core as core
+import nautical_core.anchor_inclusion as anchor_inclusion
+import nautical_core.timezone_facade as timezone_facade
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
 from nautical_core.cp_parser import cp_sequence_interval_for_token, parse_cp_sequence_tokens
 from nautical_core.integration_models import MutationOperation
+from nautical_core.occurrence_provider import Occurrence
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import NauticalTask
@@ -23,7 +28,6 @@ class _Core:
     DEFAULT_BUSINESS_CALENDAR = None
     ASTRONOMY_CONFIG = None
     ANCHOR_FILE_DIR = ""
-    _LOCAL_TZ = timezone.utc
 
     @staticmethod
     def parse_dt_any(value):
@@ -67,9 +71,13 @@ class _Core:
     @staticmethod
     def _import_sibling(name):
         if name == "task_codec":
-            from nautical_core import task_codec
+            import nautical_core.task_codec as task_codec
 
             return task_codec
+        if name == "native_until":
+            import nautical_core.native_until as native_until
+
+            return native_until
         raise AssertionError(name)
 
 
@@ -109,7 +117,123 @@ def _observation(**updates):
 
 class ChainGenerationContractTests(unittest.TestCase):
     def setUp(self):
+        timezone_override = patch.object(
+            timezone_facade, "_local_timezone", timezone.utc
+        )
+        timezone_override.start()
+        self.addCleanup(timezone_override.stop)
         self.service = ChainGenerationService.from_core(_Core())
+
+    def test_expiration_recovery_helpers_expose_typed_child_timestamps(self):
+        from nautical_core.chain_integrity_lifecycle import (
+            _build_expiration_child_with_day_end,
+            compute_expiration_child_due,
+        )
+
+        compute_hints = get_type_hints(compute_expiration_child_due)
+        self.assertEqual(
+            compute_hints["return"], tuple[datetime | None, dict[str, Any]]
+        )
+
+        fallback_hints = get_type_hints(_build_expiration_child_with_day_end)
+        self.assertIs(fallback_hints["child_due"], datetime)
+        self.assertEqual(fallback_hints["until_dt"], datetime | None)
+        self.assertIs(fallback_hints["hook"], object)
+
+    def test_reconcile_expiration_anchor_advances_from_recurrence_target(self):
+        from nautical_core.chain_integrity_lifecycle import compute_expiration_child_due
+
+        parent = {
+            "uuid": UUID,
+            "status": "deleted",
+            "anchor": "w:mon@t=09:00",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "chain-a",
+            "link": 1,
+            "due": "20260706T090000Z",
+            "end": "20260715T180000Z",
+        }
+
+        child_due, metadata = compute_expiration_child_due(
+            parent, generation=self.service
+        )
+
+        self.assertEqual(child_due, datetime(2026, 7, 13, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata.get("basis"), "due recurrence target (expired)")
+
+    def test_reconcile_expiration_cp_advances_from_recurrence_target(self):
+        from nautical_core.chain_integrity_lifecycle import compute_expiration_child_due
+
+        parent = {
+            "uuid": UUID,
+            "status": "deleted",
+            "cp": "7d",
+            "chain": "on",
+            "chainID": "chain-a",
+            "link": 1,
+            "due": "20260720T090000Z",
+            "end": "20260726T235900Z",
+        }
+
+        child_due, metadata = compute_expiration_child_due(
+            parent, generation=self.service
+        )
+
+        self.assertEqual(child_due, datetime(2026, 7, 27, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata.get("basis"), "due recurrence target (expired)")
+
+        scheduled_parent = dict(parent)
+        scheduled_parent.pop("due")
+        scheduled_parent["scheduled"] = "20260720T090000Z"
+        scheduled_child_due, scheduled_metadata = compute_expiration_child_due(
+            scheduled_parent, generation=self.service
+        )
+
+        self.assertEqual(
+            scheduled_child_due, datetime(2026, 7, 27, 9, tzinfo=timezone.utc)
+        )
+        self.assertEqual(scheduled_metadata.get("target_field"), "scheduled")
+
+    def test_native_until_carry_does_not_relabel_parser_defects_as_invalid_input(self):
+        class BrokenParser:
+            def parse(self, _value):
+                raise RuntimeError("datetime parser defect")
+
+        service = ChainGenerationService.from_core(
+            _Core(), datetime_parser=BrokenParser()
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "datetime parser defect"):
+            service.carry_native_until(
+                _task(until="2026-01-03T09:00:00Z"),
+                {},
+                datetime(2026, 1, 3, 9, tzinfo=timezone.utc),
+                "cp",
+                parent_anchor_field="due",
+                child_anchor_field="due",
+            )
+
+    def test_relative_datetime_carry_does_not_relabel_timezone_defects(self):
+        class BrokenTimezoneCore(_Core):
+            @staticmethod
+            def utc_to_local_naive(_value):
+                raise RuntimeError("timezone adapter defect")
+
+        service = ChainGenerationService.from_core(BrokenTimezoneCore())
+        parent = _task(until="2026-01-03T09:00:00Z")
+
+        with self.assertRaises(RuntimeError) as raised:
+            service.carry_relative_datetime(
+                parent,
+                {},
+                datetime(2026, 1, 3, 9, tzinfo=timezone.utc),
+                "until",
+                parent_anchor_field="due",
+                child_anchor_field="due",
+            )
+        self.assertIs(type(raised.exception), RuntimeError)
+        self.assertEqual(str(raised.exception), "timezone adapter defect")
 
     def test_cp_generation_uses_link_sequence_and_durable_metadata(self):
         parent = _task(link=1)
@@ -120,6 +244,406 @@ class ChainGenerationContractTests(unittest.TestCase):
         due2, metadata2 = self.service.compute_cp_child_due(_task(link=2))
         self.assertEqual(due2, datetime(2026, 1, 4, 9, tzinfo=timezone.utc))
         self.assertEqual(metadata2["cp_sequence_step"], 2)
+
+    def test_cp_generation_selects_middle_interval_and_preserves_wall_clock(self):
+        parent = _task(
+            cp="3d,20d,7d",
+            link=2,
+            due="2026-01-01T09:00:00Z",
+            end="2026-01-01T10:00:00Z",
+        )
+
+        due, metadata = self.service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 1, 21, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["cp_sequence_step"], 2)
+        self.assertEqual(metadata["cp_sequence_len"], 3)
+
+    def test_cp_generation_uses_chain_scoped_random_interval(self):
+        parent = _task(
+            cp="rand(3d..7d)",
+            chainID="abcd1234",
+            link=2,
+            due="2026-01-01T09:00:00Z",
+            end="2026-01-01T10:00:00Z",
+        )
+
+        due, metadata = self.service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 1, 6, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["cp_sequence_step"], 1)
+        self.assertEqual(metadata["cp_sequence_len"], 1)
+
+    def test_cp_generation_uses_scheduled_when_due_is_missing(self):
+        parent = _task(
+            cp="P1D",
+            due=None,
+            scheduled="2025-01-01T09:00:00Z",
+            end="2025-01-01T17:00:00Z",
+        )
+
+        due, metadata = self.service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2025, 1, 2, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["target_field"], "scheduled")
+
+    def test_anchor_generation_uses_scheduled_seed_for_all_mode(self):
+        scheduled = core.build_local_datetime(date(2025, 1, 6), (9, 0))
+        ended = core.build_local_datetime(date(2025, 1, 8), (10, 0))
+        parent = _task(
+            anchor="w:mon..sun@t=09:00",
+            anchor_mode="all",
+            cp=None,
+            due=None,
+            scheduled=fmt_isoz(scheduled),
+            end=fmt_isoz(ended),
+        )
+        service = ChainGenerationService.from_core(core)
+
+        due, metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        due_local = core.to_local(due)
+        self.assertEqual(due_local.date(), date(2025, 1, 7))
+        self.assertEqual((due_local.hour, due_local.minute), (9, 0))
+        self.assertEqual(metadata["target_field"], "scheduled")
+
+    def test_positional_anchor_generation_advances_to_next_selected_date(self):
+        parent = _task(
+            anchor="(w:tue | w:thu)@in-month=last",
+            anchor_mode="skip",
+            cp=None,
+            due="2026-07-30T09:00:00Z",
+            end="2026-07-30T10:00:00Z",
+        )
+
+        due, metadata, dnf = self.service.compute_anchor_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 8, 27, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "after_end")
+        self.assertEqual(dnf[0][0]["kind"], "select")
+
+    def test_anchor_post_selection_modifiers_transform_completion_occurrence(self):
+        parent = _task(
+            anchor="(w:tue | w:thu)@in-month=last@+2d@t=09:00",
+            anchor_mode="skip",
+            cp=None,
+            due="2026-08-01T09:00:00Z",
+            end="2026-08-01T10:00:00Z",
+        )
+
+        due, metadata, dnf = self.service.compute_anchor_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 8, 29, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "after_end")
+        self.assertEqual(dnf[0][0]["mods"]["day_offset"], 2)
+
+    def test_yearly_positional_selection_applies_post_selection_offset(self):
+        parent = _task(
+            anchor="(w:mon)@in-year=last@+7d@t=09:00",
+            anchor_mode="skip",
+            cp=None,
+            due="2027-01-04T09:00:00Z",
+            end="2027-01-04T10:00:00Z",
+        )
+
+        due, metadata, dnf = self.service.compute_anchor_child_due(parent)
+
+        self.assertEqual(due, datetime(2028, 1, 3, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "after_end")
+        self.assertEqual(dnf[0][0]["scope"], "year")
+
+    def test_year_ordinal_anchor_reconcile_calculation(self):
+        parent = _task(
+            anchor="y:d60@t=09:00",
+            anchor_mode="skip",
+            cp=None,
+            due="2024-02-29T09:00:00Z",
+            end="2024-02-29T10:00:00Z",
+        )
+
+        test_core = _Core()
+        test_core.YearTokenFormatError = core.YearTokenFormatError
+        service = ChainGenerationService.from_core(test_core)
+        child_due, metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        child_local = test_core.to_local(child_due)
+        self.assertEqual(child_local.date(), date(2025, 3, 1))
+        self.assertEqual((child_local.hour, child_local.minute), (9, 0))
+        self.assertEqual(metadata.get("basis"), "after_end")
+
+    def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due(self):
+        due = core.build_local_datetime(date(2025, 1, 6), (9, 0))
+        scheduled = core.build_local_datetime(date(2025, 1, 8), (12, 0))
+        ended = core.build_local_datetime(date(2025, 1, 8), (10, 0))
+        parent = _task(
+            anchor="w:mon..sun@t=09:00",
+            anchor_mode="all",
+            cp=None,
+            due=fmt_isoz(due),
+            scheduled=fmt_isoz(scheduled),
+            end=fmt_isoz(ended),
+        )
+
+        service = ChainGenerationService.from_core(core)
+        child_due, metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        self.assertEqual(core.to_local(child_due).date(), date(2025, 1, 7))
+        self.assertEqual((core.to_local(child_due).hour, core.to_local(child_due).minute), (9, 0))
+        self.assertEqual(metadata["target_field"], "due")
+
+    def test_on_modify_compute_anchor_child_due_skips_omit_date(self):
+        due = core.build_local_datetime(date(2025, 1, 6), (9, 0))
+        ended = core.build_local_datetime(date(2025, 1, 6), (10, 0))
+        parent = _task(
+            anchor="w:mon,wed,fri@t=09:00",
+            omit="w:wed",
+            anchor_mode="skip",
+            cp=None,
+            due=fmt_isoz(due),
+            end=fmt_isoz(ended),
+        )
+
+        service = ChainGenerationService.from_core(core)
+        child_due, metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        child_local = core.to_local(child_due)
+        self.assertEqual(child_local.date(), date(2025, 1, 10))
+        self.assertEqual((child_local.hour, child_local.minute), (9, 0))
+        self.assertEqual(metadata["target_field"], "due")
+
+    def test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails(self):
+        due = core.build_local_datetime(date(2025, 1, 6), (9, 0))
+        ended = core.build_local_datetime(date(2025, 1, 6), (10, 0))
+        parent = _task(
+            anchor="w:mon",
+            omit="w:mon",
+            anchor_mode="skip",
+            cp=None,
+            due=fmt_isoz(due),
+            end=fmt_isoz(ended),
+        )
+
+        service = ChainGenerationService.from_core(core)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "No valid anchor occurrences found after applying omit rules",
+        ):
+            service.compute_anchor_child_due(parent)
+
+    def test_on_modify_compute_counted_random_advances_within_period(self):
+        chain_id = "abcd1234"
+        dnf = core.validate_anchor_expr_strict("m:2rand")
+        seed = date(2026, 1, 1)
+        first, _metadata = core.next_after_expr(
+            dnf,
+            seed,
+            default_seed=seed,
+            seed_base=chain_id,
+        )
+        expected, _metadata = core.next_after_expr(
+            dnf,
+            first,
+            default_seed=seed,
+            seed_base=chain_id,
+        )
+        parent_due = core.build_local_datetime(first, (9, 0))
+        parent_end = core.build_local_datetime(first, (10, 0))
+        parent = _task(
+            anchor="m:2rand",
+            anchor_mode="skip",
+            cp=None,
+            due=fmt_isoz(parent_due),
+            end=fmt_isoz(parent_end),
+            chainID=chain_id,
+        )
+
+        service = ChainGenerationService.from_core(core)
+        child_due, metadata, _child_dnf = service.compute_anchor_child_due(parent)
+
+        self.assertEqual(core.to_local(child_due).date(), expected)
+        self.assertEqual(expected.month, first.month)
+        self.assertEqual(metadata["target_field"], "due")
+
+    def test_anchor_generation_selects_next_local_timed_slot(self):
+        due_local = core.build_local_datetime(date(2026, 7, 4), (9, 0))
+        end_local = core.build_local_datetime(date(2026, 7, 4), (10, 0))
+        parent = _task(
+            anchor="w:mon..sun@t=05:00,09:00,14:00,19:00",
+            cp=None,
+            due=fmt_isoz(due_local),
+            end=fmt_isoz(end_local),
+        )
+        service = ChainGenerationService.from_core(core)
+
+        child_due, _metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        child_local = core.to_local(child_due)
+        self.assertEqual(child_local.date(), date(2026, 7, 4))
+        self.assertEqual((child_local.hour, child_local.minute), (14, 0))
+
+    def test_anchor_generation_advances_to_next_window_slot_after_completion(self):
+        due = datetime(2025, 12, 17, 6, tzinfo=timezone.utc)
+        ended = datetime(2025, 12, 17, 6, 30, tzinfo=timezone.utc)
+        parent = _task(
+            anchor="w:mon..sun@t=06..18/3h",
+            cp=None,
+            due=fmt_isoz(due),
+            end=fmt_isoz(ended),
+        )
+
+        child_due, metadata, _dnf = self.service.compute_anchor_child_due(parent)
+
+        child_local = self.service.core.to_local(child_due)
+        self.assertEqual(child_local, datetime(2025, 12, 17, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "after_end")
+
+    def test_partitioned_anchor_window_uses_remaining_slots_then_rolls_day(self):
+        def child_after(due_hour: int, due_minute: int):
+            due = datetime(2025, 12, 17, due_hour, due_minute, tzinfo=timezone.utc)
+            parent = _task(
+                anchor="w:mon..sun@t=04:30..19:30/3",
+                cp=None,
+                due=fmt_isoz(due),
+                end=fmt_isoz(due + timedelta(minutes=10)),
+            )
+            child_due, _metadata, _dnf = self.service.compute_anchor_child_due(parent)
+            return self.service.core.to_local(child_due)
+
+        self.assertEqual(child_after(4, 30), datetime(2025, 12, 17, 12, tzinfo=timezone.utc))
+        self.assertEqual(child_after(19, 30), datetime(2025, 12, 18, 4, 30, tzinfo=timezone.utc))
+
+    def test_overnight_window_completion_advances_across_window_boundary(self):
+        due = datetime(2025, 12, 15, 22, 30, tzinfo=timezone.utc)
+        anchor = "w:mon@t=22:30..06:30/7"
+
+        def child_after(ended: datetime) -> datetime:
+            parent = _task(
+                anchor=anchor,
+                cp=None,
+                due=fmt_isoz(due),
+                end=fmt_isoz(ended),
+            )
+            child_due, _metadata, _dnf = self.service.compute_anchor_child_due(parent)
+            return self.service.core.to_local(child_due)
+
+        self.assertEqual(
+            child_after(due + timedelta(minutes=10)),
+            datetime(2025, 12, 15, 23, 50, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            child_after(datetime(2025, 12, 16, 6, 40, tzinfo=timezone.utc)),
+            datetime(2025, 12, 22, 22, 30, tzinfo=timezone.utc),
+        )
+
+    def test_random_window_completion_reuses_the_next_chain_scoped_slot(self):
+        from nautical_core.time_slots import resolve_time_slots_with_offsets
+
+        chain_id = "randommodify1"
+        target_date = date(2025, 12, 15)
+        slots = resolve_time_slots_with_offsets(
+            {"time_random": "rand(06:00..18:00/3)", "t": []},
+            target_date,
+            seed_base=chain_id,
+        )
+
+        def utc_slot(slot):
+            day_offset, hour, minute = slot
+            return datetime.combine(
+                target_date + timedelta(days=day_offset),
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            ).replace(hour=hour, minute=minute)
+
+        first, expected = utc_slot(slots[0]), utc_slot(slots[1])
+        parent = _task(
+            anchor="w:mon@t=rand(06..18/3)",
+            cp=None,
+            chainID=chain_id,
+            due=fmt_isoz(first),
+            end=fmt_isoz(first + timedelta(minutes=10)),
+        )
+
+        child_due, _metadata, _dnf = self.service.compute_anchor_child_due(parent)
+
+        self.assertEqual(self.service.core.to_local(child_due), expected)
+
+    def test_anchor_file_projection_reuses_one_provider(self):
+        builders = []
+        occurrence = Occurrence(
+            date(2026, 8, 4),
+            9,
+            0,
+            source="anchor_file",
+            local_datetime=core.to_local(
+                core.build_local_datetime(date(2026, 8, 4), (9, 0))
+            ),
+        )
+
+        def build_provider(*_args, **_kwargs):
+            provider = SimpleNamespace(
+                next_after=lambda after_local, **_kwargs: (
+                    occurrence if occurrence.local_datetime > after_local else None
+                )
+            )
+            builders.append(provider)
+            return provider
+
+        due = core.build_local_datetime(date(2026, 8, 3), (9, 0))
+        parent = _task(
+            anchor="w:mon@t=09:00",
+            anchor_file="calendar.csv@t=09:00",
+            anchor_mode="all",
+            cp=None,
+            due=fmt_isoz(due),
+            end=fmt_isoz(due + timedelta(hours=1)),
+        )
+        service = ChainGenerationService.from_core(core)
+
+        with patch.object(anchor_inclusion, "_build_anchor_file_provider", build_provider):
+            child_due, _metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        self.assertEqual(len(builders), 1)
+        self.assertEqual(core.to_local(child_due).hour, 9)
+
+    def test_pure_anchor_file_projection_reuses_one_provider(self):
+        builders = []
+        occurrence = Occurrence(
+            date(2026, 8, 4),
+            9,
+            0,
+            source="anchor_file",
+            local_datetime=core.to_local(
+                core.build_local_datetime(date(2026, 8, 4), (9, 0))
+            ),
+        )
+
+        def build_provider(*_args, **_kwargs):
+            provider = SimpleNamespace(
+                occurrences=lambda: [occurrence],
+                next_after=lambda after_local, **_kwargs: (
+                    occurrence if occurrence.local_datetime > after_local else None
+                ),
+            )
+            builders.append(provider)
+            return provider
+
+        due = core.build_local_datetime(date(2026, 8, 3), (9, 0))
+        parent = _task(
+            anchor_file="calendar.csv@t=09:00",
+            anchor_mode="skip",
+            anchor=None,
+            cp=None,
+            due=fmt_isoz(due),
+            end=fmt_isoz(due + timedelta(hours=1)),
+        )
+        service = ChainGenerationService.from_core(core)
+
+        with patch.object(anchor_inclusion, "_build_anchor_file_provider", build_provider):
+            child_due, _metadata, _dnf = service.compute_anchor_child_due(parent)
+
+        self.assertEqual(len(builders), 1)
+        self.assertEqual(core.to_local(child_due).date(), date(2026, 8, 4))
 
     def test_hook_adapter_uses_shared_generation_service_without_legacy_helpers(self) -> None:
         class Hook:
@@ -193,6 +717,76 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertNotIn("id", payload)
         self.assertEqual(draft.target.value, datetime(2026, 1, 3, 10, tzinfo=timezone.utc))
 
+    def test_child_draft_until_input_is_an_optional_datetime(self):
+        self.assertEqual(
+            get_type_hints(ChainGenerationService.build_child_draft)["until_dt"],
+            datetime | None,
+        )
+        self.assertIs(get_type_hints(ChainGenerationService.parse_datetime)["value"], object)
+
+    def test_child_draft_preserves_parent_business_calendar(self):
+        parent = _task(anchor="w:sun", cp=None, bc="weekend")
+        draft = self.service.build_child_draft(
+            parent,
+            datetime(2026, 1, 4, 9, tzinfo=timezone.utc),
+            "due", 2, "11111111", "anchor", 0, None,
+        )
+        self.assertEqual(draft.to_mapping()["bc"], "weekend")
+
+    def test_child_draft_debug_clear_failure_is_gated_and_nonfatal(self):
+        import io
+        from contextlib import redirect_stderr
+
+        class BrokenDebugState(dict):
+            def clear(self):
+                raise RuntimeError("secret debug payload")
+
+        service = ChainGenerationService.from_core(
+            _Core(),
+            debug_wait_sched=True,
+            wait_sched_debug=BrokenDebugState({"stale": {"private": "task text"}}),
+        )
+        stderr = io.StringIO()
+        with patch.dict("os.environ", {"NAUTICAL_DIAG": "1"}), redirect_stderr(stderr):
+            draft = service.build_child_draft(
+                _task(), datetime(2026, 1, 3, 10, tzinfo=timezone.utc),
+                "due", 2, "11111111", "cp", 0, None,
+            )
+
+        self.assertEqual(draft.target.value, datetime(2026, 1, 3, 10, tzinfo=timezone.utc))
+        self.assertIn("debug wait-schedule state cleanup failed: RuntimeError", stderr.getvalue())
+        self.assertNotIn("secret debug payload", stderr.getvalue())
+        self.assertNotIn("task text", stderr.getvalue())
+
+        stderr = io.StringIO()
+        with patch.dict("os.environ", {"NAUTICAL_DIAG": "0"}), redirect_stderr(stderr):
+            service.build_child_draft(
+                _task(), datetime(2026, 1, 3, 10, tzinfo=timezone.utc),
+                "due", 2, "11111111", "cp", 0, None,
+            )
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_debug_record_failure_is_gated_and_redacted(self):
+        import io
+        from contextlib import redirect_stderr
+
+        class BrokenDebugState(dict):
+            def __setitem__(self, _key, _value):
+                raise RuntimeError("secret task payload")
+
+        service = ChainGenerationService.from_core(
+            _Core(),
+            debug_wait_sched=True,
+            wait_sched_debug=BrokenDebugState(),
+        )
+        stderr = io.StringIO()
+        with patch.dict("os.environ", {"NAUTICAL_DIAG": "1"}), redirect_stderr(stderr):
+            service._record_carry_debug("wait", {"description": "private task"})
+
+        self.assertIn("debug wait-schedule state record failed: RuntimeError", stderr.getvalue())
+        self.assertNotIn("secret task payload", stderr.getvalue())
+        self.assertNotIn("private task", stderr.getvalue())
+
     def test_child_draft_reports_unrecoverable_relative_carry(self):
         parent = _task(wait="2026-01-02T08:00:00Z", due=None, scheduled=None)
         with self.assertRaisesRegex(RuntimeError, "wait carry failed"):
@@ -203,6 +797,76 @@ class ChainGenerationContractTests(unittest.TestCase):
 
 
 class IntegrityRecoveryContractTests(unittest.TestCase):
+    def test_recovery_calendar_provider_defects_are_not_mislabeled_as_invalid_config(self):
+        from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
+
+        def broken_calendar(_task):
+            raise RuntimeError("calendar provider implementation defect")
+
+        generation = SimpleNamespace(
+            core=SimpleNamespace(use_task_business_calendar=broken_calendar)
+        )
+        with self.assertRaisesRegex(RuntimeError, "calendar provider implementation defect"):
+            plan_recovery_decision(
+                _observation(), existing_children=(), hook=None, generation=generation
+            )
+
+    def test_hookless_recovery_preserves_scheduled_and_wait_offsets(self):
+        import nautical_core as core
+        from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
+        from nautical_core.lifecycle.recovery_models import RecoveryPlanResult, RecoveryRefusal
+
+        generation = ChainGenerationService.from_core(core)
+        parent = _observation(
+            status="completed",
+            description="typed fixture task",
+            cp="7d",
+            due="2026-07-20T10:00:00Z",
+            end="2026-07-20T11:00:00Z",
+            until="2026-08-03T10:00:00Z",
+            scheduled="2026-07-20T09:30:00Z",
+            wait="2026-07-20T08:00:00Z",
+        )
+        plan = plan_recovery_decision(
+            parent, existing_children=(), hook=None, generation=generation
+        )
+        self.assertIsInstance(plan, RecoveryPlanResult)
+        assert isinstance(plan, RecoveryPlanResult)
+        child = plan.plan.child_dict()
+        child_due = datetime.fromisoformat(child["due"].replace("Z", "+00:00"))
+        child_scheduled = datetime.fromisoformat(
+            child["scheduled"].replace("Z", "+00:00")
+        )
+        child_wait = datetime.fromisoformat(child["wait"].replace("Z", "+00:00"))
+        parent_due = datetime.fromisoformat("2026-07-20T10:00:00+00:00")
+        parent_scheduled = datetime.fromisoformat("2026-07-20T09:30:00+00:00")
+        parent_wait = datetime.fromisoformat("2026-07-20T08:00:00+00:00")
+        self.assertEqual(child_scheduled - child_due, parent_scheduled - parent_due)
+        self.assertEqual(child_wait - child_due, parent_wait - parent_due)
+
+        for field in ("scheduled", "wait"):
+            with self.subTest(field=field):
+                invalid_fields = {
+                    "status": "completed",
+                    "description": "typed fixture task",
+                    "cp": "7d",
+                    "due": "2026-07-20T10:00:00Z",
+                    "end": "2026-07-20T11:00:00Z",
+                    "until": "2026-08-03T10:00:00Z",
+                    "scheduled": "2026-07-20T09:30:00Z",
+                    "wait": "2026-07-20T08:00:00Z",
+                }
+                invalid_fields[field] = "not-a-date"
+                invalid = plan_recovery_decision(
+                    _observation(**invalid_fields),
+                    existing_children=(),
+                    hook=None,
+                    generation=generation,
+                )
+                self.assertIsInstance(invalid, RecoveryRefusal)
+                assert isinstance(invalid, RecoveryRefusal)
+                self.assertIn(field, invalid.reason)
+
     def test_existing_children_and_ambiguous_slots_are_fail_closed(self):
         child = _observation(uuid="22222222-2222-4222-8222-222222222222", link=2)
         service = IntegrityRecoveryService(child_lookup=lambda chain, link: child if (chain, link) == ("chain-a", 2) else None)

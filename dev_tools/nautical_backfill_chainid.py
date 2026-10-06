@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import argparse, json, subprocess, sys
+import argparse, json, subprocess
+import sys as sys
 from collections import defaultdict
 
 from nautical_core.common import short_uuid
@@ -142,7 +143,6 @@ def resolve_uuid(token, by_full, by_short, *, context_full=None, direction=None)
 
         # Ambiguous: try to pick the neighbor actually linked to 'context_full'
         if context_full and context_full in by_full:
-            cur = by_full[context_full]
             cur_short = short_uuid(context_full)
 
             def is_linked(full_u):

@@ -9,7 +9,7 @@ from nautical_core.operator_models import OperatorLimits
 
 class OperatorPresentationTests(unittest.TestCase):
     def test_operator_presentation_is_immutable_and_deterministic(self) -> None:
-        from nautical_core.lifecycle_models import LifecycleDrainProgress, LifecycleDrainStage
+        from nautical_core.lifecycle.models import LifecycleDrainProgress, LifecycleDrainStage
         from nautical_core.operator_models import OperatorCursor, OperatorPage
         from nautical_core.operator_presentation import (
             ProgressView,

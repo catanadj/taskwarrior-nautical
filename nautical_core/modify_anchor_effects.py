@@ -2,19 +2,67 @@
 
 from __future__ import annotations
 
-from typing import Any
+import csv
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+from .parsing.parser_models import ParseError
+
+if TYPE_CHECKING:
+    from .anchor_omit import OmitState
+
+
+OmitDNF = list[list[dict[str, Any]]]
+
+
+class OmitStateCombiner(Protocol):
+    def __call__(
+        self,
+        *,
+        omit_dnf: OmitDNF | None = None,
+        omit_dates: frozenset[date] | None = None,
+        omit_descriptions: Mapping[date, str] | None = None,
+    ) -> OmitState | None: ...
+
+
+class _OmitFilesOwner(Protocol):
+    def load_omit_file_data(
+        self,
+        path: str | None,
+        base_dir: str | None,
+    ) -> tuple[frozenset[date], dict[date, str]]: ...
+
+
+class _OmitCore(Protocol):
+    OMIT_FILE_DIR: str
+
+    def _import_sibling(self, name: Literal["omit_files"]) -> _OmitFilesOwner: ...
+
+
+class _AnchorOmitOwner(Protocol):
+    combine_omit_state: OmitStateCombiner
+
+
+class OmitHost(Protocol):
+    core: _OmitCore
+    _validate_omit_expr_cached: Callable[[str], OmitDNF]
+
+    def _module(self, name: Literal["anchor_omit"]) -> _AnchorOmitOwner: ...
 
 
 @dataclass(frozen=True, slots=True)
 class OmitPorts:
-    validate_omit: Any
-    load_omit_file_data: Any
+    validate_omit: Callable[[str], OmitDNF]
+    load_omit_file_data: Callable[
+        [str | None, str | None], tuple[frozenset[date], dict[date, str]]
+    ]
     omit_file_dir: str
-    combine_omit_state: Any
+    combine_omit_state: OmitStateCombiner
 
 
-def omit_ports_for(host: Any) -> OmitPorts:
+def omit_ports_for(host: OmitHost) -> OmitPorts:
     omit_files = host.core._import_sibling("omit_files")
     return OmitPorts(
         validate_omit=host._validate_omit_expr_cached,
@@ -24,23 +72,25 @@ def omit_ports_for(host: Any) -> OmitPorts:
     )
 
 
-def omit_dnf_from_parent(ports: OmitPorts, task_mapping: dict[str, Any]) -> Any:
+def omit_dnf_from_parent(
+    ports: OmitPorts, task_mapping: dict[str, Any]
+) -> tuple[str, OmitState | None]:
     expr_str = (task_mapping.get("omit") or "").strip()
     omit_file = (task_mapping.get("omit_file") or "").strip()
     omit_dnf = None
-    omit_dates: frozenset[Any] = frozenset()
-    omit_descriptions: dict[Any, str] = {}
+    omit_dates: frozenset[date] = frozenset()
+    omit_descriptions: dict[date, str] = {}
     if expr_str:
         try:
             omit_dnf = ports.validate_omit(expr_str)
-        except Exception as exc:
+        except (ParseError, ValueError) as exc:
             raise ValueError(f"Invalid omit expression '{expr_str}': {exc}") from exc
     if omit_file:
         try:
             omit_dates, omit_descriptions = ports.load_omit_file_data(
                 omit_file, ports.omit_file_dir
             )
-        except Exception as exc:
+        except (OSError, UnicodeError, ValueError, csv.Error) as exc:
             raise ValueError(f"Invalid omit_file '{omit_file}': {exc}") from exc
     if not omit_dnf and not omit_dates and not omit_descriptions:
         return "", None

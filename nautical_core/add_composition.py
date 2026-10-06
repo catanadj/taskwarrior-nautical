@@ -3,21 +3,124 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+import os
+import sys
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .task_models import TaskPayload
 from .task_datetime import TaskDatetimeParser, parser_for_core
 
+if TYPE_CHECKING:
+    from .add_workflow import AddWorkflowApplication, AddWorkflowPlan
+    from .hook_context import DueContext, OnAddContext, ProfilerPort
+    from .hook_engine import OnAddCoreClock
+    from .hook_runtime import HookRuntimeState
+    from .task_models import TaskObservation
 
-def _datetime_parser(host: Any) -> TaskDatetimeParser:
-    parser = getattr(host, "_TASK_DATETIME_PARSER", None)
+
+class AddCompositionCore(Protocol):
+    def _import_sibling(self, module_name: str) -> Any: ...
+    def coerce_int(self, value: object, default: int = 0) -> int: ...
+    def now_utc(self) -> datetime: ...
+    def to_local(self, value: datetime) -> datetime: ...
+
+    parse_cp_sequence: Callable[[str], object]
+    cp_sequence_parse_error: Callable[[str], str | None]
+
+
+class AddDatetimeParserHost(Protocol):
+    _TASK_DATETIME_PARSER: TaskDatetimeParser | None
+    core: AddCompositionCore
+
+    def _diag(self, message: str) -> None: ...
+
+
+class AddCompositionClock(Protocol):
+    def perf_counter(self) -> float: ...
+
+
+class AddArgvProvider(Protocol):
+    argv: Sequence[str]
+
+
+class AddHookRuntimeModule(Protocol):
+    def initialize_integration_context(
+        self,
+        *,
+        module_access: object,
+        hook_bootstrap: object,
+        core_base: Path,
+        argv: tuple[str, ...],
+        tw_dir: str,
+        access: str,
+    ) -> HookRuntimeState: ...
+
+
+class AddCoreBootstrapHost(Protocol):
+    _INTEGRATION_CONTEXT: object | None
+    _TASK_DATETIME_PARSER: TaskDatetimeParser | None
+    _CORE_BASE: Path
+    _CORE_READY: bool
+    _CORE_IMPORT_TARGET: Path | None
+    _TASKDATA_RAW: str
+    _USE_RC_DATA_LOCATION: bool
+    _MAX_JSON_BYTES: int
+    _IMPORT_T0: float
+    _IMPORT_MS: float | None
+    TW_DIR: str | Path
+    TW_DATA_DIR: Path
+    core: AddCompositionCore
+    hook_bootstrap: object
+    sys: AddArgvProvider
+    time: AddCompositionClock
+
+    def _diag(self, message: str) -> None: ...
+    def _hook_runtime_module(self) -> AddHookRuntimeModule: ...
+    def _hook_module_access(self) -> object: ...
+
+
+class AddCompositionHost(AddDatetimeParserHost, Protocol):
+    UPCOMING_PREVIEW: int
+    _PREVIEW_HARD_CAP: int
+    time: AddCompositionClock
+
+    def _task_has_nautical_fields(self, task: TaskPayload) -> bool: ...
+    def _load_core(self) -> None: ...
+    def _fail_and_exit(self, title: str, message: str) -> None: ...
+    def _error_and_exit(self, messages: Sequence[tuple[str, object]]) -> None: ...
+    def _module(self, name: str, *, required: bool = True) -> Any: ...
+    def _strip_quotes(self, value: str) -> str: ...
+    def _load_anchor_file_dates(self, name: str) -> Any: ...
+    def _load_omit_file_dates(self, name: str) -> Any: ...
+    def _validate_until_not_past(
+        self, until_dt: datetime, now_utc: datetime
+    ) -> tuple[bool, str | None]: ...
+    def _validate_datetime_field(
+        self, value: object, field_name: str
+    ) -> tuple[datetime | None, str | None]: ...
+    def _check_due_in_past(
+        self, due_dt: datetime | None, now_utc: datetime
+    ) -> tuple[bool, str | None]: ...
+    def _stamp_chain_id_on_add(self, task: TaskPayload) -> None: ...
+
+
+class AddHookResultFactory(Protocol):
+    def __call__(
+        self, *, task: TaskPayload, sanitize: bool, prof: ProfilerPort | None
+    ) -> object: ...
+
+
+def _datetime_parser(host: AddDatetimeParserHost) -> TaskDatetimeParser:
+    parser = host._TASK_DATETIME_PARSER
     if parser is None:
-        parser = parser_for_core(host.core, diagnostic=getattr(host, "_diag", None))
-        setattr(host, "_TASK_DATETIME_PARSER", parser)
+        parser = parser_for_core(host.core, diagnostic=host._diag)
+        host._TASK_DATETIME_PARSER = parser
     return parser
 
 
-def initialize_core(host: Any) -> None:
+def initialize_core(host: AddCoreBootstrapHost) -> None:
     """Own installed-layout integration context construction for on-add."""
     if getattr(host, "_INTEGRATION_CONTEXT", None) is not None:
         _datetime_parser(host)
@@ -40,25 +143,39 @@ def initialize_core(host: Any) -> None:
     _datetime_parser(host)
 
 
-def load_core(host: Any) -> None:
+def load_core(host: AddCoreBootstrapHost) -> None:
     """Load and finalize the on-add core exactly once."""
     if getattr(host, "core", None) is not None and getattr(host, "_CORE_READY", False):
         return
     initialize_core(host)
     core = host.core
     try:
-        core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
-    except Exception:
-        pass
+        core._import_sibling("core_config").warn_once_per_day_any(
+            "core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}"
+        )
+    except Exception as exc:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                sys.stderr.write(
+                    f"[nautical] on-add core-loaded warning failed ({type(exc).__name__})\n"
+                )
+            except (OSError, ValueError):
+                pass
     try:
         host._MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", host._MAX_JSON_BYTES))
-    except Exception:
-        pass
+    except (TypeError, ValueError, OverflowError) as exc:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                sys.stderr.write(
+                    f"[nautical] on-add MAX_JSON_BYTES fallback ({type(exc).__name__})\n"
+                )
+            except (OSError, ValueError):
+                pass
     host._IMPORT_MS = (host.time.perf_counter() - host._IMPORT_T0) * 1000.0
     host._CORE_READY = True
 
 
-def apply_description_uda_aliases(host: Any, task: TaskPayload) -> None:
+def apply_description_uda_aliases(host: AddCompositionHost, task: TaskPayload) -> None:
     if not bool(getattr(host.core, "ENABLE_UDA_ALIASES", False)):
         return
     description = task.get("description")
@@ -71,7 +188,7 @@ def apply_description_uda_aliases(host: Any, task: TaskPayload) -> None:
         host._error_and_exit([("Invalid UDA alias", str(exc))])
 
 
-def kind_and_defaults(host: Any, task: TaskPayload, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
+def kind_and_defaults(host: AddCompositionHost, task: TaskPayload, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
     has_cp, has_anchor, has_anchor_file = bool(cp_str), bool(anchor_str), bool(anchor_file_str)
     kind = "anchor" if has_anchor else ("anchor_file" if has_anchor_file else ("cp" if has_cp else None))
     ch = (task.get("chain") or "").strip().lower()
@@ -84,7 +201,7 @@ def kind_and_defaults(host: Any, task: TaskPayload, cp_str: str, anchor_str: str
     return kind, ch
 
 
-def validate_chain_limits(host: Any, task: TaskPayload, now_utc: datetime) -> datetime | None:
+def validate_chain_limits(host: AddCompositionHost, task: TaskPayload, now_utc: datetime) -> datetime | None:
     add_validation = host._module("add_validation")
     pipeline = host.core._import_sibling("hook_validation_pipeline")
     cpmax, until_dt, findings = pipeline.validate_recurrence_limits(
@@ -106,7 +223,7 @@ def validate_chain_limits(host: Any, task: TaskPayload, now_utc: datetime) -> da
     return until_dt
 
 
-def due_context(host: Any, task: TaskPayload, now_utc: datetime) -> Any:
+def due_context(host: AddCompositionHost, task: TaskPayload, now_utc: datetime) -> DueContext:
     has_due, has_scheduled = bool(task.get("due")), bool(task.get("scheduled"))
     implicit_due = has_due and _due_matches_entry(host, task)
     if has_scheduled and (not has_due or implicit_due):
@@ -134,7 +251,7 @@ def due_context(host: Any, task: TaskPayload, now_utc: datetime) -> Any:
     return user_provided_due, recurrence_field, due_dt, past_due_warning, due_local.date(), (due_local.hour, due_local.minute)
 
 
-def _due_matches_entry(host: Any, task: TaskPayload) -> bool:
+def _due_matches_entry(host: AddCompositionHost, task: TaskPayload) -> bool:
     if not task.get("due") or not task.get("entry"):
         return False
     due_dt, due_err = host._validate_datetime_field(task.get("due"), "due")
@@ -145,7 +262,9 @@ def _due_matches_entry(host: Any, task: TaskPayload) -> bool:
 class AddCompositionServices:
     """Bind add workflow infrastructure without owning recurrence decisions."""
 
-    def __init__(self, host: Any, result_cls: Any) -> None:
+    def __init__(
+        self, host: AddCompositionHost, result_cls: AddHookResultFactory | None = None
+    ) -> None:
         self._host = host
         self._result_cls = result_cls
         core = host.core
@@ -160,19 +279,24 @@ class AddCompositionServices:
             render_cp_preview_fn=self.render_cp_preview,
         )
 
-    def workflow_application(self) -> Any:
+    def workflow_application(self) -> AddWorkflowApplication:
         return self._workflow_application
 
-    def result(self, task: Any, *, sanitize: bool, prof: Any) -> Any:
-        return self._result_cls(task=task, sanitize=sanitize, prof=prof)
+    def result(
+        self, task: TaskPayload, *, sanitize: bool, prof: ProfilerPort | None
+    ) -> object:
+        result_cls = self._result_cls
+        if result_cls is None:
+            raise RuntimeError("add hook result factory is not configured")
+        return result_cls(task=task, sanitize=sanitize, prof=prof)
 
-    def has_nautical_fields(self, task: Any) -> bool:
+    def has_nautical_fields(self, task: TaskPayload) -> bool:
         return self._host._task_has_nautical_fields(task)
 
     def load_core(self) -> None:
         self._host._load_core()
 
-    def core(self) -> Any:
+    def core(self) -> OnAddCoreClock:
         return self._host.core
 
     def diag(self, message: str) -> None:
@@ -181,12 +305,20 @@ class AddCompositionServices:
     def fail_and_exit(self, title: str, message: str) -> None:
         self._host._fail_and_exit(title, message)
 
-    def validate_task(self, task: Any) -> Any:
+    def validate_task(self, task: TaskPayload) -> TaskObservation:
         """Validate and classify the add request before workflow construction."""
         return validate_task(self._host, task)
 
 
-    def build_context(self, task: Any, now_utc: Any, now_local: Any, *, observation: Any = None, prof: Any) -> Any:
+    def build_context(
+        self,
+        task: TaskPayload,
+        now_utc: datetime,
+        now_local: datetime,
+        *,
+        observation: TaskObservation | None = None,
+        prof: ProfilerPort | None = None,
+    ) -> OnAddContext:
         host = self._host
         core = host.core
         hook_context = host._module("hook_context")
@@ -233,7 +365,12 @@ class AddCompositionServices:
             if prof is not None:
                 prof.add_ms("validate:cp_vs_anchor", (host.time.perf_counter() - started) * 1000.0)
 
-    def record_schedule(self, plan: Any, task: Any, target_field: Any) -> Any:
+    def record_schedule(
+        self,
+        plan: AddWorkflowPlan,
+        task: TaskPayload,
+        target_field: str,
+    ) -> AddWorkflowPlan:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         raw = task.get(target_field)
@@ -243,13 +380,13 @@ class AddCompositionServices:
                 raise ValueError(error or "missing datetime")
             timestamp = core._import_sibling("task_models").TaskTimestamp
             return workflow.record_schedule(plan, first_occurrence=timestamp(value))
-        except Exception as exc:
+        except ValueError as exc:
             self._host._fail_and_exit(
                 "Scheduler unavailable", f"Could not record first {target_field}: {exc}"
             )
             raise
 
-    def record_preview(self, plan: Any) -> Any:
+    def record_preview(self, plan: AddWorkflowPlan) -> AddWorkflowPlan:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         policy = workflow.preview_policy(
@@ -259,7 +396,12 @@ class AddCompositionServices:
         )
         return workflow.record_preview(plan, policy)
 
-    def record_limits(self, plan: Any, task: Any, context: Any) -> Any:
+    def record_limits(
+        self,
+        plan: AddWorkflowPlan,
+        task: TaskPayload,
+        context: OnAddContext,
+    ) -> AddWorkflowPlan:
         core = self._host.core
         workflow = core._import_sibling("add_workflow")
         timestamp = core._import_sibling("task_models").TaskTimestamp
@@ -283,10 +425,10 @@ class AddCompositionServices:
         )
         return workflow.record_limits(plan, limits)
 
-    def stamp_chain_id(self, task: Any) -> None:
+    def stamp_chain_id(self, task: TaskPayload) -> None:
         self._host._stamp_chain_id_on_add(task)
 
-    def render_anchor_preview(self, context: Any, *, prof: Any) -> None:
+    def render_anchor_preview(self, context: OnAddContext, *, prof: ProfilerPort) -> None:
         self._host._module("add_preview_composition").render_anchor(
             self._host, task=context.task, anchor_str=context.anchor_str,
             anchor_file_str=context.anchor_file_str, ch=context.chain_state,
@@ -298,7 +440,7 @@ class AddCompositionServices:
             prof=prof,
         )
 
-    def render_cp_preview(self, context: Any, *, prof: Any) -> None:
+    def render_cp_preview(self, context: OnAddContext, *, prof: ProfilerPort) -> None:
         self._host._module("add_preview_composition").render_cp(
             self._host, context.task, context.cp_str, context.chain_state,
             context.now_utc, context.user_provided_due,
@@ -306,7 +448,7 @@ class AddCompositionServices:
         )
 
 
-def validate_task(host: Any, task: Any) -> Any:
+def validate_task(host: AddCompositionHost, task: TaskPayload) -> TaskObservation:
     """Validate and classify an add request without constructing services."""
     core = host.core
     validation = core._import_sibling("hook_validation_pipeline")
@@ -341,16 +483,24 @@ __all__ = (
 )
 
 
-def build_on_add_context(host: Any, task: Any, now_utc: Any, now_local: Any, *, observation: Any = None, prof: Any = None) -> Any:
+def build_on_add_context(
+    host: AddCompositionHost,
+    task: TaskPayload,
+    now_utc: datetime,
+    now_local: datetime,
+    *,
+    observation: TaskObservation | None = None,
+    prof: ProfilerPort | None = None,
+) -> OnAddContext:
     """Build recurrence context through the installed composition boundary."""
-    return AddCompositionServices(host, object()).build_context(
+    return AddCompositionServices(host).build_context(
         task, now_utc, now_local, observation=observation, prof=prof
     )
 
 
-def render_anchor_preview(host: Any, context: Any, *, prof: Any) -> None:
-    AddCompositionServices(host, object()).render_anchor_preview(context, prof=prof)
+def render_anchor_preview(host: AddCompositionHost, context: OnAddContext, *, prof: ProfilerPort) -> None:
+    AddCompositionServices(host).render_anchor_preview(context, prof=prof)
 
 
-def render_cp_preview(host: Any, context: Any, *, prof: Any) -> None:
-    AddCompositionServices(host, object()).render_cp_preview(context, prof=prof)
+def render_cp_preview(host: AddCompositionHost, context: OnAddContext, *, prof: ProfilerPort) -> None:
+    AddCompositionServices(host).render_cp_preview(context, prof=prof)

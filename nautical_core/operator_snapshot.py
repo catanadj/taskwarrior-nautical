@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import hashlib
-from typing import Any, Callable, Mapping, Protocol, TypeAlias, cast
+from typing import Any, Callable, Mapping, Protocol, TypeAlias
 
 from .operator_models import (
     CoverageRequirement,
@@ -23,6 +23,7 @@ from .operator_models import (
 from .operator_context import OperatorBudgetLedger, OperatorInvocationContext
 from .integration_models import Absent, Found, TaskRead, Unavailable
 from .chain_integrity_models import ChainSnapshot
+from .chain_snapshot import IntegritySnapshotRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,7 +332,10 @@ SnapshotReadResult: TypeAlias = OperatorSnapshot | OperatorFailure
 class ChainSnapshotReader:
     """Adapt the existing integrity snapshot provider to operator requests."""
 
-    def __init__(self, collector: Callable[[object], TaskRead[object]]) -> None:
+    def __init__(
+        self,
+        collector: Callable[[IntegritySnapshotRequest], TaskRead[ChainSnapshot]],
+    ) -> None:
         if not callable(collector):
             raise OperatorContractError("snapshot collector must be callable")
         self._collector = collector
@@ -395,8 +399,6 @@ class ChainSnapshotReader:
         if not isinstance(request, SnapshotReadRequest):
             raise OperatorContractError("snapshot read requires a typed request")
         ledger = budget or context.budget
-        from .chain_snapshot import IntegritySnapshotRequest
-
         scope = request.scope
         if scope.kind in {OperatorScopeKind.CHAINS, OperatorScopeKind.UUIDS}:
             requested_identities = len(scope.values)
@@ -518,11 +520,11 @@ class ChainSnapshotReader:
             )
         outcome = self._collector(source_request)
         if isinstance(outcome, Found):
-            if not hasattr(outcome.value, "coverage"):
+            if not isinstance(outcome.value, ChainSnapshot):
                 return OperatorFailure("invalid_snapshot", "snapshot provider returned an invalid value", scope=scope)
             if not request.refresh:
                 context.cache.put(cache_key, outcome.value)
-            return cast(ChainSnapshot, outcome.value)
+            return outcome.value
         if isinstance(outcome, Unavailable):
             return OperatorFailure(
                 "snapshot_unavailable",

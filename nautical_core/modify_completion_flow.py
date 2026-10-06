@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
-from typing import Any
+from datetime import datetime
+from typing import TYPE_CHECKING
 
 from nautical_core.modify_models import (
     CompletionLifecycleResult,
     CompletionLifecycleDiagnostic,
     CompletionComputeResult,
+    CompletionComputeCallback,
+    CompletionFinalizeCallback,
     CompletionFinalizeServices,
     CompletionPreflightContext,
     AnchorCompletionFeedbackModel,
@@ -16,25 +19,33 @@ from nautical_core.modify_models import (
 )
 from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation, TaskPayload
+from nautical_core.modify_runtime import ModifyRuntimeState
+from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+if TYPE_CHECKING:
+    from nautical_core.lifecycle.read_service import LifecycleReadService
+    from nautical_core.task_read_repository import TaskReadRepository
 
 
 @dataclass(slots=True)
 class CompletionFlowServices:
     """Typed collaborators for the complete-on-modify lifecycle boundary."""
 
-    runtime_state: Callable[[], Any]
+    runtime_state: Callable[[], ModifyRuntimeState]
     prepare_recurrence: Callable[[TaskPayload, TaskPayload], tuple[str, str, str]]
     preserve_cp_relative_offsets: Callable[[TaskPayload, TaskPayload, str], None]
     preserve_native_until: Callable[[TaskPayload, TaskPayload, str], None]
     validate_native_until: Callable[[TaskPayload], None]
     validate_native_until_slots: Callable[[TaskPayload], None]
-    now_utc: Callable[[], Any]
-    preflight_context: Callable[[TaskPayload, Any, Any], CompletionPreflightContext | None]
-    compute_next_and_limits: Callable[..., CompletionComputeResult | CompletionLifecycleResult | None]
-    lifecycle_read_service: Any
+    now_utc: Callable[[], datetime]
+    preflight_context: Callable[
+        [TaskPayload, datetime, TaskReadRepository], CompletionPreflightContext | None
+    ]
+    compute_next_and_limits: CompletionComputeCallback
+    lifecycle_read_service: LifecycleReadService
     diag_count: Callable[[str, int], None]
     diag_lifecycle_result: Callable[[CompletionLifecycleResult], None]
-    finalize_completion: Callable[..., CompletionLifecycleResult]
+    finalize_completion: CompletionFinalizeCallback
     finalize_services: CompletionFinalizeServices
     transition: TaskTransition | None = None
 
@@ -42,7 +53,7 @@ class CompletionFlowServices:
 def handle_completion_modify(
     old: TaskPayload,
     new: TaskPayload,
-    unit_of_work: Any,
+    unit_of_work: TaskwarriorUnitOfWork,
     *,
     services: CompletionFlowServices,
 ) -> CompletionLifecycleResult | None:
@@ -132,8 +143,22 @@ def _render_lifecycle_result(services: CompletionFinalizeServices, result: Compl
     try:
         services.render_lifecycle_result(result, task)
     except Exception as exc:
-        if services.diagnostic is not None:
-            services.diagnostic(f"completion lifecycle presentation failed: {type(exc).__name__}: {exc}")
+        _diagnose_optional_failure(
+            services,
+            f"completion lifecycle presentation failed: {type(exc).__name__}: {exc}",
+        )
+
+
+def _diagnose_optional_failure(services: CompletionFinalizeServices, message: str) -> None:
+    """Keep an unavailable diagnostic sink from suppressing completed work."""
+    if services.diagnostic is None:
+        return
+    try:
+        services.diagnostic(message)
+    except Exception:
+        # The child operation is already applied; enrichment diagnostics are
+        # optional and must not prevent the Taskwarrior response from printing.
+        pass
 
 
 def finalize_completion_modify(
@@ -141,7 +166,7 @@ def finalize_completion_modify(
     new: TaskPayload,
     ctx: CompletionPreflightContext,
     computed: CompletionComputeResult,
-    now_utc: Any,
+    now_utc: datetime,
     need_chain: bool,
     chain_snapshot_loaded: bool,
     preloaded_chain: list[TaskObservation],
@@ -238,22 +263,26 @@ def finalize_completion_modify(
                 chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                 read_service.replace_chain_cache(chain_id, chain)
             elif need_chain and not chain_snapshot_loaded:
-                chain = read_service.get_chain_export(chain_id)
-                if chain:
-                    indexes = read_service.build_indexes(chain)
+                exported_chain = read_service.get_chain_export(chain_id)
+                if exported_chain:
+                    chain = exported_chain
+                    indexes = read_service.build_indexes(exported_chain)
                     chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                     read_service.replace_chain_cache(chain_id, chain)
         except Exception as exc:
-            if services.diagnostic is not None:
-                services.diagnostic(f"completion chain refresh failed: {type(exc).__name__}: {exc}")
+            _diagnose_optional_failure(
+                services,
+                f"completion chain refresh failed: {type(exc).__name__}: {exc}",
+            )
 
     state = services.modify_chain_state()
     state.panel_chain_by_link = chain_by_link
     state.panel_chain_by_short = chain_by_short
     state.panel_chain_snapshot_loaded = True
 
-    # The lifecycle read cache remains in its operational row form.  Panels
-    # receive immutable views so presentation cannot mutate chain history.
+    # The lifecycle read cache remains in its operational row form. Panels
+    # receive immutable chain history; completion feedback payloads below are
+    # detached mappings for the existing presentation callback contracts.
     presentation_chain_by_short = {
         short: TaskView.from_observation(row)
         for short, row in (chain_by_short or {}).items()
@@ -267,24 +296,24 @@ def finalize_completion_modify(
             analytics_advice = services.chain_health_advice(chain, kind, new, style=services.analytics_style)
         except Exception as exc:
             analytics_advice = None
-            if services.diagnostic is not None:
-                services.diagnostic(
-                    f"completion analytics failed: {type(exc).__name__}: {exc}"
-                )
+            _diagnose_optional_failure(
+                services,
+                f"completion analytics failed: {type(exc).__name__}: {exc}",
+            )
     if chain and services.check_integrity:
         try:
             integrity_warnings = services.chain_integrity_warnings(chain, expected_chain_id=chain_id)
         except Exception as exc:
             integrity_warnings = None
-            if services.diagnostic is not None:
-                services.diagnostic(
-                    f"completion integrity presentation failed: {type(exc).__name__}: {exc}"
-                )
+            _diagnose_optional_failure(
+                services,
+                f"completion integrity presentation failed: {type(exc).__name__}: {exc}",
+            )
 
     if kind in {"anchor", "anchor_file"}:
         services.render_anchor_completion_feedback(
             request=AnchorCompletionFeedbackModel(
-                new=new_view, child=child_view, child_due=computed.child_due,
+                new=dict(new_view), child=dict(child_view), child_due=computed.child_due,
                 child_short=child_short, next_no=next_no, parent_short=parent_short,
                 cap_no=computed.cap_no, finals=computed.finals, now_utc=now_utc,
                 until_dt=computed.until_dt, until_cap_no=computed.until_cap_no,
@@ -298,7 +327,7 @@ def finalize_completion_modify(
     else:
         services.render_cp_completion_feedback(
             request=CpCompletionFeedbackModel(
-                new=new_view, child=child_view, child_due=computed.child_due,
+                new=dict(new_view), child=dict(child_view), child_due=computed.child_due,
                 child_short=child_short, next_no=next_no, parent_short=parent_short,
                 cap_no=computed.cap_no, finals=computed.finals, now_utc=now_utc,
                 until_dt=computed.until_dt, until_cap_no=computed.until_cap_no,

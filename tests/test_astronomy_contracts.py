@@ -1,5 +1,6 @@
 """Direct contracts for astronomy configuration and moon-phase semantics."""
 
+import importlib
 import os
 import unittest
 from datetime import date, timedelta
@@ -8,11 +9,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import add_anchor_compute
-from nautical_core import astronomy
-from nautical_core import scheduler_expr
+import nautical_core.add_anchor_compute as add_anchor_compute
+import nautical_core.astronomy as astronomy
+import nautical_core.scheduler_expr as scheduler_expr
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
+
+
+def _import_core_sibling(name: str):
+    return importlib.import_module(f"nautical_core.{name}")
 
 try:
     from astral import Observer, moon, sun  # noqa: F401
@@ -23,6 +28,12 @@ else:
 
 
 class AstronomyContractTests(unittest.TestCase):
+    def test_anchor_scheduler_requires_explicit_core_dependency(self) -> None:
+        with self.assertRaises(TypeError):
+            add_anchor_compute.anchor_next_occurrence_after_local_dt(
+                [], datetime(2027, 7, 1, tzinfo=timezone.utc)
+            )
+
     def test_unavailable_astronomy_candidate_advances_to_next_candidate_date(self) -> None:
         first = date(2027, 7, 1)
 
@@ -31,7 +42,7 @@ class AstronomyContractTests(unittest.TestCase):
             _scheduler_api = SimpleNamespace()
             factor_matches_on = staticmethod(lambda *_args, **_kwargs: True)
             dnf_has_counted_random = staticmethod(lambda _dnf: False)
-            _import_sibling = staticmethod(core._import_sibling)
+            _import_sibling = staticmethod(_import_core_sibling)
             build_local_datetime = staticmethod(
                 lambda day, hhmm: datetime(
                     day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc
@@ -74,7 +85,7 @@ class AstronomyContractTests(unittest.TestCase):
             MAX_ANCHOR_ITER = 4
             _scheduler_api = SimpleNamespace()
             dnf_has_counted_random = staticmethod(lambda _dnf: False)
-            _import_sibling = staticmethod(core._import_sibling)
+            _import_sibling = staticmethod(_import_core_sibling)
             build_local_datetime = staticmethod(
                 lambda day, hhmm: datetime(
                     day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc
@@ -123,7 +134,7 @@ class AstronomyContractTests(unittest.TestCase):
             MAX_ANCHOR_ITER = 4
             _scheduler_api = SimpleNamespace()
             dnf_has_counted_random = staticmethod(lambda _dnf: False)
-            _import_sibling = staticmethod(core._import_sibling)
+            _import_sibling = staticmethod(_import_core_sibling)
             build_local_datetime = staticmethod(
                 lambda day, hhmm: datetime(
                     day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc
@@ -262,6 +273,18 @@ class AstronomyContractTests(unittest.TestCase):
         self.assertEqual(healthy.get("status"), "ok")
         self.assertEqual(healthy.get("event"), "sunrise")
 
+    def test_preflight_does_not_reclassify_unexpected_resolver_failures(self) -> None:
+        config = {
+            "default_location": "home",
+            "locations": {"home": {"latitude": 1, "longitude": 2, "timezone": "UTC"}},
+        }
+        with (
+            patch.object(astronomy, "_observer", return_value=("home", object(), "UTC")),
+            patch.object(astronomy, "resolve_event", side_effect=RuntimeError("internal defect")),
+            self.assertRaisesRegex(RuntimeError, "internal defect"),
+        ):
+            astronomy.preflight(config, reference_day=date(2026, 7, 31))
+
     def test_none_from_real_event_cache_becomes_actionable_unavailable_error(self) -> None:
         config = {
             "default_location": "home",
@@ -383,6 +406,27 @@ class AstronomyContractTests(unittest.TestCase):
                 {"locations": {"home": {"latitude": 40.0, "longitude": -74.0}}},
                 "home",
             )
+
+    def test_timezone_validation_paths_propagate_unexpected_zoneinfo_failures(self) -> None:
+        config = {
+            "default_location": "home",
+            "locations": {
+                "home": {"latitude": 40.0, "longitude": -74.0, "timezone": "UTC"}
+            },
+        }
+        validations = (
+            lambda: astronomy.validate_configuration(config),
+            lambda: astronomy._timezone_for_profile(config),
+            lambda: astronomy._observer(config),
+            lambda: astronomy._resolve_event_cached(
+                "sunrise", date(2026, 1, 1), "home", 40.0, -74.0, 0.0, "UTC"
+            ),
+        )
+        with patch("zoneinfo.ZoneInfo", side_effect=RuntimeError("tz database failed")):
+            for validate in validations:
+                with self.subTest(validate=validate):
+                    with self.assertRaisesRegex(RuntimeError, "tz database failed"):
+                        validate()
 
     def test_phase_distance_wraps_at_new_moon(self) -> None:
         self.assertAlmostEqual(astronomy._phase_distance(27.8, 0.0), 0.2, places=9)

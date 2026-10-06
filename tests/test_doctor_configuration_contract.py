@@ -2,10 +2,13 @@
 
 import importlib
 import os
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Callable, get_type_hints
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -14,6 +17,60 @@ doctor = importlib.import_module("nautical_core.tools.nautical_doctor")
 
 
 class DoctorConfigurationContractTests(unittest.TestCase):
+    def test_astronomy_preflight_ports_match_the_real_configuration_input_contract(self) -> None:
+        from nautical_core.operator_health_service import ConfigurationDiagnosisRequest
+
+        expected = Callable[[dict[str, Any] | None], dict[str, Any]]
+        self.assertEqual(
+            get_type_hints(ConfigurationDiagnosisRequest)["astronomy_preflight"],
+            expected,
+        )
+        self.assertEqual(
+            get_type_hints(doctor.OperatorHealthService.astronomy_findings)["preflight"],
+            expected,
+        )
+
+    def test_astronomy_findings_normalizes_non_mapping_config_before_preflight(self) -> None:
+        received = []
+
+        def preflight(config: dict[str, Any] | None) -> dict[str, Any]:
+            received.append(config)
+            return {"status": "not_configured"}
+
+        doctor.OperatorHealthService.astronomy_findings(
+            ["malformed", "profile"], effective_timezone=ZoneInfo("UTC"),
+            source_hint="user-config", preflight=preflight,
+        )
+
+        self.assertEqual(received, [None])
+
+    def test_panel_configuration_does_not_hide_unexpected_conversion_fault(self) -> None:
+        class BrokenString:
+            def __str__(self) -> str:
+                raise RuntimeError("duration conversion invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "duration conversion invariant failed"):
+            doctor.OperatorHealthService.panel_findings(
+                {"live_panel_duration_ms": BrokenString()}, lambda _name: None
+            )
+
+    def test_panel_configuration_does_not_hide_unexpected_dependency_probe_fault(self) -> None:
+        def broken_probe(_name: str) -> object:
+            raise RuntimeError("Rich dependency probe invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "Rich dependency probe invariant failed"):
+            doctor.OperatorHealthService.panel_findings(
+                {"panel_mode": "live"}, broken_probe
+            )
+
+    def test_color_probe_failure_falls_back_to_plain_output(self) -> None:
+        class BrokenTerminalProbe:
+            def isatty(self) -> bool:
+                raise RuntimeError("terminal probe unavailable")
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(doctor._color_enabled(BrokenTerminalProbe()))
+
     def test_timezone_findings_distinguish_missing_and_unavailable_zones(self) -> None:
         service = doctor.OperatorHealthService
         missing = service.timezone_findings({}, ZoneInfo)[0].to_doctor_dict()
@@ -30,6 +87,15 @@ class DoctorConfigurationContractTests(unittest.TestCase):
         )[0].to_doctor_dict()
         self.assertEqual(invalid.get("id"), "config.timezone.invalid")
         self.assertIn("pip install tzdata", invalid.get("fix", ""))
+
+    def test_timezone_findings_do_not_hide_unexpected_resolver_faults(self) -> None:
+        def broken_resolver(_name: str) -> object:
+            raise RuntimeError("timezone resolver invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "timezone resolver invariant failed"):
+            doctor.OperatorHealthService.timezone_findings(
+                {"tz": "Europe/Bucharest"}, broken_resolver
+            )
 
     def test_astronomy_findings_distinguish_unconfigured_and_healthy(self) -> None:
         service = doctor.OperatorHealthService
@@ -241,6 +307,49 @@ class DoctorConfigurationContractTests(unittest.TestCase):
         )
         observed = (defaulted.get("details") or {}).get("observed") or {}
         self.assertIs(observed.get("enabled"), False)
+
+    def test_config_read_contains_expected_errors_but_propagates_internal_faults(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = Path(td) / "nautical.toml"
+            config.write_text("invalid = [", encoding="utf-8")
+            findings: list[dict[str, object]] = []
+            with patch.dict(os.environ, {"NAUTICAL_CONFIG": str(config)}):
+                doctor._check_config(findings, Path(td))
+            invalid = next(item for item in findings if item.get("id") == "config.invalid")
+            self.assertIn("TOML syntax", invalid.get("fix", ""))
+
+            with patch.dict(os.environ, {"NAUTICAL_CONFIG": str(config)}):
+                with patch.object(Path, "read_text", side_effect=RuntimeError("unexpected parser fault")):
+                    with self.assertRaisesRegex(RuntimeError, "unexpected parser fault"):
+                        doctor._check_config([], Path(td))
+
+    def test_deep_config_read_does_not_hide_internal_parser_faults(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            taskdata = Path(td)
+            config = taskdata / "nautical.toml"
+            config.write_text('tz = "UTC"', encoding="utf-8")
+            unit_of_work = SimpleNamespace(
+                context=SimpleNamespace(taskdata=taskdata, command_prefix=(sys.executable,))
+            )
+            with (
+                patch.object(sys, "argv", ["nautical-doctor", "--taskdata", td, "--deep", "--installation-only"]),
+                patch.object(doctor, "build_operator_uow", return_value=unit_of_work),
+                patch.object(doctor, "_check_runtime", return_value=taskdata),
+                patch.object(doctor, "_check_hooks_and_udas", return_value={}),
+                patch.object(doctor, "_check_managed_runtime"),
+                patch.object(doctor, "_check_config"),
+                patch.object(doctor, "_config_candidates", return_value=[config]),
+                patch.object(doctor.install_runtime, "runtime_status", return_value={}),
+                patch.object(doctor.OperatorHealthService, "storage_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_identity_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_ownership_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_resource_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_local_state_findings", return_value=()),
+                patch.object(doctor.OperatorHealthService, "deep_clock_findings", return_value=()),
+                patch.object(Path, "read_text", side_effect=RuntimeError("unexpected deep parser fault")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "unexpected deep parser fault"):
+                    doctor.main()
 
 
 if __name__ == "__main__":

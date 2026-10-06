@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 from .compiled_schedule import CompiledSchedule
@@ -14,6 +15,7 @@ from .occurrence_provider import OccurrenceBatch
 from .scheduler_cursor import OccurrenceCursor
 from .time_projection import ProjectionResult, TimeProjectionService
 from .task_models import NauticalTask, TaskObservation
+from .recurrence_protocols import PickOccurrenceCallback
 
 
 @dataclass(slots=True)
@@ -70,22 +72,94 @@ class EvaluationSession:
     def evaluator(self) -> RecurrenceEvaluator:
         return self._evaluator
 
-    def next_outcome(self, cursor: OccurrenceCursor, **kwargs: Any) -> OccurrenceOutcome:
-        return self._evaluator.next_outcome(cursor, **kwargs)
+    def next_outcome(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_file_skips: int = 512,
+    ) -> OccurrenceOutcome:
+        return self._evaluator.next_outcome(
+            cursor,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_file_skips=max_file_skips,
+        )
 
-    def collect_after_cursor(self, cursor: OccurrenceCursor, *, limit: int, **kwargs: Any) -> OccurrenceBatch:
-        return self._evaluator.collect_after_cursor(cursor, limit=limit, **kwargs)
+    def collect_after_cursor(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        limit: int,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
+    ) -> OccurrenceBatch:
+        return self._evaluator.collect_after_cursor(
+            cursor,
+            limit=limit,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_iterations=max_iterations,
+            max_file_skips=max_file_skips,
+        )
 
-    def collect_events_after_cursor(self, cursor: OccurrenceCursor, *, limit: int, **kwargs: Any) -> OccurrenceBatch:
-        return self._evaluator.collect_events_after_cursor(cursor, limit=limit, **kwargs)
+    def collect_events_after_cursor(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        limit: int,
+        count_omitted: bool = False,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
+    ) -> OccurrenceBatch:
+        return self._evaluator.collect_events_after_cursor(
+            cursor,
+            limit=limit,
+            count_omitted=count_omitted,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_iterations=max_iterations,
+            max_file_skips=max_file_skips,
+        )
 
-    def project_time(self, value: Any, selected_date: Any, **kwargs: Any) -> ProjectionResult:
+    def project_time(
+        self,
+        value: Any,
+        selected_date: date,
+        *,
+        config: dict[str, Any] | None = None,
+        to_local: Any | None = None,
+        seed_base: str = "",
+    ) -> ProjectionResult:
         """Project a time modifier without allowing it to change the date."""
-        if kwargs.get("config") is None and self._evaluator.context.astronomy_config is not None:
-            kwargs = dict(kwargs)
-            kwargs["config"] = dict(self._evaluator.context.astronomy_config)
+        if config is None and self._evaluator.context.astronomy_config is not None:
+            config = dict(self._evaluator.context.astronomy_config)
         service = self.get_or_create("time_projection_service", TimeProjectionService)
-        return service.project(value, selected_date, context=self._evaluator.context, **kwargs)
+        return service.project(
+            value,
+            selected_date,
+            config=config,
+            to_local=to_local,
+            seed_base=seed_base,
+            context=self._evaluator.context,
+        )
 
     @property
     def fingerprint(self) -> str:

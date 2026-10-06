@@ -4,19 +4,51 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable
+from datetime import datetime
+from typing import Any, Callable, Protocol
+
+from .lifecycle.models import (
+    LifecycleAction,
+    LifecycleIdentity,
+    LifecyclePlan,
+    ParentGuard,
+    recurrence_fingerprint,
+)
+from .modify_models import DatetimeParserCallback
+from nautical_core.task_models import TaskDraft, TaskPayload
+
+
+class _ChildUUIDForSpawn(Protocol):
+    def __call__(
+        self,
+        parent_task: TaskPayload | None,
+        child_task: TaskPayload | None,
+        env: dict[str, Any],
+    ) -> str: ...
+
+
+class _PrepareSpawnChildPayload(Protocol):
+    def __call__(
+        self,
+        child_task: TaskPayload,
+        parent_task: TaskPayload | None,
+        env: dict[str, Any],
+        *,
+        child_uuid_for_spawn: _ChildUUIDForSpawn,
+        fmt_isoz: Callable[[datetime], str],
+        now_utc: Callable[[], datetime],
+    ) -> tuple[TaskDraft, str, str]: ...
 
 
 @dataclass(slots=True)
 class SpawnServices:
-    prepare_spawn_child_payload: Callable[..., tuple[Any, str, str]]
-    child_uuid_for_spawn: Callable[..., str]
-    fmt_isoz: Callable[[Any], str]
-    now_utc: Callable[[], Any]
-    lifecycle_models: Any
-    lifecycle_spawn_identity: Callable[[dict, dict], Any]
-    enqueue_spawn_intent: Callable[[Any], tuple[bool, str]]
-    parse_datetime: Callable[[Any], Any]
+    prepare_spawn_child_payload: _PrepareSpawnChildPayload
+    child_uuid_for_spawn: _ChildUUIDForSpawn
+    fmt_isoz: Callable[[datetime], str]
+    now_utc: Callable[[], datetime]
+    lifecycle_spawn_identity: Callable[[TaskPayload, TaskPayload], LifecycleIdentity]
+    enqueue_spawn_intent: Callable[[LifecyclePlan], tuple[bool, str]]
+    parse_datetime: DatetimeParserCallback
     diag_count: Callable[[str], None]
 
 
@@ -24,7 +56,7 @@ def spawn_child_atomic(
     child_task: dict,
     parent_task_with_nextlink: dict,
     *,
-    lifecycle_plan: Any = None,
+    lifecycle_plan: LifecyclePlan | None = None,
     services: SpawnServices,
 ) -> tuple[str, set[str], bool, bool, str | None, str | None]:
     """Queue a child spawn intent for on-exit processing.
@@ -48,7 +80,7 @@ def spawn_child_atomic(
                 False,
                 False,
                 f"Spawn intent queue failed: {queue_reason}",
-                getattr(getattr(lifecycle_plan, "identity", None), "idempotency_key", None),
+                lifecycle_plan.identity.idempotency_key,
             )
         services.diag_count("spawn_deferred")
         return (
@@ -57,7 +89,7 @@ def spawn_child_atomic(
             False,
             True,
             "Spawn intent queued for on-exit processing",
-            getattr(getattr(lifecycle_plan, "identity", None), "idempotency_key", None),
+            lifecycle_plan.identity.idempotency_key,
         )
 
     env = os.environ.copy()
@@ -71,10 +103,9 @@ def spawn_child_atomic(
     )
     child_obj = child_draft.to_mapping()
 
-    lifecycle_models = services.lifecycle_models
     lifecycle_identity = services.lifecycle_spawn_identity(parent_task_with_nextlink, child_obj)
     spawn_intent_id = lifecycle_identity.idempotency_key
-    recurrence_guard = lifecycle_models.recurrence_fingerprint(
+    recurrence_guard = recurrence_fingerprint(
         parent_task_with_nextlink,
         parse_datetime=services.parse_datetime,
     )
@@ -85,7 +116,7 @@ def spawn_child_atomic(
         else ""
     )
     modified_guard = "" if end_guard else str(parent_task_with_nextlink.get("modified") or "").strip()
-    parent_guard = lifecycle_models.ParentGuard(
+    parent_guard = ParentGuard(
         status=str(parent_task_with_nextlink.get("status") or ""),
         chain=str(parent_task_with_nextlink.get("chain") or ""),
         chain_id=str(parent_task_with_nextlink.get("chainID") or ""),
@@ -94,9 +125,9 @@ def spawn_child_atomic(
         end=end_guard,
         recurrence_fingerprint=recurrence_guard,
     )
-    lifecycle_plan = lifecycle_models.LifecyclePlan.from_draft(
+    lifecycle_plan = LifecyclePlan.from_draft(
         identity=lifecycle_identity,
-        action=lifecycle_models.LifecycleAction.SPAWN_CHILD,
+        action=LifecycleAction.SPAWN_CHILD,
         parent_guard=parent_guard,
         draft=child_draft,
         parent_patch={"nextLink": child_short},

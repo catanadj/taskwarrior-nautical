@@ -17,6 +17,7 @@ from nautical_core.installation_report import InstallationVerificationReport
 from nautical_core.operator_models import OperatorV2Result
 from nautical_core.query_models import QueryCapabilities
 from nautical_core.taskwarrior_client import TaskwarriorClient
+from tests.support.hook_process import HookSubprocessFixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,10 +26,18 @@ DOCTOR = ROOT / "nautical_core" / "tools" / "nautical_doctor.py"
 QUEUE_STATUS = ROOT / "nautical_core" / "tools" / "nautical_queue_status.py"
 RECONCILE = ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"
 NAVIGATOR = ROOT / "nautical_navigator.py"
+DEV_QUEUE_STATUS = ROOT / "dev_tools" / "nautical_queue_status.py"
+HEALTH_CHECK = ROOT / "dev_tools" / "nautical_health_check.py"
 
 
-class OperatorProcessContractTests(unittest.TestCase):
+class OperatorProcessContractTests(HookSubprocessFixture):
     def _run(self, path: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        if path.resolve().is_relative_to((ROOT / "nautical_core").resolve()):
+            return self.run_python_command(
+                [sys.executable, str(path), *args],
+                env=env,
+                timeout=15,
+            )
         merged = os.environ.copy()
         merged.update(env or {})
         return subprocess.run(
@@ -45,6 +54,124 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertIsInstance(payload, dict)
         return payload
 
+    def test_health_check_json_ok_empty_taskdata(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            process = self._run(HEALTH_CHECK, "--taskdata", taskdata, "--json")
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(self._json(process).get("status"), "ok")
+
+    def test_health_check_critical_outbox_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            outbox = Path(taskdata) / ".nautical-state" / ".nautical_lifecycle_outbox.db"
+            outbox.parent.mkdir()
+            outbox.write_text("x" * 64, encoding="utf-8")
+            process = self._run(
+                HEALTH_CHECK,
+                "--taskdata",
+                taskdata,
+                "--outbox-warn-bytes",
+                "32",
+                "--outbox-crit-bytes",
+                "48",
+                "--json",
+            )
+
+        self.assertEqual(process.returncode, 2, process.stderr)
+        self.assertEqual(self._json(process).get("status"), "crit")
+
+    def test_health_check_critical_outbox_rows(self) -> None:
+        import sqlite3
+
+        from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
+
+        with tempfile.TemporaryDirectory() as taskdata:
+            repository = _LifecycleOutboxRepository(Path(taskdata))
+            self.assertTrue(repository.open().ok)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "INSERT INTO lifecycle_outbox "
+                    "(intent_id, plan_json, plan_fingerprint, parent_guard_json, "
+                    "configuration_fingerprint, schedule_fingerprint, "
+                    "lifecycle_stage, processing_state, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "health-row",
+                        "{}",
+                        "test",
+                        "{}",
+                        "test",
+                        "test",
+                        "planned",
+                        "ready",
+                        1.0,
+                        1.0,
+                    ),
+                )
+            process = self._run(
+                HEALTH_CHECK,
+                "--taskdata",
+                taskdata,
+                "--outbox-warn-bytes",
+                "1048576",
+                "--outbox-crit-bytes",
+                "10485760",
+                "--outbox-warn-rows",
+                "1",
+                "--outbox-crit-rows",
+                "1",
+                "--json",
+            )
+
+        self.assertEqual(process.returncode, 2, process.stderr)
+        payload = self._json(process)
+        self.assertEqual(payload.get("status"), "crit")
+        self.assertEqual((payload.get("outbox") or {}).get("rows"), 1)
+
+    def test_queue_status_json_ok_empty_taskdata(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            process = self._run(DEV_QUEUE_STATUS, "--taskdata", taskdata, "--json")
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        payload = self._json(process)
+        self.assertEqual(payload.get("status"), "ok")
+        outbox = payload.get("outbox") or {}
+        self.assertEqual(outbox.get("states"), {})
+        self.assertEqual((outbox.get("schema") or {}).get("status"), "absent")
+
+    def test_core_queue_status_does_not_create_missing_outbox(self) -> None:
+        from nautical_core.lifecycle.outbox import lifecycle_outbox_path
+
+        with tempfile.TemporaryDirectory() as taskdata:
+            state_dir = Path(taskdata) / ".nautical-state"
+            process = self._run(QUEUE_STATUS, "--taskdata", taskdata, "--json")
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertEqual(process.stderr, "")
+            self.assertFalse(state_dir.exists())
+            self.assertFalse(lifecycle_outbox_path(Path(taskdata)).exists())
+
+    def test_queue_status_explicit_prune_reports_maintenance_result(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            process = self._run(
+                DEV_QUEUE_STATUS,
+                "--taskdata",
+                taskdata,
+                "--prune-acknowledged",
+                "--json",
+            )
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        maintenance = self._json(process).get("maintenance") or {}
+        self.assertIs(maintenance.get("ok"), True)
+        self.assertEqual(maintenance.get("removed"), 0)
+
+    def test_operator_queue_status_json_ok_empty_taskdata(self) -> None:
+        with tempfile.TemporaryDirectory() as taskdata:
+            process = self._run(QUEUE_STATUS, "--taskdata", taskdata, "--json")
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(self._json(process).get("status"), "ok")
+
     def test_capabilities_is_strict_json_stdout(self) -> None:
         process = self._run(QUERY, "capabilities")
         self.assertEqual(process.returncode, 0)
@@ -52,6 +179,58 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertEqual(payload.get("schema"), "nautical.query.capabilities")
         decoded = QueryCapabilities.from_mapping(payload)
         self.assertEqual(decoded.to_dict(), payload)
+
+    def test_query_launcher_keeps_one_document_stdout_and_separates_diagnostics(self) -> None:
+        """The managed query CLI keeps invalid-request forms equivalent and diagnostics on stderr."""
+        launcher = ROOT / "nautical"
+        environment = {**os.environ, "PYTHONPATH": str(ROOT)}
+
+        capabilities = subprocess.run(
+            [sys.executable, str(launcher), "query", "capabilities"],
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=15,
+        )
+        self.assertEqual(capabilities.returncode, 0, capabilities.stderr)
+        self.assertEqual(capabilities.stderr, "")
+        self.assertEqual(len(capabilities.stdout.splitlines()), 1)
+        self.assertEqual(json.loads(capabilities.stdout).get("schema"), "nautical.query.capabilities")
+
+        inline = subprocess.run(
+            [sys.executable, str(launcher), "query", "occurrences", "--request", "{}"],
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=15,
+        )
+        stdin = subprocess.run(
+            [sys.executable, str(launcher), "query", "occurrences", "--request", "-"],
+            input="{}",
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=15,
+        )
+        self.assertEqual(inline.returncode, 2)
+        self.assertEqual(stdin.returncode, 2)
+        self.assertEqual(inline.stderr, "")
+        self.assertEqual(stdin.stderr, "")
+        self.assertEqual(inline.stdout, stdin.stdout)
+        self.assertEqual(len(inline.stdout.splitlines()), 1)
+        self.assertEqual(json.loads(inline.stdout).get("schema"), "nautical.query.occurrences")
+
+        diagnostic = subprocess.run(
+            [sys.executable, str(launcher), "query", "occurrences", "--request", "{}"],
+            text=True,
+            capture_output=True,
+            env={**environment, "NAUTICAL_DIAG": "1"},
+            timeout=15,
+        )
+        self.assertEqual(diagnostic.returncode, 2)
+        self.assertEqual(len(diagnostic.stdout.splitlines()), 1)
+        self.assertEqual(json.loads(diagnostic.stdout).get("schema"), "nautical.query.occurrences")
+        self.assertTrue(diagnostic.stderr.startswith("[nautical] query:"), diagnostic.stderr)
 
     def test_process_interruption_is_typed_and_retryable(self) -> None:
         client = TaskwarriorClient((sys.executable, "-c", "import signal; signal.pause()"))
@@ -299,6 +478,10 @@ class OperatorProcessContractTests(unittest.TestCase):
                     payload = json.loads(process.stdout)
                     self.assertIsInstance(payload, dict)
                     self.assertTrue(str(payload.get("schema", "")).startswith("nautical."), args)
+                    if args == ("query", "capabilities"):
+                        self.assertEqual(process.stderr, "")
+                        self.assertEqual(len(process.stdout.splitlines()), 1)
+                        self.assertEqual(payload.get("schema"), "nautical.query.capabilities")
 
     def test_malformed_request_fails_with_json_and_exit_code(self) -> None:
         process = self._run(QUERY, "occurrences", "--request", "{not-json")

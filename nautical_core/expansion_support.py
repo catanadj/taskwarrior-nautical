@@ -23,7 +23,7 @@ def wd_idx(s: str, *, wd_abbr: list[str]) -> int | None:
         n = int(s)
         if 1 <= n <= 7:
             return n - 1
-    except Exception:
+    except ValueError:
         pass
     return None
 

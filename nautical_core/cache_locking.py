@@ -1,35 +1,58 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from types import SimpleNamespace
-from typing import Any, Protocol
+from dataclasses import dataclass
+from collections.abc import Callable
+from typing import ContextManager, Iterator, Protocol
+
+from nautical_core.cache_ports import ClockPort, FcntlPort, LockFilesystemPort, RandomPort
+from nautical_core.cache_support import ValidatedUserDir
 
 
-class TimePort(Protocol):
-    def time(self) -> float: ...
-    def sleep(self, seconds: float) -> None: ...
+class BoundSafeLock(Protocol):
+    def __call__(
+        self,
+        path: object,
+        *,
+        retries: int = 6,
+        sleep_base: float = 0.05,
+        jitter: float = 0.0,
+        mode: int = 0o600,
+        mkdir: bool = True,
+        stale_after: float | None = 60.0,
+    ) -> ContextManager[bool]: ...
 
 
-class RandomPort(Protocol):
-    def uniform(self, start: float, end: float) -> float: ...
+class BoundCacheLock(Protocol):
+    def __call__(self, key: str) -> ContextManager[bool]: ...
 
 
-class FcntlPort(Protocol):
-    LOCK_EX: int
-    LOCK_NB: int
-    LOCK_UN: int
+class CacheDirectorySelector(Protocol):
+    def __call__(
+        self,
+        *,
+        anchor_cache_dir_override: str,
+        nautical_cache_dir_path: str,
+        validated_user_dir: ValidatedUserDir,
+    ) -> str: ...
 
-    def flock(self, file_descriptor: int, operation: int) -> None: ...
+
+@dataclass(frozen=True, slots=True)
+class BoundLocking:
+    """One cache facade's already-bound lock operations."""
+
+    safe_lock: BoundSafeLock
+    cache_lock: BoundCacheLock
 
 
 def cache_dir(
-    current_cache_dir: Any,
+    current_cache_dir: str | None,
     *,
-    anchor_cache_dir_override: Any,
-    nautical_cache_dir_path: Any,
-    validated_user_dir: Any,
-    select_cache_dir: Any,
-) -> Any:
+    anchor_cache_dir_override: str,
+    nautical_cache_dir_path: str,
+    validated_user_dir: ValidatedUserDir,
+    select_cache_dir: CacheDirectorySelector,
+) -> str:
     if current_cache_dir is not None:
         return current_cache_dir
     return select_cache_dir(
@@ -43,46 +66,46 @@ def safe_lock_sleep_once(
     sleep_base: float,
     jitter: float,
     *,
-    time_mod: TimePort,
+    time_mod: ClockPort,
     random_mod: RandomPort,
 ) -> None:
     try:
         delay = float(sleep_base or 0.0)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         delay = 0.0
     if jitter:
         try:
             delay += random_mod.uniform(0.0, float(jitter))
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             pass
     if delay > 0:
         time_mod.sleep(delay)
 
 
-def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: Any) -> None:
+def safe_lock_ensure_parent(path_str: str, mkdir: bool, *, os_mod: LockFilesystemPort) -> None:
     if not mkdir:
         return
     try:
         parent = os_mod.path.dirname(path_str)
         if parent:
             os_mod.makedirs(parent, exist_ok=True)
-    except Exception:
+    except OSError:
         pass
 
 
-def safe_lock_age(path_str: str, *, time_mod: TimePort, os_mod: Any) -> float | None:
+def safe_lock_age(path_str: str, *, time_mod: ClockPort, os_mod: LockFilesystemPort) -> float | None:
     try:
         with open(path_str, "r", encoding="utf-8") as fh:
             head = fh.read(64)
         parts = head.strip().split()
         if len(parts) >= 2:
             return time_mod.time() - float(parts[1])
-    except Exception:
+    except (OSError, UnicodeError, ValueError, OverflowError):
         pass
     try:
         st = os_mod.stat(path_str)
         return time_mod.time() - float(st.st_mtime)
-    except Exception:
+    except OSError:
         return None
 
 
@@ -90,8 +113,8 @@ def safe_lock_stale_pid(
     path_str: str,
     stale_after: float | None,
     *,
-    time_mod: TimePort,
-    os_mod: Any,
+    time_mod: ClockPort,
+    os_mod: LockFilesystemPort,
 ) -> bool:
     try:
         with open(path_str, "r", encoding="utf-8") as fh:
@@ -106,7 +129,7 @@ def safe_lock_stale_pid(
                 age = time_mod.time() - float(parts[1])
                 if age < float(stale_after):
                     return False
-            except Exception:
+            except (ValueError, OverflowError):
                 pass
         try:
             os_mod.kill(pid, 0)
@@ -115,9 +138,9 @@ def safe_lock_stale_pid(
             return False
         except ProcessLookupError:
             return True
-        except Exception:
+        except OSError:
             return False
-    except Exception:
+    except (OSError, UnicodeError, ValueError, OverflowError):
         return False
 
 
@@ -130,43 +153,57 @@ def safe_lock_fcntl_context(
     jitter: float,
     mode: int,
     mkdir: bool,
-    safe_lock_ensure_parent: Any,
-    safe_lock_sleep_once: Any,
-    fcntl_mod: FcntlPort,
-    os_mod: Any,
-) -> Any:
+    safe_lock_ensure_parent: Callable[[str, bool], None],
+    safe_lock_sleep_once: Callable[[float, float], None],
+    fcntl_mod: FcntlPort | None,
+    os_mod: LockFilesystemPort,
+) -> Iterator[bool]:
+    if fcntl_mod is None:
+        yield False
+        return
+
     lf = None
+    fd: int | None = None
     acquired = False
     safe_lock_ensure_parent(path_str, mkdir)
     try:
         fd = os_mod.open(path_str, os_mod.O_CREAT | os_mod.O_RDWR, mode)
         try:
             os_mod.fchmod(fd, mode)
-        except Exception:
+        except OSError:
             pass
         lf = os_mod.fdopen(fd, "a", encoding="utf-8")
-        for _ in range(tries):
-            try:
-                fcntl_mod.flock(lf.fileno(), fcntl_mod.LOCK_EX | fcntl_mod.LOCK_NB)
-                acquired = True
-                break
-            except Exception:
-                safe_lock_sleep_once(sleep_base, jitter)
-    except Exception:
+        fd = None
+    except OSError:
         lf = None
+    finally:
+        if fd is not None:
+            try:
+                os_mod.close(fd)
+            except OSError:
+                pass
     try:
+        if lf is not None:
+            for _ in range(tries):
+                try:
+                    fcntl_mod.flock(lf.fileno(), fcntl_mod.LOCK_EX | fcntl_mod.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    safe_lock_sleep_once(sleep_base, jitter)
         yield acquired
     finally:
         try:
             if acquired and lf is not None:
                 fcntl_mod.flock(lf.fileno(), fcntl_mod.LOCK_UN)
-        except Exception:
+        except OSError:
             pass
-        try:
+        finally:
             if lf is not None:
-                lf.close()
-        except Exception:
-            pass
+                try:
+                    lf.close()
+                except OSError:
+                    pass
 
 
 @contextmanager
@@ -179,64 +216,68 @@ def safe_lock_excl_context(
     mode: int,
     mkdir: bool,
     stale_after: float | None,
-    safe_lock_ensure_parent: Any,
-    safe_lock_stale_pid: Any,
-    safe_lock_age: Any,
-    safe_lock_sleep_once: Any,
-    os_mod: Any,
-    time_mod: TimePort,
-) -> Any:
+    safe_lock_ensure_parent: Callable[[str, bool], None],
+    safe_lock_stale_pid: Callable[[str, float | None], bool],
+    safe_lock_age: Callable[[str], float | None],
+    safe_lock_sleep_once: Callable[[float, float], None],
+    os_mod: LockFilesystemPort,
+    time_mod: ClockPort,
+) -> Iterator[bool]:
     fd = None
     acquired = False
-    for _ in range(tries):
-        safe_lock_ensure_parent(path_str, mkdir)
-        try:
-            fd = os_mod.open(path_str, os_mod.O_CREAT | os_mod.O_EXCL | os_mod.O_WRONLY, mode)
+    try:
+        for _ in range(tries):
+            safe_lock_ensure_parent(path_str, mkdir)
+            try:
+                fd = os_mod.open(path_str, os_mod.O_CREAT | os_mod.O_EXCL | os_mod.O_WRONLY, mode)
+            except FileExistsError:
+                pid_stale = safe_lock_stale_pid(path_str, stale_after)
+                age_stale = False
+                if stale_after is not None:
+                    age = safe_lock_age(path_str)
+                    if age is not None and age >= float(stale_after):
+                        age_stale = True
+                if pid_stale and age_stale:
+                    try:
+                        os_mod.unlink(path_str)
+                    except OSError:
+                        pass
+                else:
+                    safe_lock_sleep_once(sleep_base, jitter)
+                continue
+            except OSError:
+                break
+
+            acquired = True
             try:
                 os_mod.fchmod(fd, mode)
-            except Exception:
+            except OSError:
                 pass
+
             try:
                 payload = f"{os_mod.getpid()} {int(time_mod.time())}\n"
                 os_mod.write(fd, payload.encode("ascii", "replace"))
-            except Exception:
+            except OSError:
                 pass
-            acquired = True
             break
-        except FileExistsError:
-            pid_stale = safe_lock_stale_pid(path_str, stale_after)
-            age_stale = False
-            if stale_after is not None:
-                age = safe_lock_age(path_str)
-                if age is not None and age >= float(stale_after):
-                    age_stale = True
-            if pid_stale and age_stale:
-                try:
-                    os_mod.unlink(path_str)
-                except Exception:
-                    pass
-            else:
-                safe_lock_sleep_once(sleep_base, jitter)
-        except Exception:
-            break
-    try:
         yield acquired
     finally:
         try:
             if acquired and fd is not None:
                 os_mod.close(fd)
-        except Exception:
+        except OSError:
             pass
-        try:
+        finally:
             if acquired and fd is not None:
-                os_mod.unlink(path_str)
-        except Exception:
-            pass
+                try:
+                    os_mod.unlink(path_str)
+                except OSError:
+                    pass
 
 
 @contextmanager
 def safe_lock(
-    path: Any,
+    path: object,
     *,
     retries: int = 6,
     sleep_base: float = 0.05,
@@ -245,10 +286,10 @@ def safe_lock(
     mkdir: bool = True,
     stale_after: float | None = 60.0,
     fcntl_mod: FcntlPort | None,
-    os_mod: Any,
-    time_mod: TimePort,
+    os_mod: LockFilesystemPort,
+    time_mod: ClockPort,
     random_mod: RandomPort,
-) -> Any:
+) -> Iterator[bool]:
     path_str = str(path) if path else ""
     if not path_str:
         yield False
@@ -256,10 +297,19 @@ def safe_lock(
 
     tries = max(1, int(retries or 0))
 
-    _ensure_parent = lambda p, m: safe_lock_ensure_parent(p, m, os_mod=os_mod)
-    _sleep_once = lambda base, jit: safe_lock_sleep_once(base, jit, time_mod=time_mod, random_mod=random_mod)
-    _age = lambda p: safe_lock_age(p, time_mod=time_mod, os_mod=os_mod)
-    _stale_pid = lambda p, s: safe_lock_stale_pid(p, s, time_mod=time_mod, os_mod=os_mod)
+    def _ensure_parent(path_str: str, mkdir: bool) -> None:
+        safe_lock_ensure_parent(path_str, mkdir, os_mod=os_mod)
+
+    def _sleep_once(base: float, jit: float) -> None:
+        safe_lock_sleep_once(base, jit, time_mod=time_mod, random_mod=random_mod)
+
+    def _age(path_str: str) -> float | None:
+        return safe_lock_age(path_str, time_mod=time_mod, os_mod=os_mod)
+
+    def _stale_pid(path_str: str, stale_after: float | None) -> bool:
+        return safe_lock_stale_pid(
+            path_str, stale_after, time_mod=time_mod, os_mod=os_mod
+        )
 
     if fcntl_mod is not None:
         with safe_lock_fcntl_context(
@@ -299,13 +349,13 @@ def safe_lock(
 def cache_lock(
     key: str,
     *,
-    cache_lock_path: Any,
-    safe_lock: Any,
+    cache_lock_path: Callable[[str], str],
+    safe_lock: BoundSafeLock,
     cache_lock_retries: int,
     cache_lock_sleep_base: float,
     cache_lock_jitter: float,
     cache_lock_stale_after: float,
-) -> Any:
+) -> Iterator[bool]:
     lock_path = cache_lock_path(key)
     if not lock_path:
         yield False
@@ -324,28 +374,42 @@ def cache_lock(
 
 def bind_locking(
     *,
-    cache_lock_path: Any,
+    cache_lock_path: Callable[[str], str],
     retries: int,
     sleep_base: float,
     jitter: float,
     stale_after: float,
     fcntl_mod: FcntlPort | None,
-    os_mod: Any,
-    time_mod: TimePort,
+    os_mod: LockFilesystemPort,
+    time_mod: ClockPort,
     random_mod: RandomPort,
-) -> Any:
+) -> BoundLocking:
     """Bind lock dependencies once for one core facade instance."""
-    def bound_safe_lock(path: Any, **kwargs: Any) -> Any:
+    def bound_safe_lock(
+        path: object,
+        *,
+        retries: int = 6,
+        sleep_base: float = 0.05,
+        jitter: float = 0.0,
+        mode: int = 0o600,
+        mkdir: bool = True,
+        stale_after: float | None = 60.0,
+    ) -> ContextManager[bool]:
         return safe_lock(
             path,
             fcntl_mod=fcntl_mod,
             os_mod=os_mod,
             time_mod=time_mod,
             random_mod=random_mod,
-            **kwargs,
+            retries=retries,
+            sleep_base=sleep_base,
+            jitter=jitter,
+            mode=mode,
+            mkdir=mkdir,
+            stale_after=stale_after,
         )
 
-    def bound_cache_lock(key: Any) -> Any:
+    def bound_cache_lock(key: str) -> ContextManager[bool]:
         return cache_lock(
             key,
             cache_lock_path=cache_lock_path,
@@ -356,4 +420,4 @@ def bind_locking(
             cache_lock_stale_after=stale_after,
         )
 
-    return SimpleNamespace(safe_lock=bound_safe_lock, cache_lock=bound_cache_lock)
+    return BoundLocking(safe_lock=bound_safe_lock, cache_lock=bound_cache_lock)

@@ -14,6 +14,7 @@ from typing import Any, Callable
 from .task_changes import TaskTransition
 from .task_models import TaskPayload, TaskTimestamp
 from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
+from .modify_models import FirstRecurrenceTargetCallback, PanelCallback
 from .modify_workflow import ChainCompletionDecision, RecurrenceTransitionDecision
 
 
@@ -44,10 +45,10 @@ class OrdinaryModifyServices:
     apply_transition: Callable[[TaskPayload, TaskPayload], RecurrenceTransitionDecision]
     short_uuid: Callable[[str], str]
     recurrence_enabled_rows: Callable[[TaskPayload, str], list[tuple[str, str]]]
-    panel: Callable[..., None]
+    panel: PanelCallback
     render_disabled_summary: Callable[[TaskPayload, TaskPayload, ChainCompletionDecision], None]
     semantic_diff_value: Callable[[str, str], str]
-    first_recurrence_target: Callable[[TaskPayload, str], datetime | None]
+    first_recurrence_target: FirstRecurrenceTargetCallback
     fmtlocal: Callable[[datetime], str]
     render_recurrence_updated: Callable[[list[tuple[str, str, str]], TaskPayload], None]
     print_task: Callable[[TaskPayload], None]
@@ -128,7 +129,7 @@ def handle_non_completion_modify(
 
     try:
         lifecycle_transition = services.apply_transition(old, new)
-    except Exception as exc:
+    except ValueError as exc:
         raise RecurrenceActivationError(
             f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}"
         ) from exc
@@ -205,14 +206,10 @@ def handle_non_completion_modify(
             rows.append(("Next", services.fmtlocal(first)))
         services.panel("⚓ Nautical resumed", rows, kind="note")
     else:
-        try:
-            # ``new`` includes validated carry-forward values (notably a
-            # shifted native ``until``).  Build feedback from that mutated
-            # payload so the panel reports both the user's edit and its
-            # derived recurrence changes.
-            changes = lifecycle.recurrence_setting_changes(old, new)
-        except Exception:
-            changes = []
+        # ``new`` includes validated carry-forward values (notably a shifted
+        # native ``until``). Build feedback from that mutated payload so the
+        # panel reports both the user's edit and its derived recurrence changes.
+        changes = lifecycle.recurrence_setting_changes(old, new)
         services.render_recurrence_updated(changes, new)
     services.print_task(new)
 

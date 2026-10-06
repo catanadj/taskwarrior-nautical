@@ -41,7 +41,8 @@ def sanitize_text(v: str, max_len: int = 1024) -> Any:
         if os.environ.get("NAUTICAL_DIAG") == "1":
             try:
                 print(f"[nautical] UDA value truncated from {len(s)} to {max_len} chars", file=sys.stderr)
-            except Exception:
+            except (OSError, ValueError):
+                # Optional diagnostics must not block sanitization when stderr is unavailable.
                 pass
         s = s[:max_len]
     return s
@@ -75,5 +76,5 @@ def coerce_int(v: Any, default: Any = None) -> Any:
             return iv if abs(iv) <= (2**63 - 1) else default
         iv = int(s)
         return iv if abs(iv) <= (2**63 - 1) else default
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default

@@ -1,24 +1,26 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Callable, Sequence, get_type_hints
 import unittest
 
-from nautical_core.lifecycle_application import (
+from nautical_core.lifecycle.application import (
     DrainResult,
     LifecycleApplicationError,
     LifecycleApplicationOutcome,
     LifecycleApplicationOutcomeKind,
     LifecycleApplicationService,
 )
-from nautical_core.lifecycle_outbox import OutboxResult, OutboxResultKind
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.outbox import OutboxResult, OutboxResultKind
+from nautical_core.lifecycle.models import (
     LifecycleAction,
     LifecycleEvent,
     LifecycleIdentity,
     LifecyclePlan,
     ParentGuard,
 )
-from nautical_core.lifecycle_operator_owner import LifecycleOperatorOwner
+from nautical_core.integration_models import MutationOutcome, MutationPayload, MutationRequest
+from nautical_core.lifecycle.operator_owner import LifecycleOperatorOwner
 from nautical_core.operator_domain_plans import DomainApplicationAuthorization
 from nautical_core.operator_models import (
     CoverageKind,
@@ -66,8 +68,29 @@ class _CompleteMutationGateway:
 
 
 class LifecycleExecutionCapabilityTests(unittest.TestCase):
+    def test_lifecycle_mutation_helpers_use_the_shared_payload_union(self) -> None:
+        request_hints = get_type_hints(LifecycleApplicationService._request_for)
+        apply_hints = get_type_hints(LifecycleApplicationService._apply)
+
+        self.assertEqual(request_hints["payload"], MutationPayload | None)
+        self.assertEqual(apply_hints["payload"], MutationPayload)
+
+    def test_batched_drain_callbacks_have_explicit_execution_contracts(self) -> None:
+        annotations = get_type_hints(LifecycleApplicationService._drain_batched)
+
+        self.assertEqual(
+            annotations["apply_unverified"],
+            Callable[[MutationRequest], MutationOutcome],
+        )
+        batch_operation = Callable[
+            [Sequence[MutationRequest]], dict[str, MutationOutcome]
+        ]
+        for name in ("apply_children", "verify_children", "verify_parents"):
+            with self.subTest(callback=name):
+                self.assertEqual(annotations[name], batch_operation)
+
     def test_explicit_execution_protocol_names_all_required_operations(self) -> None:
-        from nautical_core.lifecycle_application import LifecycleExecutionPort
+        from nautical_core.lifecycle.application import LifecycleExecutionPort
 
         self.assertEqual(
             tuple(name for name in _EXECUTION_METHODS if hasattr(LifecycleExecutionPort, name)),

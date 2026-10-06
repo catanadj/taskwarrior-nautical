@@ -37,14 +37,14 @@ def _outbox_may_have_work(path: Path) -> bool | None:
             return row is not None
         finally:
             conn.close()
-    except Exception:
+    except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError):
         return None
 
 
 def probe_exit_work(taskdata: str | os.PathLike[str]) -> ExitWorkProbe:
     try:
         root = Path(taskdata).expanduser().resolve()
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return ExitWorkProbe(True, "taskdata path could not be resolved")
 
     # An invalid or inaccessible taskdata path must never be classified as
@@ -52,7 +52,7 @@ def probe_exit_work(taskdata: str | os.PathLike[str]) -> ExitWorkProbe:
     try:
         if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
             return ExitWorkProbe(True, f"taskdata directory is unavailable: {root}")
-    except Exception:
+    except OSError:
         return ExitWorkProbe(True, f"taskdata directory could not be inspected: {root}")
 
     path = root / ".nautical-state" / ".nautical_lifecycle_outbox.db"
@@ -61,7 +61,7 @@ def probe_exit_work(taskdata: str | os.PathLike[str]) -> ExitWorkProbe:
             return ExitWorkProbe(False, "no lifecycle outbox")
         if not path.is_file():
             return ExitWorkProbe(True, f"lifecycle outbox is not a regular file: {path}")
-    except Exception:
+    except OSError:
         return ExitWorkProbe(True, f"lifecycle outbox state is uncertain: {path}")
     may_have_work = _outbox_may_have_work(path)
     if may_have_work is None:

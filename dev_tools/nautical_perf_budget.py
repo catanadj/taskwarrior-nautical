@@ -54,7 +54,7 @@ from dev_tools.perf import workflow_workloads as _workflow_workloads
 
 core = importlib.import_module("nautical_core")
 install_runtime = importlib.import_module("nautical_core.install_runtime")
-lifecycle_outbox = importlib.import_module("nautical_core.lifecycle_outbox")
+lifecycle_outbox = importlib.import_module("nautical_core.lifecycle.outbox")
 task_codec = importlib.import_module("nautical_core.task_codec")
 IMPORT_PROFILES: dict[str, int] = {}
 RESOURCE_DETAILS: dict[str, object] = {}
@@ -104,7 +104,21 @@ def _load_budget_config(path: Path) -> dict:
 
 def _clear_caches() -> None:
     try:
-        core._clear_all_caches()
+        import nautical_core.cache_facade as cache_facade
+
+        cache_facade.clear_all(
+            core._CACHE_LOAD_MEM,
+            (
+                core._acf_api._normalize_spec_for_acf_cached,
+                core._acf_api._year_pair_cached,
+                core._parser_support_api._parse_y_token_cached,
+                core._scheduler_api.expand_monthly_cached,
+                core._scheduler_api.expand_weekly_cached,
+                core._cache_api._cache_key_for_task_cached,
+            ),
+            position_selection=core._position_selection,
+            selection_matcher=core._scheduler_api._selection_inner_matcher,
+        )
     except Exception:
         pass
 
@@ -310,7 +324,7 @@ def _bench_doctor_installation_stage() -> float:
 
 def _bench_housekeeping_stage() -> float:
     """Measure bounded housekeeping against an isolated outbox."""
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle.outbox import LifecycleOutboxRepository
 
     with tempfile.TemporaryDirectory(prefix="nautical-perf-housekeeping-") as td:
         repository = LifecycleOutboxRepository(Path(td))
@@ -1014,16 +1028,6 @@ def _bench_hook_fast_paths(cfg: dict, *, panel_mode: str = "minimal") -> dict[st
     )
 
 
-def _run_workflow_hook(hook_path: Path, *, input_text: str, env: dict[str, str], expect_output: bool) -> float:
-    elapsed, _result, _stderr = _run_workflow_hook_result(
-        hook_path,
-        input_text=input_text,
-        env=env,
-        expect_output=expect_output,
-    )
-    return elapsed
-
-
 def _run_workflow_hook_result(
     hook_path: Path,
     *,
@@ -1268,7 +1272,7 @@ def _stage_workflow_plans(
 
 def _bind_workflow_plans_to_parents(plans: list, rows: list[dict]) -> list:
     """Bind benchmark plans to the guards Taskwarrior assigned on import."""
-    from nautical_core.lifecycle_models import LifecyclePlan, ParentGuard, recurrence_fingerprint
+    from nautical_core.lifecycle.models import LifecyclePlan, ParentGuard, recurrence_fingerprint
     from nautical_core.task_models import NauticalTask, TaskDraft
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
@@ -1309,7 +1313,7 @@ def _bind_workflow_plans_to_parents(plans: list, rows: list[dict]) -> list:
 
 def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) -> tuple[list[dict], list]:
     """Create independent typed lifecycle plans for durable outbox recovery tests."""
-    from nautical_core.lifecycle_models import (
+    from nautical_core.lifecycle.models import (
         ExecutionStage,
         LifecycleAction,
         LifecycleEvent,
@@ -1349,7 +1353,6 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
             "cp": "P1D",
             "due": "20260102T090000Z",
         }
-        guard = {"status": "completed", "chain": "on", "chainID": chain_id, "link": str(parent_link)}
         child_task = NauticalTask.from_observation(
             DEFAULT_TASK_CODEC.decode_row(child, source_query="perf:workflow-plan")
         )

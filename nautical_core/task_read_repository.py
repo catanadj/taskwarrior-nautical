@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Mapping, Sequence, TypeAlias
+from typing import TYPE_CHECKING, Hashable, Mapping, Sequence, TypeAlias, TypeVar
 
 from .integration_models import (
     Absent,
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 # accepted only by TaskCodec, never retained by the authoritative repository.
 TaskRow: TypeAlias = TaskObservation
 TaskSlot: TypeAlias = tuple[str, int]
+_IndexKey = TypeVar("_IndexKey", bound=Hashable)
 _RETRYABLE_READ_FAILURES = frozenset(
     {CommandFailureKind.TIMEOUT, CommandFailureKind.BUSY, CommandFailureKind.EXECUTION_FAILURE}
 )
@@ -95,12 +96,12 @@ def _link_number(value: object) -> int | None:
     return number if number >= 0 else None
 
 
-def _append_index(index: dict[Any, list[TaskRow]], key: Any, row: TaskRow) -> None:
+def _append_index(index: dict[_IndexKey, list[TaskRow]], key: _IndexKey, row: TaskRow) -> None:
     if key not in (None, "", ("", None)):
         index.setdefault(key, []).append(row)
 
 
-def _freeze_index(index: dict[Any, list[TaskRow]]) -> Mapping[Any, tuple[TaskRow, ...]]:
+def _freeze_index(index: dict[_IndexKey, list[TaskRow]]) -> Mapping[_IndexKey, tuple[TaskRow, ...]]:
     return MappingProxyType({key: tuple(values) for key, values in index.items()})
 
 

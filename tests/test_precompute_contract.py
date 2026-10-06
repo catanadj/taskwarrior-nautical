@@ -6,8 +6,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 import nautical_core as core
-from nautical_core import natural_language_api
+import nautical_core.natural_language_api as natural_language_api
 from nautical_core.precompute import build_and_cache_hints
+from nautical_core.scheduler_service import SchedulerService
 
 
 class PrecomputeContractTests(unittest.TestCase):
@@ -46,6 +47,15 @@ class PrecomputeContractTests(unittest.TestCase):
         builder.build.assert_not_called()
         validate.assert_called_once_with("w:mon")
 
+    def test_cached_hint_validation_defects_propagate_without_retry(self) -> None:
+        cached = {"dnf": [[{"typ": "w", "spec": "mon"}]]}
+        validate = Mock(side_effect=RuntimeError("validator defect"))
+
+        with self.assertRaisesRegex(RuntimeError, "validator defect"):
+            self._build(cached=cached, validate=validate, builder=self._builder())
+
+        validate.assert_called_once_with("w:mon")
+
     def test_cached_hint_payload_is_isolated_from_caller_mutation(self) -> None:
         first = core.build_and_cache_hints("w:mon@t=09:00", "skip")
         second = core.build_and_cache_hints("w:mon@t=09:00", "skip")
@@ -58,6 +68,7 @@ class PrecomputeContractTests(unittest.TestCase):
             self.assertEqual(second_dnf[0][0]["spec"], "mon")
 
     def test_production_hint_path_uses_scheduler_service_not_legacy_callbacks(self) -> None:
+        collect_request = SchedulerService.collect_request
         with (
             patch.object(
                 core,
@@ -65,15 +76,17 @@ class PrecomputeContractTests(unittest.TestCase):
                 side_effect=AssertionError("hint build used a legacy scheduler callback"),
             ),
             patch.object(
-                core,
-                "_next_for_or",
-                side_effect=AssertionError("hint build used a legacy scheduler callback"),
-            ),
+                SchedulerService,
+                "collect_request",
+                autospec=True,
+                side_effect=collect_request,
+            ) as collect,
             patch.object(core, "cache_load", return_value=None),
             patch.object(core, "cache_save", return_value=None),
         ):
             payload = core.build_and_cache_hints("w:thu@t=08:45", "skip")
 
+        collect.assert_called()
         self.assertTrue(payload["next_dates"])
         self.assertGreater(payload["per_year"]["est"], 0)
 

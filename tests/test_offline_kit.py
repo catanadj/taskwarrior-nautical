@@ -1,14 +1,18 @@
 import json
 import os
 import tarfile
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from tests.support.hook_process import HookSubprocessFixture
 
-class OfflineKitTests(unittest.TestCase):
+
+class OfflineKitTests(HookSubprocessFixture):
+    def _run_cli(self, command, **kwargs):
+        return self.run_python_command(command, **kwargs)
+
     def test_astronomy_dependency_is_optional_and_bounded(self):
         root = Path(__file__).parents[1]
         base = (root / "requirements.txt").read_text(encoding="utf-8")
@@ -23,10 +27,10 @@ class OfflineKitTests(unittest.TestCase):
         script = Path(__file__).parents[1] / "dev_tools" / "nautical_offline_kit.py"
         with tempfile.TemporaryDirectory(prefix="nautical-kit-test-") as td:
             kit = Path(td) / "kit"
-            built = subprocess.run([sys.executable, str(script), "build", str(kit)], capture_output=True, text=True, check=False)
+            built = self._run_cli([sys.executable, str(script), "build", str(kit)], capture_output=True, text=True, check=False)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
             self.assertEqual(json.loads(built.stdout)["status"], "created")
-            verified = subprocess.run([sys.executable, str(script), "verify", str(kit)], capture_output=True, text=True, check=False)
+            verified = self._run_cli([sys.executable, str(script), "verify", str(kit)], capture_output=True, text=True, check=False)
             self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
             self.assertEqual(json.loads(verified.stdout)["status"], "verified")
             manifest = json.loads((kit / "kit-manifest.json").read_text(encoding="utf-8"))
@@ -40,10 +44,10 @@ class OfflineKitTests(unittest.TestCase):
         script = Path(__file__).parents[1] / "dev_tools" / "nautical_offline_kit.py"
         with tempfile.TemporaryDirectory(prefix="nautical-kit-test-") as td:
             kit = Path(td) / "kit"
-            subprocess.run([sys.executable, str(script), "build", str(kit)], check=True, capture_output=True, text=True)
+            self._run_cli([sys.executable, str(script), "build", str(kit)], check=True, capture_output=True, text=True)
             target = kit / "nautical"
             target.write_bytes(target.read_bytes() + b"\n")
-            verified = subprocess.run([sys.executable, str(script), "verify", str(kit)], capture_output=True, text=True, check=False)
+            verified = self._run_cli([sys.executable, str(script), "verify", str(kit)], capture_output=True, text=True, check=False)
             self.assertEqual(verified.returncode, 2)
             self.assertIn("checksum mismatch", verified.stdout)
 
@@ -52,13 +56,13 @@ class OfflineKitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="nautical-kit-test-") as td:
             kit = Path(td) / "kit"
             archive = Path(td) / "kit.tar.gz"
-            built = subprocess.run(
+            built = self._run_cli(
                 [sys.executable, str(script), "build", str(kit), "--archive", str(archive)],
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
             self.assertTrue(archive.is_file())
-            verified = subprocess.run(
+            verified = self._run_cli(
                 [sys.executable, str(script), "verify", str(archive)],
                 capture_output=True, text=True, check=False,
             )
@@ -74,24 +78,24 @@ class OfflineKitTests(unittest.TestCase):
             target = root / "taskdata"
             launcher = root / "launcher"
             env = {**os.environ, "TASKRC": str(root / "taskrc")}
-            built = subprocess.run(
+            built = self._run_cli(
                 [sys.executable, str(script), "build", str(kit)],
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-            verified = subprocess.run(
+            verified = self._run_cli(
                 [sys.executable, str(script), "verify", str(kit)],
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
-            planned = subprocess.run(
+            planned = self._run_cli(
                 [sys.executable, str(install), "--source", str(kit), "--taskdata", str(target),
                  "--launcher-path", str(launcher), "--dry-run", "--json"],
                 capture_output=True, text=True, check=False, env=env,
             )
             self.assertEqual(planned.returncode, 0, planned.stdout + planned.stderr)
             self.assertFalse(target.exists())
-            applied = subprocess.run(
+            applied = self._run_cli(
                 [sys.executable, str(install), "--source", str(kit), "--taskdata", str(target),
                  "--launcher-path", str(launcher), "--json"],
                 capture_output=True, text=True, check=False, env=env,
@@ -108,7 +112,7 @@ class OfflineKitTests(unittest.TestCase):
                 info = tarfile.TarInfo("../escape")
                 info.size = 1
                 handle.addfile(info, __import__("io").BytesIO(b"x"))
-            verified = subprocess.run(
+            verified = self._run_cli(
                 [sys.executable, str(script), "verify", str(archive)],
                 capture_output=True, text=True, check=False,
             )

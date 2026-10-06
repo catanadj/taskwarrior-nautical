@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from collections.abc import Callable
-from typing import Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 import time as _time
 
 from nautical_core.modify_models import (
@@ -15,7 +16,7 @@ from nautical_core.modify_models import (
     FeedbackRowsFormatter,
     HumanDeltaCallback,
     PanelLineCallback,
-    PreviewLineFormatter,
+    CompletionPreviewFormatter,
     PrintTaskCallback,
     RootAgeFormatter,
     ShortUuidCallback,
@@ -23,16 +24,29 @@ from nautical_core.modify_models import (
     TextLineCallback,
     TimelineLinesCallback,
     WaitScheduleRowsCallback,
+    WaitScheduleDebug,
 )
-from nautical_core.task_models import TaskPayload
+from nautical_core.task_models import TaskObservation, TaskPayload
+from nautical_core.parsing.parser_models import AnchorDNF
+import nautical_core.timezone_facade as timezone_facade
+
+if TYPE_CHECKING:
+    from nautical_core.hook_workflow_context import WorkflowInvocationContext
+    from nautical_core.lifecycle.read_service import ChainCacheStore, LifecycleReadService
+    from nautical_core.modify_generation_effects import ChainGenerationServicePort
+    from nautical_core.occurrence_provider import OccurrenceProvider
+    from nautical_core.scheduler_service import SchedulerService
+    from nautical_core.task_read_repository import TaskReadRepository
 
 
 @dataclass(slots=True)
 class ModifyRuntimeState:
-    workflow_context: Any = None
-    task_repository: Any = None
-    scheduler_services: dict[Any, Any] = field(default_factory=dict)
-    chain_generation_service: Any = None
+    workflow_context: WorkflowInvocationContext | None = None
+    task_repository: TaskReadRepository | None = None
+    scheduler_services: dict[tuple[object, ...], SchedulerService] = field(
+        default_factory=dict
+    )
+    chain_generation_service: ChainGenerationServicePort | None = None
     query_ctx: dict[str, dict[object, object]] = field(
         default_factory=lambda: {
             "tw_get": {},
@@ -41,7 +55,7 @@ class ModifyRuntimeState:
             "format_root_age": {},
         }
     )
-    diag_stats: dict[str, Any] = field(
+    diag_stats: dict[str, int | float] = field(
         default_factory=lambda: {
             "run_task_calls": 0,
             "run_task_failures": 0,
@@ -68,8 +82,6 @@ class ModifyRuntimeState:
             "format_root_age_cache_misses": 0,
             "read_query_cache_hits": 0,
             "read_query_cache_misses": 0,
-            "read_query_cache_invalidations": 0,
-            "read_query_cache_entries": 0,
             "chain_snapshot_hits": 0,
             "chain_snapshot_misses": 0,
             "chain_snapshot_filter_hits": 0,
@@ -82,14 +94,14 @@ class ModifyRuntimeState:
         }
     )
     diag_start_ts: float = field(default_factory=_time.perf_counter)
-    panel_chain_by_link: dict[int, list[dict[str, Any]]] | None = None
-    panel_chain_by_short: dict[str, dict[str, Any]] | None = None
+    panel_chain_by_link: dict[int, list[TaskObservation]] | None = None
+    panel_chain_by_short: dict[str, TaskObservation] | None = None
     panel_chain_snapshot_loaded: bool = False
-    lifecycle_read_service: Any = None
-    chain_cache_store: Any = None
-    anchor_file_providers: dict[tuple[str, str, tuple[int, int], str], Any] = field(
-        default_factory=dict
-    )
+    lifecycle_read_service: LifecycleReadService | None = None
+    chain_cache_store: ChainCacheStore | None = None
+    anchor_file_providers: dict[
+        tuple[str, str, tuple[int, int], str], OccurrenceProvider
+    ] = field(default_factory=dict)
 
 
 def new_runtime_state() -> ModifyRuntimeState:
@@ -102,10 +114,10 @@ def scheduler_service_for_task(
     state: ModifyRuntimeState,
     core: Any,
     recurrence_seed_base: Callable[[dict[str, Any]], str],
-) -> Any:
+) -> SchedulerService:
     """Return one cached scheduler service for the task's scheduling state."""
     identity = str(task.get("uuid") or task.get("chainID") or "").strip()
-    cache_key: tuple[Any, ...]
+    cache_key: tuple[object, ...]
     if identity:
         cache_key = (
             "task",
@@ -141,7 +153,7 @@ def scheduler_service_for_task(
         business_calendar = core.business_calendar_for_task(task)
     context = RecurrenceContext.from_observation(
         observation,
-        timezone=core._LOCAL_TZ,
+        timezone=timezone_facade.current_timezone(),
         business_calendar=business_calendar,
         astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
@@ -159,7 +171,7 @@ def anchor_file_provider_for(
     seed_base: str,
     state: ModifyRuntimeState,
     core: Any,
-) -> Any:
+) -> OccurrenceProvider | None:
     """Return one cached anchor-file provider for a projection session."""
     if not anchor_file:
         return None
@@ -183,7 +195,7 @@ class ModifyRuntimeServices:
     state: ModifyRuntimeState
     core: Any
     debug_wait_sched: bool
-    last_wait_sched_debug: dict[str, Any]
+    last_wait_sched_debug: WaitScheduleDebug | None
     diag_enabled: bool
     format_root_and_age: RootAgeFormatter
     append_next_wait_sched_rows: WaitScheduleRowsCallback
@@ -193,7 +205,7 @@ class ModifyRuntimeServices:
     short: ShortUuidCallback
     format_next_anchor_rows: FeedbackRowsFormatter
     format_next_cp_rows: FeedbackRowsFormatter
-    format_line_preview: PreviewLineFormatter
+    format_line_preview: CompletionPreviewFormatter
     panel_line: PanelLineCallback
     text_line: TextLineCallback
     panel: FeedbackPanelCallback
@@ -213,9 +225,9 @@ def _timeline_lines_adapter(
     def timeline_lines(
         kind: str,
         task: TaskPayload,
-        child_due: Any,
+        child_due: datetime | None,
         child_short: str,
-        dnf: Any,
+        dnf: AnchorDNF | None,
         *,
         next_count: int = 3,
         cap_no: int | None = None,

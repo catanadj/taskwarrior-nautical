@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from collections.abc import Iterable
+from typing import Callable, ClassVar, Protocol
 
 from nautical_core.timeutil import compare_datetimes
 
@@ -17,11 +18,19 @@ class NativeUntilCarryError(ValueError):
         self.code = str(code or CARRY_FAILED)
 
 
-def uses_exact_carry(until_local: Any) -> bool:
+class NativeUntilPolicy(Protocol):
+    """Stable error vocabulary used by the carry operation."""
+
+    CARRY_INVALID: ClassVar[str]
+    CARRY_FAILED: ClassVar[str]
+    NativeUntilCarryError: ClassVar[type[NativeUntilCarryError]]
+
+
+def uses_exact_carry(until_local: datetime) -> bool:
     """Return whether the stored +1s expiration marker requests exact carry."""
     try:
         return int(until_local.second) == 1
-    except Exception:
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return False
 
 
@@ -41,10 +50,10 @@ def _elapsed_delta(later: datetime, earlier: datetime) -> timedelta:
 
 
 def describe_carry(
-    until_dt: Any,
-    target_dt: Any,
+    until_dt: datetime | None,
+    target_dt: datetime | None,
     *,
-    to_local: Callable[[Any], Any],
+    to_local: Callable[[datetime], datetime],
 ) -> str | None:
     """Describe the expiration carry policy represented by one occurrence."""
     if until_dt is None or target_dt is None:
@@ -77,12 +86,14 @@ def describe_carry(
             return f"1 calendar day later at {clock}"
         return f"{day_gap} calendar days later at {clock}"
     except Exception:
+        # This summary is optional presentation; it must not replace carry
+        # validation or make an otherwise valid transition fail.
         return None
 
 
 def validate_after_target(
-    until_dt: Any,
-    target_dt: Any,
+    until_dt: datetime | None,
+    target_dt: datetime | None,
     target_field: str,
 ) -> tuple[bool, str | None]:
     if until_dt is None or target_dt is None:
@@ -91,17 +102,17 @@ def validate_after_target(
     try:
         if compare_datetimes(until_dt, target_dt) <= 0:
             return (False, f"until must be later than {label}")
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return (False, f"until and {label} could not be compared")
     return (True, None)
 
 
 def validate_calendar_slots(
-    until_dt: Any,
-    target_dt: Any,
-    slots: Any,
+    until_dt: datetime | None,
+    target_dt: datetime | None,
+    slots: Iterable[tuple[int, int]] | None,
     *,
-    to_local: Callable[[Any], Any],
+    to_local: Callable[[datetime], datetime],
 ) -> tuple[bool, str | None]:
     """Reject same-day calendar expirations that are not later than every fixed slot."""
     if until_dt is None or target_dt is None:
@@ -119,7 +130,7 @@ def validate_calendar_slots(
             for hh, mm in slots or ()
             if (int(hh), int(mm), 0) >= expiration
         )
-    except Exception:
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return (False, "could not compare calendar expiration with anchor times")
     if not blocked:
         return (True, None)
@@ -166,11 +177,15 @@ def carry(
     except NativeUntilCarryError:
         raise
     except Exception as exc:
+        # Conversion adapters are an explicit boundary: fail closed with a
+        # stable carry error while retaining the original exception as cause.
         raise NativeUntilCarryError(CARRY_FAILED, "native until carry could not be calculated") from exc
 
     try:
         invalid_order = compare_datetimes(child_until, child_target) <= 0
     except Exception as exc:
+        # The postcondition is part of the same typed carry boundary; callers
+        # must never accept an unchecked timestamp.
         raise NativeUntilCarryError(CARRY_FAILED, "native until carry produced incomparable timestamps") from exc
     if invalid_order:
         raise NativeUntilCarryError(CARRY_CONFLICT, "native until must be later than the child recurrence target")

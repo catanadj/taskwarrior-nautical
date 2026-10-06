@@ -2,10 +2,25 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core import modify_lifecycle
+import nautical_core.modify_lifecycle as modify_lifecycle
+
+
+class _BrokenString:
+    def __str__(self) -> str:
+        raise RuntimeError("broken task value adapter")
 
 
 class ModifyLifecycleContractTests(unittest.TestCase):
+    def test_recurrence_field_probe_does_not_swallow_value_rendering_defects(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "broken task value adapter"):
+            modify_lifecycle.task_has_nautical_recurrence_fields({"anchor": _BrokenString()})
+
+    def test_recurrence_change_normalization_does_not_swallow_internal_errors(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "broken task value adapter"):
+            modify_lifecycle.recurrence_setting_changes(
+                {"anchor": _BrokenString()}, {"anchor": "w:mon"}
+            )
+
     def test_new_nautical_recurrence_is_promoted_and_transitions_are_explicit(self) -> None:
         self.assertFalse(modify_lifecycle.task_has_nautical_fields({"chainid": "legacy-1234"}))
         self.assertFalse(modify_lifecycle.task_has_nautical_fields({"anchor_mode": "skip"}))

@@ -27,6 +27,8 @@ def redact_diagnostic_message(msg: object, *, core: Any = None) -> str:
             redacted = redactor(raw)
             return redacted if isinstance(redacted, str) else str(redacted)
         except Exception:
+            # The privacy fallback below is local and deterministic; a broken
+            # optional core redactor must not expose the original task text.
             pass
     # Keep this boundary independent from the task/domain codec.  Redact
     # scalar JSON values in-place while preserving the original Unicode text.
@@ -48,6 +50,7 @@ def emit_diagnostic(msg: object, *, hook_name: str, core: Any = None, taskdata: 
             import sys
             sys.stderr.write(f"[nautical] {safe_msg}\n")
         except Exception:
+            # Opt-in diagnostics are best-effort and must not alter hook output.
             pass
 
 
@@ -70,6 +73,7 @@ def emit_diagnostic_block(
         for index in range(0, len(pairs), step):
             emit("  " + "  ".join(pairs[index:index + step]))
     except Exception:
+        # Formatting and emission are optional observability, not hook work.
         pass
 
 
@@ -157,7 +161,7 @@ class HookModuleAccess:
             module = importlib.import_module(import_name)
             self.namespace[cache_attr] = module
             return module
-        except Exception as exc:
+        except ImportError as exc:
             self.errors[name] = f"{type(exc).__name__}: {exc}"
             self.namespace[failed_attr] = True
             return None
@@ -195,7 +199,6 @@ def build_hook_runtime_context(
     uow = build_taskwarrior_uow(integration_context, env=os.environ)
     return hook_context.build_hook_runtime_context(
         hook_name=hook_name,
-        integration=integration_context,
         uow=uow,
         hook_dir=hook_dir,
         profile_level=profile_level,

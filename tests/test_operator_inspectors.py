@@ -211,9 +211,24 @@ class OperatorInspectorTests(unittest.TestCase):
         self.assertEqual(projected[0].actionability, FindingActionability.REPAIRABLE)
         self.assertEqual(projected[0].observed["nextLink"], "")
 
+    def test_integrity_inspector_rejects_duck_typed_findings(self) -> None:
+        from nautical_core.chain_integrity_models import FindingSeverity as IntegritySeverity, FindingStatus, IntegrityFinding
+
+        typed_finding = IntegrityFinding(
+            "continuity.child", FindingStatus.REPAIRABLE, IntegritySeverity.ERROR,
+            "snap-1", reason_code="missing_successor", message="successor is missing",
+        )
+
+        class FindingProxy:
+            def to_dict(self):
+                return typed_finding.to_dict()
+
+        with self.assertRaises(TypeError):
+            inspect_integrity_findings((FindingProxy(),))
+
     def test_typed_lifecycle_outcome_preserves_manual_review(self) -> None:
-        from nautical_core.lifecycle_application import LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
-        from nautical_core.lifecycle_models import LifecycleEvent, LifecycleIdentity
+        from nautical_core.lifecycle.application import LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
+        from nautical_core.lifecycle.models import LifecycleEvent, LifecycleIdentity
 
         outcome = LifecycleApplicationOutcome(
             LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
@@ -224,6 +239,25 @@ class OperatorInspectorTests(unittest.TestCase):
         self.assertEqual(projected[0].code, "lifecycle.manual_review")
         self.assertEqual(projected[0].actionability, FindingActionability.MANUAL_REVIEW)
         self.assertEqual(projected[0].affected, ("task-a",))
+
+    def test_lifecycle_inspector_rejects_duck_typed_outcomes(self) -> None:
+        from nautical_core.lifecycle.application import LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
+        from nautical_core.lifecycle.models import LifecycleEvent, LifecycleIdentity
+
+        typed_outcome = LifecycleApplicationOutcome(
+            LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
+            LifecycleIdentity("chain-a", "task-a", 1, 2, LifecycleEvent.COMPLETE),
+            reason="parent guard changed", intent_id="intent-1",
+        )
+
+        class OutcomeProxy:
+            kind = typed_outcome.kind
+            identity = typed_outcome.identity
+            reason = typed_outcome.reason
+            intent_id = typed_outcome.intent_id
+
+        with self.assertRaises(TypeError):
+            inspect_lifecycle_outcomes((OutcomeProxy(),))
 
     def test_typed_schedule_failure_maps_to_retryable_finding(self) -> None:
         from datetime import datetime, timezone

@@ -84,6 +84,70 @@ class PerformanceCompareTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertIn("stage_operator_failure_matrix:peak_memory", payload["metric_regressions"])
 
+    def test_timing_metrics_use_seconds_noise_floor_not_count_floor(self) -> None:
+        base = {
+            "results": {
+                "micro_timing_noise": {
+                    "pass": True,
+                    "median_s": 1.0,
+                    "timing_breakdown": [{"presentation_seconds": 0.000115}],
+                },
+                "material_timing_change": {
+                    "pass": True,
+                    "median_s": 1.0,
+                    "timing_breakdown": [{"presentation_seconds": 0.010}],
+                },
+            }
+        }
+        head = {
+            "results": {
+                "micro_timing_noise": {
+                    "pass": True,
+                    "median_s": 1.0,
+                    "timing_breakdown": [{"presentation_seconds": 0.000151}],
+                },
+                "material_timing_change": {
+                    "pass": True,
+                    "median_s": 1.0,
+                    "timing_breakdown": [{"presentation_seconds": 0.014}],
+                },
+            }
+        }
+        compare = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_compare.py"
+        with TemporaryDirectory(prefix="nautical-compare-timing-floor-") as td:
+            base_path = Path(td) / "base.json"
+            head_path = Path(td) / "head.json"
+            base_path.write_text(json.dumps(base), encoding="utf-8")
+            head_path.write_text(json.dumps(head), encoding="utf-8")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(compare),
+                    "--base",
+                    str(base_path),
+                    "--head",
+                    str(head_path),
+                    "--enforce",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(proc.returncode, 1)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(
+            payload["metric_regressions"],
+            ["material_timing_change:presentation_time"],
+        )
+        micro = next(
+            row
+            for row in payload["metric_rows"]
+            if row["check"] == "micro_timing_noise" and row["metric"] == "presentation_time"
+        )
+        self.assertEqual(micro["trend"], "noise")
+
     def test_compare_rejects_malformed_reports_without_traceback(self) -> None:
         compare = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_compare.py"
         invalid_reports = (

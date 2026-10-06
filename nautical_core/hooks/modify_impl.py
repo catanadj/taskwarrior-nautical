@@ -17,7 +17,7 @@ _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
 HOOK_DIR = _IMPL_CORE_DIR.parent
 _TW_DIR_BOOT = _IMPL_CORE_DIR.parent
 try:
-    import hook_bootstrap
+    import hook_bootstrap  # type: ignore[import-not-found]  # standalone hook fallback
 except ModuleNotFoundError:
     hook_bootstrap = None
     _bootstrap_paths = [
@@ -32,7 +32,7 @@ except ModuleNotFoundError:
                 _core_path / 'hook_bootstrap.py',
                 _core_path / 'nautical_core' / 'hook_bootstrap.py',
             ])
-        except Exception:
+        except (OSError, RuntimeError, TypeError):
             pass
     for _bootstrap_path in _bootstrap_paths:
         try:
@@ -44,7 +44,7 @@ except ModuleNotFoundError:
                 _spec.loader.exec_module(_bootstrap_mod)
                 hook_bootstrap = _bootstrap_mod
                 break
-        except Exception:
+        except (AttributeError, ImportError, OSError, SyntaxError):
             continue
     if hook_bootstrap is None:
         raise
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     if _protocol is not None:
         try:
             _EARLY_PROTOCOL_RESULT = _protocol.read_on_modify(max_bytes=_MAX_JSON_BYTES)
-        except Exception:
+        except (OSError, TypeError, UnicodeError, ValueError):
             _EARLY_PROTOCOL_RESULT = None
         if (
             _EARLY_PROTOCOL_RESULT is not None
@@ -233,8 +233,14 @@ def _diag_count(key: str, inc: float = 1) -> None:
         state = _modify_runtime_state()
         stats = state.diag_stats
         stats[key] = stats.get(key, 0) + inc
-    except Exception:
-        pass
+    except Exception as exc:
+        # Counter bookkeeping is optional; report an unavailable sink only in
+        # diagnostic mode and never include task data or exception messages.
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                _diag(f"diagnostic counter update failed ({type(exc).__name__})")
+            except Exception:
+                pass
 
 
 def _run_task_diag_bucket(cmd: list[str]) -> str:
@@ -243,7 +249,12 @@ def _run_task_diag_bucket(cmd: list[str]) -> str:
         for p in (cmd or ()):
             parts.extend(str(p).split())
         tokens = tuple(parts)
-    except Exception:
+    except Exception as exc:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                _diag(f"run-task diagnostic bucket failed ({type(exc).__name__})")
+            except Exception:
+                pass
         return "other"
     if not parts:
         return "other"
@@ -293,12 +304,9 @@ def _dump_diag_stats() -> None:
 
 
 def _query_ctx_get(bucket: str, key: Any) -> Any:
-    try:
-        store = _modify_runtime_state().query_ctx.get(bucket)
-        if isinstance(store, dict):
-            return store.get(key)
-    except Exception:
-        pass
+    store = _modify_runtime_state().query_ctx.get(bucket)
+    if isinstance(store, dict):
+        return store.get(key)
 
 
 def _write_bench_stats() -> None:
@@ -318,14 +326,11 @@ def _write_bench_stats() -> None:
 
 
 def _query_ctx_set(bucket: str, key: Any, value: Any) -> None:
-    try:
-        state = _modify_runtime_state()
-        store = state.query_ctx.get(bucket)
-        if isinstance(store, dict):
-            store[key] = value
-            state.diag_stats[f"query_ctx_{bucket}_entries"] = len(store)
-    except Exception:
-        pass
+    state = _modify_runtime_state()
+    store = state.query_ctx.get(bucket)
+    if isinstance(store, dict):
+        store[key] = value
+        state.diag_stats[f"query_ctx_{bucket}_entries"] = len(store)
 
 
 _READ_QUERY_MISSING = object()
@@ -333,80 +338,23 @@ _READ_QUERY_MISSING = object()
 
 def _read_query_get(kind: str, key: Any) -> Any:
     """Return a defensive copy of a read-only Taskwarrior query result."""
-    try:
-        state = _modify_runtime_state()
-        bucket = state.query_ctx.get("read_query")
-        cache_key = (str(kind), key)
-        if not isinstance(bucket, dict) or cache_key not in bucket:
-            _diag_count("read_query_cache_misses")
-            return _READ_QUERY_MISSING
-        _diag_count("read_query_cache_hits")
-        return copy.deepcopy(bucket[cache_key])
-    except Exception:
+    state = _modify_runtime_state()
+    bucket = state.query_ctx.get("read_query")
+    cache_key = (str(kind), key)
+    if not isinstance(bucket, dict) or cache_key not in bucket:
         _diag_count("read_query_cache_misses")
         return _READ_QUERY_MISSING
-
-
-def _read_query_set(kind: str, key: Any, value: Any) -> None:
     try:
-        state = _modify_runtime_state()
-        bucket = state.query_ctx.get("read_query")
-        if not isinstance(bucket, dict):
-            return
-        stored = copy.deepcopy(value)
-        if str(kind) in {"chain", "chain_snapshot"} and isinstance(stored, list):
-            if len(stored) > _MAX_CHAIN_WALK:
-                stored = stored[:_MAX_CHAIN_WALK]
-                state.diag_stats["chain_snapshot_truncations"] = (
-                    state.diag_stats.get("chain_snapshot_truncations", 0) + 1
-                )
-        bucket[(str(kind), key)] = stored
-        state.diag_stats["read_query_cache_entries"] = len(bucket)
-    except Exception:
-        pass
-
-
-def _read_query_delete(kind: str, key: Any) -> None:
-    try:
-        state = _modify_runtime_state()
-        bucket = state.query_ctx.get("read_query")
-        if isinstance(bucket, dict):
-            bucket.pop((str(kind), key), None)
-            state.diag_stats["read_query_cache_entries"] = len(bucket)
-    except Exception:
-        pass
-
-
-def _invalidate_read_query_cache() -> None:
-    """Invalidate all request-scoped reads after a Taskwarrior mutation."""
-    try:
-        state = _modify_runtime_state()
-        bucket = state.query_ctx.get("read_query")
-        if isinstance(bucket, dict):
-            bucket.clear()
-        state.diag_stats["read_query_cache_entries"] = 0
-        state.diag_stats["read_query_cache_invalidations"] = (
-            state.diag_stats.get("read_query_cache_invalidations", 0) + 1
-        )
-    except Exception:
-        pass
-    try:
-        service = getattr(_modify_runtime_state(), "lifecycle_read_service", None)
-        clear_cache = getattr(service, "clear_cache", None)
-        if callable(clear_cache):
-            clear_cache()
-        else:
-            _module("lifecycle_read_service").clear_cached_chain_exports()
-    except Exception:
-        pass
+        value = copy.deepcopy(bucket[cache_key])
+    except (copy.Error, TypeError, ValueError, RecursionError):
+        _diag_count("read_query_cache_misses")
+        return _READ_QUERY_MISSING
+    _diag_count("read_query_cache_hits")
+    return value
 
 
 def _record_chain_snapshot_stat(name: str, inc: int = 1) -> None:
-    try:
-        state = _modify_runtime_state()
-        state.diag_stats[name] = state.diag_stats.get(name, 0) + inc
-    except Exception:
-        pass
+    _diag_count(name, inc)
 
 
 def _diag_summary() -> None:
@@ -455,7 +403,7 @@ atexit.register(_dump_diag_stats)
 def _append_next_wait_sched_rows(
     fb: list[tuple[str, str]],
     nxt: dict,
-    nxt_due_utc: datetime,
+    nxt_due_utc: datetime | None,
     *,
     anchor_field: str = "due",
 ) -> None:
@@ -560,8 +508,8 @@ _MODULE_SPECS = {
     "lifecycle_read_service": (
         "_LIFECYCLE_READ_SERVICE",
         "_LIFECYCLE_READ_SERVICE_LOAD_FAILED",
-        "lifecycle_read_service.py",
-        "nautical_core.lifecycle_read_service",
+        "lifecycle/read_service.py",
+        "nautical_core.lifecycle.read_service",
     ),
     "modify_spawn_prep": (
         "_MODIFY_SPAWN_PREP",
@@ -620,8 +568,8 @@ _MODULE_SPECS = {
     "lifecycle_models": (
         "_LIFECYCLE_MODELS",
         "_LIFECYCLE_MODELS_LOAD_FAILED",
-        "lifecycle_models.py",
-        "nautical_core.lifecycle_models",
+        "lifecycle/models.py",
+        "nautical_core.lifecycle.models",
     ),
     "task_codec": (
         "_TASK_CODEC",
@@ -638,8 +586,8 @@ _MODULE_SPECS = {
     "lifecycle_planner": (
         "_LIFECYCLE_PLANNER",
         "_LIFECYCLE_PLANNER_LOAD_FAILED",
-        "lifecycle_planner.py",
-        "nautical_core.lifecycle_planner",
+        "lifecycle/planner.py",
+        "nautical_core.lifecycle.planner",
     ),
     "chain_integrity_lifecycle": (
         "_CHAIN_INTEGRITY_LIFECYCLE",
@@ -650,20 +598,20 @@ _MODULE_SPECS = {
     "lifecycle_application": (
         "_LIFECYCLE_APPLICATION",
         "_LIFECYCLE_APPLICATION_LOAD_FAILED",
-        "lifecycle_application.py",
-        "nautical_core.lifecycle_application",
+        "lifecycle/application.py",
+        "nautical_core.lifecycle.application",
     ),
     "lifecycle_outbox": (
         "_LIFECYCLE_OUTBOX",
         "_LIFECYCLE_OUTBOX_LOAD_FAILED",
-        "lifecycle_outbox.py",
-        "nautical_core.lifecycle_outbox",
+        "lifecycle/outbox.py",
+        "nautical_core.lifecycle.outbox",
     ),
     "lifecycle_outbox_operations": (
         "_LIFECYCLE_OUTBOX_OPERATIONS",
         "_LIFECYCLE_OUTBOX_OPERATIONS_LOAD_FAILED",
-        "lifecycle_outbox_operations.py",
-        "nautical_core.lifecycle_outbox_operations",
+        "lifecycle/outbox_operations.py",
+        "nautical_core.lifecycle.outbox_operations",
     ),
     "modify_feedback": (
         "_MODIFY_FEEDBACK",
@@ -905,18 +853,6 @@ _TASK_DATETIME_PARSER = None
 _CORE_IMPORT_TARGET = None
 _CORE_IMPORT_ERROR = None
 
-
-def _resolve_task_data_context() -> tuple[str, bool]:
-    return hook_bootstrap.resolve_task_data_context_lazy(
-        core=core,
-        core_import_error=_CORE_IMPORT_ERROR,
-        core_import_target=_CORE_IMPORT_TARGET,
-        core_base=_CORE_BASE,
-        tw_dir=str(TW_DIR),
-        argv=sys.argv[1:],
-        env=os.environ,
-    )
-
 _TASKDATA_RAW = ""
 _USE_RC_DATA_LOCATION = False
 TW_DATA_DIR = Path(TW_DIR).expanduser()
@@ -991,7 +927,9 @@ def _load_core() -> None:
         return
     _initialize_integration_context()
     try:
-        core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
+        core._import_sibling("core_config").warn_once_per_day_any(
+            "core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}"
+        )
     except Exception:
         pass
     try:

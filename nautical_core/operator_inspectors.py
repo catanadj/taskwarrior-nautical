@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from collections.abc import Mapping
-from typing import Any, Protocol, Sequence
+from typing import TYPE_CHECKING, Protocol, Sequence
 
 from .operator_findings import FindingActionability, FindingSeverity, OperatorFinding, deduplicate_findings
 from .operator_models import CoverageKind, CoverageRequirement, OperatorContractError, OperatorLimits, OperatorScope
 from .operator_snapshot import OperatorSnapshot
+
+if TYPE_CHECKING:
+    from .chain_integrity_models import IntegrityFinding
+    from .lifecycle.application import LifecycleApplicationOutcome
+    from .occurrence_outcomes import OccurrenceCollectionResult
 
 
 class OperatorInspector(Protocol):
@@ -82,19 +87,18 @@ class PerformanceInspector(ComponentValidityInspector):
 
 
 def inspect_integrity_findings(
-    findings: Sequence[Any],
+    findings: Sequence[IntegrityFinding],
     *,
     scope: OperatorScope | None = None,
 ) -> tuple[OperatorFinding, ...]:
     """Project typed chain-integrity findings without losing their evidence."""
-    from .chain_integrity_models import FindingSeverity as IntegritySeverity, FindingStatus
+    from .chain_integrity_models import FindingSeverity as IntegritySeverity, FindingStatus, IntegrityFinding
 
     result: list[OperatorFinding] = []
     for finding in findings:
-        if not hasattr(finding, "to_dict"):
+        if not isinstance(finding, IntegrityFinding):
             raise TypeError("integrity findings must be typed model values")
-        raw = finding.to_dict()
-        status = FindingStatus(raw["status"])
+        status = FindingStatus(finding.status)
         if status is FindingStatus.HEALTHY:
             continue
         actionability = {
@@ -107,34 +111,34 @@ def inspect_integrity_findings(
             IntegritySeverity.INFO: FindingSeverity.INFO,
             IntegritySeverity.WARNING: FindingSeverity.WARNING,
             IntegritySeverity.ERROR: FindingSeverity.ERROR,
-        }[IntegritySeverity(raw["severity"])]
+        }[IntegritySeverity(finding.severity)]
         result.append(OperatorFinding(
-            code=str(raw["reason_code"]),
+            code=finding.reason_code,
             domain="chain_integrity",
             severity=severity,
             actionability=actionability,
-            message=str(raw["message"]),
+            message=finding.message,
             scope=scope,
-            affected=tuple(raw.get("subject_uuids", ())),
-            observed=raw.get("observed", {}),
-            expected=raw.get("expected", {}),
-            evidence={"snapshot_id": raw["snapshot_id"], "invariant_id": raw["invariant_id"], **raw.get("evidence", {})},
+            affected=finding.subject_uuids,
+            observed=dict(finding.observed),
+            expected=dict(finding.expected),
+            evidence={"snapshot_id": finding.snapshot_id, "invariant_id": finding.invariant_id, **dict(finding.evidence)},
             guidance="Apply the associated guarded repair plan or inspect the chain evidence.",
         ))
     return deduplicate_findings(result)
 
 
 def inspect_lifecycle_outcomes(
-    outcomes: Sequence[Any],
+    outcomes: Sequence[LifecycleApplicationOutcome],
     *,
     scope: OperatorScope | None = None,
 ) -> tuple[OperatorFinding, ...]:
     """Project typed lifecycle application outcomes into stable findings."""
-    from .lifecycle_application import LifecycleApplicationOutcomeKind
+    from .lifecycle.application import LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
 
     result: list[OperatorFinding] = []
     for outcome in outcomes:
-        if not hasattr(outcome, "kind") or not hasattr(outcome, "identity"):
+        if not isinstance(outcome, LifecycleApplicationOutcome):
             raise TypeError("lifecycle outcomes must be typed model values")
         kind = LifecycleApplicationOutcomeKind(outcome.kind)
         if kind in {LifecycleApplicationOutcomeKind.APPLIED, LifecycleApplicationOutcomeKind.ALREADY_APPLIED, LifecycleApplicationOutcomeKind.NOOP}:
@@ -160,7 +164,7 @@ def inspect_lifecycle_outcomes(
 
 
 def inspect_occurrence_collection(
-    collection: Any,
+    collection: OccurrenceCollectionResult,
     *,
     scope: OperatorScope | None = None,
 ) -> tuple[OperatorFinding, ...]:

@@ -149,12 +149,18 @@ _PARSER_RUNTIME_FILES = (
     "parsing/parser_support_api.py",
 )
 
+def _lazy_module_file(module: str) -> str:
+    if module.startswith("lifecycle_"):
+        return f"lifecycle/{module.removeprefix('lifecycle_')}.py"
+    return f"{module}.py"
+
+
 HOOK_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
     event: (
         impl,
         *_HOOK_SUPPORT_FILES[event],
         *_PARSER_RUNTIME_FILES,
-        *(f"{module}.py" for module in modules),
+        *(_lazy_module_file(module) for module in modules),
     )
     for event, modules in HOOK_LAZY_MODULES.items()
     for impl in (_HOOK_IMPL[event],)
@@ -192,9 +198,9 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/reconcile_operator_service.py",
     "nautical_core/doctor_report.py",
     "nautical_core/installation_report.py",
-    "nautical_core/lifecycle_reconciliation.py",
-    "nautical_core/lifecycle_operator_owner.py",
-    "nautical_core/lifecycle_recovery_models.py",
+    "nautical_core/lifecycle/reconciliation.py",
+    "nautical_core/lifecycle/operator_owner.py",
+    "nautical_core/lifecycle/recovery_models.py",
     "nautical_core/integrity_report.py",
     "nautical_core/chain_integrity_recovery.py",
     "nautical_core/tools/nautical_query.py",
@@ -234,7 +240,7 @@ OPERATOR_PURE_MODULES = (
 OPERATOR_FORBIDDEN_MUTATION_IMPORTS = (
     "nautical_core.taskwarrior_mutations",
     "nautical_core.chain_integrity_application",
-    "nautical_core.lifecycle_application",
+    "nautical_core.lifecycle.application",
     "nautical_core.taskwarrior_uow",
 )
 PURE_INTEGRITY_MODULES = (

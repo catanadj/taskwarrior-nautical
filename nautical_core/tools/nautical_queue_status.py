@@ -15,10 +15,10 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core.lifecycle_outbox import (  # noqa: E402
+from nautical_core.lifecycle.outbox import (  # noqa: E402
     OUTBOX_ACK_RETENTION_SECONDS,
 )
-from nautical_core.lifecycle_outbox import LifecycleOutboxRepository  # noqa: E402
+from nautical_core.lifecycle.outbox import LifecycleOutboxRepository  # noqa: E402
 from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
 from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402

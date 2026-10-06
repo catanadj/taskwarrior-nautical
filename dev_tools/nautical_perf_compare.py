@@ -276,6 +276,13 @@ def main() -> int:
     metric_rows = []
     regressions = []
     metric_regressions = []
+    timing_metrics = {
+        "cpu_time",
+        "taskwarrior_time",
+        "startup_time",
+        "drain_time",
+        "presentation_time",
+    }
     for name in names:
         b = bres.get(name) if isinstance(bres.get(name), dict) else {}
         h = hres.get(name) if isinstance(hres.get(name), dict) else {}
@@ -320,10 +327,13 @@ def main() -> int:
             if base_value == 0.0 and head_value > 0.0:
                 metric_trend = "regression"
             else:
+                absolute_floor = (
+                    args.abs_floor_s if metric in timing_metrics else args.count_abs_floor
+                )
                 metric_trend = _trend_class(
                     metric_delta,
                     metric_pct,
-                    max(0.0, float(args.count_abs_floor)),
+                    max(0.0, float(absolute_floor)),
                     args.pct_floor,
                 )
             metric_rows.append(

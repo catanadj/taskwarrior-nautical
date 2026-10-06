@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from datetime import timedelta
+from typing import Callable, get_type_hints
 from zoneinfo import ZoneInfo
 
 from nautical_core.modify_carry_workflow import (
@@ -15,12 +17,135 @@ from nautical_core.modify_carry_workflow import (
     verify_temporal_carry_task,
 )
 from nautical_core.modify_carry import preserve_native_until_on_target_change
+from nautical_core.modify_carry import preserve_cp_relative_offsets_on_due_change
 from nautical_core.modify_lifecycle import recurrence_setting_changes
 from nautical_core.task_models import TaskTimestamp
 
 
 class TemporalCarryWorkflowTests(unittest.TestCase):
+    def test_native_until_carry_uses_explicit_callback_contracts(self) -> None:
+        import nautical_core.modify_generation_effects as generation_effects
+        from nautical_core.modify_carry import preserve_native_until_on_target_change
+        import nautical_core.native_until as native_until
+        from nautical_core.native_until import NativeUntilCarryError
+        from nautical_core.task_models import TaskPayload
+
+        native_until_policy = getattr(native_until, "NativeUntilPolicy", None)
+        generation_service = getattr(generation_effects, "NativeUntilGenerationService", None)
+        self.assertIsNotNone(native_until_policy)
+        self.assertIsNotNone(generation_service)
+        annotations = get_type_hints(preserve_native_until_on_target_change)
+        expected = {
+            "old": TaskPayload,
+            "new": TaskPayload,
+            "kind": str,
+            "field_changed": Callable[[TaskPayload, TaskPayload, str], bool],
+            "recurrence_anchor_field": Callable[[TaskPayload], str],
+            "parse_datetime": Callable[[object], datetime | None],
+            "native_until": native_until_policy,
+            "generation_service": Callable[[], generation_service],
+            "reject_carry": Callable[
+                [TaskPayload, TaskPayload, datetime | None, str, NativeUntilCarryError], None
+            ],
+            "diagnostic": Callable[[str], None],
+            "return": bool,
+        }
+        for name, annotation in expected.items():
+            with self.subTest(parameter=name):
+                self.assertEqual(annotations[name], annotation)
+
+    def test_cp_carry_calculation_has_explicit_callback_contracts(self) -> None:
+        from nautical_core.modify_carry import CpCarryResult
+        from nautical_core.task_models import TaskPayload
+
+        self.assertEqual(
+            get_type_hints(preserve_cp_relative_offsets_on_due_change),
+            {
+                "old": TaskPayload,
+                "new": TaskPayload,
+                "new_cp": str,
+                "field_changed": Callable[[TaskPayload, TaskPayload, str], bool],
+                "parse_datetime": Callable[[object], datetime | None],
+                "utc_to_local_naive": Callable[[datetime], datetime],
+                "local_naive_to_utc": Callable[[datetime], datetime],
+                "format_datetime": Callable[[datetime], str],
+                "carry_error": Callable[[str, str], Exception],
+                "return": CpCarryResult,
+            },
+        )
+
+    def test_cp_carry_normalizer_has_concrete_result_and_factory_types(self) -> None:
+        from nautical_core.modify_carry import CpCarryResult
+        import nautical_core.modify_carry_workflow as modify_carry_workflow
+
+        result_type = getattr(modify_carry_workflow, "CpCarryResult", None)
+        self.assertIs(result_type, CpCarryResult)
+
+        self.assertEqual(
+            get_type_hints(decision_from_cp_adjustments),
+            {
+                "result": result_type,
+                "timestamp_factory": Callable[[datetime], TaskTimestamp],
+                "return": TemporalCarryDecision,
+            },
+        )
+
+    def test_cp_carry_does_not_translate_unexpected_due_parser_failures(self) -> None:
+        old = {"cp": "P1D", "due": "old"}
+        new = {**old, "due": "new"}
+
+        def parse_datetime(_value):
+            raise RuntimeError("parser implementation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "parser implementation failed") as caught:
+            preserve_cp_relative_offsets_on_due_change(
+                old,
+                new,
+                "P1D",
+                field_changed=lambda _old, _new, field: field == "due",
+                parse_datetime=parse_datetime,
+                utc_to_local_naive=lambda value: value,
+                local_naive_to_utc=lambda value: value,
+                format_datetime=str,
+                carry_error=lambda field, reason: ValueError(f"{field}: {reason}"),
+            )
+
+        self.assertIs(type(caught.exception), RuntimeError)
+
+    def test_cp_carry_does_not_translate_unexpected_scheduled_conversion_failures(self) -> None:
+        old = {
+            "cp": "P1D",
+            "due": "old-due",
+            "scheduled": "old-scheduled",
+        }
+        new = {**old, "due": "new-due"}
+
+        def parse_datetime(value):
+            if value == "old-scheduled":
+                raise RuntimeError("scheduled conversion implementation failed")
+            return datetime(2026, 8, 25, 9, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(
+            RuntimeError, "scheduled conversion implementation failed"
+        ) as caught:
+            preserve_cp_relative_offsets_on_due_change(
+                old,
+                new,
+                "P1D",
+                field_changed=lambda _old, _new, field: field == "due",
+                parse_datetime=parse_datetime,
+                utc_to_local_naive=lambda value: value,
+                local_naive_to_utc=lambda value: value,
+                format_datetime=str,
+                carry_error=lambda field, reason: ValueError(f"{field}: {reason}"),
+            )
+
+        self.assertIs(type(caught.exception), RuntimeError)
+
     def test_wait_edit_does_not_carry_native_until(self) -> None:
+        import nautical_core.native_until as native_until
+        from nautical_core.task_models import NauticalTask, TaskPayload
+
         old = {
             "due": "2026-08-25T09:00:00Z",
             "wait": "2026-08-25T08:00:00Z",
@@ -28,11 +153,18 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
         }
         new = {**old, "wait": "2026-08-25T10:00:00Z"}
 
-        class NativeUntil:
-            class NativeUntilCarryError(Exception):
-                pass
-
-            CARRY_FAILED = "carry_failed"
+        class GenerationService:
+            def carry_native_until(
+                self,
+                parent: NauticalTask,
+                child: TaskPayload,
+                child_due_utc: datetime,
+                kind: str,
+                *,
+                parent_anchor_field: str,
+                child_anchor_field: str,
+            ) -> None:
+                raise AssertionError("unchanged wait must not request native-until carry")
 
         carried = preserve_native_until_on_target_change(
             old,
@@ -41,14 +173,45 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
             field_changed=lambda before, after, field: before.get(field) != after.get(field),
             recurrence_anchor_field=lambda _task: "due",
             parse_datetime=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")),
-            native_until=NativeUntil,
-            generation_service=lambda: None,
+            native_until=native_until,
+            generation_service=GenerationService,
             reject_carry=lambda *args: self.fail(f"unexpected rejection: {args!r}"),
             diagnostic=lambda message: self.fail(message),
         )
 
         self.assertFalse(carried)
         self.assertEqual(new["until"], old["until"])
+
+    def test_native_until_carry_does_not_translate_unexpected_parser_failures(self) -> None:
+        import nautical_core.native_until as native_until
+
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "due": "2026-08-25T09:00:00Z",
+            "until": "2026-08-25T23:00:00Z",
+        }
+        new = {**old, "due": "2026-08-26T09:00:00Z"}
+
+        def parse_datetime(_value):
+            raise RuntimeError("datetime parser implementation failed")
+
+        with self.assertRaisesRegex(
+            RuntimeError, "datetime parser implementation failed"
+        ) as caught:
+            preserve_native_until_on_target_change(
+                old,
+                new,
+                "anchor",
+                field_changed=lambda _old, _new, field: field == "due",
+                recurrence_anchor_field=lambda _task: "due",
+                parse_datetime=parse_datetime,
+                native_until=native_until,
+                generation_service=lambda: self.fail("generation must not start"),
+                reject_carry=lambda *_args: self.fail("unexpectedly rejected carry"),
+                diagnostic=lambda _message: self.fail("unexpected diagnostic"),
+            )
+
+        self.assertIs(type(caught.exception), RuntimeError)
 
     def test_temporal_edits_are_reported_as_recurrence_changes(self) -> None:
         changes = recurrence_setting_changes(
@@ -77,7 +240,9 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
     def test_cp_result_is_normalized_to_typed_adjustments(self) -> None:
         old = datetime(2026, 8, 25, 9, tzinfo=timezone.utc)
         new = datetime(2026, 8, 26, 9, tzinfo=timezone.utc)
-        result = decision_from_cp_adjustments((old, new, [("scheduled", old, new, 86400)]))
+        result = decision_from_cp_adjustments(
+            (old, new, [("scheduled", old, new, timedelta(seconds=86400))])
+        )
         self.assertEqual(result.status, "adjusted")
         self.assertEqual(result.adjustments[0].field, "scheduled")
         self.assertTrue(result)

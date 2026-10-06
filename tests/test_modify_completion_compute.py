@@ -6,9 +6,18 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import nautical_core as core
-from nautical_core import add_validation
-from nautical_core.modify_completion_compute import completion_compute_child_due, completion_compute_next_and_limits
-from nautical_core.modify_models import CompletionComputeServices, CompletionLifecycleResult
+import nautical_core.add_validation as add_validation
+from nautical_core.modify_completion_compute import (
+    attach_lifecycle_plan,
+    completion_compute_child_due,
+    completion_compute_next_and_limits,
+)
+from nautical_core.modify_models import (
+    CompletionComputeResult,
+    CompletionComputeServices,
+    CompletionLifecycleResult,
+    CompletionPreflightContext,
+)
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
 from nautical_core.modify_completion_preflight import completion_existing_next_or_fail
@@ -25,7 +34,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         result = completion_compute_child_due(
             {"chain": "on", "uuid": "incompatible-anchor"},
             "anchor",
-            compute_anchor_child_due=lambda _task: (_ for _ in ()).throw(Exception(reason)),
+            compute_anchor_child_due=lambda _task: (_ for _ in ()).throw(ValueError(reason)),
             compute_cp_child_due=lambda _task: (None, None),
             panel=lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs)),
             print_task=lambda _value: None,
@@ -33,10 +42,155 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertEqual(panels[0][0], "⛔ Chain error")
-        self.assertEqual(panels[0][1], [("Reason", reason)])
+        self.assertIn(reason, str(panels[0][1]))
+
+    def test_date_limit_still_disables_chain_when_rich_summary_fails(self) -> None:
+        from nautical_core.modify_completion_effects import ChildDuePorts, compute_child_due
+
+        error = OccurrenceSearchExhausted(
+            "daily recurrence", reference=date.max, limit=2,
+        )
+        events: list[str] = []
+        panels: list[tuple[str, list[tuple[str, object]], dict[str, object]]] = []
+        diagnostics: list[str] = []
+        task = {"chain": "on", "uuid": "terminal-task"}
+
+        def compute_anchor(_task: object) -> object:
+            raise error
+
+        ports = ChildDuePorts(
+            compute=SimpleNamespace(completion_compute_child_due=completion_compute_child_due),
+            generation=SimpleNamespace(compute_anchor_child_due=compute_anchor),
+            decode_task=lambda _task, **_kwargs: object(),
+            task_type=SimpleNamespace(from_observation=lambda observation: observation),
+            exhaustion_message=str,
+            ensure_terminal=lambda current, _event: (
+                events.append("chain-off"), current.update({"chain": "off"}), True
+            )[2],
+            end_summary=lambda *_args, **_kwargs: (
+                events.append("rich-summary"),
+                (_ for _ in ()).throw(RuntimeError("summary render defect")),
+            )[1],
+            now_utc=lambda: datetime(2026, 10, 3, tzinfo=timezone.utc),
+            panel=lambda title, rows, **kwargs: (
+                events.append("fallback-panel"), panels.append((title, list(rows), kwargs))
+            ),
+            print_task=lambda _current: events.append("task-output"),
+            diag=diagnostics.append,
+        )
+
+        with self.assertRaises(OccurrenceSearchExhausted):
+            compute_child_due(ports, task, "anchor")
+
+        self.assertEqual(task["chain"], "off")
+        self.assertEqual(events, ["chain-off", "rich-summary", "fallback-panel", "task-output"])
+        self.assertEqual(panels[0][0], "⛔ Nautical chain stopped")
+        self.assertTrue(any(label == "Reason" for label, _value in panels[0][1]))
+        self.assertEqual(diagnostics, ["terminal chain summary failed: summary render defect"])
+
+    def test_child_due_compute_does_not_hide_unexpected_failures(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "scheduler defect"):
+            completion_compute_child_due(
+                {"chain": "on", "uuid": "unexpected-scheduler-failure"},
+                "anchor",
+                compute_anchor_child_due=lambda _task: (_ for _ in ()).throw(
+                    RuntimeError("scheduler defect")
+                ),
+                compute_cp_child_due=lambda _task: (None, None),
+                panel=lambda *_args, **_kwargs: None,
+                print_task=lambda _value: None,
+            )
+
+    def test_lifecycle_plan_attachment_does_not_hide_invalid_computed_shape(self) -> None:
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": 1,
+            "cp": "1d",
+            "due": "2026-01-01T09:00:00Z",
+        }
+        computed = CompletionComputeResult(
+            child_due=datetime(2026, 1, 2, 9, tzinfo=timezone.utc),
+            meta=object(),
+            dnf=None,
+            until_dt=None,
+            cpmax=0,
+            cap_no=None,
+            finals=[],
+            until_cap_no=None,
+        )
+
+        with self.assertRaises(TypeError):
+            attach_lifecycle_plan(
+                task,
+                computed,
+                2,
+                datetime(2026, 1, 1, tzinfo=timezone.utc),
+                preflight=None,
+                generation=None,
+                scheduler_fingerprint="",
+                compare_datetimes=lambda left, right: (left > right) - (left < right),
+                invalid_relative_carry_reason=lambda *_args, **_kwargs: None,
+                end_chain_summary=lambda *_args, **_kwargs: None,
+                ensure_terminal_chain_off=lambda *_args: True,
+                panel=lambda *_args, **_kwargs: None,
+                print_task=lambda _task: None,
+                diag=lambda _message: None,
+            )
+
+    def test_lifecycle_planning_failures_remain_retryable_results(self) -> None:
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": 1,
+            "cp": "1d",
+            "due": "2026-01-01T09:00:00Z",
+        }
+        computed = CompletionComputeResult(
+            child_due=datetime(2026, 1, 2, 9, tzinfo=timezone.utc),
+            meta={},
+            dnf=None,
+            until_dt=None,
+            cpmax=0,
+            cap_no=None,
+            finals=[],
+            until_cap_no=None,
+        )
+
+        result = attach_lifecycle_plan(
+            task,
+            computed,
+            2,
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            preflight=CompletionPreflightContext(
+                parent_short="parent",
+                base_no=1,
+                next_no=3,
+                kind="cp",
+                chain_id="chain-1",
+                chain_snapshot=None,
+            ),
+            generation=None,
+            scheduler_fingerprint="",
+            compare_datetimes=lambda left, right: (left > right) - (left < right),
+            invalid_relative_carry_reason=lambda *_args, **_kwargs: None,
+            end_chain_summary=lambda *_args, **_kwargs: None,
+            ensure_terminal_chain_off=lambda *_args: True,
+            panel=lambda *_args, **_kwargs: None,
+            print_task=lambda _task: None,
+            diag=lambda _message: None,
+        )
+
+        self.assertIsInstance(result, CompletionLifecycleResult)
+        self.assertEqual(result.state, "retryable")
+        self.assertIn("adjacent", result.reason)
 
     def test_date_and_search_exhaustion_never_produce_child_tuples(self) -> None:
-        from nautical_core import modify_completion_compute as compute
+        import nautical_core.modify_completion_compute as compute
 
         terminal = OccurrenceSearchExhausted(
             "anchor scheduling", reference=date(9999, 12, 31), limit=2
@@ -80,7 +234,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         self.assertEqual(panels[-1], ("terminal", [("kind", "search_limit")], {}))
 
     def test_completion_caps_include_exact_boundary_and_stop_after_it(self) -> None:
-        from nautical_core import modify_completion_compute as compute
+        import nautical_core.modify_completion_compute as compute
 
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         summaries = []
@@ -124,8 +278,26 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
             )
         )
 
+    def test_until_guard_defers_missing_child_due_to_required_due_check(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        until = now + timedelta(days=2)
+        self.assertTrue(
+            compute.completion_until_guard_or_stop(
+                {},
+                None,
+                until,
+                now,
+                end_chain_summary=lambda *_args, **_kwargs: self.fail(
+                    "a missing child due must not be compared against chainUntil"
+                ),
+                print_task=lambda _value: None,
+            )
+        )
+
     def test_completion_caps_choose_earliest_limit_without_dropping_estimates(self) -> None:
-        from nautical_core import modify_completion_compute as compute
+        import nautical_core.modify_completion_compute as compute
 
         child_due = datetime(2026, 1, 2, 9, tzinfo=timezone.utc)
         until = child_due + timedelta(days=10)
@@ -161,6 +333,143 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
             cap_from_until_anchor=lambda *_args: (None, None),
         )
         self.assertEqual((earlier_max[2], earlier_max[4]), (3, 5))
+
+    def test_completion_caps_do_not_hide_unexpected_forecast_failures(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        child_due = datetime(2026, 1, 2, 9, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(RuntimeError, "forecast defect"):
+            compute.completion_caps(
+                "cp",
+                {"chainMax": 8},
+                child_due,
+                None,
+                coerce_int=core.coerce_int,
+                dtparse=core.parse_dt_any,
+                estimate_cp_final_by_max=lambda *_args: (_ for _ in ()).throw(
+                    RuntimeError("forecast defect")
+                ),
+                estimate_anchor_final_by_max=lambda *_args: None,
+                cap_from_until_cp=lambda *_args: (None, None),
+                cap_from_until_anchor=lambda *_args: (None, None),
+            )
+
+    def test_completion_caps_keep_known_exhaustion_as_optional_forecast(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        child_due = datetime(2026, 1, 2, 9, tzinfo=timezone.utc)
+        result = compute.completion_caps(
+            "cp",
+            {"chainMax": 8},
+            child_due,
+            None,
+            coerce_int=core.coerce_int,
+            dtparse=core.parse_dt_any,
+            estimate_cp_final_by_max=lambda *_args: (_ for _ in ()).throw(
+                OccurrenceSearchExhausted(
+                    "CP forecast", reference=child_due, limit=2
+                )
+            ),
+            estimate_anchor_final_by_max=lambda *_args: None,
+            cap_from_until_cp=lambda *_args: (None, None),
+            cap_from_until_anchor=lambda *_args: (None, None),
+        )
+
+        self.assertEqual(result[2:], (8, [], None))
+
+    def test_cp_final_projection_skips_when_next_due_is_missing(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        result = compute.estimate_cp_final_by_max(
+            {"chainMax": 3, "link": 1, "cp": "1d"},
+            None,
+            coerce_int=lambda value, default=0: int(value or default),
+            parse_cp_sequence_tokens=lambda _cp: None,
+            sequence_period_for_link=lambda *_args: timedelta(days=1),
+            add_period=lambda *_args: self.fail(
+                "forecast cannot advance without an initial child due"
+            ),
+            max_iterations=5,
+        )
+
+        self.assertIsNone(result)
+
+    def test_anchor_projections_skip_when_next_due_is_missing(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        until = datetime(2026, 1, 3, tzinfo=timezone.utc)
+
+        def unexpected_call(*_args, **_kwargs):
+            self.fail("anchor projection must stop when its next due is missing")
+
+        cap_result = compute.cap_from_until_anchor(
+            {"chainUntil": "20260103T000000Z"},
+            None,
+            None,
+            parse_datetime=lambda _value: until,
+            coerce_int=unexpected_call,
+            recurrence_seed_base=unexpected_call,
+            to_local_cached=unexpected_call,
+            safe_parse_datetime=unexpected_call,
+            anchor_file_fallback_hhmm=unexpected_call,
+            omit_dnf_from_parent=unexpected_call,
+            recurrence_evaluator_for_task=unexpected_call,
+            anchor_file_provider_for=unexpected_call,
+            anchor_included_occurrences=unexpected_call,
+            compare_datetimes=unexpected_call,
+            max_iterations=5,
+        )
+        estimate_result = compute.estimate_anchor_final_by_max(
+            {"chainMax": 3, "link": 1},
+            None,
+            None,
+            coerce_int=lambda value, default=0: int(value or default),
+            recurrence_seed_base=unexpected_call,
+            to_local_cached=unexpected_call,
+            safe_parse_datetime=unexpected_call,
+            anchor_file_fallback_hhmm=unexpected_call,
+            omit_dnf_from_parent=unexpected_call,
+            recurrence_evaluator_for_task=unexpected_call,
+            anchor_file_provider_for=unexpected_call,
+            anchor_included_occurrences=unexpected_call,
+            max_iterations=5,
+        )
+
+        self.assertEqual(cap_result, (None, None))
+        self.assertIsNone(estimate_result)
+
+    def test_optional_recurrence_projection_does_not_hide_unexpected_failures(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        task = {"due": "2026-01-02T09:00:00Z", "cp": "1d"}
+
+        with self.assertRaisesRegex(RuntimeError, "projection defect"):
+            compute.first_recurrence_target(
+                task,
+                "cp",
+                parse_datetime=core.parse_dt_any,
+                format_datetime=core.fmt_isoz,
+                generation_service=lambda: (_ for _ in ()).throw(
+                    RuntimeError("projection defect")
+                ),
+            )
+
+    def test_optional_recurrence_projection_degrades_on_invalid_input(self) -> None:
+        import nautical_core.modify_completion_compute as compute
+
+        task = {"due": "2026-01-02T09:00:00Z", "cp": "1d"}
+        result = compute.first_recurrence_target(
+            task,
+            "cp",
+            parse_datetime=core.parse_dt_any,
+            format_datetime=core.fmt_isoz,
+            generation_service=lambda: (_ for _ in ()).throw(
+                ValueError("invalid recurrence projection")
+            ),
+        )
+
+        self.assertIsNone(result)
 
     def test_until_past_guard_orders_repeated_wall_times_by_instant(self) -> None:
         zone = ZoneInfo("Europe/Bucharest")
@@ -237,7 +546,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
         self.assertEqual(result[2], ["end_chain_summary", "panel", "print_task"])
 
     def test_effect_compute_orchestration_uses_explicit_ports(self) -> None:
-        from nautical_core import modify_completion_compute as compute
+        import nautical_core.modify_completion_compute as compute
         from nautical_core.modify_completion_effects import (
             CompletionComputePorts,
             CompletionLifecyclePlanPorts,
@@ -255,15 +564,11 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
             warn_unreasonable_duration=lambda *_args: None,
             caps=lambda *_args: (None, None, None, [], None),
             cap_guard_or_stop=lambda *_args: True,
-            lifecycle_result_type=CompletionLifecycleResult,
             lifecycle_plan=CompletionLifecyclePlanPorts(
                 generation=None,
                 scheduler_fingerprint=lambda: "",
                 compare_datetimes=lambda _left, _right: 0,
                 invalid_relative_carry_reason=lambda *_args: None,
-                lifecycle_planner=None,
-                lifecycle_models=None,
-                modify_models=None,
                 end_chain_summary=lambda *_args, **_kwargs: None,
                 ensure_terminal_chain_off=lambda *_args, **_kwargs: None,
                 panel=lambda *_args, **_kwargs: None,

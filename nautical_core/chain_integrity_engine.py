@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Any, Protocol
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Iterable, Protocol
 
 from .chain_graph import ChainGraph
 from .chain_integrity_application import (
@@ -38,12 +41,12 @@ from .integration_models import (
     TaskRead,
     Unavailable,
 )
-from .lifecycle_outbox import OutboxFailure
-from .lifecycle_outbox_operations import LifecycleExecutionOutboxPort
+from .lifecycle.outbox import OutboxFailure
+from .lifecycle.outbox_operations import LifecycleExecutionOutboxPort
 from .task_models import TaskObservation
 from .chain_generation import ChainGenerationService
-from .lifecycle_models import LifecyclePlan
-from .lifecycle_recovery_models import RecoveryPlanResult, RecoveryResult
+from .lifecycle.models import LifecyclePlan
+from .lifecycle.recovery_models import RecoveryPlanResult, RecoveryResult
 
 
 class _SnapshotProvider(Protocol):
@@ -153,13 +156,13 @@ class ChainIntegrityEngine:
 
     def audit_native_until(
         self,
-        rows: Any,
+        rows: Iterable[TaskObservation],
         *,
-        predecessor: Any,
-        safe_parse_datetime: Any,
-        fmt_isoz: Any,
-        utc_to_local_naive: Any,
-        local_naive_to_utc: Any,
+        predecessor: Callable[[TaskObservation], TaskObservation | None],
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        fmt_isoz: Callable[[datetime], str],
+        utc_to_local_naive: Callable[[datetime], datetime],
+        local_naive_to_utc: Callable[[datetime], datetime],
     ) -> RecoveryAudit:
         """Delegate recovery evidence through the single integrity owner."""
         return self._recovery.audit_native_until(
@@ -171,9 +174,45 @@ class ChainIntegrityEngine:
             local_naive_to_utc=local_naive_to_utc,
         )
 
-    def apply_native_until_candidate(self, row: Any, previous: Any, item: Any, **kwargs: Any) -> Any:
+    def apply_native_until_candidate(
+        self,
+        row: TaskObservation,
+        previous: TaskObservation | None,
+        item: dict[str, Any],
+        *,
+        repaired: str,
+        taskdata: Path | None,
+        lease_held: bool,
+        mutation_lock: Callable[[Path, bool], AbstractContextManager[bool]],
+        parent_lock: Callable[[str], AbstractContextManager[bool]],
+        refresh_parent: Callable[[TaskObservation], TaskObservation | None],
+        refresh_previous: Callable[[TaskObservation], TaskObservation | None],
+        guard_error: Callable[
+            [TaskObservation, TaskObservation | None, TaskObservation | None], str | None
+        ],
+        configuration: Callable[[], tuple[str, str]],
+        mutate: Callable[[TaskObservation, str], None],
+        verify: Callable[[TaskObservation | None, str], bool],
+        on_lock_busy: Callable[[str], None],
+    ) -> str | None:
         """Apply one guarded recovery candidate through the recovery owner."""
-        return self._recovery.apply_native_until_candidate(row, previous, item, **kwargs)
+        return self._recovery.apply_native_until_candidate(
+            row,
+            previous,
+            item,
+            repaired=repaired,
+            taskdata=taskdata,
+            lease_held=lease_held,
+            mutation_lock=mutation_lock,
+            parent_lock=parent_lock,
+            refresh_parent=refresh_parent,
+            refresh_previous=refresh_previous,
+            guard_error=guard_error,
+            configuration=configuration,
+            mutate=mutate,
+            verify=verify,
+            on_lock_busy=on_lock_busy,
+        )
 
     def audit(
         self,
@@ -306,36 +345,21 @@ class ChainIntegrityEngine:
                 snapshot.complete_chain_history or chain_id in hydrated_chains,
                 snapshot.reason,
             )
-            try:
-                graph = ChainGraph.from_snapshot(scoped)
-                # Outbox evidence is global at load time but chain-local during
-                # invariant evaluation. Filtering here prevents every intent
-                # from being compared with every chain in a broad audit.
-                chain_outbox = OutboxSnapshot.from_records(
-                    outbox.for_chain(chain_id), source=outbox.source,
-                )
-                context = IntegrityContext(
-                    graph, chain_outbox, self._configuration_fingerprint, mutation_epoch,
-                )
-                from .chain_invariants import evaluate_context
+            graph = ChainGraph.from_snapshot(scoped)
+            # Outbox evidence is global at load time but chain-local during
+            # invariant evaluation. Filtering here prevents every intent
+            # from being compared with every chain in a broad audit.
+            chain_outbox = OutboxSnapshot.from_records(
+                outbox.for_chain(chain_id), source=outbox.source,
+            )
+            context = IntegrityContext(
+                graph, chain_outbox, self._configuration_fingerprint, mutation_epoch,
+            )
+            from .chain_invariants import evaluate_context
 
-                local_findings = evaluate_context(context)
-                planning: IntegrityPlanningResult = self._planner.plan(context, local_findings)
-                local_status = self._status(local_findings, planning)
-            except Exception as exc:
-                local_findings = ()
-                planning = IntegrityPlanningResult((), ())
-                local_status = IntegrityReportStatus.UNAVAILABLE
-                reason = str(exc).strip() or type(exc).__name__
-                return IntegrityEngineResult(
-                    IntegrityReportStatus.UNAVAILABLE,
-                    snapshot,
-                    tuple(findings),
-                    tuple(plans),
-                    tuple(refusals),
-                    chain_statuses=tuple(statuses) + ((chain_id, local_status),),
-                    reason=reason,
-                )
+            local_findings = evaluate_context(context)
+            planning: IntegrityPlanningResult = self._planner.plan(context, local_findings)
+            local_status = self._status(local_findings, planning)
             findings.extend(local_findings)
             plans.extend(planning.plans)
             refusals.extend(planning.refusals)

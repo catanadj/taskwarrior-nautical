@@ -5,11 +5,24 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import anchor_inclusion, anchor_omit
+import nautical_core.anchor_inclusion as anchor_inclusion
+import nautical_core.anchor_omit as anchor_omit
 from nautical_core.occurrence_provider import Occurrence
 
 
 class AnchorInclusionContractTests(unittest.TestCase):
+    def test_time_modifier_normalizer_has_a_named_owner(self) -> None:
+        self.assertTrue(callable(anchor_inclusion.normalize_time_modifiers))
+        self.assertFalse(hasattr(anchor_inclusion, "_norm_t_mod"))
+
+    def test_datetime_only_compatibility_wrappers_are_absent(self) -> None:
+        self.assertFalse(
+            hasattr(anchor_inclusion, "_next_anchor_file_occurrence_local")
+        )
+        self.assertFalse(
+            hasattr(anchor_inclusion, "next_included_occurrence_local")
+        )
+
     def test_same_instant_anchor_file_occurrence_keeps_file_description(self) -> None:
         target = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
 
@@ -40,14 +53,18 @@ class AnchorInclusionContractTests(unittest.TestCase):
         self.assertEqual(result.description, "watering")
 
     def test_omission_scheduler_failure_does_not_fail_open(self) -> None:
+        class BrokenScheduler:
+            def next_after_expr(self, *_args, **_kwargs):
+                raise RuntimeError("scheduler invariant failed")
+
         with patch.object(
-            core,
-            "next_after_expr",
-            side_effect=RuntimeError("scheduler unavailable"),
+            anchor_omit,
+            "_scheduler_engine",
+            return_value=BrokenScheduler(),
         ):
-            with self.assertRaisesRegex(ValueError, "Unable to evaluate omit rule"):
+            with self.assertRaisesRegex(RuntimeError, "scheduler invariant failed"):
                 anchor_omit.omit_expr_fires_on_date(
-                    [[{"kind": "w", "value": "mon", "mods": {}}]],
+                    core.validate_anchor_expr_strict("w:mon"),
                     date(2026, 8, 3),
                     date(2026, 8, 1),
                     "omit-fail-closed",
@@ -104,13 +121,13 @@ class AnchorInclusionContractTests(unittest.TestCase):
                     max_file_skips=2,
                 )
 
-    def test_omit_evaluation_failure_is_reported_as_unavailable(self) -> None:
+    def test_unexpected_omit_evaluator_failure_propagates(self) -> None:
         with patch.object(
             anchor_omit,
             "omit_expr_fires_on_date",
             side_effect=RuntimeError("broken omit evaluator"),
         ):
-            with self.assertRaisesRegex(ValueError, "Unable to evaluate omit rule") as raised:
+            with self.assertRaisesRegex(RuntimeError, "broken omit evaluator"):
                 anchor_inclusion._anchor_file_occurrence_is_omitted(
                     datetime(2026, 8, 3, 9),
                     omit_dnf=[["omit"]],
@@ -118,8 +135,6 @@ class AnchorInclusionContractTests(unittest.TestCase):
                     seed_base="omit-failure-contract",
                     core=core,
                 )
-
-        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
 
 
 if __name__ == "__main__":

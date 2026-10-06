@@ -1,13 +1,220 @@
 from __future__ import annotations
 
 import unittest
+import threading
+from collections.abc import Callable, Mapping
+from typing import get_type_hints
 
-from nautical_core.lifecycle_read_service import ChainCacheStore, LifecycleReadService
+from nautical_core.lifecycle import read_service
+from nautical_core.lifecycle.read_service import ChainCacheStore, LifecycleReadService
 from nautical_core.task_models import TaskObservation
-from nautical_core.integration_models import Absent
+from nautical_core.integration_models import (
+    Absent,
+    CommandFailureKind,
+    FailureEvidence,
+    Found,
+    TaskCommand,
+    Unavailable,
+)
 
 
 class LifecycleReadServiceTests(unittest.TestCase):
+    def test_query_cache_callback_contracts_are_bounded_at_the_service_edge(self) -> None:
+        self.assertEqual(
+            read_service.ReadQuery,
+            Callable[[str, tuple[object, ...]], object],
+        )
+        self.assertEqual(
+            read_service.CoerceInt,
+            Callable[[object, int | None], int | None],
+        )
+        self.assertEqual(
+            read_service.chain_read_key.__annotations__["return"],
+            "tuple[object, ...]",
+        )
+
+    def test_spawned_child_merge_accepts_object_valued_task_mappings(self) -> None:
+        hints = get_type_hints(LifecycleReadService.merge_spawned_child)
+        task_input = read_service.TaskRow | Mapping[str, object]
+
+        self.assertEqual(hints["parent_task"], task_input)
+        self.assertEqual(hints["child_task"], task_input)
+
+    def test_chain_cache_filters_typed_repository_snapshot_in_memory(self) -> None:
+        rows = (
+            TaskObservation.from_mapping(
+                {
+                    "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "chainID": "cid",
+                    "link": 1,
+                    "status": "completed",
+                },
+                source_query="chain:cid",
+            ),
+            TaskObservation.from_mapping(
+                {
+                    "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                    "chainID": "cid",
+                    "link": 2,
+                    "status": "pending",
+                },
+                source_query="chain:cid",
+            ),
+        )
+        calls = []
+
+        class Repository:
+            def chain_snapshot(self, chain_id, **_kwargs):
+                calls.append(chain_id)
+                return Found(rows, "chain:cid")
+
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda value: str(value).split(),
+            token_matcher=lambda row, token: token == f"status:{row.get('status')}",
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            repository=Repository(),
+            max_chain_walk=10,
+        )
+
+        selected = service.get_chain_export("cid", extra="status:pending")
+
+        self.assertEqual(calls, ["cid"])
+        self.assertEqual([row.get("link") for row in selected or []], [2])
+
+    def test_chain_cache_filters_cached_rows_in_memory(self) -> None:
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda value: str(value).split(),
+            token_matcher=lambda row, token: token == f"status:{row.get('status')}",
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            max_chain_walk=10,
+            cache_store=ChainCacheStore(),
+        )
+        service.replace_chain_cache(
+            "cid",
+            [
+                {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1, "status": "completed"},
+                {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2, "status": "pending"},
+                {"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "link": 2, "status": "deleted"},
+            ],
+        )
+
+        selected = service.get_chain_export("cid", extra="status:pending")
+
+        self.assertEqual([row.get("link") for row in selected or []], [2])
+        self.assertEqual([row.get("status") for row in selected or []], ["pending"])
+
+    def test_chain_cache_preserves_repository_unavailability(self) -> None:
+        command = TaskCommand(("task", "export"), "test chain read", 1.0)
+        evidence = FailureEvidence(
+            command,
+            CommandFailureKind.INVALID_RESPONSE,
+            0,
+            1,
+            0.0,
+            False,
+            "malformed JSON",
+        )
+
+        class Repository:
+            def chain_snapshot(self, _chain_id, **_kwargs):
+                return Unavailable("chain:cid", evidence)
+
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda _value: [],
+            token_matcher=lambda _row, _token: True,
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            repository=Repository(),
+            max_chain_walk=10,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "malformed JSON"):
+            service.get_chain_export("cid")
+
+    def test_collect_prev_two_prefers_live_statuses_over_deleted(self) -> None:
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda _value: [],
+            token_matcher=lambda _row, _token: True,
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            max_chain_walk=10,
+        )
+        chain_by_link = {
+            2: [
+                {"uuid": "deleted-2", "status": "deleted", "link": 2},
+                {"uuid": "pending-2", "status": "pending", "link": 2},
+            ],
+            3: [
+                {"uuid": "deleted-3", "status": "deleted", "link": 3},
+                {"uuid": "completed-3", "status": "completed", "link": 3},
+            ],
+        }
+
+        result = service.collect_prev_two(
+            {"chainID": "cid", "link": 4},
+            get_chain_read=lambda _chain: self.fail("provided index should be used"),
+            chain_by_link=chain_by_link,
+        )
+
+        self.assertIsInstance(result, Found)
+        self.assertEqual([row.get("uuid") for row in result.value], ["pending-2", "completed-3"])
+
+    def test_chain_cache_concurrent_reads_and_replacements_keep_typed_rows(self) -> None:
+        service = LifecycleReadService(
+            coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,
+            parse_extra_tokens=lambda _value: [],
+            token_matcher=lambda _row, _token: True,
+            read_query_get=lambda _kind, _key: None,
+            chain_cache_get=lambda _chain: None,
+            max_chain_walk=10,
+            cache_store=ChainCacheStore(),
+        )
+        full_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        errors: list[str] = []
+        hits = 0
+
+        def writer(chain_id: str) -> None:
+            try:
+                for index in range(300):
+                    service.replace_chain_cache(
+                        chain_id,
+                        [{"uuid": full_uuid, "link": 1, "entry": f"2026-01-01T00:00:{index % 60:02d}Z"}],
+                    )
+            except Exception as exc:
+                errors.append(f"writer: {exc}")
+
+        def reader() -> None:
+            nonlocal hits
+            try:
+                for _ in range(600):
+                    row, _chain_id = service.lookup_short("aaaaaaaa")
+                    if row is not None:
+                        if not isinstance(row, TaskObservation):
+                            errors.append(f"reader returned {type(row)}")
+                        hits += 1
+            except Exception as exc:
+                errors.append(f"reader: {exc}")
+
+        threads = [
+            threading.Thread(target=writer, args=("cid-a",)),
+            threading.Thread(target=writer, args=("cid-b",)),
+            threading.Thread(target=reader),
+            threading.Thread(target=reader),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, [])
+        self.assertGreater(hits, 0)
+
     def test_indexes_and_spawned_child_merge_preserve_chain_order_and_links(self) -> None:
         service = LifecycleReadService(
             coerce_int=lambda value, default: int(value) if str(value).isdigit() else default,

@@ -2,18 +2,21 @@ import json
 import os
 import sqlite3
 import stat
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nautical_core import backup_service
+import nautical_core.backup_service as backup_service
 from nautical_core.tools import nautical_backup
+from tests.support.hook_process import HookSubprocessFixture
 
 
-class BackupCliTests(unittest.TestCase):
+class BackupCliTests(HookSubprocessFixture):
+    def _run_cli(self, command, *, env=None, input=None, check=False, **_kwargs):
+        return self.run_python_command(command, env=env, input=input, check=check)
+
     def test_publication_interruption_removes_staging_and_preserves_previous(self):
         with tempfile.TemporaryDirectory(prefix="nautical-backup-cli-") as td:
             root = Path(td)
@@ -57,9 +60,13 @@ class BackupCliTests(unittest.TestCase):
             )
             fake_task.chmod(fake_task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run(
-                [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(fake_task), "--json"],
-                capture_output=True, text=True, check=False, env={**os.environ, "PYTHONPATH": str(root)},
+            result = self.run_script(
+                script,
+                script_arguments=(
+                    "--taskdata", str(taskdata), "--destination", str(destination),
+                    "--task-bin", str(fake_task), "--json",
+                ),
+                extra_environment={"PYTHONPATH": str(root)},
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             payload = json.loads(result.stdout)
@@ -83,7 +90,7 @@ class BackupCliTests(unittest.TestCase):
             task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run(
+            result = self._run_cli(
                 [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--json"],
                 capture_output=True, text=True, check=False,
             )
@@ -114,7 +121,7 @@ class BackupCliTests(unittest.TestCase):
             task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run(
+            result = self._run_cli(
                 [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--json"],
                 capture_output=True, text=True, check=False, env={**os.environ, "TASKRC": str(taskrc)},
             )
@@ -136,7 +143,7 @@ class BackupCliTests(unittest.TestCase):
             task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run(
+            result = self._run_cli(
                 [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--json"],
                 capture_output=True, text=True, check=False,
             )
@@ -160,7 +167,7 @@ class BackupCliTests(unittest.TestCase):
             task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run(
+            result = self._run_cli(
                 [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--json"],
                 capture_output=True, text=True, check=False,
             )
@@ -191,7 +198,7 @@ class BackupCliTests(unittest.TestCase):
             )
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run(
+            result = self._run_cli(
                 [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--json"],
                 capture_output=True, text=True, check=False,
             )
@@ -219,7 +226,7 @@ class BackupCliTests(unittest.TestCase):
             )
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run(
+            result = self._run_cli(
                 [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--json"],
                 capture_output=True, text=True, check=False,
             )
@@ -248,7 +255,7 @@ class BackupCliTests(unittest.TestCase):
             task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run(
+            result = self._run_cli(
                 [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--json"],
                 capture_output=True, text=True, check=False,
             )
@@ -282,7 +289,7 @@ class BackupCliTests(unittest.TestCase):
             task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run(
+            result = self._run_cli(
                 [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--json"],
                 capture_output=True, text=True, check=False,
             )
@@ -304,7 +311,7 @@ class BackupCliTests(unittest.TestCase):
             task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run([
+            result = self._run_cli([
                 sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task),
                 "--active-release", "r-test", "--runtime-digest", "a" * 64, "--timezone", "Europe/Bucharest", "--json",
             ], capture_output=True, text=True, check=False)
@@ -331,7 +338,7 @@ class BackupCliTests(unittest.TestCase):
             task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run([sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--include", "calendar=" + str(resource), "--json"], capture_output=True, text=True, check=False)
+            result = self._run_cli([sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--include", "calendar=" + str(resource), "--json"], capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual((destination / "resources" / "calendar").read_text(encoding="utf-8"), '{"description":"café"}\n')
 
@@ -349,13 +356,13 @@ class BackupCliTests(unittest.TestCase):
             task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             task.chmod(task.stat().st_mode | stat.S_IXUSR)
             destination = root / "backup"
-            result = subprocess.run([sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--include", "x=" + str(taskdata / ".nautical-state" / ".nautical_lifecycle_outbox.db"), "--json"], capture_output=True, text=True, check=False)
+            result = self._run_cli([sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--include", "x=" + str(taskdata / ".nautical-state" / ".nautical_lifecycle_outbox.db"), "--json"], capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 2)
             self.assertIn("outside Taskdata", json.loads(result.stdout)["error"])
 
     def test_missing_destination_is_structured_error(self):
         script = Path(__file__).parents[1] / "nautical_core" / "tools" / "nautical_backup.py"
-        result = subprocess.run([sys.executable, str(script), "--taskdata", "/tmp/no-taskdata"], capture_output=True, text=True, check=False)
+        result = self._run_cli([sys.executable, str(script), "--taskdata", "/tmp/no-taskdata"], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stdout)["error"], "--destination is required")
         self.assertEqual(result.stderr, "")

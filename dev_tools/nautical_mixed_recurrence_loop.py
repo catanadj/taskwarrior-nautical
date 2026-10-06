@@ -46,7 +46,6 @@ def _run(cmd: list[str], env: dict, timeout: float = 20.0) -> tuple[bool, str, s
 
 
 def _write_taskrc(path: Path, data_dir: Path) -> None:
-    hooks_dir = data_dir / "hooks"
     lines = [
         f"data.location={data_dir}",
         "hooks=on",

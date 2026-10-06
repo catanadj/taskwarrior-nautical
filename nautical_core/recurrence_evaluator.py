@@ -6,8 +6,8 @@ limits, and local-time conversion while callers migrate incrementally.
 
 from __future__ import annotations
 
+import importlib
 import copy
-import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, NoReturn
@@ -435,7 +435,12 @@ class RecurrenceEvaluator:
     def next_after_cursor(
         self,
         cursor: OccurrenceCursor,
-        **kwargs: Any,
+        *,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_file_skips: int = 512,
     ) -> Occurrence | None:
         """Resolve an explicit cursor without caller-side time arithmetic."""
         if not isinstance(cursor, OccurrenceCursor):
@@ -448,23 +453,103 @@ class RecurrenceEvaluator:
         return self.next_after(
             cursor.local_datetime,
             inclusive=cursor.inclusive,
-            **kwargs,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_file_skips=max_file_skips,
         )
 
     def next_outcome(
         self,
         cursor: OccurrenceCursor,
-        **kwargs: Any,
+        *,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_file_skips: int = 512,
     ) -> OccurrenceOutcome:
         """Return a typed lookup outcome without collapsing terminal states."""
         try:
-            return outcome_from_occurrence(self.next_after_cursor(cursor, **kwargs))
+            return outcome_from_occurrence(
+                self.next_after_cursor(
+                    cursor,
+                    fallback_hhmm=fallback_hhmm,
+                    default_seed_date=default_seed_date,
+                    pick_occurrence_local=pick_occurrence_local,
+                    anchor_file_provider=anchor_file_provider,
+                    max_file_skips=max_file_skips,
+                )
+            )
         except OccurrenceSearchExhausted as exc:
             return ExhaustedOccurrence(exc)
         except LookupError as exc:
             return UnavailableOccurrence(str(exc) or type(exc).__name__, type(exc).__name__)
         except (TypeError, ValueError) as exc:
             return InvalidOccurrence(str(exc) or type(exc).__name__, type(exc).__name__)
+
+    def _scan_next_event_after(
+        self,
+        after_local: datetime,
+        *,
+        fallback_hhmm: tuple[int, int],
+        default_seed_date: date | None,
+        inclusive: bool,
+        pick_occurrence_local: PickOccurrenceCallback | None,
+        anchor_file_provider: Any,
+        include_omitted: bool,
+        max_file_skips: int,
+    ) -> Occurrence | None:
+        """Request events and advance the omission cursor until one is usable."""
+        from . import anchor_inclusion
+        from .occurrence_provider import require_forward_progress
+        from .timeutil import compare_datetimes
+
+        cursor = after_local
+        first = inclusive
+        for _ in range(max_file_skips):
+            event = anchor_inclusion.next_occurrence_event_local(
+                dnf=self.anchor_dnf,
+                anchor_file_str=self.spec.anchor_file,
+                after_local_dt=cursor,
+                inclusive=first,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed_date or after_local.date(),
+                seed_base=self.seed_base,
+                omit_dnf=self.omit_dnf,
+                scheduler_omit_dnf=None,
+                core=self._core_module(),
+                next_occurrence_after_local_dt=self._default_next_occurrence_after_local_dt,
+                pick_occurrence_local=pick_occurrence_local,
+                anchor_file_dir=self.context.anchor_file_dir,
+                anchor_file_provider=anchor_file_provider,
+                recurrence_context=self.context,
+                business_calendar=self.context.business_calendar,
+            )
+            if event is None or event.local_datetime is None:
+                return None
+            if first:
+                try:
+                    if compare_datetimes(event.local_datetime, cursor) < 0:
+                        raise ValueError("Occurrence event provider returned an event before its cursor.")
+                except (TypeError, ValueError) as exc:
+                    if isinstance(exc, ValueError) and str(exc).startswith("Occurrence event provider"):
+                        raise
+                    raise ValueError("Occurrence event provider returned an incomparable datetime.") from exc
+            if include_omitted or not event.omitted:
+                return event
+            if first and compare_datetimes(event.local_datetime, cursor) == 0:
+                cursor = event.local_datetime + timedelta(microseconds=1)
+                first = False
+                continue
+            require_forward_progress(cursor, event.local_datetime)
+            cursor = event.local_datetime
+            first = False
+        raise ValueError(
+            f"Occurrence omission scan exceeded {max_file_skips} events; "
+            "narrow the anchor or omit rule."
+        )
 
     def next_event_after(
         self,
@@ -491,61 +576,16 @@ class RecurrenceEvaluator:
         self._validate_hhmm(fallback_hhmm)
         if isinstance(max_file_skips, bool) or not isinstance(max_file_skips, int) or max_file_skips <= 0:
             raise ValueError("Anchor-file omission scan limit must be a positive integer.")
-        from . import anchor_inclusion
-        from .occurrence_provider import _require_forward_progress
-        from .timeutil import compare_datetimes
-        next_occurrence_after_local_dt = self._default_next_occurrence_after_local_dt
         anchor_file_provider = anchor_file_provider or self._anchor_file_provider_for(fallback_hhmm)
-
-        cursor = after_local
-        first = inclusive
-        for _ in range(max_file_skips):
-            event = anchor_inclusion.next_occurrence_event_local(
-                dnf=self.anchor_dnf,
-                anchor_file_str=self.spec.anchor_file,
-                after_local_dt=cursor,
-                inclusive=first,
-                fallback_hhmm=fallback_hhmm,
-                default_seed_date=default_seed_date or after_local.date(),
-                seed_base=self.seed_base,
-                # The event stream must see omitted anchor dates so it can
-                # retain or skip them explicitly; omission is applied by the
-                # event merger rather than by the date scheduler.
-                omit_dnf=self.omit_dnf,
-                scheduler_omit_dnf=None,
-                core=self._core_module(),
-                next_occurrence_after_local_dt=next_occurrence_after_local_dt,
-                pick_occurrence_local=pick_occurrence_local,
-                anchor_file_dir=self.context.anchor_file_dir,
-                anchor_file_provider=anchor_file_provider,
-                recurrence_context=self.context,
-                business_calendar=self.context.business_calendar,
-            )
-            if event is None or event.local_datetime is None:
-                return None
-            if first:
-                try:
-                    if compare_datetimes(event.local_datetime, cursor) < 0:
-                        raise ValueError("Occurrence event provider returned an event before its cursor.")
-                except (TypeError, ValueError) as exc:
-                    if isinstance(exc, ValueError) and str(exc).startswith("Occurrence event provider"):
-                        raise
-                    raise ValueError("Occurrence event provider returned an incomparable datetime.") from exc
-            if include_omitted or not event.omitted:
-                return event
-            if first and compare_datetimes(event.local_datetime, cursor) == 0:
-                # An inclusive cursor may surface an omitted event exactly at
-                # its boundary. Advance by one microsecond before continuing
-                # the omitted scan so the provider cannot repeat that event.
-                cursor = event.local_datetime + timedelta(microseconds=1)
-                first = False
-                continue
-            _require_forward_progress(cursor, event.local_datetime)
-            cursor = event.local_datetime
-            first = False
-        raise ValueError(
-            f"Occurrence omission scan exceeded {max_file_skips} events; "
-            "narrow the anchor or omit rule."
+        return self._scan_next_event_after(
+            after_local,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            inclusive=inclusive,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            include_omitted=include_omitted,
+            max_file_skips=max_file_skips,
         )
 
     def events_between(
@@ -628,6 +668,8 @@ class RecurrenceEvaluator:
         count_omitted: bool = False,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
         max_iterations: int = 512,
         max_file_skips: int = 512,
     ) -> OccurrenceBatch[Occurrence]:
@@ -646,6 +688,8 @@ class RecurrenceEvaluator:
                 fallback_hhmm=fallback_hhmm,
                 default_seed_date=default_seed_date,
                 inclusive=False,
+                pick_occurrence_local=pick_occurrence_local,
+                anchor_file_provider=anchor_file_provider,
                 include_omitted=True,
                 max_file_skips=max_file_skips,
             ),
@@ -803,7 +847,12 @@ class RecurrenceEvaluator:
         cursor: OccurrenceCursor,
         *,
         limit: int,
-        **kwargs: Any,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
     ) -> OccurrenceBatch[Occurrence]:
         """Collect occurrences from an explicit cursor contract."""
         if not isinstance(cursor, OccurrenceCursor):
@@ -816,18 +865,20 @@ class RecurrenceEvaluator:
         values = self.collect_after(
             cursor,
             limit=limit,
-            **kwargs,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_iterations=max_iterations,
+            max_file_skips=max_file_skips,
         )
         return OccurrenceBatch(values, terminal=getattr(values, "terminal", None))
 
     @staticmethod
     def _core_module() -> Any:
-        from . import _PKG_PROXY
-        package = sys.modules.get(__package__ or "nautical_core")
-        if package is not None:
-            _PKG_PROXY.__dict__.update(vars(package))
-
-        return _PKG_PROXY
+        if not __package__:
+            raise RuntimeError("Recurrence evaluator requires a package context.")
+        return importlib.import_module(__package__)
 
     def _default_next_occurrence_after_local_dt(
         self,
@@ -850,23 +901,37 @@ class RecurrenceEvaluator:
             fallback_hhmm=fallback_hhmm,
         )
 
-    def project_time(self, value: Any, selected_date: date, **kwargs: Any) -> Any:
+    def project_time(
+        self,
+        value: Any,
+        selected_date: date,
+        *,
+        config: dict[str, Any] | None = None,
+        to_local: Any | None = None,
+        seed_base: str = "",
+    ) -> Any:
         """Project a time modifier against a selected date through one service."""
         from .time_projection import TimeProjectionService
 
         # Anchor scheduling passes this callback without repeating the full
         # context. Keep astronomical projections task-scoped instead of
         # silently falling back to an empty global configuration.
-        if kwargs.get("config") is None and self.context.astronomy_config is not None:
-            kwargs = dict(kwargs)
-            kwargs["config"] = dict(self.context.astronomy_config)
+        if config is None and self.context.astronomy_config is not None:
+            config = dict(self.context.astronomy_config)
         service = self._get_cached("time_projection_service", TimeProjectionService)
-        return service.project(value, selected_date, context=self.context, **kwargs)
+        return service.project(
+            value,
+            selected_date,
+            config=config,
+            to_local=to_local,
+            seed_base=seed_base,
+            context=self.context,
+        )
 
     def _build_scheduler_binding(self) -> NextOccurrenceCallback:
         """Build the evaluator-bound scheduler once per evaluator session."""
         from .add_anchor_compute import anchor_next_occurrence_after_local_dt
-        from .anchor_inclusion import _norm_t_mod
+        from .anchor_inclusion import normalize_time_modifiers
         from .time_projection import (
             ProjectedTime,
             ProjectionInvalid,
@@ -990,7 +1055,7 @@ class RecurrenceEvaluator:
                 omit_dnf=omit_dnf,
                 default_seed_date=default_seed_date,
                 core=scheduler_core,
-                norm_t_mod=_norm_t_mod,
+                norm_t_mod=normalize_time_modifiers,
                 resolve_time_slots=resolve_slots,
                 project_time=self_evaluator.project_time,
             )

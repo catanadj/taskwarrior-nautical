@@ -3,8 +3,8 @@
 import unittest
 import uuid
 
-import nautical_core as core
 from nautical_core.add_anchor_preview import _preview_seed_base
+from nautical_core.common import coerce_int
 from nautical_core.modify_schedule_effects import recurrence_seed_base
 from nautical_core.modify_spawn_prep import SpawnIdentityError, stable_child_uuid
 from nautical_core.modify_timeline import _timeline_seed_base
@@ -38,7 +38,7 @@ class RecurrenceIdentityContracts(unittest.TestCase):
                 parent,
                 child,
                 task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
-                coerce_int=core.coerce_int,
+                coerce_int=coerce_int,
                 stable_child_uuid_namespace=uuid.NAMESPACE_URL,
             )
 

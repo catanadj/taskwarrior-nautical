@@ -4,7 +4,7 @@ from datetime import date
 import unittest
 
 import nautical_core as core
-from nautical_core import anchor_omit
+import nautical_core.anchor_omit as anchor_omit
 
 
 class OmitContracts(unittest.TestCase):

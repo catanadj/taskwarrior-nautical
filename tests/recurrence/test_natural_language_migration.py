@@ -5,7 +5,8 @@ from __future__ import annotations
 import unittest
 
 import nautical_core as core
-from nautical_core import position_selection, season_support
+import nautical_core.position_selection as position_selection
+import nautical_core.season_support as season_support
 
 
 class NaturalLanguageMigrationTests(unittest.TestCase):

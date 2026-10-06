@@ -8,9 +8,20 @@ from __future__ import annotations
 
 import statistics
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, TypedDict
 
 from .task_models import TaskObservation, TaskPayload
+
+
+class LatenessStats(TypedDict):
+    early: int
+    on_time: int
+    late: int
+    avg: float | None
+    median: float | None
+    best_early: float | None
+    worst_late: float | None
+    count: int
 
 
 def _median(values: list[float]) -> float | None:
@@ -37,10 +48,7 @@ def sort_chain_for_analytics(
         due = parse_datetime(obj.get("due")) or datetime.max.replace(tzinfo=timezone.utc)
         return (1, due)
 
-    try:
-        return sorted(chain, key=link_sort_key)
-    except Exception:
-        return chain[:]
+    return sorted(chain, key=link_sort_key)
 
 
 def lateness_stats(
@@ -48,7 +56,7 @@ def lateness_stats(
     *,
     parse_datetime: Callable[[Any], datetime | None],
     tol_secs: int = 60,
-) -> dict[str, Any]:
+) -> LatenessStats:
     """Summarize completed-link timing without hook orchestration state."""
     early = on = late = 0
     deltas: list[float] = []

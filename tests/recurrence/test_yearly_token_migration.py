@@ -8,9 +8,23 @@ from datetime import date
 
 import nautical_core as core
 import nautical_core.anchor_omit as anchor_omit
+import nautical_core.parser_api as parser_api
+import nautical_core.parsing.parser_support_api as parser_support_api
+import nautical_core.scheduler_api as scheduler_api
 
 
 class YearlyTokenMigrationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        namespace = vars(core).copy()
+        namespace.update(
+            ParseError=core.ParseError,
+            YearTokenFormatError=core.YearTokenFormatError,
+        )
+        cls.parser = parser_api.for_core(module=core, namespace=namespace)
+        cls.parser_support = parser_support_api.for_core(module=core)
+        cls.scheduler = scheduler_api.for_core(module=core)
+
     def test_parser_validation_accepts_the_golden_expression_matrix(self) -> None:
         expressions = (
             "w:mon",
@@ -75,20 +89,20 @@ class YearlyTokenMigrationTests(unittest.TestCase):
     def test_yearly_token_format_owner_helper_preserves_golden_contract(self) -> None:
         for spec in ("01-01..12-31", "rand-07", "q1..q2"):
             with self.subTest(spec=spec):
-                core._validate_yearly_token_format(spec)
+                self.parser._validate_yearly_token_format(spec)
         with self.assertRaisesRegex(core.YearTokenFormatError, "month '13' is invalid"):
-            core._validate_yearly_token_format("13-01")
+            self.parser._validate_yearly_token_format("13-01")
 
     def test_dnf_yearly_validation_preserves_typed_format_error(self) -> None:
-        core._validate_year_tokens_in_dnf([[{"typ": "y", "spec": "01-01"}]])
+        self.parser._validate_year_tokens_in_dnf([[{"typ": "y", "spec": "01-01"}]])
         with self.assertRaises(core.YearTokenFormatError) as ctx:
-            core._validate_year_tokens_in_dnf([[{"typ": "y", "spec": "05:15"}]])
+            self.parser._validate_year_tokens_in_dnf([[{"typ": "y", "spec": "05:15"}]])
         self.assertIn("uses ':' between numbers", str(ctx.exception))
 
     def test_canonical_quarter_and_date_tokens_are_accepted(self) -> None:
         for token in ("q1", "q2s", "q1..q2", "q1s..q2s", "01-01", "01-01..31-12"):
             with self.subTest(token=token):
-                core._validate_yearly_spec_token(token)
+                self.parser._validate_yearly_spec_token(token)
 
     def test_malformed_or_cross_year_ranges_are_rejected_with_guidance(self) -> None:
         cases = (
@@ -100,7 +114,7 @@ class YearlyTokenMigrationTests(unittest.TestCase):
         for token, expected_message in cases:
             with self.subTest(token=token):
                 with self.assertRaises(core.ParseError) as raised:
-                    core._validate_yearly_spec_token(token)
+                    self.parser._validate_yearly_spec_token(token)
                 self.assertIn(expected_message.casefold(), str(raised.exception).casefold())
 
     def test_year_day_ordinals_validate_strictly(self) -> None:
@@ -109,7 +123,7 @@ class YearlyTokenMigrationTests(unittest.TestCase):
                 self.assertTrue(core.validate_anchor_expr_strict(expression))
         for token in ("d1", "d-1", "d100..d110", "d-7..d-1"):
             with self.subTest(token=token):
-                core._validate_yearly_spec_token(token)
+                self.parser._validate_yearly_spec_token(token)
 
         invalid = (
             ("y:d0", "Year-day '0' out of range"),
@@ -125,27 +139,27 @@ class YearlyTokenMigrationTests(unittest.TestCase):
                     core.validate_anchor_expr_strict(expression)
                 self.assertIn(message, str(raised.exception))
 
-        self.assertEqual(core._parse_y_token("d100"), ("year_day", 100))
-        self.assertEqual(core._parse_y_token("d-1"), ("year_day", -1))
-        self.assertIsNone(core._parse_y_token("d0"))
+        self.assertEqual(self.parser_support._parse_y_token("d100"), ("year_day", 100))
+        self.assertEqual(self.parser_support._parse_y_token("d-1"), ("year_day", -1))
+        self.assertIsNone(self.parser_support._parse_y_token("d0"))
 
     def test_year_day_ordinals_expand_and_schedule_across_leap_years(self) -> None:
         self.assertEqual(
-            core.expand_yearly_for_year_strict("d1,d60,d-1", 2023),
+            self.scheduler.expand_yearly_cached("d1,d60,d-1", 2023),
             [date(2023, 1, 1), date(2023, 3, 1), date(2023, 12, 31)],
         )
         self.assertEqual(
-            core.expand_yearly_for_year_strict("d1,d60,d-1", 2024),
+            self.scheduler.expand_yearly_cached("d1,d60,d-1", 2024),
             [date(2024, 1, 1), date(2024, 2, 29), date(2024, 12, 31)],
         )
-        self.assertEqual(core.expand_yearly_for_year_strict("d366", 2023), [])
-        self.assertEqual(core.expand_yearly_for_year_strict("d1..d366", 2023)[-1], date(2023, 12, 31))
+        self.assertEqual(self.scheduler.expand_yearly_cached("d366", 2023), [])
+        self.assertEqual(self.scheduler.expand_yearly_cached("d1..d366", 2023)[-1], date(2023, 12, 31))
         self.assertEqual(
-            core.expand_yearly_for_year_strict("d366,d-366", 2024),
+            self.scheduler.expand_yearly_cached("d366,d-366", 2024),
             [date(2024, 1, 1), date(2024, 12, 31)],
         )
         self.assertEqual(
-            core.expand_yearly_for_year_strict("d100..d102,d-2..d-1", 2024),
+            self.scheduler.expand_yearly_cached("d100..d102,d-2..d-1", 2024),
             [
                 date(2024, 4, 9), date(2024, 4, 10), date(2024, 4, 11),
                 date(2024, 12, 30), date(2024, 12, 31),
@@ -166,7 +180,7 @@ class YearlyTokenMigrationTests(unittest.TestCase):
                 self.assertTrue(core.validate_anchor_expr_strict(expression))
         for token in ("w1", "w-1", "w10..w13", "w-4..w-1"):
             with self.subTest(token=token):
-                core._validate_yearly_spec_token(token)
+                self.parser._validate_yearly_spec_token(token)
 
         invalid = (
             ("y:w0", "ISO week '0' out of range"),
@@ -182,30 +196,30 @@ class YearlyTokenMigrationTests(unittest.TestCase):
                     core.validate_anchor_expr_strict(expression)
                 self.assertIn(message, str(raised.exception))
 
-        self.assertEqual(core._parse_y_token("w20"), ("iso_week", 20))
-        self.assertEqual(core._parse_y_token("w-1"), ("iso_week", -1))
-        self.assertIsNone(core._parse_y_token("w0"))
+        self.assertEqual(self.parser_support._parse_y_token("w20"), ("iso_week", 20))
+        self.assertEqual(self.parser_support._parse_y_token("w-1"), ("iso_week", -1))
+        self.assertIsNone(self.parser_support._parse_y_token("w0"))
 
     def test_iso_week_ordinals_expand_across_gregorian_year_boundaries(self) -> None:
         self.assertEqual(
-            core.expand_yearly_for_year_strict("w53", 2020),
+            self.scheduler.expand_yearly_cached("w53", 2020),
             [date(2020, 12, 28), date(2020, 12, 29), date(2020, 12, 30), date(2020, 12, 31)],
         )
         self.assertEqual(
-            core.expand_yearly_for_year_strict("w53", 2021),
+            self.scheduler.expand_yearly_cached("w53", 2021),
             [date(2021, 1, 1), date(2021, 1, 2), date(2021, 1, 3)],
         )
-        self.assertEqual(core.expand_yearly_for_year_strict("w1", 2018)[-1], date(2018, 12, 31))
+        self.assertEqual(self.scheduler.expand_yearly_cached("w1", 2018)[-1], date(2018, 12, 31))
         self.assertEqual(
-            core.expand_yearly_for_year_strict("w-1", 2021),
+            self.scheduler.expand_yearly_cached("w-1", 2021),
             [
                 date(2021, 1, 1), date(2021, 1, 2), date(2021, 1, 3),
                 date(2021, 12, 27), date(2021, 12, 28), date(2021, 12, 29),
                 date(2021, 12, 30), date(2021, 12, 31),
             ],
         )
-        self.assertEqual(len(core.expand_yearly_for_year_strict("w20", 2024)), 7)
-        self.assertEqual(len(core.expand_yearly_for_year_strict("w1..w53", 2021)), 365)
+        self.assertEqual(len(self.scheduler.expand_yearly_cached("w20", 2024)), 7)
+        self.assertEqual(len(self.scheduler.expand_yearly_cached("w1..w53", 2021)), 365)
 
         dnf = core.validate_anchor_expr_strict("y:w53")
         next_date, _meta = core.next_after_expr(dnf, date(2020, 12, 31), default_seed=date(2020, 1, 1))
@@ -245,8 +259,8 @@ class YearlyTokenMigrationTests(unittest.TestCase):
             with self.subTest(after=after_date):
                 actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
                 self.assertEqual(actual, expected)
-        self.assertTrue(core._interval_allowed_for_atom("y", 2, seed, date(2019, 12, 30), "w1"))
-        self.assertTrue(core._interval_allowed_for_atom("y", 2, seed, date(2020, 1, 3), "w1"))
+        self.assertTrue(self.scheduler.interval_allowed_for_atom("y", 2, seed, date(2019, 12, 30), "w1"))
+        self.assertTrue(self.scheduler.interval_allowed_for_atom("y", 2, seed, date(2020, 1, 3), "w1"))
 
     def test_year_ordinals_constrain_random_and_omitted_candidates(self) -> None:
         seed = date(2024, 1, 1)

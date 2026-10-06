@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Callable, TypeAlias
 
+from .modify_generation_effects import NativeUntilGenerationService
+from .native_until import NativeUntilCarryError, NativeUntilPolicy
 from .task_models import TaskPayload
+
+
+CpCarryAdjustment: TypeAlias = tuple[str, datetime, datetime, timedelta]
+CpCarryResult: TypeAlias = tuple[datetime, datetime, list[CpCarryAdjustment]] | None
 
 
 def preserve_cp_relative_offsets_on_due_change(
@@ -12,13 +19,13 @@ def preserve_cp_relative_offsets_on_due_change(
     new: TaskPayload,
     new_cp: str,
     *,
-    field_changed: Any,
-    parse_datetime: Any,
-    utc_to_local_naive: Any,
-    local_naive_to_utc: Any,
-    format_datetime: Any,
-    carry_error: Any,
-) -> tuple[Any, Any, list[tuple[str, Any, Any, Any]]] | None:
+    field_changed: Callable[[TaskPayload, TaskPayload, str], bool],
+    parse_datetime: Callable[[object], datetime | None],
+    utc_to_local_naive: Callable[[datetime], datetime],
+    local_naive_to_utc: Callable[[datetime], datetime],
+    format_datetime: Callable[[datetime], str],
+    carry_error: Callable[[str, str], Exception],
+) -> CpCarryResult:
     """Keep scheduled/wait relative to due when a CP task's due moves."""
     if not new_cp or not str(old.get("cp") or "").strip():
         return None
@@ -30,10 +37,10 @@ def preserve_cp_relative_offsets_on_due_change(
         new_due = parse_datetime(new.get("due"))
         if not (old_due and new_due):
             raise ValueError("due timestamp is missing or invalid")
-    except Exception as exc:
+    except (ValueError, OverflowError) as exc:
         raise carry_error("due", str(exc) or "timestamp conversion failed") from exc
 
-    adjustments: list[tuple[str, Any, Any, Any]] = []
+    adjustments: list[CpCarryAdjustment] = []
     for field in ("scheduled", "wait"):
         if field_changed(old, new, field) or not old.get(field):
             continue
@@ -46,7 +53,7 @@ def preserve_cp_relative_offsets_on_due_change(
             new_value = local_naive_to_utc(new_value_local)
             new[field] = format_datetime(new_value)
             adjustments.append((field, old_value, new_value, local_offset))
-        except Exception as exc:
+        except (ValueError, OverflowError) as exc:
             raise carry_error(field, str(exc) or "timezone conversion failed") from exc
     return (old_due, new_due, adjustments) if adjustments else None
 
@@ -56,13 +63,15 @@ def preserve_native_until_on_target_change(
     new: TaskPayload,
     kind: str,
     *,
-    field_changed: Any,
-    recurrence_anchor_field: Any,
-    parse_datetime: Any,
-    native_until: Any,
-    generation_service: Any,
-    reject_carry: Any,
-    diagnostic: Any,
+    field_changed: Callable[[TaskPayload, TaskPayload, str], bool],
+    recurrence_anchor_field: Callable[[TaskPayload], str],
+    parse_datetime: Callable[[object], datetime | None],
+    native_until: NativeUntilPolicy,
+    generation_service: Callable[[], NativeUntilGenerationService],
+    reject_carry: Callable[
+        [TaskPayload, TaskPayload, datetime | None, str, NativeUntilCarryError], None
+    ],
+    diagnostic: Callable[[str], None],
 ) -> bool:
     """Carry an untouched native until when an existing recurrence target moves."""
     if field_changed(old, new, "until") or not old.get("until"):
@@ -106,7 +115,7 @@ def preserve_native_until_on_target_change(
         return True
     except native_until.NativeUntilCarryError as exc:
         reject_carry(old, new, new_target, old_target_field, exc)
-    except Exception as exc:
+    except (ImportError, TypeError, ValueError, OverflowError) as exc:
         diagnostic(f"native until target carry failed: {exc}")
         typed_error = native_until.NativeUntilCarryError(
             native_until.CARRY_FAILED,

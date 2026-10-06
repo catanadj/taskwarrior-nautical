@@ -11,8 +11,8 @@ from .chain_integrity_models import IntegrityReportStatus, SnapshotCoverage
 from .chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
 from .integrity_report import doctor_findings
 from .integration_models import Found, Unavailable
-from .lifecycle_outbox import LifecycleOutboxRepository
-from .lifecycle_outbox_operations import LifecycleExecutionOutboxPort
+from .lifecycle.outbox import LifecycleOutboxRepository
+from .lifecycle.outbox_operations import LifecycleExecutionOutboxPort
 from .operator_context import OperatorInvocationContext
 from .operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind
 from .operator_snapshot import ChainSnapshotReader, SnapshotReadRequest

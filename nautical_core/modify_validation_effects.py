@@ -3,112 +3,487 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from collections.abc import Callable
+from datetime import date, datetime, timedelta
 from dataclasses import dataclass
-from typing import Any
-from .callback_ports import CallbackPort
-from .task_datetime import datetime_value, parser_for_host
+from typing import Any, Literal, NoReturn, Protocol, overload
+from .hook_validation_pipeline import ValidationFinding
+from .modify_validation import (
+    CollectAnchorTimeSlots,
+    NativeUntilSlotsValidationOperation,
+    NormalizeTimeSlots,
+    ValidationPanel,
+    ValidateCalendarSlots,
+)
+from .parsing.parser_models import ParseError
+from .recurrence_context import RecurrenceContext
+from .task_models import TaskPayload
+from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from .timeutil import compare_datetimes
 
 
 @dataclass(frozen=True, slots=True)
 class DurationPorts:
     min_future_warn: int
-    format_local: CallbackPort
+    format_local: Callable[[datetime], str]
+
+
+class HumanizeUntilDelta(Protocol):
+    def __call__(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        use_months_days: bool,
+    ) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
 class UntilPorts:
-    minute_delta: CallbackPort
-    compare: CallbackPort
-    humanize: CallbackPort
+    minute_delta: Callable[[datetime], timedelta]
+    compare: Callable[[datetime, datetime], int]
+    humanize: HumanizeUntilDelta
 
 
 @dataclass(frozen=True, slots=True)
 class AnchorModePorts:
-    panel: CallbackPort
+    panel: ValidationPanel
+
+
+class SharedValidationPipeline(Protocol):
+    def validate_anchor_expression(
+        self,
+        expr: str,
+        *,
+        parse_anchor_expr: Callable[[str], object],
+        validate_anchor_expr: Callable[[str], object],
+    ) -> None: ...
+
+    def validate_omit_expression(
+        self,
+        expr: str,
+        *,
+        validate_omit_expr: Callable[[str], object],
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class SharedValidationPorts:
-    pipeline: Any
-    parse_anchor: Any
-    validate_anchor: Any
-    validate_omit: Any
+    pipeline: SharedValidationPipeline
+    parse_anchor: Callable[[str], object]
+    validate_anchor: Callable[[str], object]
+    validate_omit: Callable[[str], object]
+
+
+class OmitValidationPipeline(SharedValidationPipeline, Protocol):
+    def validate_recurrence_files(
+        self,
+        anchor: object,
+        anchor_file: object,
+        omit: object,
+        omit_file: object,
+        *,
+        load_anchor_file: Callable[[str], object],
+        load_omit_file: Callable[[str], object],
+    ) -> tuple[ValidationFinding, ...]: ...
+
+
+class _AnchorParserAPI(Protocol):
+    def validate_anchor_expr_strict(self, expr: str) -> object: ...
+
+
+class _OmitParserAPI(Protocol):
+    def parse_anchor_expr_to_dnf(self, expr: str) -> object: ...
+
+
+class _AstronomyValidationAPI(Protocol):
+    def is_astronomy_error(self, exc: BaseException) -> bool: ...
+
+    def scheduling_error_message(self, exc: BaseException) -> str: ...
+
+
+class _ValidationUI(Protocol):
+    def ui_ports_for(self, host: object) -> object: ...
+
+    def panel(
+        self,
+        ports: object,
+        title: str,
+        rows: list[tuple[str, str]],
+        *,
+        kind: str,
+    ) -> object: ...
+
+
+class _AnchorValidationCore(Protocol):
+    _parser_api: _AnchorParserAPI
+    lint_anchor_expr: Callable[[str], tuple[str | None, list[str]]]
+
+    def _import_sibling(
+        self,
+        name: Literal["astronomy"],
+    ) -> _AstronomyValidationAPI: ...
+
+
+class _OmitValidationCore(Protocol):
+    _parser_api: _OmitParserAPI
+
+    def _import_sibling(
+        self,
+        name: Literal["hook_validation_pipeline"],
+    ) -> OmitValidationPipeline: ...
+
+
+class AnchorValidationHost(Protocol):
+    core: _AnchorValidationCore
+    _fail_and_exit: Callable[[str, str], NoReturn]
+
+    def _module(self, name: Literal["modify_ui_effects"]) -> _ValidationUI: ...
+
+
+class OmitValidationHost(Protocol):
+    core: _OmitValidationCore
+    _fail_and_exit: Callable[[str, str], NoReturn]
+    _validate_anchor_expr_cached: Callable[[str], object]
+    _validate_omit_expr_cached: Callable[[str], object]
+    _load_anchor_file_dates: Callable[[str], object]
+    _load_omit_file_dates: Callable[[str], object]
+
+
+class _AddValidationLimitsAPI(Protocol):
+    def parse_chain_max(self, value: object) -> tuple[int | None, str | None]: ...
+
+
+class _ModifyChainValidationAPI(Protocol):
+    validate_chain_limits_on_modify: ChainLimitsValidationOperation
+
+
+class _ChainLimitCore(Protocol):
+    parse_cp_sequence: Callable[[str], list[timedelta] | None]
+    cp_sequence_parse_error: Callable[[str], str | None]
+    humanize_delta: HumanizeUntilDelta
+    now_utc: Callable[[], datetime]
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["add_validation"],
+    ) -> _AddValidationLimitsAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["hook_validation_pipeline"],
+    ) -> RecurrenceLimitsPipeline: ...
+
+
+class ChainLimitHost(Protocol):
+    core: _ChainLimitCore
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _fail_and_exit: Callable[[str, str], object]
+
+    def _module(
+        self,
+        name: Literal["modify_validation"],
+    ) -> _ModifyChainValidationAPI: ...
+
+
+class _AddValidationNativeUntilAPI(Protocol):
+    def validate_native_until_anchor_mode(
+        self,
+        until_value: object,
+        anchor_value: object,
+        anchor_file_value: object,
+        anchor_mode_value: object,
+    ) -> tuple[bool, str | None]: ...
+
+    def validate_native_until_after_target(
+        self,
+        until_dt: datetime | None,
+        target_dt: datetime | None,
+        target_field: str,
+    ) -> tuple[bool, str | None]: ...
+
+
+class _ModifyNativeUntilValidationAPI(Protocol):
+    validate_native_until_after_target_or_fail: NativeUntilValidationOperation
+
+
+class _NativeUntilCore(Protocol):
+    fmt_dt_local: Callable[[datetime], str]
+
+    def _import_sibling(
+        self,
+        name: Literal["add_validation"],
+    ) -> _AddValidationNativeUntilAPI: ...
+
+
+class _SystemExit(Protocol):
+    def exit(self, code: int) -> NoReturn: ...
+
+
+class NativeUntilHost(Protocol):
+    core: _NativeUntilCore
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _fail_and_exit: Callable[[str, str], NoReturn]
+    sys: _SystemExit
+
+    @overload
+    def _module(self, name: Literal["modify_ui_effects"]) -> _ValidationUI: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_validation"],
+    ) -> _ModifyNativeUntilValidationAPI: ...
+
+
+class _TimeSlotsOwner(Protocol):
+    def resolve_time_slots(
+        self,
+        value: object,
+        target_date: date | None,
+        *,
+        config: dict[str, Any] | None = None,
+        to_local: Callable[[Any], Any] | None = None,
+    ) -> list[tuple[int, int]]: ...
+
+
+class _AddValidationTimeSlotsAPI(Protocol):
+    collect_anchor_time_slots: CollectAnchorTimeSlots
+
+
+class _NativeUntilTimeSlotsAPI(Protocol):
+    validate_calendar_slots: ValidateCalendarSlots
+
+
+class _RecurrenceContextAPI(Protocol):
+    RecurrenceContext: type[RecurrenceContext]
+
+
+class _ModifyValidationSlotAPI(Protocol):
+    validate_native_until_anchor_slots_or_fail: NativeUntilSlotsValidationOperation
+
+
+class _TimeSlotPorts(Protocol):
+    def resolve_time_slots(
+        self,
+        value: object,
+        target_date: date | None,
+    ) -> list[tuple[int, int]]: ...
+
+
+class _ModifyTimeEffectsAPI(Protocol):
+    def time_slot_ports_for(self, host: "NativeUntilSlotHost") -> _TimeSlotPorts: ...
+
+    def normalize_hhmm_list(
+        self,
+        ports: _TimeSlotPorts,
+        value: object,
+        target_date: date | None = None,
+    ) -> list[tuple[int, int]]: ...
+
+
+class _NativeUntilSlotCore(Protocol):
+    ASTRONOMY_CONFIG: dict[str, Any]
+    fmt_dt_local: Callable[[datetime], str]
+    to_local: Callable[[Any], Any]
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["add_validation"],
+    ) -> _AddValidationTimeSlotsAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["astronomy"],
+    ) -> _AstronomyValidationAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["native_until"],
+    ) -> _NativeUntilTimeSlotsAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["recurrence_context"],
+    ) -> _RecurrenceContextAPI: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["time_slots"],
+    ) -> _TimeSlotsOwner: ...
+
+
+class NativeUntilSlotHost(Protocol):
+    core: _NativeUntilSlotCore
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _validate_anchor_expr_cached: Callable[[str], object]
+    _tolocal: Callable[[datetime], datetime]
+    sys: _SystemExit
+
+    @overload
+    def _module(self, name: Literal["modify_ui_effects"]) -> _ValidationUI: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_validation"],
+    ) -> _ModifyValidationSlotAPI: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_time_effects"],
+    ) -> _ModifyTimeEffectsAPI: ...
+
+
+class ValidateRecurrenceFiles(Protocol):
+    def __call__(
+        self,
+        anchor: object,
+        anchor_file: object,
+        omit: object,
+        omit_file: object,
+        *,
+        load_anchor_file: Callable[[str], object],
+        load_omit_file: Callable[[str], object],
+    ) -> tuple[ValidationFinding, ...]: ...
+
+
+class CPValidationOperation(Protocol):
+    def __call__(
+        self,
+        cp_value: str,
+        chain_max_value: object,
+        chain_until_value: object,
+        *,
+        parse_cp_sequence: Callable[[str], list[timedelta] | None],
+        cp_sequence_parse_error: Callable[[str], str | None],
+        parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+        parse_datetime: Callable[[object], datetime | None],
+    ) -> None: ...
+
+
+class RecurrenceLimitsPipeline(Protocol):
+    def validate_recurrence_limits(
+        self,
+        cp_value: object,
+        chain_max_value: object,
+        chain_until_value: object,
+        *,
+        parse_cp_sequence: Callable[[str], list[timedelta] | None],
+        cp_sequence_parse_error: Callable[[str], str | None],
+        parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+        parse_datetime: Callable[[object], datetime | None],
+    ) -> tuple[int | None, datetime | None, tuple[ValidationFinding, ...]]: ...
+
+
+class ChainLimitsValidationOperation(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+        parse_datetime: Callable[[object], datetime | None],
+        validate_until_not_past: Callable[[datetime, datetime], tuple[bool, str | None]],
+        now_utc: Callable[[], datetime],
+        fail: Callable[[str, str], object],
+    ) -> None: ...
+
+
+class NativeUntilValidationOperation(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        validate_anchor_mode: Callable[[object, object, object, object], tuple[bool, str | None]],
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        validate_after_target: Callable[[datetime | None, datetime | None, str], tuple[bool, str | None]],
+        format_local: Callable[[datetime], str],
+        panel: ValidationPanel,
+        fail: Callable[[str, str], NoReturn],
+        abort: Callable[[int], NoReturn],
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class CPValidationPorts:
-    validate: Any
-    parse_cp_sequence: Any
-    cp_sequence_error: Any
-    parse_chain_max: Any
-    parse_datetime: Any
+    validate: CPValidationOperation
+    parse_cp_sequence: Callable[[str], list[timedelta] | None]
+    cp_sequence_error: Callable[[str], str | None]
+    parse_chain_max: Callable[[object], tuple[int | None, str | None]]
+    parse_datetime: Callable[[object], datetime | None]
 
 
 @dataclass(frozen=True, slots=True)
 class ChainLimitPorts:
-    pipeline: Any
-    validate_limits: Any
-    parse_cp_sequence: Any
-    cp_sequence_error: Any
-    parse_chain_max: Any
-    parse_datetime: Any
-    validate_until_not_past: Any
-    now_utc: Any
-    fail: Any
+    pipeline: RecurrenceLimitsPipeline
+    validate_limits: ChainLimitsValidationOperation
+    parse_cp_sequence: Callable[[str], list[timedelta] | None]
+    cp_sequence_error: Callable[[str], str | None]
+    parse_chain_max: Callable[[object], tuple[int | None, str | None]]
+    parse_datetime: Callable[[object], datetime | None]
+    validate_until_not_past: Callable[[datetime, datetime], tuple[bool, str | None]]
+    now_utc: Callable[[], datetime]
+    fail: Callable[[str, str], object]
 
 
 @dataclass(frozen=True, slots=True)
 class NativeUntilPorts:
-    validate: Any
-    validate_anchor_mode: Any
-    parse_datetime: Any
-    validate_after_target: Any
-    format_local: Any
-    panel: Any
-    fail: Any
-    abort: Any
+    validate: NativeUntilValidationOperation
+    validate_anchor_mode: Callable[[object, object, object, object], tuple[bool, str | None]]
+    parse_datetime: Callable[[object], tuple[datetime | None, str | None]]
+    validate_after_target: Callable[[datetime | None, datetime | None, str], tuple[bool, str | None]]
+    format_local: Callable[[datetime], str]
+    panel: ValidationPanel
+    fail: Callable[[str, str], NoReturn]
+    abort: Callable[[int], NoReturn]
 
 
 @dataclass(frozen=True, slots=True)
 class NativeUntilSlotPorts:
-    validate: Any
-    parse_datetime: Any
-    validate_anchor: Any
-    collect_time_slots: Any
-    validate_time_slots: Any
-    normalize_time_slots: Any
+    validate: NativeUntilSlotsValidationOperation
+    parse_datetime: Callable[[object], tuple[datetime | None, str | None]]
+    validate_anchor: Callable[[str], object]
+    collect_time_slots: CollectAnchorTimeSlots
+    validate_time_slots: ValidateCalendarSlots
+    normalize_time_slots: NormalizeTimeSlots
     anchor_file_dir: str
-    recurrence_context: Any
-    to_local: Any
-    format_local: Any
-    astronomy_is_error: Any
-    astronomy_error_message: Any
-    panel: Any
-    abort: Any
+    recurrence_context: Callable[[TaskPayload], RecurrenceContext]
+    to_local: Callable[[datetime], datetime]
+    format_local: Callable[[datetime], str]
+    astronomy_is_error: Callable[[BaseException], bool]
+    astronomy_error_message: Callable[[BaseException], str]
+    panel: ValidationPanel
+    abort: Callable[[int], NoReturn]
 
 
 @dataclass(frozen=True, slots=True)
 class AnchorValidationPorts:
-    lint: Any
-    validate_strict: Any
-    panel: Any
-    is_astronomy_error: Any
-    astronomy_error_message: Any
-    fail: Any
+    lint: Callable[[str], tuple[str | None, list[str]]]
+    validate_strict: Callable[[str], object]
+    panel: ValidationPanel
+    is_astronomy_error: Callable[[BaseException], bool]
+    astronomy_error_message: Callable[[BaseException], str]
+    fail: Callable[[str, str], NoReturn]
 
 
 @dataclass(frozen=True, slots=True)
 class OmitValidationPorts:
-    pipeline: Any
-    parse_anchor: Any
-    validate_anchor: Any
-    validate_omit: Any
-    validate_files: Any
-    load_anchor_file: Any
-    load_omit_file: Any
-    fail: Any
+    pipeline: OmitValidationPipeline
+    parse_anchor: Callable[[str], object]
+    validate_anchor: Callable[[str], object]
+    validate_omit: Callable[[str], object]
+    validate_files: ValidateRecurrenceFiles
+    load_anchor_file: Callable[[str], object]
+    load_omit_file: Callable[[str], object]
+    fail: Callable[[str, str], NoReturn]
 
 
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
@@ -117,7 +492,7 @@ def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     return f"{default_msg} (expected an anchor such as w:mon, m:15, or y:jul)"
 
 
-def anchor_mode(ports: AnchorModePorts, old: Any, new: Any) -> str:
+def anchor_mode(ports: AnchorModePorts, old: TaskPayload, new: TaskPayload) -> str:
     raw = str(new.get("anchor_mode") or old.get("anchor_mode") or "skip").strip()
     mode = raw.lower()
     aliases = {"all": "all", "skip": "skip", "flex": "flex"}
@@ -131,21 +506,26 @@ def anchor_mode(ports: AnchorModePorts, old: Any, new: Any) -> str:
     return normalized.upper()
 
 
-def validate_anchor(ports: AnchorValidationPorts, old: Any, new: Any, anchor_expr: str) -> None:
+def validate_anchor(ports: AnchorValidationPorts, old: TaskPayload, new: TaskPayload, anchor_expr: str) -> None:
     try:
-        _, warns = ports.lint(anchor_expr)
+        try:
+            _, warns = ports.lint(anchor_expr)
+        except TypeError:
+            ports.validate_strict(anchor_expr)
+            return
         if warns:
             ports.panel("ℹ️  Lint", [("Hint", warning) for warning in warns], kind="note")
         anchor_mode(AnchorModePorts(ports.panel), old, new)
         # Validation must remain decision-only. Hint persistence has no
         # synchronous consumer and would repeat scheduler work on every edit.
         ports.validate_strict(anchor_expr)
-    except TypeError:
-        ports.validate_strict(anchor_expr)
-    except Exception as exc:
+    except (ParseError, ValueError, LookupError, RuntimeError) as exc:
         if ports.is_astronomy_error(exc):
             ports.fail("Invalid anchor", ports.astronomy_error_message(exc))
-        ports.fail("Invalid anchor", anchor_error_message(anchor_expr, str(exc)))
+        elif isinstance(exc, (ParseError, ValueError)):
+            ports.fail("Invalid anchor", anchor_error_message(anchor_expr, str(exc)))
+        else:
+            raise
 
 
 def validate_omit(ports: OmitValidationPorts, anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:
@@ -163,7 +543,7 @@ def validate_omit(ports: OmitValidationPorts, anchor_expr: str, anchor_file_expr
             load_anchor_file=ports.load_anchor_file,
             load_omit_file=ports.load_omit_file,
         )
-    except Exception as exc:
+    except ValueError as exc:
         ports.fail("Invalid omit", str(exc))
         return
     if findings:
@@ -171,7 +551,7 @@ def validate_omit(ports: OmitValidationPorts, anchor_expr: str, anchor_file_expr
         ports.fail(f"Invalid {finding.field}", finding.reason)
 
 
-def anchor_validation_ports_for(host: Any) -> AnchorValidationPorts:
+def anchor_validation_ports_for(host: AnchorValidationHost) -> AnchorValidationPorts:
     astronomy = host.core._import_sibling("astronomy")
     ui = host._module("modify_ui_effects")
     ui_ports = ui.ui_ports_for(host)
@@ -185,7 +565,7 @@ def anchor_validation_ports_for(host: Any) -> AnchorValidationPorts:
     )
 
 
-def omit_validation_ports_for(host: Any) -> OmitValidationPorts:
+def omit_validation_ports_for(host: OmitValidationHost) -> OmitValidationPorts:
     pipeline = host.core._import_sibling("hook_validation_pipeline")
     return OmitValidationPorts(
         pipeline=pipeline,
@@ -214,7 +594,12 @@ def validate_shared_omit(ports: SharedValidationPorts, expr: str) -> None:
     )
 
 
-def validate_cp(ports: CPValidationPorts, cp_value: str, chain_max_value: Any, chain_until_value: Any) -> None:
+def validate_cp(
+    ports: CPValidationPorts,
+    cp_value: str,
+    chain_max_value: object,
+    chain_until_value: object,
+) -> None:
     ports.validate(
         cp_value,
         chain_max_value,
@@ -226,7 +611,7 @@ def validate_cp(ports: CPValidationPorts, cp_value: str, chain_max_value: Any, c
     )
 
 
-def validate_chain_limits(ports: ChainLimitPorts, task: dict) -> None:
+def validate_chain_limits(ports: ChainLimitPorts, task: TaskPayload) -> None:
     cpmax, _until_dt, findings = ports.pipeline.validate_recurrence_limits(
         task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
         parse_cp_sequence=ports.parse_cp_sequence,
@@ -250,7 +635,7 @@ def validate_chain_limits(ports: ChainLimitPorts, task: dict) -> None:
     )
 
 
-def chain_limit_ports_for(host: Any) -> ChainLimitPorts:
+def chain_limit_ports_for(host: ChainLimitHost) -> ChainLimitPorts:
     add_validation = host.core._import_sibling("add_validation")
     return ChainLimitPorts(
         pipeline=host.core._import_sibling("hook_validation_pipeline"),
@@ -267,7 +652,7 @@ def chain_limit_ports_for(host: Any) -> ChainLimitPorts:
     )
 
 
-def validate_native_until(ports: NativeUntilPorts, task: dict) -> None:
+def validate_native_until(ports: NativeUntilPorts, task: TaskPayload) -> None:
     ports.validate(
         task,
         validate_anchor_mode=ports.validate_anchor_mode,
@@ -280,7 +665,7 @@ def validate_native_until(ports: NativeUntilPorts, task: dict) -> None:
     )
 
 
-def native_until_ports_for(host: Any) -> NativeUntilPorts:
+def native_until_ports_for(host: NativeUntilHost) -> NativeUntilPorts:
     add_validation = host.core._import_sibling("add_validation")
     ui = host._module("modify_ui_effects")
     ui_ports = ui.ui_ports_for(host)
@@ -296,7 +681,7 @@ def native_until_ports_for(host: Any) -> NativeUntilPorts:
     )
 
 
-def validate_native_until_slots(ports: NativeUntilSlotPorts, task: dict) -> None:
+def validate_native_until_slots(ports: NativeUntilSlotPorts, task: TaskPayload) -> None:
     ports.validate(
         task,
         safe_parse_datetime=ports.parse_datetime,
@@ -315,7 +700,7 @@ def validate_native_until_slots(ports: NativeUntilSlotPorts, task: dict) -> None
     )
 
 
-def native_until_slot_ports_for(host: Any) -> NativeUntilSlotPorts:
+def native_until_slot_ports_for(host: NativeUntilSlotHost) -> NativeUntilSlotPorts:
     add_validation = host.core._import_sibling("add_validation")
     astronomy = host.core._import_sibling("astronomy")
     native_until = host.core._import_sibling("native_until")
@@ -342,7 +727,11 @@ def native_until_slot_ports_for(host: Any) -> NativeUntilSlotPorts:
     )
 
 
-def until_not_past(ports: UntilPorts, until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
+def until_not_past(
+    ports: UntilPorts,
+    until_dt: datetime | None,
+    now_utc: datetime,
+) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
     grace = ports.minute_delta(now_utc)
@@ -352,7 +741,12 @@ def until_not_past(ports: UntilPorts, until_dt: Any, now_utc: Any) -> tuple[bool
     return True, None
 
 
-def chain_duration_reasonable(ports: DurationPorts, child_due: Any, until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
+def chain_duration_reasonable(
+    ports: DurationPorts,
+    child_due: datetime | None,
+    until_dt: datetime | None,
+    now_utc: datetime,
+) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
     days = (until_dt - now_utc).days

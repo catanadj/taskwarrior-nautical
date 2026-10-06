@@ -192,7 +192,7 @@ class SchedulerRuntimeContractTests(unittest.TestCase):
     def test_evaluator_loads_omit_file_without_text_rule(self) -> None:
         from types import SimpleNamespace
 
-        from nautical_core import omit_files
+        import nautical_core.omit_files as omit_files
         from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
         with TemporaryDirectory() as directory:
@@ -220,7 +220,7 @@ class SchedulerRuntimeContractTests(unittest.TestCase):
     def test_evaluator_combines_and_caches_omit_expression_and_file(self) -> None:
         from types import SimpleNamespace
 
-        from nautical_core import omit_files
+        import nautical_core.omit_files as omit_files
         from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
         original_loader = omit_files.load_omit_file_data

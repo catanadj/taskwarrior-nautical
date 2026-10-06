@@ -5,15 +5,546 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from contextlib import nullcontext
-from typing import Any, Callable, Protocol
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
 from .callback_ports import CallbackPort
+from .modify_models import (
+    AnchorCompletionRenderCallback,
+    ChainIntegrityCallback,
+    CpCompletionRenderCallback,
+    CompletionComputeCallback,
+    LifecycleResultRenderCallback,
+    SafeParseDatetimeCallback,
+    SeedLookupCallback,
+)
 from .task_datetime import datetime_value, parser_for_core
+from .task_models import NauticalTask, TaskObservation, TaskPayload
+
+if TYPE_CHECKING:
+    from .lifecycle.models import LifecyclePlan
+    from .lifecycle.read_service import LifecycleReadService
+    from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
+    from .modify_completion_effects import (
+        CompletionComputePorts,
+        CompletionComputeHost,
+        CompletionPreflightContextPorts,
+        CompletionSpawnHost,
+        CompletionSpawnPorts,
+    )
+    from .modify_models import (
+        AnchorCompletionFeedbackModel,
+        CompletionComputeResult,
+        CompletionLifecycleResult,
+        CompletionPreflightContext,
+        CompletionSpawnResult,
+        CpCompletionFeedbackModel,
+        TaskView,
+    )
+    from .modify_runtime import ModifyRuntimeState
+    from .modify_generation_effects import NativeUntilGenerationService
+    from .modify_ordinary import (
+        OrdinaryModifyServices as OrdinaryModifyServicesContract,
+    )
+    from .modify_workflow import RecurrenceTransitionDecision
+    from .modify_validation_effects import (
+        AnchorValidationPorts,
+        ChainLimitPorts,
+        CPValidationPorts as CPValidationPortsContract,
+        NativeUntilPorts,
+        NativeUntilSlotPorts,
+        OmitValidationPorts,
+        SharedValidationPorts as SharedValidationPortsContract,
+    )
+    from .modify_transition_effects import (
+        CPCarryPorts as CPCarryPortsContract,
+        CompletionValidationPorts as CompletionValidationPortsContract,
+        NativeCarryPorts as NativeCarryPortsContract,
+        NativePreservePorts as NativePreservePortsContract,
+    )
+    from .task_changes import TaskTransition
+    from .task_read_repository import TaskReadRepository
+    from .taskwarrior_uow import TaskwarriorUnitOfWork
 
 
-class ModifyCallback(Protocol):
-    """Callable service port used by modify-route composition services."""
+class _ModifyGenerationEffects(Protocol):
+    def generation_ports_for(self, host: Any) -> object: ...
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+    def chain_generation_service(self, ports: object) -> NativeUntilGenerationService: ...
+
+
+class _DefaultTaskCodec(Protocol):
+    def decode_row(
+        self,
+        row: Mapping[str, Any],
+        *,
+        source_query: str,
+    ) -> TaskObservation: ...
+
+
+class _TaskCodecModule(Protocol):
+    DEFAULT_TASK_CODEC: _DefaultTaskCodec
+
+
+class _TaskModelsModule(Protocol):
+    NauticalTask: type[NauticalTask]
+
+
+class _ModifySpawnEffects(Protocol):
+    def spawn_intent_ports_for(self, host: Any) -> object: ...
+
+    def enqueue_spawn_intent(
+        self,
+        ports: object,
+        plan: "LifecyclePlan",
+    ) -> tuple[bool, str]: ...
+
+
+class _ModifyPresentationEffects(Protocol):
+    def lifecycle_result_port_for(self, host: Any) -> object: ...
+
+    def render_lifecycle_result(
+        self,
+        ports: object,
+        result: "CompletionLifecycleResult",
+        task: "TaskView",
+    ) -> None: ...
+
+
+class _ModifyDiagnosticsEffects(Protocol):
+    def analytics_ports_for(self, host: Any) -> object: ...
+
+    def chain_health_advice(
+        self,
+        ports: object,
+        chain: Sequence[TaskObservation],
+        kind: str,
+        task: TaskPayload,
+        *,
+        tol_secs: int = 60,
+        style: str,
+    ) -> str | None: ...
+
+    def chain_integrity_warnings(
+        self,
+        ports: object,
+        chain: Sequence[TaskPayload],
+        expected_chain_id: str | None = None,
+    ) -> list[str]: ...
+
+
+class _ModifyOrdinaryEffects(Protocol):
+    OrdinaryModifyServices: type[OrdinaryModifyServicesContract]
+    RecurrenceActivationError: type[Exception]
+
+    def handle_non_completion_modify(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        *,
+        services: OrdinaryModifyServicesContract,
+        lifecycle: "_ModifyLifecycle",
+        transition: TaskTransition | None = None,
+    ) -> None: ...
+
+
+class _ModifyCompositionAdapters(Protocol):
+    def handle_non_completion(
+        self,
+        host: Any,
+        old: TaskPayload,
+        new: TaskPayload,
+        unit_of_work: TaskwarriorUnitOfWork,
+        *,
+        transition: TaskTransition | None = None,
+        runtime: ModifyRuntimeServices | None = None,
+    ) -> None: ...
+
+    def handle_completion(
+        self,
+        host: Any,
+        old: TaskPayload,
+        new: TaskPayload,
+        unit_of_work: TaskwarriorUnitOfWork,
+        *,
+        transition: TaskTransition | None = None,
+        runtime: ModifyRuntimeServices | None = None,
+    ) -> CompletionLifecycleResult | None: ...
+
+    def handle_deleted(
+        self,
+        host: Any,
+        old: TaskPayload,
+        new: TaskPayload,
+        unit_of_work: Any,
+        *,
+        transition: Any = None,
+        terminal_decision: Any = None,
+        runtime: Any = None,
+    ) -> None: ...
+
+    def render_anchor_completion_feedback_for(
+        self, host: Any, *, request: AnchorCompletionFeedbackModel
+    ) -> None: ...
+
+    def render_cp_completion_feedback_for(
+        self, host: Any, *, request: CpCompletionFeedbackModel
+    ) -> None: ...
+
+
+class _ChainHealthAdviceCallback(Protocol):
+    def __call__(
+        self,
+        chain: Sequence[TaskObservation],
+        kind: str,
+        task: TaskPayload,
+        *,
+        tol_secs: int = 60,
+        style: str,
+    ) -> str | None: ...
+
+
+class _PrepareRecurrenceCallback(Protocol):
+    def __call__(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        *,
+        transition: TaskTransition | None = None,
+    ) -> tuple[str, str, str]: ...
+
+
+class _PreserveCPCarryCallback(Protocol):
+    def __call__(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        cp: str,
+        *,
+        transition: TaskTransition | None = None,
+    ) -> TemporalCarryDecision: ...
+
+
+class _PreserveNativeUntilCallback(Protocol):
+    def __call__(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        kind: str,
+        *,
+        transition: TaskTransition | None = None,
+    ) -> NativeUntilDecision: ...
+
+
+class _TaskHookResponseFactory(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        sanitize: bool = False,
+        prof: Any | None = None,
+    ) -> Any: ...
+
+
+class _HookResults(Protocol):
+    TaskHookResponse: _TaskHookResponseFactory
+
+    def emit_passthrough_json(self, task: TaskPayload) -> None: ...
+
+    def emit_json_result(self, result: Any, *, core: Any = None) -> None: ...
+
+
+class _HookContext(Protocol):
+    def build_on_modify_request(
+        self,
+        *,
+        runtime: Any,
+        old: TaskPayload,
+        new: TaskPayload,
+        old_observation: TaskObservation | None = None,
+        new_observation: TaskObservation | None = None,
+    ) -> Any: ...
+
+
+class _HookEngine(Protocol):
+    def handle_on_modify(self, request: Any, *, services: Any) -> Any: ...
+
+
+class _ModifyDeletionDiagnosticsEffects(_ModifyDiagnosticsEffects, Protocol):
+    def end_chain_summary_ports_for(self, host: Any) -> object: ...
+
+    def end_chain_summary(
+        self,
+        ports: object,
+        task: Any,
+        reason: str,
+        now_utc: datetime,
+        *,
+        current_task: Any = None,
+    ) -> Any: ...
+
+
+class _ModifyCompletionEffects(Protocol):
+    def completion_preflight_context_ports_for(
+        self, host: Any
+    ) -> CompletionPreflightContextPorts: ...
+
+    def completion_compute_ports_for(self, host: CompletionComputeHost) -> CompletionComputePorts: ...
+
+    def completion_spawn_ports_for(self, host: CompletionSpawnHost) -> CompletionSpawnPorts: ...
+
+    def preflight_context(
+        self,
+        ports: CompletionPreflightContextPorts,
+        new: TaskPayload,
+        now_utc: datetime,
+        repository: TaskReadRepository,
+    ) -> CompletionPreflightContext | None: ...
+
+    def compute_next_and_limits(
+        self,
+        ports: CompletionComputePorts,
+        new: TaskPayload,
+        kind: str,
+        next_no: int,
+        now_utc: datetime,
+        *,
+        preflight: CompletionPreflightContext | None = None,
+    ) -> CompletionComputeResult | CompletionLifecycleResult | None: ...
+
+    def build_and_spawn_child(
+        self,
+        ports: CompletionSpawnPorts,
+        new: TaskPayload,
+        *,
+        child_due: datetime | None,
+        child_field: str = "due",
+        next_no: int,
+        parent_short: str,
+        kind: str,
+        cpmax: int,
+        until_dt: datetime | None,
+        lifecycle_plan: LifecyclePlan | None = None,
+    ) -> CompletionSpawnResult | None: ...
+
+
+class _ModifyUIEffects(Protocol):
+    def ui_ports_for(self, host: Any) -> object: ...
+
+    def print_task(self, ports: object, task: TaskPayload) -> None: ...
+
+    def panel(
+        self,
+        ports: object,
+        title: str,
+        rows: list[tuple[str | None, Any]],
+        kind: str = "info",
+        border_style: str | None = None,
+        title_style: str | None = None,
+        label_style: str | None = None,
+    ) -> Any: ...
+
+
+class _ModifyQueries(Protocol):
+    def query_ports_for(self, host: Any) -> object: ...
+
+    def cached_format_root_and_age(
+        self,
+        ports: object,
+        task: TaskPayload,
+        now_utc: datetime,
+    ) -> str: ...
+
+
+class _ModifyLifecycle(Protocol):
+    def recurrence_setting_changes(
+        self,
+        old: TaskPayload | None,
+        new: TaskPayload | None,
+        *,
+        transition: TaskTransition | None = None,
+    ) -> list[tuple[str, str, str]]: ...
+
+    def task_has_nautical_fields(self, task: TaskPayload | None) -> bool: ...
+
+    def task_has_nautical_recurrence_fields(self, task: TaskPayload | None) -> bool: ...
+
+    def apply_nautical_transition(
+        self,
+        old: TaskPayload | None,
+        new: TaskPayload | None,
+        *,
+        short_uuid: Callable[[Any], str],
+    ) -> "RecurrenceTransitionDecision": ...
+
+
+class _ServiceFactory(Protocol):
+    def __call__(self, **kwargs: Any) -> Any: ...
+
+
+class _ModifyExpirationEffects(Protocol):
+    ExpirationServices: _ServiceFactory
+    DeletedModifyServices: _ServiceFactory
+
+    def render_recovery_warning(
+        self,
+        task: TaskPayload,
+        reason: str,
+        *,
+        services: Any,
+    ) -> None: ...
+
+    def handle_expired_deleted_modify(self, task: TaskPayload, *, services: Any) -> bool: ...
+
+    def handle_deleted_modify(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        *,
+        services: Any,
+        transition: Any = None,
+        terminal_decision: Any = None,
+    ) -> None: ...
+
+
+class _ChainIntegrityLifecycle(Protocol):
+    def deleted_chain_disposition(
+        self,
+        task: TaskObservation,
+        *,
+        safe_parse_datetime: SafeParseDatetimeCallback,
+    ) -> object: ...
+
+    def is_orphan_expiration_candidate(
+        self,
+        task: TaskObservation,
+        *,
+        safe_parse_datetime: SafeParseDatetimeCallback,
+    ) -> bool: ...
+
+    def plan_recovery_decision(
+        self,
+        parent: TaskObservation,
+        *,
+        existing_children: Sequence[TaskObservation],
+        hook: object,
+    ) -> object: ...
+
+
+class _ModifyTransitionEffects(Protocol):
+    CPCarryPorts: type[CPCarryPortsContract]
+    NativePreservePorts: type[NativePreservePortsContract]
+    NativeCarryPorts: type[NativeCarryPortsContract]
+    CompletionValidationPorts: type[CompletionValidationPortsContract]
+
+    def preserve_cp_relative_offsets_on_due_change(
+        self,
+        ports: CPCarryPortsContract,
+        old: TaskPayload,
+        new: TaskPayload,
+        cp: str,
+        *,
+        transition: TaskTransition | None = None,
+    ) -> TemporalCarryDecision: ...
+
+    def reject_native_until_carry(
+        self,
+        ports: NativeCarryPortsContract,
+        old: TaskPayload,
+        new: TaskPayload,
+        new_target: datetime | None,
+        old_target_field: str,
+        exc: Exception,
+    ) -> None: ...
+
+    def preserve_native_until_on_target_change(
+        self,
+        ports: NativePreservePortsContract,
+        old: TaskPayload,
+        new: TaskPayload,
+        kind: str,
+        *,
+        transition: TaskTransition | None = None,
+    ) -> NativeUntilDecision: ...
+
+    def validate_completion_cp_and_anchor(
+        self,
+        ports: CompletionValidationPortsContract,
+        old: TaskPayload,
+        new: TaskPayload,
+        *,
+        transition: TaskTransition | None = None,
+    ) -> tuple[str, str, str]: ...
+
+
+class _SeedLookupPortsFactory(Protocol):
+    def __call__(self, *, service: Any, decode_row: Any, cache_set: Any) -> object: ...
+
+
+class _ModifyReadEffects(Protocol):
+    SeedLookupPorts: _SeedLookupPortsFactory
+
+    def seed_runtime_lookup_tasks(self, ports: object, *tasks: TaskPayload | None) -> None: ...
+
+
+class _ModifyTaskFields(Protocol):
+    def field_changed(self, old: TaskPayload, new: TaskPayload, key: str) -> bool: ...
+
+    def recurrence_anchor_field(self, payload: TaskPayload) -> str: ...
+
+    def strip_quotes(self, value: str) -> str: ...
+
+
+class _ModifyValidationEffects(Protocol):
+    SharedValidationPorts: type["SharedValidationPortsContract"]
+    CPValidationPorts: type["CPValidationPortsContract"]
+
+    def omit_validation_ports_for(self, host: Any) -> "OmitValidationPorts": ...
+
+    def chain_limit_ports_for(self, host: Any) -> "ChainLimitPorts": ...
+
+    def anchor_validation_ports_for(self, host: Any) -> "AnchorValidationPorts": ...
+
+    def native_until_ports_for(self, host: Any) -> "NativeUntilPorts": ...
+
+    def native_until_slot_ports_for(self, host: Any) -> "NativeUntilSlotPorts": ...
+
+    def validate_omit(
+        self,
+        ports: "OmitValidationPorts",
+        anchor_expr: str,
+        anchor_file_expr: str,
+        omit_expr: str,
+        omit_file: str,
+    ) -> None: ...
+
+    def validate_chain_limits(self, ports: "ChainLimitPorts", task: TaskPayload) -> None: ...
+
+    def validate_anchor(
+        self,
+        ports: "AnchorValidationPorts",
+        old: TaskPayload,
+        new: TaskPayload,
+        anchor_expr: str,
+    ) -> None: ...
+
+    def validate_shared_anchor(self, ports: "SharedValidationPortsContract", expr: str) -> None: ...
+
+    def validate_cp(
+        self,
+        ports: "CPValidationPortsContract",
+        cp_value: str,
+        chain_max_value: object,
+        chain_until_value: object,
+    ) -> None: ...
+
+    def validate_native_until(self, ports: "NativeUntilPorts", task: TaskPayload) -> None: ...
+
+    def validate_native_until_slots(
+        self,
+        ports: "NativeUntilSlotPorts",
+        task: TaskPayload,
+    ) -> None: ...
+
+    def semantic_diff_value(self, old_text: str, new_text: str) -> str: ...
 
 
 class _HookHost:
@@ -39,28 +570,27 @@ class ModifyHookCapabilities:
     that constructs the set, preserving import-by-file compatibility.
     """
 
-    modify_ordinary: Any
-    modify_composition_adapters: Any
-    hook_results: Any
-    hook_context: Any
-    hook_engine: Any
-    modify_lifecycle: Any
-    modify_transition_effects: Any
-    modify_presentation_effects: Any
-    modify_diagnostics_effects: Any
-    modify_validation_effects: Any
-    modify_ui_effects: Any
-    modify_task_fields: Any
-    modify_completion_effects: Any
-    modify_read_effects: Any
-    modify_queries: Any
-    modify_expiration: Any
-    modify_generation_effects: Any
-    task_codec: Any
-    task_models: Any
-    chain_integrity_lifecycle: Any
-    modify_datetime_effects: Any
-    modify_spawn_effects: Any
+    modify_ordinary: _ModifyOrdinaryEffects
+    modify_composition_adapters: _ModifyCompositionAdapters
+    hook_results: _HookResults
+    hook_context: _HookContext
+    hook_engine: _HookEngine
+    modify_lifecycle: _ModifyLifecycle
+    modify_transition_effects: _ModifyTransitionEffects
+    modify_presentation_effects: _ModifyPresentationEffects
+    modify_diagnostics_effects: _ModifyDeletionDiagnosticsEffects
+    modify_validation_effects: _ModifyValidationEffects
+    modify_ui_effects: _ModifyUIEffects
+    modify_task_fields: _ModifyTaskFields
+    modify_completion_effects: _ModifyCompletionEffects
+    modify_read_effects: _ModifyReadEffects
+    modify_queries: _ModifyQueries
+    modify_expiration: _ModifyExpirationEffects | None
+    modify_generation_effects: _ModifyGenerationEffects
+    task_codec: _TaskCodecModule
+    task_models: _TaskModelsModule
+    chain_integrity_lifecycle: _ChainIntegrityLifecycle
+    modify_spawn_effects: _ModifySpawnEffects
 
     @classmethod
     def from_host(cls, host: Any) -> "ModifyHookCapabilities":
@@ -86,7 +616,6 @@ class ModifyHookCapabilities:
             task_codec=load("task_codec"),
             task_models=load("task_models"),
             chain_integrity_lifecycle=load("chain_integrity_lifecycle"),
-            modify_datetime_effects=load("modify_datetime_effects"),
             modify_spawn_effects=load("modify_spawn_effects"),
         )
 
@@ -95,37 +624,34 @@ class ModifyHookCapabilities:
 class NonCompletionRouteCapabilities:
     """Dependencies used only by the ordinary/recurring-edit route."""
 
-    modify_ordinary: Any
-    modify_lifecycle: Any
-    modify_presentation_effects: Any
-    modify_diagnostics_effects: Any
-    modify_validation_effects: Any
-    modify_ui_effects: Any
-    modify_task_fields: Any
+    modify_ordinary: _ModifyOrdinaryEffects
+    modify_lifecycle: _ModifyLifecycle
+    modify_validation_effects: _ModifyValidationEffects
+    modify_ui_effects: _ModifyUIEffects
+    modify_task_fields: _ModifyTaskFields
 
 
 @dataclass(frozen=True)
 class CompletionRouteCapabilities:
     """Dependencies used only by the completion route."""
 
-    modify_completion_effects: Any
-    modify_presentation_effects: Any
-    modify_diagnostics_effects: Any
-    modify_validation_effects: Any
+    modify_completion_effects: _ModifyCompletionEffects
 
 
 @dataclass(frozen=True)
 class DeletionRouteCapabilities:
     """Dependencies used only by deletion and expiration routes."""
 
-    modify_presentation_effects: Any
-    modify_diagnostics_effects: Any
-    modify_ui_effects: Any
-    modify_expiration: Any
-    modify_queries: Any
+    modify_diagnostics_effects: _ModifyDeletionDiagnosticsEffects
+    modify_ui_effects: _ModifyUIEffects
+    modify_expiration: _ModifyExpirationEffects | None
+    modify_queries: _ModifyQueries
 
 
-def _cp_carry_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
+def _cp_carry_ports(
+    host: Any,
+    capabilities: ModifyHookCapabilities,
+) -> CPCarryPortsContract:
     transition_effects = capabilities.modify_transition_effects
     return transition_effects.CPCarryPorts(
         carry=host._module("modify_carry").preserve_cp_relative_offsets_on_due_change,
@@ -139,7 +665,10 @@ def _cp_carry_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
     )
 
 
-def _native_preserve_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
+def _native_preserve_ports(
+    host: Any,
+    capabilities: ModifyHookCapabilities,
+) -> NativePreservePortsContract:
     transition_effects = capabilities.modify_transition_effects
     generation = capabilities.modify_generation_effects
     task_fields = capabilities.modify_task_fields
@@ -163,16 +692,19 @@ def _native_preserve_ports(host: Any, capabilities: ModifyHookCapabilities) -> A
                 anchor_field=task_fields.recurrence_anchor_field,
                 panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
                 abort=host.sys.exit,
+                diagnostic=host._diag,
             ),
             *args,
         ),
         diagnostic=host._diag,
         workflow=host._module("modify_carry_workflow"),
-        timestamp=capabilities.task_models.TaskTimestamp,
     )
 
 
-def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
+def _completion_validation_ports(
+    host: Any,
+    capabilities: ModifyHookCapabilities,
+) -> CompletionValidationPortsContract:
     transition_effects = capabilities.modify_transition_effects
     validation_effects = capabilities.modify_validation_effects
     modify_validation = host._module("modify_validation")
@@ -191,9 +723,16 @@ def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities
         add_validation.parse_chain_max,
         lambda value: datetime_value(host._TASK_DATETIME_PARSER, value),
     )
+
+    def apply_transition(old_task: TaskPayload, new_task: TaskPayload) -> None:
+        capabilities.modify_lifecycle.apply_nautical_transition(
+            old_task,
+            new_task,
+            short_uuid=host.core.short_uuid,
+        )
+
     return transition_effects.CompletionValidationPorts(
         validate=modify_validation.validate_completion_cp_and_anchor,
-        services_type=modify_validation.CompletionValidationServices,
         strip_quotes=capabilities.modify_task_fields.strip_quotes,
         reject_conflicting_types=pipeline.reject_recurrence_kind_conflict,
         validate_omit=lambda anchor, anchor_file, omit, omit_file: validation_effects.validate_omit(
@@ -209,13 +748,8 @@ def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities
         validate_cp=lambda cp, chain_max, chain_until: validation_effects.validate_cp(
             cp_ports, cp, chain_max, chain_until
         ),
-        apply_transition=lambda old_task, new_task: capabilities.modify_lifecycle.apply_nautical_transition(
-            old_task,
-            new_task,
-            short_uuid=host.core.short_uuid,
-        ),
+        apply_transition=apply_transition,
         fail=host._fail_and_exit,
-        diagnostic=host._diag,
     )
 
 
@@ -226,28 +760,28 @@ class ModifyRuntimeServices:
     non_completion: NonCompletionRouteCapabilities
     completion: CompletionRouteCapabilities
     deletion: DeletionRouteCapabilities
-    runtime_state: ModifyCallback
-    import_module: ModifyCallback
-    diag_summary: ModifyCallback
-    diagnostic: ModifyCallback
+    runtime_state: Callable[[], ModifyRuntimeState]
+    import_module: Callable[[str], Any]
+    diag_summary: Callable[[], None]
+    diagnostic: Callable[[str], None]
     show_analytics: bool
     check_integrity: bool
     analytics_style: str
-    seed_runtime_lookup_tasks: ModifyCallback
-    lifecycle_read_service: Callable[[], Any]
-    chain_health_advice: ModifyCallback
-    chain_integrity_warnings: ModifyCallback
-    render_anchor_completion_feedback: ModifyCallback
-    render_cp_completion_feedback: ModifyCallback
-    render_lifecycle_result: ModifyCallback
-    print_task: ModifyCallback
-    prepare_recurrence: ModifyCallback
-    preserve_cp_relative_offsets: ModifyCallback
-    preserve_native_until: ModifyCallback
-    validate_native_until: ModifyCallback
-    validate_native_until_slots: ModifyCallback
-    now_utc: Callable[[], Any]
-    compute_next_and_limits: ModifyCallback
+    seed_runtime_lookup_tasks: SeedLookupCallback
+    lifecycle_read_service: Callable[[], LifecycleReadService]
+    chain_health_advice: _ChainHealthAdviceCallback
+    chain_integrity_warnings: ChainIntegrityCallback
+    render_anchor_completion_feedback: AnchorCompletionRenderCallback
+    render_cp_completion_feedback: CpCompletionRenderCallback
+    render_lifecycle_result: LifecycleResultRenderCallback
+    print_task: Callable[[TaskPayload], None]
+    prepare_recurrence: _PrepareRecurrenceCallback
+    preserve_cp_relative_offsets: _PreserveCPCarryCallback
+    preserve_native_until: _PreserveNativeUntilCallback
+    validate_native_until: Callable[[TaskPayload], None]
+    validate_native_until_slots: Callable[[TaskPayload], None]
+    now_utc: Callable[[], datetime]
+    compute_next_and_limits: CompletionComputeCallback
 
     @classmethod
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None) -> "ModifyRuntimeServices":
@@ -256,24 +790,29 @@ class ModifyRuntimeServices:
         native_preserve_ports = _native_preserve_ports(host, capabilities)
         completion_validation_ports = _completion_validation_ports(host, capabilities)
         completion_compute_ports = capabilities.modify_completion_effects.completion_compute_ports_for(host)
+
+        def render_anchor_completion_feedback(*, request: AnchorCompletionFeedbackModel) -> None:
+            capabilities.modify_composition_adapters.render_anchor_completion_feedback_for(
+                host, request=request
+            )
+
+        def render_cp_completion_feedback(*, request: CpCompletionFeedbackModel) -> None:
+            capabilities.modify_composition_adapters.render_cp_completion_feedback_for(
+                host, request=request
+            )
+
         return cls(
             non_completion=NonCompletionRouteCapabilities(
                 modify_ordinary=capabilities.modify_ordinary,
                 modify_lifecycle=capabilities.modify_lifecycle,
-                modify_presentation_effects=capabilities.modify_presentation_effects,
-                modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
                 modify_validation_effects=capabilities.modify_validation_effects,
                 modify_ui_effects=capabilities.modify_ui_effects,
                 modify_task_fields=capabilities.modify_task_fields,
             ),
             completion=CompletionRouteCapabilities(
                 modify_completion_effects=capabilities.modify_completion_effects,
-                modify_presentation_effects=capabilities.modify_presentation_effects,
-                modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
-                modify_validation_effects=capabilities.modify_validation_effects,
             ),
             deletion=DeletionRouteCapabilities(
-                modify_presentation_effects=capabilities.modify_presentation_effects,
                 modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
                 modify_ui_effects=capabilities.modify_ui_effects,
                 modify_expiration=capabilities.modify_expiration,
@@ -300,8 +839,8 @@ class ModifyRuntimeServices:
             chain_integrity_warnings=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_integrity_warnings(
                 capabilities.modify_diagnostics_effects.analytics_ports_for(host), *args, **kwargs
             ),
-            render_anchor_completion_feedback=lambda **kwargs: capabilities.modify_composition_adapters.render_anchor_completion_feedback_for(host, **kwargs),
-            render_cp_completion_feedback=lambda **kwargs: capabilities.modify_composition_adapters.render_cp_completion_feedback_for(host, **kwargs),
+            render_anchor_completion_feedback=render_anchor_completion_feedback,
+            render_cp_completion_feedback=render_cp_completion_feedback,
             render_lifecycle_result=lambda result, task: capabilities.modify_presentation_effects.render_lifecycle_result(
                 capabilities.modify_presentation_effects.lifecycle_result_port_for(host), result, task
             ),
@@ -337,7 +876,7 @@ def capabilities_for(host: Any) -> ModifyHookCapabilities:
         cached = ModifyHookCapabilities.from_host(host)
         try:
             setattr(host, "_MODIFY_CAPABILITIES", cached)
-        except Exception:
+        except AttributeError:
             pass
     # Construct the datetime port once at the composition root.  Effects may
     # consume it through their narrow parser adapter without rediscovering the
@@ -349,12 +888,12 @@ def capabilities_for(host: Any) -> ModifyHookCapabilities:
                 "_TASK_DATETIME_PARSER",
                 parser_for_core(host.core, diagnostic=getattr(host, "_diag", None)),
             )
-        except Exception:
+        except AttributeError:
             pass
     return cached
 
 
-def lifecycle_read_service_for(host: Any) -> Any:
+def lifecycle_read_service_for(host: Any) -> LifecycleReadService:
     """Construct and retain the invocation's lifecycle read service."""
     state = host._modify_runtime_state()
     existing = getattr(state, "lifecycle_read_service", None)
@@ -480,6 +1019,16 @@ def run_on_modify(host: Any) -> None:
         host._write_bench_stats()
         return
     host._load_core()
+    if host._PARSED_OLD_OBSERVATION is not None and host._PARSED_NEW_OBSERVATION is not None:
+        task_models = host.core._import_sibling("task_models")
+        host._PARSED_OLD_OBSERVATION = task_models.TaskObservation.from_mapping(
+            old,
+            source_query="on-modify typed task transition",
+        )
+        host._PARSED_NEW_OBSERVATION = task_models.TaskObservation.from_mapping(
+            new,
+            source_query="on-modify typed task transition",
+        )
     hook_context = capabilities.hook_context
     hook_engine = capabilities.hook_engine
     host._apply_description_uda_aliases(old, new)
@@ -523,7 +1072,7 @@ def run_on_modify(host: Any) -> None:
     )
     try:
         calendar_context = host.core.use_task_business_calendar(new)
-    except Exception as exc:
+    except host.core.BusinessCalendarConfigError as exc:
         host._fail_and_exit("Invalid business calendar", str(exc))
         return
     request_t0 = host._ptime.perf_counter()

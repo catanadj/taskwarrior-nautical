@@ -4,7 +4,7 @@ import copy
 import os
 import re
 import sys
-from typing import Any, Literal, Mapping
+from typing import BinaryIO, Callable, Literal, Mapping, Protocol
 
 
 _UDA_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -42,12 +42,26 @@ class ConfigReadResult:
         return self.state == "invalid"
 
 
-def env_flag_true(name: str, env_map: dict | None = None) -> bool:
+class ConfigReadResultPort(Protocol):
+    @property
+    def data(self) -> dict: ...
+
+    @property
+    def is_absent(self) -> bool: ...
+
+    @property
+    def is_invalid(self) -> bool: ...
+
+
+class TomlParserPort(Protocol):
+    """Parser capability kept local because hooks load this helper by path."""
+
+    def load(self, fp: BinaryIO) -> dict: ...
+
+
+def env_flag_true(name: str, env_map: Mapping[str, object] | None = None) -> bool:
     src = env_map if env_map is not None else os.environ
-    try:
-        raw = src.get(name, "") if hasattr(src, "get") else ""
-    except Exception:
-        raw = ""
+    raw = src.get(name, "")
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -118,7 +132,7 @@ def path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | None
                     return "path is not readable"
             elif not os.access(probe, os.W_OK | os.X_OK):
                 return "parent path is not writable/searchable"
-    except Exception as exc:
+    except OSError as exc:
         return str(exc)
     return None
 
@@ -128,7 +142,7 @@ def validated_user_dir(
     *,
     label: str,
     trust_env: str = "",
-    env_map: dict | None = None,
+    env_map: Mapping[str, object] | None = None,
     warn_on_error: bool = True,
 ) -> str:
     raw = str(path_value or "").strip()
@@ -137,7 +151,7 @@ def validated_user_dir(
         if warn_on_error and env_flag_true("NAUTICAL_DIAG", env_map):
             try:
                 sys.stderr.write(f"[nautical] Ignoring unsafe {label} '{raw}': {in_err}\n")
-            except Exception:
+            except (OSError, ValueError):
                 pass
         return ""
     ap = normalized_abspath(raw)
@@ -148,24 +162,72 @@ def validated_user_dir(
         if warn_on_error and env_flag_true("NAUTICAL_DIAG", env_map):
             try:
                 sys.stderr.write(f"[nautical] Ignoring unsafe {label} '{path_value}': {err}\n")
-            except Exception:
+            except (OSError, ValueError):
                 pass
         return ""
     return ap
 
 
+def hook_arg_value(argv: list[str], keys: tuple[str, ...]) -> str:
+    for token in argv:
+        text = str(token or "").strip()
+        if not text:
+            continue
+        for key in keys:
+            for separator in (":", "="):
+                prefix = f"{key}{separator}"
+                if text.startswith(prefix):
+                    value = text[len(prefix):].strip()
+                    if value:
+                        return value
+    return ""
+
+
+def resolve_task_data_context(
+    *,
+    argv: list[str] | None = None,
+    env: Mapping[str, object] | None = None,
+    tw_dir: str | None = None,
+) -> tuple[str, bool, str]:
+    """Resolve Taskwarrior's Taskdata path and whether it was explicit."""
+    args = list(argv if argv is not None else sys.argv[1:])
+    env_map = env if env is not None else os.environ
+    taskdata_env = str((env_map.get("TASKDATA") if hasattr(env_map, "get") else "") or "").strip()
+    taskdata_arg = hook_arg_value(args, ("data", "data.location"))
+    explicit = taskdata_arg or taskdata_env
+    if explicit:
+        source = "argv" if taskdata_arg else "env"
+        safe_explicit = validated_user_dir(
+            str(explicit),
+            label=("rc.data.location" if taskdata_arg else "TASKDATA"),
+            trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+            env_map=env_map,
+        )
+        if safe_explicit:
+            return safe_explicit, True, source
+    base = str(tw_dir or "~/.task")
+    safe_fallback = validated_user_dir(
+        base,
+        label="fallback task data dir",
+        trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+        env_map=env_map,
+        warn_on_error=False,
+    )
+    return (safe_fallback or normalized_abspath(base)), False, "fallback"
+
+
 def read_toml_result(
     path: str,
     *,
-    tomllib_mod: Any,
-    warn_missing_toml_parser: Any,
-    warn_toml_parse_error: Any,
-    error_sink: Any = None,
+    tomllib_mod: TomlParserPort | None,
+    warn_missing_toml_parser: Callable[[str], None],
+    warn_toml_parse_error: Callable[[str, Exception], None],
+    error_sink: Callable[[str], None] | None = None,
 ) -> ConfigReadResult:
     try:
         if not path or not os.path.exists(path):
             return ConfigReadResult("absent", {})
-    except Exception as exc:
+    except OSError as exc:
         message = f"config inspection failed for {path}: {exc}"
         if callable(error_sink):
             error_sink(message)
@@ -185,7 +247,7 @@ def read_toml_result(
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 try:
                     sys.stderr.write(f"[nautical] Rejected unsafe config path '{path}': {in_err}\n")
-                except Exception:
+                except (OSError, ValueError):
                     pass
             return ConfigReadResult("invalid", {}, message)
         safety_err = path_safety_error(path, expect_dir=False)
@@ -196,7 +258,7 @@ def read_toml_result(
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 try:
                     sys.stderr.write(f"[nautical] Rejected unsafe config path '{path}': {safety_err}\n")
-                except Exception:
+                except (OSError, ValueError):
                     pass
             return ConfigReadResult("invalid", {}, message)
 
@@ -221,7 +283,7 @@ def read_toml_result(
                     error_sink(message)
                 return ConfigReadResult("invalid", {}, message)
             return ConfigReadResult("present", data)
-    except Exception as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         message = f"config parse failed for {path}: {exc}"
         if callable(error_sink):
             error_sink(message)
@@ -237,10 +299,10 @@ def read_toml_result(
 def read_toml(
     path: str,
     *,
-    tomllib_mod: Any,
-    warn_missing_toml_parser: Any,
-    warn_toml_parse_error: Any,
-    error_sink: Any = None,
+    tomllib_mod: TomlParserPort | None,
+    warn_missing_toml_parser: Callable[[str], None],
+    warn_toml_parse_error: Callable[[str, Exception], None],
+    error_sink: Callable[[str], None] | None = None,
 ) -> dict:
     """Compatibility wrapper returning only the parsed table."""
     return read_toml_result(
@@ -252,7 +314,11 @@ def read_toml(
     ).data
 
 
-def warn_env_config_missing(env_path: str, *, warn_once_per_day_any: Any) -> None:
+def warn_env_config_missing(
+    env_path: str,
+    *,
+    warn_once_per_day_any: Callable[[str, str], None],
+) -> None:
     warn_once_per_day_any(
         "config_missing",
         "[nautical] NAUTICAL_CONFIG path missing; using defaults.",
@@ -275,7 +341,7 @@ def normalize_keys(data: dict) -> dict:
     return out
 
 
-def normalize_preset_table(value: Any) -> dict[str, str]:
+def normalize_preset_table(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
     out: dict[str, str] = {}
@@ -288,11 +354,16 @@ def normalize_preset_table(value: Any) -> dict[str, str]:
     return out
 
 
-def normalize_anchor_presets(value: Any) -> dict[str, str]:
+def normalize_anchor_presets(value: object) -> dict[str, str]:
     return normalize_preset_table(value)
 
 
-def config_paths(*, warn_env_config_missing: Any, taskdata: str | None = None, error_sink: Any = None) -> list[str]:
+def config_paths(
+    *,
+    warn_env_config_missing: Callable[[str], None],
+    taskdata: str | None = None,
+    error_sink: Callable[[str], None] | None = None,
+) -> list[str]:
     env_path = os.environ.get("NAUTICAL_CONFIG")
     if env_path:
         raw_env = str(env_path).strip()
@@ -304,7 +375,7 @@ def config_paths(*, warn_env_config_missing: Any, taskdata: str | None = None, e
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 try:
                     sys.stderr.write(f"[nautical] Rejected unsafe NAUTICAL_CONFIG '{raw_env}': {in_err}\n")
-                except Exception:
+                except (OSError, ValueError):
                     pass
             return []
         ap = os.path.abspath(os.path.expanduser(raw_env))
@@ -367,7 +438,7 @@ def config_paths(*, warn_env_config_missing: Any, taskdata: str | None = None, e
             for path in out:
                 print(f"  - {path}", file=sys.stderr)
             _LAST_DIAG_SEARCH_ORDER = tuple(out)
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     return out
@@ -376,9 +447,9 @@ def config_paths(*, warn_env_config_missing: Any, taskdata: str | None = None, e
 def load_config(
     *,
     defaults: dict,
-    config_paths: Any,
-    read_toml_result: Any,
-    normalize_keys: Any,
+    config_paths: Callable[[], list[str]],
+    read_toml_result: Callable[[str], ConfigReadResultPort],
+    normalize_keys: Callable[[dict], dict],
 ) -> dict:
     cfg = dict(defaults)
     chosen = None
@@ -404,7 +475,7 @@ def load_config(
                 print("[nautical] Search order:", file=sys.stderr)
                 for path in paths:
                     print(f"  - {path}", file=sys.stderr)
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     cfg["wrand_salt"] = str(cfg.get("wrand_salt") or defaults["wrand_salt"])
@@ -425,17 +496,21 @@ def load_config(
     return cfg
 
 
-def get_config(conf_cache: Any, *, load_config: Any) -> Any:
+def get_config(
+    conf_cache: dict | None,
+    *,
+    load_config: Callable[[], dict],
+) -> tuple[dict, dict]:
     if conf_cache is None:
         conf_cache = copy.deepcopy(load_config())
     return copy.deepcopy(conf_cache), conf_cache
 
 
-def conf_raw(conf: Mapping[str, Any], key: str) -> Any:
+def conf_raw(conf: Mapping[str, object], key: str) -> object:
     return conf.get(key)
 
 
-def conf_str(conf: Mapping[str, Any], key: str, default: str) -> str:
+def conf_str(conf: Mapping[str, object], key: str, default: str) -> str:
     value = conf_raw(conf, key)
     if value is None:
         return str(default)
@@ -444,7 +519,7 @@ def conf_str(conf: Mapping[str, Any], key: str, default: str) -> str:
 
 
 def conf_int(
-    conf: Mapping[str, Any],
+    conf: Mapping[str, object],
     key: str,
     default: int,
     min_value: int | None = None,
@@ -453,7 +528,7 @@ def conf_int(
     value = conf_raw(conf, key)
     try:
         out = int(str(value).strip())
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         out = int(default)
     if min_value is not None and out < min_value:
         out = int(min_value)
@@ -463,7 +538,7 @@ def conf_int(
 
 
 def conf_bool(
-    conf: Mapping[str, Any],
+    conf: Mapping[str, object],
     key: str,
     default: bool = False,
     true_values: set[str] | None = None,
@@ -486,12 +561,13 @@ def conf_bool(
     return bool(default)
 
 
-def conf_csv_or_list(conf: Mapping[str, Any], key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
+def conf_csv_or_list(conf: Mapping[str, object], key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
     value = conf_raw(conf, key)
     if value is None:
         return list(default or [])
     if isinstance(value, str):
-        raw_items = value.split(",")
+        raw_items: list[object] = []
+        raw_items.extend(value.split(","))
     elif isinstance(value, (list, tuple, set)):
         raw_items = list(value)
     else:
@@ -512,7 +588,7 @@ def conf_csv_or_list(conf: Mapping[str, Any], key: str, default: list[str] | Non
     return out if out else list(default or [])
 
 
-def conf_uda_field_list(conf: Mapping[str, Any], key: str) -> list[str]:
+def conf_uda_field_list(conf: Mapping[str, object], key: str) -> list[str]:
     fields = conf_csv_or_list(conf, key, default=[], lower=True)
     out: list[str] = []
     for field in fields:
@@ -522,12 +598,12 @@ def conf_uda_field_list(conf: Mapping[str, Any], key: str) -> list[str]:
         if os.environ.get("NAUTICAL_DIAG") == "1":
             try:
                 print(f"[nautical] Ignoring invalid UDA field in {key}: {field!r}", file=sys.stderr)
-            except Exception:
+            except (OSError, ValueError):
                 pass
     return out
 
 
-def trueish(v: Any, default: bool = False) -> bool:
+def trueish(v: object, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")

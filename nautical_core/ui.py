@@ -4,7 +4,10 @@ import os
 import re
 import sys
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rich.console import RenderableType
 
 
 _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
@@ -58,7 +61,7 @@ def _normalize_live_panel_footer(value: object) -> str:
 def term_width_stderr(default: int = 80) -> int:
     try:
         w = os.get_terminal_size(sys.stderr.fileno()).columns
-    except Exception:
+    except (OSError, ValueError):
         w = default
     return max(40, min(70, int(w)))
 
@@ -122,7 +125,7 @@ def emit_line(msg: str) -> None:
         return
     try:
         sys.stderr.write(msg + "\n")
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 
@@ -392,10 +395,11 @@ def _build_rich_panel(
     live: bool = False,
     active_row: int | None = None,
     live_footer: str = "NAUTICAL",
-) -> object:
+) -> RenderableType:
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+    from rich.errors import MarkupError
 
     theme = _panel_theme(kind, themes)
     border = theme.get("border", "blue")
@@ -426,7 +430,7 @@ def _build_rich_panel(
             value_raw = "" if v is None else str(v)
             try:
                 value_text = Text.from_markup(value_raw)
-            except Exception:
+            except MarkupError:
                 value_text = Text(value_raw)
             marker_text = Text(marker)
             if row_active:
@@ -441,7 +445,7 @@ def _build_rich_panel(
         value_raw = "" if v is None else str(v)
         try:
             value_text = Text.from_markup(value_raw)
-        except Exception:
+        except MarkupError:
             value_text = Text(value_raw)
         lk = str(k).lower()
         if "warning" in lk:
@@ -464,12 +468,7 @@ def _build_rich_panel(
 
         t.add_row(label_text, value_text)
 
-    panel_kwargs = {}
-    if live and footer:
-        panel_kwargs = {
-            "subtitle": Text(footer, style=f"dim {tstyle}"),
-            "subtitle_align": "right",
-        }
+    subtitle = Text(footer, style=f"dim {tstyle}") if live and footer else None
 
     return Panel(
         t,
@@ -477,7 +476,8 @@ def _build_rich_panel(
         border_style=f"bold {border}" if live and active_row is not None else border,
         expand=False,
         padding=(0, 1),
-        **panel_kwargs,
+        subtitle=subtitle,
+        subtitle_align="right" if subtitle is not None else "center",
     )
 
 
@@ -489,10 +489,14 @@ def _render_panel_rich(
     themes: dict | None,
 ) -> bool:
     try:
-        if not sys.stderr.isatty():
-            raise RuntimeError("no tty")
+        is_tty = sys.stderr.isatty()
+    except (OSError, ValueError):
+        return False
+    if not is_tty:
+        return False
+    try:
         from rich.console import Console
-    except Exception:
+    except ImportError:
         return False
 
     try:
@@ -608,7 +612,7 @@ def _render_panel_live(
 def _normalized_live_duration_ms(duration_ms: int | float) -> float:
     try:
         duration = float(duration_ms)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         duration = float(_DEFAULT_LIVE_PANEL_DURATION_MS)
     return max(0.0, min(float(_MAX_LIVE_PANEL_DURATION_MS), duration))
 

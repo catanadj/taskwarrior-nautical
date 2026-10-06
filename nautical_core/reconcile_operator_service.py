@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from .chain_generation import ChainGenerationService
 from .chain_integrity_lifecycle import is_orphan_deleted_chain_candidate
-from .lifecycle_reconciliation import CallbackLifecycleRecoveryOperations, LifecycleReconciliationService
-from .lifecycle_recovery_models import RecoveryResult
+from .lifecycle.reconciliation import (
+    ApplyParentCallback,
+    CallbackLifecycleRecoveryOperations,
+    LifecycleReconciliationService,
+    PlanParentCallback,
+    VirtualChildCallback,
+)
+from .lifecycle.recovery_models import RecoveryResult
 from .task_models import TaskObservation, TaskPayload
 
 
@@ -17,16 +24,16 @@ from .task_models import TaskObservation, TaskPayload
 class ReconcileRecoveryCallbacks:
     """Taskwarrior-specific mechanics supplied to the lifecycle owner."""
 
-    apply_parent: Callable[..., tuple[RecoveryResult, str]]
-    plan_parent: Callable[..., Any]
-    next_child: Callable[..., TaskObservation]
-    virtual_child: Callable[..., tuple[Any, str]]
-    terminal_error: Callable[..., str]
-    recovery_error: Callable[..., Any]
-    recovery_partial: Callable[..., Any]
-    recovery_manual_review: Callable[..., Any]
-    recovery_terminal: Callable[..., Any]
-    recovery_exception: Callable[..., Any]
+    apply_parent: ApplyParentCallback
+    plan_parent: PlanParentCallback
+    next_child: Callable[[TaskObservation, str], TaskObservation]
+    virtual_child: VirtualChildCallback
+    terminal_error: Callable[[TaskObservation, datetime], str]
+    recovery_error: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_partial: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_manual_review: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_terminal: Callable[[TaskPayload, str], RecoveryResult]
+    recovery_exception: Callable[[TaskPayload, Exception], RecoveryResult]
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +50,7 @@ class ReconcileRecoveryCoordinator:
         taskdata: Path | None,
         apply: bool,
         max_expiration_hops: int,
-        recovery_at: Any,
+        recovery_at: datetime,
         lease_held: bool = False,
         generation: ChainGenerationService | None = None,
     ) -> list[tuple[RecoveryResult, str]]:

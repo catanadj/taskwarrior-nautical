@@ -4,6 +4,8 @@ from unittest.mock import patch
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Sequence
+from typing import Any, Callable, Iterable, get_args, get_type_hints
 
 from nautical_core.operator_application import DomainApplicationRegistry
 from nautical_core.operator_control_plane import OperatorControlPlane
@@ -22,7 +24,6 @@ from nautical_core.integration_context import (
 from nautical_core.integration_models import (
     CommandFailureKind, FailureEvidence, TaskCommand, Unavailable,
 )
-from nautical_core.operator_models import OperatorFailure
 from nautical_core.operator_plans import OperatorPlan
 from nautical_core.operator_context import OperatorInvocationContext
 from nautical_core.operator_context import OperatorInvocationBudget
@@ -31,6 +32,212 @@ from nautical_core.scheduler_service import SchedulerService
 
 
 class OperatorConformanceTests(unittest.TestCase):
+    def test_chain_snapshot_reader_uses_the_typed_collector_boundary(self) -> None:
+        from nautical_core.chain_integrity_models import ChainSnapshot
+        from nautical_core.chain_snapshot import IntegritySnapshotRequest
+        from nautical_core.integration_models import TaskRead
+
+        self.assertEqual(
+            get_type_hints(ChainSnapshotReader.__init__)["collector"],
+            Callable[[IntegritySnapshotRequest], TaskRead[ChainSnapshot]],
+        )
+
+    def test_native_until_audit_dependencies_share_datetime_ports(self) -> None:
+        from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+        from nautical_core.chain_integrity_lifecycle import (
+            fallback_native_until_at_day_end,
+            invalid_native_until_reason,
+            repair_native_until_from_previous,
+        )
+        from nautical_core.chain_integrity_recovery import (
+            IntegrityRecoveryService,
+            RecoveryAudit,
+        )
+        from nautical_core.task_models import TaskObservation
+
+        parser = Callable[[object], tuple[datetime | None, str | None]]
+        formatter = Callable[[datetime], str]
+        convert = Callable[[datetime], datetime]
+        predecessor = Callable[[TaskObservation], TaskObservation | None]
+        typed_signatures = (
+            get_type_hints(OperatorControlPlane.audit_native_until),
+            get_type_hints(ChainIntegrityEngine.audit_native_until),
+            get_type_hints(IntegrityRecoveryService.audit_native_until),
+        )
+        for hints in typed_signatures:
+            self.assertEqual(hints["rows"], Iterable[TaskObservation])
+            self.assertEqual(hints["predecessor"], predecessor)
+            self.assertEqual(hints["safe_parse_datetime"], parser)
+            self.assertEqual(hints["fmt_isoz"], formatter)
+            self.assertEqual(hints["utc_to_local_naive"], convert)
+            self.assertEqual(hints["local_naive_to_utc"], convert)
+        self.assertIs(RecoveryAudit, typed_signatures[-1].get("return"))
+
+        self.assertEqual(get_type_hints(invalid_native_until_reason)["safe_parse_datetime"], parser)
+        repair_hints = get_type_hints(repair_native_until_from_previous)
+        self.assertEqual(repair_hints["safe_parse_datetime"], parser)
+        self.assertEqual(repair_hints["fmt_isoz"], formatter)
+        self.assertEqual(repair_hints["utc_to_local_naive"], convert)
+        self.assertEqual(repair_hints["local_naive_to_utc"], convert)
+        fallback_hints = get_type_hints(fallback_native_until_at_day_end)
+        self.assertEqual(fallback_hints["safe_parse_datetime"], parser)
+        self.assertEqual(fallback_hints["fmt_isoz"], formatter)
+        self.assertEqual(fallback_hints["utc_to_local_naive"], convert)
+        self.assertEqual(fallback_hints["local_naive_to_utc"], convert)
+
+    def test_native_until_application_uses_explicit_mutation_ports(self) -> None:
+        from contextlib import AbstractContextManager
+        from pathlib import Path
+
+        from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+        from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
+        from nautical_core.task_models import TaskObservation
+
+        lock_factory = Callable[[Path, bool], AbstractContextManager[bool]]
+        parent_lock = Callable[[str], AbstractContextManager[bool]]
+        refresh = Callable[[TaskObservation], TaskObservation | None]
+        guard = Callable[
+            [TaskObservation, TaskObservation | None, TaskObservation | None],
+            str | None,
+        ]
+        configuration = Callable[[], tuple[str, str]]
+        mutate = Callable[[TaskObservation, str], None]
+        verify = Callable[[TaskObservation | None, str], bool]
+        on_lock_busy = Callable[[str], None]
+        expected = {
+            "row": TaskObservation,
+            "previous": TaskObservation | None,
+            "item": dict[str, Any],
+            "repaired": str,
+            "taskdata": Path | None,
+            "lease_held": bool,
+            "mutation_lock": lock_factory,
+            "parent_lock": parent_lock,
+            "refresh_parent": refresh,
+            "refresh_previous": refresh,
+            "guard_error": guard,
+            "configuration": configuration,
+            "mutate": mutate,
+            "verify": verify,
+            "on_lock_busy": on_lock_busy,
+        }
+        signatures = (
+            get_type_hints(OperatorControlPlane.apply_native_until),
+            get_type_hints(ChainIntegrityEngine.apply_native_until_candidate),
+            get_type_hints(IntegrityRecoveryService.apply_native_until_candidate),
+        )
+        for hints in signatures:
+            for name, annotation in expected.items():
+                self.assertEqual(hints[name], annotation, name)
+            self.assertEqual(hints["return"], str | None)
+
+    def test_recovery_planning_uses_validated_configuration_and_snapshot_ports(self) -> None:
+        from nautical_core.integration_context import ValidatedNauticalConfiguration
+        from nautical_core.lifecycle.models import TaskSnapshot
+
+        control_plane_types = get_type_hints(OperatorControlPlane)
+        self.assertEqual(
+            control_plane_types["configuration"],
+            ValidatedNauticalConfiguration | None,
+        )
+        configuration_hints = get_type_hints(OperatorControlPlane.from_configuration)
+        self.assertEqual(
+            configuration_hints["configuration"],
+            ValidatedNauticalConfiguration | None,
+        )
+        recovery_hints = get_type_hints(OperatorControlPlane.plan_recovery)
+        self.assertEqual(recovery_hints["parent"], TaskSnapshot)
+        self.assertEqual(
+            recovery_hints["existing_children"],
+            tuple[TaskSnapshot, ...] | list[TaskSnapshot],
+        )
+        candidates_hints = get_type_hints(OperatorControlPlane.plan_recovery_candidates)
+        self.assertEqual(candidates_hints["candidates"], Sequence[TaskSnapshot])
+        self.assertEqual(
+            candidates_hints["children_for"],
+            Callable[
+                [TaskSnapshot], tuple[TaskSnapshot, ...] | list[TaskSnapshot]
+            ],
+        )
+
+    def test_recovery_planning_unwraps_snapshot_observations(self) -> None:
+        from nautical_core.lifecycle.models import TaskSnapshot
+        from nautical_core.task_models import TaskObservation
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        parent_observation = TaskObservation.from_mapping(
+            {"uuid": "parent"}, source_query="operator recovery parent"
+        )
+        child_observation = TaskObservation.from_mapping(
+            {"uuid": "child"}, source_query="operator recovery child"
+        )
+        parent = TaskSnapshot.from_observation(parent_observation)
+        child = TaskSnapshot.from_observation(child_observation)
+        engine = SimpleNamespace(
+            plan_recovery_plan=lambda received_parent, **kwargs: (
+                received_parent,
+                kwargs["existing_children"],
+            )
+        )
+        control_plane = OperatorControlPlane.from_configuration(
+            Configuration(), DomainApplicationRegistry()
+        )
+        with patch(
+            "nautical_core.operator_control_plane.ChainIntegrityEngine.lifecycle_only",
+            return_value=engine,
+        ):
+            result = control_plane.plan_recovery(
+                parent,
+                existing_children=(child,),
+                hook=object(),
+            )
+
+        self.assertIs(parent_observation, result[0])
+        self.assertEqual([child_observation], result[1])
+
+    def test_integrity_audit_uses_typed_unit_of_work_and_result(self) -> None:
+        from nautical_core.chain_integrity_engine import IntegrityEngineResult
+        from nautical_core.task_models import TaskObservation
+        from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+        hints = get_type_hints(OperatorControlPlane.audit_integrity)
+        self.assertIs(hints["unit_of_work"], TaskwarriorUnitOfWork)
+        self.assertEqual(hints["rows"], Sequence[TaskObservation])
+        self.assertEqual(
+            hints["return"],
+            tuple[IntegrityEngineResult | None, list[dict[str, object]]],
+        )
+        diagnose_hints = get_type_hints(OperatorControlPlane.diagnose_chains)
+        self.assertIs(diagnose_hints["unit_of_work"], TaskwarriorUnitOfWork)
+
+    def test_operator_invocation_cache_contains_values_as_objects(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationCache
+
+        self.assertIs(get_type_hints(OperatorInvocationCache.put)["value"], object)
+        self.assertEqual(
+            get_type_hints(OperatorInvocationCache.get)["return"],
+            object | None,
+        )
+
+    def test_integrity_drain_uses_concrete_execution_ports(self) -> None:
+        from nautical_core.chain_integrity_application import (
+            IntegrityMutationExecutor,
+            IntegrityMutationRequestFactory,
+        )
+        from nautical_core.chain_integrity_engine import IntegrityApplicationResult
+        from nautical_core.lifecycle.outbox_operations import LifecycleExecutionOutboxPort
+        from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+        hints = get_type_hints(OperatorControlPlane.drain_integrity)
+        self.assertIs(LifecycleExecutionOutboxPort, hints["outbox"])
+        self.assertIs(TaskwarriorUnitOfWork, hints["unit_of_work"])
+        self.assertIs(IntegrityMutationExecutor, hints["executor"])
+        self.assertIs(IntegrityMutationRequestFactory, hints["request_factory"])
+        self.assertEqual(get_args(hints["return"]), (IntegrityApplicationResult, ...))
+
     def test_integrity_drain_uses_canonical_snapshot_provider(self) -> None:
         class Configuration:
             fingerprint = "config-1"
@@ -218,7 +425,7 @@ class OperatorConformanceTests(unittest.TestCase):
         self.assertEqual(result.terminal.kind, "search_limit")
 
     def test_control_plane_domain_application_emits_ordered_effect_phases(self) -> None:
-        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+        from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
         from nautical_core.operator_domain_plans import DomainApplicationAuthorization
 
         class Configuration:
@@ -257,7 +464,7 @@ class OperatorConformanceTests(unittest.TestCase):
     def test_control_plane_rejects_expired_budget_before_authorization(self) -> None:
         from nautical_core.operator_domain_plans import DomainApplicationAuthorization
         from nautical_core.operator_context import OperatorInvocationBudget
-        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+        from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 
         class Configuration:
             fingerprint = "config-1"
@@ -282,7 +489,7 @@ class OperatorConformanceTests(unittest.TestCase):
     def test_effect_owner_failure_is_retryable_after_effect_boundary(self) -> None:
         from nautical_core.operator_domain_plans import DomainApplicationAuthorization
         from nautical_core.operator_context import OperatorInvocationBudget
-        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+        from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 
         class Configuration:
             fingerprint = "config-1"
@@ -547,6 +754,8 @@ class OperatorConformanceTests(unittest.TestCase):
         self.assertTrue(result.retryable)
 
     def test_invalid_snapshot_collector_result_fails_closed(self) -> None:
+        from nautical_core.integration_models import Found
+
         configuration = ValidatedNauticalConfiguration(
             source="test", fingerprint="config-1", scheduler_fingerprint="schedule-1",
             timezone_name="UTC", values=(),
@@ -563,6 +772,16 @@ class OperatorConformanceTests(unittest.TestCase):
         result = reader.read(context, SnapshotReadRequest(OperatorScope.system()))
         self.assertIsInstance(result, OperatorFailure)
         self.assertEqual(result.code, "invalid_snapshot_read")
+
+        malformed_reader = ChainSnapshotReader(
+            lambda _request: Found(SimpleNamespace(coverage="complete"), "snapshot")
+        )
+        malformed_result = malformed_reader.read(
+            context,
+            SnapshotReadRequest(OperatorScope.system()),
+        )
+        self.assertIsInstance(malformed_result, OperatorFailure)
+        self.assertEqual(malformed_result.code, "invalid_snapshot")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta, timezone, tzinfo
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .astronomical_seasons import seasonal_event_utc
 
@@ -82,7 +82,7 @@ def configure_timezone(value: object) -> str:
         raise ValueError("Astronomical season timezone cannot be empty.")
     try:
         _ACTIVE_TIMEZONE = ZoneInfo(name)
-    except Exception as exc:
+    except (OSError, ValueError, ZoneInfoNotFoundError) as exc:
         raise ValueError(f"Astronomical season timezone '{name}' is invalid or unavailable.") from exc
     return name
 

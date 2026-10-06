@@ -5,7 +5,50 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import timedelta
-from typing import Any
+from typing import Literal, NotRequired, TypeAlias, TypedDict, TypeGuard
+
+
+class FixedCPSequenceToken(TypedDict):
+    kind: Literal["fixed"]
+    raw: str
+    duration: timedelta
+
+
+class RandomCPSequenceToken(TypedDict):
+    kind: Literal["rand"]
+    raw: str
+    lo: timedelta
+    hi: timedelta
+    granularity_seconds: int
+    lo_raw: str
+    hi_raw: str
+    base_raw: NotRequired[str]
+    spread_raw: NotRequired[str]
+
+
+CPSequenceToken: TypeAlias = FixedCPSequenceToken | RandomCPSequenceToken
+
+
+def _is_random_cp_sequence_token(
+    token: CPSequenceToken,
+) -> TypeGuard[RandomCPSequenceToken]:
+    return (
+        token.get("kind") == "rand"
+        and isinstance(token.get("raw"), str)
+        and isinstance(token.get("lo"), timedelta)
+        and isinstance(token.get("hi"), timedelta)
+        and isinstance(token.get("granularity_seconds"), int)
+        and isinstance(token.get("lo_raw"), str)
+        and isinstance(token.get("hi_raw"), str)
+        and (
+            "base_raw" not in token
+            or isinstance(token.get("base_raw"), str)
+        )
+        and (
+            "spread_raw" not in token
+            or isinstance(token.get("spread_raw"), str)
+        )
+    )
 
 
 _CP_RE = re.compile(
@@ -104,7 +147,7 @@ def _cp_rand_granularity_seconds(lo: timedelta, hi: timedelta) -> int:
     return 1
 
 
-def _parse_cp_token(part: str) -> dict[str, Any] | None:
+def _parse_cp_token(part: str) -> CPSequenceToken | None:
     raw = str(part or "").strip()
     random_match = _CP_RAND_RE.match(raw)
     if not random_match:
@@ -200,7 +243,7 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     return None
 
 
-def parse_cp_sequence_tokens(cp: str) -> list[dict[str, Any]] | None:
+def parse_cp_sequence_tokens(cp: str) -> list[CPSequenceToken] | None:
     """Parse CP into fixed/random period tokens without resolving randomness."""
     if cp_sequence_parse_error(cp):
         return None
@@ -217,7 +260,7 @@ def parse_cp_sequence_tokens(cp: str) -> list[dict[str, Any]] | None:
 
 
 def _cp_rand_duration_for_token(
-    token: dict[str, Any],
+    token: RandomCPSequenceToken,
     *,
     cp: str,
     link_no: int,
@@ -244,7 +287,7 @@ def _cp_rand_duration_for_token(
 
 
 def cp_sequence_interval_for_token(
-    token: dict[str, Any],
+    token: CPSequenceToken,
     *,
     cp: str,
     link_no: int,
@@ -256,6 +299,8 @@ def cp_sequence_interval_for_token(
         duration = token.get("duration")
         return duration if isinstance(duration, timedelta) else None
     if token.get("kind") == "rand":
+        if not _is_random_cp_sequence_token(token):
+            return timedelta()
         return _cp_rand_duration_for_token(
             token,
             cp=canonical_cp,
@@ -284,19 +329,21 @@ def parse_cp_sequence(cp: str) -> list[timedelta] | None:
     return durations
 
 
-def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = None) -> timedelta | None:
+def cp_sequence_interval_for_link(
+    cp: str,
+    link_no: int | None,
+    chain_id: str | None = None,
+) -> timedelta | None:
     """Return the interval used to spawn ``link_no + 1`` from ``link_no``."""
     tokens = parse_cp_sequence_tokens(cp)
     if not tokens:
         return None
-    try:
-        idx = max(0, int(link_no) - 1) % len(tokens)
-    except Exception:
-        idx = 0
+    normalized_link_no = int(link_no or 1)
+    idx = max(0, normalized_link_no - 1) % len(tokens)
     return cp_sequence_interval_for_token(
         tokens[idx],
         cp=str(cp),
-        link_no=int(link_no or 1),
+        link_no=normalized_link_no,
         token_index=idx,
         chain_id=chain_id,
     )

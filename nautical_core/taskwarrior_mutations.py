@@ -38,7 +38,7 @@ from .integration_models import (
     Unavailable,
 )
 from .task_codec import TaskCodec
-from .lifecycle_models import recurrence_fingerprint
+from .lifecycle.models import recurrence_fingerprint
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_models import ALL_TASK_STATUSES, FieldPresence, TaskObservation, TaskStatus
 from .task_changes import timestamp_equal
@@ -436,7 +436,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 return f"guard {field} changed (expected {expected}, found {actual or '-'})"
         try:
             actual_identity = recurrence_fingerprint(row.to_mapping())
-        except Exception as exc:
+        except (TypeError, ValueError, OverflowError, RecursionError) as exc:
             return f"guard recurrence identity unavailable: {exc}"
         if actual_identity != guard.recurrence_identity:
             return "guard recurrence identity changed"

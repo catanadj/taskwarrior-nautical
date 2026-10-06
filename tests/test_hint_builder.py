@@ -8,7 +8,7 @@ from nautical_core.occurrence_outcomes import OccurrenceCollectionResult, Unavai
 from nautical_core.occurrence_provider import Occurrence
 from nautical_core.scheduler_cursor import OccurrenceCursor
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
-from nautical_core.parser_api import validate_anchor_expr_strict
+from nautical_core import validate_anchor_expr_strict
 
 
 class HintBuilderTests(unittest.TestCase):

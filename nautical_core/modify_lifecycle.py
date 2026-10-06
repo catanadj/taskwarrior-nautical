@@ -41,10 +41,7 @@ def task_has_nautical_recurrence_fields(task: TaskPayload | None) -> bool:
         val = task.get(key)
         if val is None:
             continue
-        try:
-            s = str(val).strip()
-        except Exception:
-            s = ""
+        s = str(val).strip()
         if s:
             return True
     return False
@@ -58,10 +55,7 @@ def task_has_nautical_chain_fields(task: TaskPayload | None) -> bool:
         val = task.get(key)
         if val is None:
             continue
-        try:
-            s = str(val).strip()
-        except Exception:
-            s = ""
+        s = str(val).strip()
         if s:
             return True
     return False
@@ -72,10 +66,7 @@ def task_has_nautical_fields(task: TaskPayload | None) -> bool:
 
 
 def _norm_field(value: Any) -> str:
-    try:
-        return str(value or "").strip()
-    except Exception:
-        return ""
+    return str(value or "").strip()
 
 
 def ensure_terminal_chain_off(task: TaskPayload) -> bool:
@@ -90,8 +81,8 @@ def ensure_terminal_chain_off(task: TaskPayload) -> bool:
 
 def apply_terminal_transition(task: TaskPayload, event: Any) -> bool:
     """Validate one terminal event, then apply its idempotent chain patch."""
-    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
-    from nautical_core.lifecycle_planner import terminal_plan_for_snapshot
+    from nautical_core.lifecycle.models import LifecycleEvent, TaskSnapshot
+    from nautical_core.lifecycle.planner import terminal_plan_for_snapshot
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
     try:

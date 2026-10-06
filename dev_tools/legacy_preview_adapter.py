@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from nautical_core import anchor_inclusion
+import nautical_core.anchor_inclusion as anchor_inclusion
 from nautical_core.occurrence_provider import (
     AnchorEventOccurrenceProvider,
     Occurrence,

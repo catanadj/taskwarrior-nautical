@@ -6,6 +6,8 @@ from decimal import Decimal, InvalidOperation
 import json
 from typing import Any
 
+from .task_models import TaskPayload
+
 
 def recurrence_anchor_field(payload: dict[str, Any] | None) -> str:
     if isinstance(payload, dict):
@@ -16,7 +18,7 @@ def recurrence_anchor_field(payload: dict[str, Any] | None) -> str:
     return "due"
 
 
-def root_uuid(payload: dict[str, Any]) -> str:
+def root_uuid(payload: TaskPayload) -> str:
     return str(payload.get("chainID") or "").strip()
 
 
@@ -38,7 +40,7 @@ def _canonical(value: Any) -> Any:
             return text
     try:
         return json.dumps(value, sort_keys=True, ensure_ascii=False)
-    except Exception:
+    except (TypeError, ValueError, OverflowError, RecursionError):
         return str(value)
 
 

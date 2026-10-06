@@ -1,14 +1,15 @@
 import json
 import sqlite3
 import stat
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from tests.support.hook_process import HookSubprocessFixture
 
-class BackupCliRetentionTests(unittest.TestCase):
+
+class BackupCliRetentionTests(HookSubprocessFixture):
     def test_prune_is_explicit_and_returns_retention_details(self):
         script = Path(__file__).parents[1] / "nautical_core" / "tools" / "nautical_backup.py"
         with tempfile.TemporaryDirectory(prefix="nautical-backup-retention-") as td:
@@ -28,12 +29,12 @@ class BackupCliRetentionTests(unittest.TestCase):
             )
             fake_task.chmod(fake_task.stat().st_mode | stat.S_IXUSR)
             for name in ("one", "two", "three"):
-                result = subprocess.run(
+                result = self.run_python_command(
                     [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(root / name), "--task-bin", str(fake_task), "--json"],
                     capture_output=True, text=True, check=False,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            result = subprocess.run(
+            result = self.run_python_command(
                 [sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(root / "four"), "--task-bin", str(fake_task), "--prune", "--keep", "2", "--json"],
                 capture_output=True, text=True, check=False,
             )
@@ -58,7 +59,7 @@ class BackupCliRetentionTests(unittest.TestCase):
             fake_task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
             fake_task.chmod(fake_task.stat().st_mode | stat.S_IXUSR)
             target = root / "generation"
-            result = subprocess.run([sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(target), "--task-bin", str(fake_task), "--json"], capture_output=True, text=True, check=False)
+            result = self.run_python_command([sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(target), "--task-bin", str(fake_task), "--json"], capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(json.loads(result.stdout)["retention"]["status"], "not_requested")
 

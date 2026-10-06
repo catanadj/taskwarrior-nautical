@@ -1,5 +1,6 @@
 """Direct contracts for panel mode routing in the public renderer."""
 
+import builtins
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -7,10 +8,81 @@ import os
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import ui
+import nautical_core.ui as ui
 
 
 class PanelRendererContractTests(unittest.TestCase):
+    def test_emit_line_ignores_expected_stderr_write_failures(self) -> None:
+        with patch.object(ui.sys, "stderr") as stderr:
+            stderr.write.side_effect = OSError("closed stderr")
+            ui.emit_line("diagnostic")
+
+        stderr.write.assert_called_once_with("diagnostic\n")
+
+    def test_emit_line_does_not_hide_unexpected_stderr_failures(self) -> None:
+        with patch.object(ui.sys, "stderr") as stderr:
+            stderr.write.side_effect = RuntimeError("broken stream adapter")
+            with self.assertRaisesRegex(RuntimeError, "broken stream adapter"):
+                ui.emit_line("diagnostic")
+
+    def test_terminal_width_uses_default_when_stderr_is_not_a_terminal(self) -> None:
+        with patch.object(ui.os, "get_terminal_size", side_effect=OSError("not a tty")):
+            self.assertEqual(ui.term_width_stderr(default=60), 60)
+
+    def test_terminal_width_does_not_hide_unexpected_probe_failures(self) -> None:
+        with patch.object(ui.os, "get_terminal_size", side_effect=RuntimeError("broken probe")):
+            with self.assertRaisesRegex(RuntimeError, "broken probe"):
+                ui.term_width_stderr()
+
+    def test_live_duration_defaults_for_invalid_values(self) -> None:
+        self.assertEqual(ui._normalized_live_duration_ms("invalid"), 160)
+
+    def test_live_duration_does_not_hide_unexpected_conversion_failures(self) -> None:
+        calls = 0
+
+        def converter(value: object) -> float:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("conversion defect")
+            return builtins.float(value)
+
+        with patch.dict(ui.__dict__, {"float": converter}):
+            with self.assertRaisesRegex(RuntimeError, "conversion defect"):
+                ui._normalized_live_duration_ms(160)
+
+    def test_static_rich_renderer_does_not_hide_unexpected_tty_probe_failures(self) -> None:
+        class BrokenStderr:
+            def isatty(self) -> bool:
+                raise RuntimeError("tty probe defect")
+
+        with patch.object(ui.sys, "stderr", BrokenStderr()):
+            with self.assertRaisesRegex(RuntimeError, "tty probe defect"):
+                ui._render_panel_rich("Title", [], kind="info", themes=None)
+
+    def test_rich_panel_uses_literal_text_when_markup_is_invalid(self) -> None:
+        from rich.console import Console
+        from rich.errors import MarkupError
+        from rich.text import Text
+
+        output = StringIO()
+        with patch.object(Text, "from_markup", side_effect=MarkupError("bad markup")):
+            panel = ui._build_rich_panel(
+                "Title", [("Key", "[broken] value")], kind="info", themes=None
+            )
+        Console(file=output, width=80, color_system=None).print(panel)
+
+        self.assertIn("[broken] value", output.getvalue())
+
+    def test_rich_panel_does_not_hide_unexpected_markup_failures(self) -> None:
+        from rich.text import Text
+
+        with patch.object(Text, "from_markup", side_effect=RuntimeError("markup defect")):
+            with self.assertRaisesRegex(RuntimeError, "markup defect"):
+                ui._build_rich_panel(
+                    "Title", [("Key", "value")], kind="info", themes=None
+                )
+
     def test_live_panel_branding_focus_and_footer_bounds_do_not_change_static_panels(self) -> None:
         from rich.console import Console
 
@@ -167,6 +239,25 @@ class PanelRendererContractTests(unittest.TestCase):
         panel_line.assert_not_called()
         self.assertIn("Title", stderr.getvalue())
         self.assertIn("Key", stderr.getvalue())
+
+    def test_fast_panel_falls_back_to_plain_output_when_width_probe_fails(self) -> None:
+        stderr = StringIO()
+        with (
+            patch.object(ui, "term_width_stderr", side_effect=RuntimeError("boom")),
+            redirect_stderr(stderr),
+        ):
+            ui.render_panel(
+                "Test Panel",
+                [("Key", "Value")],
+                panel_mode="fast",
+                fast_color=False,
+            )
+
+        output = stderr.getvalue()
+        self.assertIn("Test Panel", output)
+        self.assertIn("Key", output)
+        self.assertIn("Value", output)
+        self.assertNotIn("boom", output)
 
     def test_live_failure_preserves_generator_rows_for_static_fallback(self) -> None:
         stderr = StringIO()

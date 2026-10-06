@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from nautical_core.chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
 from nautical_core.chain_integrity_application import IntegrityApplicationResult, IntegrityApplicationService
@@ -39,16 +40,16 @@ from nautical_core.integration_models import (
     MutationOutcomeKind,
     Unavailable,
 )
-from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 from nautical_core.task_models import NauticalTask, TaskDraft, TaskObservation
-from nautical_core.lifecycle_models import (
+from nautical_core.lifecycle.models import (
     LifecycleAction,
     LifecycleEvent,
     LifecycleIdentity,
     LifecyclePlan,
     ParentGuard,
 )
-from nautical_core.lifecycle_outbox import ExecutionStage, LifecycleOutboxRecord, OutboxProcessingState
+from nautical_core.lifecycle.outbox import ExecutionStage, LifecycleOutboxRecord, OutboxProcessingState
 
 
 def node(row: dict[str, object]) -> ChainNode:
@@ -56,6 +57,27 @@ def node(row: dict[str, object]) -> ChainNode:
 
 
 class ChainIntegrityEngineTests(unittest.TestCase):
+    def test_snapshot_audit_does_not_classify_planner_defects_as_unavailable(self) -> None:
+        snapshot = ChainSnapshot(
+            "planner-defect-snapshot",
+            SnapshotCoverage.CANDIDATES,
+            "test",
+            (),
+        )
+        engine = ChainIntegrityEngine.lifecycle_only(
+            configuration_fingerprint="planner-defect-config",
+        )
+        with TemporaryDirectory() as directory:
+            outbox = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(outbox.open().ok)
+            with patch.object(
+                engine._planner,
+                "plan",
+                side_effect=RuntimeError("repair planner invariant failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "repair planner invariant failed"):
+                    engine.audit_snapshot(snapshot, outbox_repository=outbox)
+
     def test_integrity_context_keeps_graph_and_outbox_provenance_separate(self) -> None:
         graph = ChainGraph.from_snapshot(
             ChainSnapshot("context-graph", SnapshotCoverage.CANDIDATES, "taskwarrior", ())
@@ -173,6 +195,55 @@ class ChainIntegrityEngineTests(unittest.TestCase):
         multi = IntegrityApplicationService().apply(multi_plan, object(), lambda _operation: object())
         self.assertTrue(multi)
         self.assertTrue(all(item.kind is MutationOutcomeKind.MANUAL_REVIEW for item in multi))
+
+    def test_application_adapter_exceptions_fail_closed_as_manual_review(self) -> None:
+        from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
+
+        first = IntegrityOperation(
+            "exception-op-1", RepairOperationKind.METADATA_REPAIR, "exception-chain",
+            "aaaaaaaa-0000-0000-0000-000000000941", (("snapshot_id", "exception-snapshot"),),
+            ("target remains present",), ("link is 2",), (("link", 2),),
+        )
+        second = IntegrityOperation(
+            "exception-op-2", RepairOperationKind.METADATA_REPAIR, "exception-chain",
+            "bbbbbbbb-0000-0000-0000-000000000942", (("snapshot_id", "exception-snapshot"),),
+            ("target remains present",), ("link is 3",), (("link", 3),),
+        )
+        single_plan = IntegrityRepairPlan(
+            "exception-single-plan", "exception-snapshot", "exception-chain", RepairSafety.SAFE,
+            "missing_link", "adapter exception", (first,), "cfg-exception",
+        )
+        multi_plan = IntegrityRepairPlan(
+            "exception-multi-plan", "exception-snapshot", "exception-chain", RepairSafety.SAFE,
+            "structural_batch", "outbox exception", (first, second), "cfg-exception",
+        )
+
+        def fail_request(_operation):
+            raise RuntimeError("request adapter defect")
+
+        mutation = IntegrityApplicationService().apply(single_plan, object(), fail_request)
+        self.assertIs(mutation[0].kind, MutationOutcomeKind.MANUAL_REVIEW)
+        self.assertIn("request adapter defect", mutation[0].reason)
+
+        class FailingOutbox:
+            def persist(self, _plan):
+                raise RuntimeError("persistence adapter defect")
+
+        durable = IntegrityApplicationService().apply(multi_plan, object(), fail_request, FailingOutbox())
+        self.assertEqual(len(durable), 2)
+        self.assertTrue(all(item.kind is MutationOutcomeKind.MANUAL_REVIEW for item in durable))
+        self.assertTrue(all("persistence adapter defect" in item.reason for item in durable))
+
+        class FailingRepository:
+            def enqueue_integrity(self, _envelope):
+                raise RuntimeError("repository adapter defect")
+
+        sink = RepositoryIntegrityOutboxSink(
+            FailingRepository(), configuration_fingerprint="cfg-exception", schedule_fingerprint="sch-exception"
+        )
+        persisted = sink.persist(multi_plan)
+        self.assertFalse(persisted.accepted)
+        self.assertIn("repository adapter defect", persisted.reason)
 
     def test_acknowledged_lifecycle_postconditions_are_checked_against_current_graph(self) -> None:
         parent_uuid = "11111111-0000-0000-0000-000000000927"

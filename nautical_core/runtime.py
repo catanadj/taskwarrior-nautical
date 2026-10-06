@@ -4,9 +4,14 @@ import json
 import os
 import sys
 import time
-from typing import Any
+from typing import Any, Mapping
 
-from . import _normalized_abspath, _validated_user_dir
+from .config_support import hook_arg_value as _hook_arg_value
+from .config_support import resolve_task_data_context as _resolve_task_data_context
+from .core_config import (
+    normalized_abspath as _normalized_abspath,
+    validated_user_dir as _validated_user_dir,
+)
 from .hook_bootstrap import env_int
 
 
@@ -16,58 +21,16 @@ DIAG_LOG_REDACT_KEYS: frozenset[str] = frozenset(
 
 
 def hook_arg_value(argv: list[str], keys: tuple[str, ...]) -> str:
-    for tok in argv:
-        s = str(tok or "").strip()
-        if not s:
-            continue
-        for key in keys:
-            for sep in (":", "="):
-                prefix = f"{key}{sep}"
-                if s.startswith(prefix):
-                    val = s[len(prefix):].strip()
-                    if val:
-                        return val
-    return ""
+    return _hook_arg_value(argv, keys)
 
 
 def resolve_task_data_context(
     *,
     argv: list[str] | None = None,
-    env: dict | None = None,
+    env: Mapping[str, Any] | None = None,
     tw_dir: str | None = None,
 ) -> tuple[str, bool, str]:
-    """
-    Resolve Taskwarrior data directory context for hooks.
-
-    Returns: (task_data_dir, use_rc_data_location, source)
-      - task_data_dir: resolved directory path (user-expanded)
-      - use_rc_data_location: True only when source is explicit (argv/env)
-      - source: one of "argv", "env", "fallback"
-    """
-    args = list(argv if argv is not None else sys.argv[1:])
-    env_map = env if env is not None else os.environ
-    taskdata_env = str((env_map.get("TASKDATA") if hasattr(env_map, "get") else "") or "").strip()
-    taskdata_arg = hook_arg_value(args, ("data", "data.location"))
-    explicit = taskdata_arg or taskdata_env
-    if explicit:
-        source = "argv" if taskdata_arg else "env"
-        safe_explicit = _validated_user_dir(
-            str(explicit),
-            label=("rc.data.location" if taskdata_arg else "TASKDATA"),
-            trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
-            env_map=env_map,
-        )
-        if safe_explicit:
-            return safe_explicit, True, source
-    base = str(tw_dir or "~/.task")
-    safe_fallback = _validated_user_dir(
-        base,
-        label="fallback task data dir",
-        trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
-        env_map=env_map,
-        warn_on_error=False,
-    )
-    return (safe_fallback or _normalized_abspath(base)), False, "fallback"
+    return _resolve_task_data_context(argv=argv, env=env, tw_dir=tw_dir)
 
 
 def _redact_dict(data: dict, redact_keys: frozenset) -> dict:
@@ -92,7 +55,7 @@ def diag_log_redact(msg: str, redact_keys: frozenset | None = None) -> Any:
                 if k in keys:
                     data[k] = "[redacted]"
             return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
+    except json.JSONDecodeError:
         pass
     return msg
 
@@ -132,7 +95,7 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-    except Exception:
+    except OSError:
         pass
     try:
         if max_bytes > 0 and os.path.exists(path):
@@ -141,13 +104,8 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
                 if st.st_size > max_bytes:
                     overflow = path.replace(".jsonl", f".overflow.{int(time.time())}.jsonl")
                     os.replace(path, overflow)
-            except Exception:
+            except OSError:
                 pass
-        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
         payload = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "hook": hook_name,
@@ -166,9 +124,13 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
                 payload["msg"] = str(red)
         else:
             payload["msg"] = diag_log_redact(str(msg))
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
+            os.fchmod(fd, 0o600)
             f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
     except Exception:
+        # Diagnostic persistence is optional; it must not replace the hook's
+        # primary result.
         pass
 
 
@@ -186,7 +148,7 @@ def diag(msg: Any, hook_name: str = "nautical", data_dir: str | None = None) -> 
     if os.environ.get("NAUTICAL_DIAG") == "1":
         try:
             sys.stderr.write(f"[nautical] {rendered}\n")
-        except Exception:
+        except (OSError, UnicodeError, ValueError):
             pass
     diag_log(log_value, hook_name, data_dir)
 

@@ -757,9 +757,9 @@ class AnchorFileOccurrenceProvider:
             return None
         value, description = candidate_records[selected_index]
         local = value
-        from .occurrence_provider import _require_forward_progress
+        from .occurrence_provider import require_forward_progress
 
-        _require_forward_progress(cursor_after, local)
+        require_forward_progress(cursor_after, local)
         self._next_index = selected_index + 1 if selected_index is not None else len(candidate_records)
         self._last_after = after_local
         self._last_candidate = local

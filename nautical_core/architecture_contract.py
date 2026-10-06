@@ -62,7 +62,15 @@ _COMPATIBILITY_NAMES = {
     "business_calendar_api", "hint_builder_api", "linting_api", "configuration_facade", "cache_facade", "timezone_facade",
 }
 _INTEGRATION_NAMES = {"hook_context", "hook_runtime", "operator_health_service"}
+_LIFECYCLE_INTEGRATION_NAMES = {
+    "outbox", "outbox_claims", "outbox_codec", "outbox_maintenance",
+    "outbox_operations", "outbox_queries", "outbox_schema",
+}
+_LIFECYCLE_APPLICATION_NAMES = {
+    "application", "operator_owner", "planner", "read_service", "reconciliation",
+}
 _DOMAIN_NAMES = {"common", "hint_models", "task_models", "diagnostic_models"}
+_BOUND_OWNER_APIS = {"parser_api", "scheduler_api", "cache_api"}
 
 
 @dataclass(frozen=True)
@@ -104,6 +112,8 @@ def module_layer(relative_path: str | Path) -> str:
     if parts and parts[0] in _ENTRYPOINT_DIRS:
         return ENTRYPOINT
     stem = path.stem
+    if len(parts) > 1 and parts[0] == "lifecycle" and stem in _LIFECYCLE_INTEGRATION_NAMES:
+        return INTEGRATION
     if stem in _COMPATIBILITY_NAMES:
         return COMPATIBILITY
     if stem in _INTEGRATION_NAMES:
@@ -112,6 +122,8 @@ def module_layer(relative_path: str | Path) -> str:
         return DOMAIN
     if parts and parts[0] == "tools":
         return ENTRYPOINT
+    if len(parts) > 1 and parts[0] == "lifecycle" and stem in _LIFECYCLE_APPLICATION_NAMES:
+        return APPLICATION
     if stem in {"operator_models", "operator_findings", "diagnostic_models", "on_exit_models"}:
         return DOMAIN
     if stem in _PRESENTATION_PREFIXES or any(stem.startswith(p) for p in _PRESENTATION_PREFIXES):
@@ -179,6 +191,110 @@ def _dynamic_hook_host_access(
     return None
 
 
+def _namespace_root(node: ast.AST, aliases: set[str]) -> ast.Name | None:
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id in {"getattr", "vars", "hasattr", "setattr"} and node.args:
+            return _namespace_root(node.args[0], aliases)
+    return node if isinstance(node, ast.Name) and node.id in aliases else None
+
+
+def _owner_namespace_reads(tree: ast.AST) -> tuple[tuple[str, int], ...]:
+    """Find mutable facade namespace reads outside explicit composition adapters."""
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.functions: list[str] = []
+            self.alias_scopes: list[set[str]] = []
+            self.reads: list[tuple[str, int]] = []
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self.functions.append(node.name)
+            aliases = set(self.alias_scopes[-1]) if self.alias_scopes else set()
+            arguments = (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            )
+            aliases.update(arg.arg for arg in arguments if arg.arg in {"module", "core"})
+            self.alias_scopes.append(aliases)
+            self.generic_visit(node)
+            self.alias_scopes.pop()
+            self.functions.pop()
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self.functions.append(node.name)
+            aliases = set(self.alias_scopes[-1]) if self.alias_scopes else set()
+            arguments = (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            )
+            aliases.update(arg.arg for arg in arguments if arg.arg in {"module", "core"})
+            self.alias_scopes.append(aliases)
+            self.generic_visit(node)
+            self.alias_scopes.pop()
+            self.functions.pop()
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            self._update_aliases(node.targets, node.value)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            self._update_aliases((node.target,), node.value)
+            self.generic_visit(node)
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            self._update_aliases((node.target,), node.value)
+            self.generic_visit(node)
+
+        def visit_Attribute(self, node: ast.Attribute) -> None:
+            self._record_namespace_read(node)
+            self.generic_visit(node)
+
+        def visit_Subscript(self, node: ast.Subscript) -> None:
+            self._record_namespace_read(node)
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Name) and node.func.id in {
+                "getattr", "vars", "hasattr", "setattr",
+            } and node.args:
+                self._record_namespace_read(node)
+            self.generic_visit(node)
+
+        def _record_namespace_read(self, node: ast.AST) -> None:
+            function = self.functions[-1] if self.functions else "<module>"
+            is_adapter = (
+                function == "for_core"
+                or function.startswith("compat_")
+                or function.startswith("_compat_")
+                or function.endswith("_compat_adapter")
+            )
+            aliases = self.alias_scopes[-1] if self.alias_scopes else {"module", "core"}
+            if not is_adapter and _namespace_root(node, aliases) is not None:
+                self.reads.append((function, getattr(node, "lineno", 0)))
+
+        def _update_aliases(self, targets: Iterable[ast.AST], value: ast.AST | None) -> None:
+            if not self.alias_scopes:
+                return
+            aliases = self.alias_scopes[-1]
+            names = {
+                target.id
+                for root in targets
+                for target in ast.walk(root)
+                if isinstance(target, ast.Name)
+            }
+            aliases.difference_update(names)
+            if isinstance(value, ast.Name) and value.id in aliases:
+                aliases.update(names)
+
+    visitor = Visitor()
+    visitor.visit(tree)
+    return tuple(sorted(set(visitor.reads)))
+
+
 def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
     """Validate imports in ``root`` without importing any source module."""
     layers = module_layer_map(root)
@@ -225,6 +341,18 @@ def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
                             ),
                             dynamic_access.lineno,
                         ))
+        if path.parent.name == "nautical_core" and path.stem in _BOUND_OWNER_APIS:
+            for function, line in _owner_namespace_reads(tree):
+                violations.append(ArchitectureViolation(
+                    relative,
+                    "module-namespace",
+                    layer,
+                    (
+                        f"owner operation {function} must consume explicit dependencies; "
+                        "only for_core composition and compatibility adapters may read module/core namespaces"
+                    ),
+                    line,
+                ))
         for reference in _imports(tree):
             module = reference.module
             if layer in {DOMAIN, RECURRENCE} and _is_forbidden(module, forbidden_pure):
@@ -245,6 +373,29 @@ def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
                     "primary production modules may not depend on the compatibility implementation",
                     reference.line,
                 ))
+        if path.parent == root / "nautical_core":
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.ImportFrom)
+                    and node.level == 1
+                    and node.module is None
+                ):
+                    continue
+                for alias in node.names:
+                    if not alias.name.startswith("_"):
+                        continue
+                    owner_module = path.parent / f"{alias.name}.py"
+                    owner_package = path.parent / alias.name / "__init__.py"
+                    if owner_module.is_file() or owner_package.is_file():
+                        continue
+                    if layer not in facade_allowed:
+                        violations.append(ArchitectureViolation(
+                            relative,
+                            "nautical_core",
+                            layer,
+                            "internal production modules may not import private names from the root facade",
+                            node.lineno,
+                        ))
     return tuple(sorted(violations, key=lambda item: (item.importing_file, item.line, item.dependency)))
 
 

@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from .occurrence_provider import Occurrence, _cursor_before
+from .occurrence_provider import Occurrence, OccurrenceProvider, _cursor_before
 from .recurrence_protocols import NextOccurrenceCallback, PickOccurrenceCallback
 from .timeutil import compare_datetimes
 from .scheduler_models import OccurrenceSearchExhausted
@@ -17,7 +17,7 @@ def _scheduler_engine(core: Any) -> Any:
     return engine
 
 
-def _norm_t_mod(v: Any) -> list[Any]:
+def normalize_time_modifiers(v: Any) -> list[Any]:
     if v is None:
         return []
     if isinstance(v, tuple) and len(v) == 2:
@@ -73,32 +73,6 @@ def _next_anchor_file_occurrence(
     return occurrence
 
 
-def _next_anchor_file_occurrence_local(
-    anchor_file_str: str,
-    *,
-    anchor_file_dir: str,
-    after_local_dt: datetime,
-    inclusive: bool,
-    fallback_hhmm: tuple[int, int],
-    core: Any,
-    anchor_file_provider: Any | None = None,
-    recurrence_context: Any | None = None,
-    business_calendar: Any | None = None,
-) -> datetime | None:
-    occurrence = _next_anchor_file_occurrence(
-        anchor_file_str,
-        anchor_file_dir=anchor_file_dir,
-        after_local_dt=after_local_dt,
-        inclusive=inclusive,
-        fallback_hhmm=fallback_hhmm,
-        core=core,
-        anchor_file_provider=anchor_file_provider,
-        recurrence_context=recurrence_context,
-        business_calendar=business_calendar,
-    )
-    return occurrence.local_datetime if occurrence is not None else None
-
-
 def _build_anchor_file_provider(
     anchor_file_str: str,
     *,
@@ -108,7 +82,7 @@ def _build_anchor_file_provider(
     core: Any,
     recurrence_context: Any | None = None,
     business_calendar: Any | None = None,
-) -> Any:
+) -> OccurrenceProvider:
     """Build one context-bound file provider for a merged occurrence stream."""
     anchor_files = core._import_sibling("anchor_files")
     if business_calendar is None:
@@ -151,7 +125,7 @@ def _anchor_file_occurrence_is_omitted(
         )
     except OccurrenceSearchExhausted:
         raise
-    except Exception as exc:
+    except ValueError as exc:
         raise ValueError(
             f"Unable to evaluate omit rule for {item_local.date().isoformat()}: {exc}"
         ) from exc
@@ -260,12 +234,6 @@ def next_included_occurrence(
         if comparison > 0 or (comparison == 0 and file_occurrence.description):
             selected = file_occurrence
     return selected
-
-
-def next_included_occurrence_local(**kwargs: Any) -> datetime | None:
-    """Compatibility wrapper returning only the selected local datetime."""
-    occurrence = next_included_occurrence(**kwargs)
-    return occurrence.local_datetime if occurrence is not None else None
 
 
 def next_occurrence_event_local(

@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping
 
 from .business_calendar import ConfiguredBusinessCalendar
 from . import file_resource_limits as resource_limits
+from .parsing.parser_models import ParseError
 
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -169,7 +170,7 @@ def _validated_rules(
             _validate_rule_dnf(dnf, label=field_label)
         except BusinessCalendarConfigError:
             raise
-        except Exception as exc:
+        except ParseError as exc:
             raise BusinessCalendarConfigError(f"Invalid {field_label}: {exc}") from exc
         out.append(dnf)
     return tuple(out)
@@ -204,7 +205,7 @@ def _loaded_file_dates(
             if field_label in str(exc):
                 raise
             raise BusinessCalendarConfigError(f"Invalid {field_label}: {exc}") from exc
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             raise BusinessCalendarConfigError(f"Invalid {field_label}: {exc}") from exc
     return frozenset(out)
 

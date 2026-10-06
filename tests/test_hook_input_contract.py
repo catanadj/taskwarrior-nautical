@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+from pathlib import Path
 import subprocess
+import sys
+import textwrap
 import unittest
 
-from tests.support.hook_process import HookSubprocessFixture
+from nautical_core.hook_results import panic_passthrough
+from tests.support.hook_process import ROOT, HookSubprocessFixture
 
 
 class HookInputContractTests(HookSubprocessFixture):
@@ -12,7 +18,19 @@ class HookInputContractTests(HookSubprocessFixture):
         return self.run_hook(hook, payload, diagnostics=diagnostics)
 
     def test_invalid_inputs_never_traceback_or_emit_stdout(self) -> None:
-        invalid = ("", "{\"uuid\":", "{not-json", "[]", "x" * (10 * 1024 * 1024 + 1))
+        task = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
+        invalid = (
+            "",
+            "{\"uuid\":",
+            "{not-json",
+            "[]",
+            json.dumps({"status": "pending", "anchor": "w:mon"}),
+            json.dumps({"status": "pending", "anchor": "w:mon"})
+            + "\n"
+            + json.dumps({"status": "pending", "anchor": "w:mon"}),
+            "  \n" + json.dumps(task) + "\n{bad",
+            "x" * (10 * 1024 * 1024 + 1),
+        )
         for hook in ("on-add.nautical", "on-modify.nautical"):
             for payload in invalid:
                 with self.subTest(hook=hook, payload_size=len(payload)):
@@ -22,6 +40,35 @@ class HookInputContractTests(HookSubprocessFixture):
                     self.assertNotIn("Traceback", process.stderr)
                     self.assertNotIn("[nautical]", process.stderr)
 
+    def test_on_modify_rejects_mismatched_nautical_task_uuids(self) -> None:
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000111",
+            "status": "pending",
+            "anchor": "w:mon",
+        }
+        new = {
+            "uuid": "00000000-0000-4000-8000-000000000222",
+            "status": "completed",
+            "anchor": "w:mon",
+        }
+
+        process = self._run("on-modify.nautical", json.dumps([old, new]))
+
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "")
+
+    def test_on_modify_ignores_plain_deletes_without_uuid(self) -> None:
+        tasks = (
+            [{"status": "deleted"}],
+            {"status": "deleted", "description": "plain Taskwarrior delete"},
+        )
+        for task in tasks:
+            with self.subTest(task=task):
+                process = self._run("on-modify.nautical", json.dumps(task))
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(len(process.stdout.splitlines()), 1)
+                json.loads(process.stdout)
+
     def test_invalid_input_diagnostics_are_opt_in(self) -> None:
         for hook in ("on-add.nautical", "on-modify.nautical"):
             with self.subTest(hook=hook):
@@ -30,6 +77,78 @@ class HookInputContractTests(HookSubprocessFixture):
                 self.assertNotIn("[nautical]", quiet.stderr)
                 self.assertIn("[nautical]", diagnostic.stderr)
 
+    def test_on_modify_invalid_anchor_has_no_stdout(self) -> None:
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000611",
+            "status": "pending",
+            "description": "invalid anchor test",
+        }
+        new = dict(old, anchor="bad")
+
+        process = self._run(
+            "on-modify.nautical",
+            json.dumps(old) + "\n" + json.dumps(new),
+        )
+
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(process.stdout.strip(), "")
+
+    def test_on_modify_panic_passthrough_emits_latest_task(self) -> None:
+        previous = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
+        latest = {"uuid": previous["uuid"], "status": "completed"}
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            panic_passthrough(json.dumps(previous) + "\n" + json.dumps(latest), None)
+
+        self.assertEqual(json.loads(output.getvalue()), latest)
+
+    def test_on_modify_rejects_oversized_stdin_early(self) -> None:
+        raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 256})
+        script = textwrap.dedent(
+            """
+            import importlib.util
+            import io
+            import json
+            import sys
+            from pathlib import Path
+
+            root = Path(sys.argv[1])
+            sys.path.insert(0, str(root / "nautical_core"))
+            source = root / "nautical_core" / "hooks" / "modify_impl.py"
+            spec = importlib.util.spec_from_file_location("_oversized_modify_input", source)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module._MAX_JSON_BYTES = 32
+            sys.stdin = io.TextIOWrapper(io.BytesIO(__RAW__.encode("utf-8")), encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            sys.stdout, sys.stderr = stdout, stderr
+            try:
+                module._read_two()
+            except SystemExit as exc:
+                assert exc.code == 1
+            else:
+                raise AssertionError("oversized on-modify input was accepted")
+            assert stdout.getvalue() == ""
+            assert "exceeds 32 bytes" in stderr.getvalue(), stderr.getvalue()
+            print("ok", file=sys.__stdout__)
+            """
+        ).replace("__RAW__", repr(raw))
+        # Keep the raw interpreter here: the contract specifically exercises
+        # the original sys.__stdout__ stream while replacing sys.stdout.
+        process = subprocess.run(
+            [sys.executable, "-c", script, str(ROOT)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        self.assertEqual(process.stdout.strip(), "ok", process.stderr)
+
     def test_on_exit_ignores_malformed_and_oversized_input_silently(self) -> None:
         for payload in ("", "{not-json", "[]", "x" * (10 * 1024 * 1024 + 1)):
             with self.subTest(payload_size=len(payload)):
@@ -37,6 +156,20 @@ class HookInputContractTests(HookSubprocessFixture):
                 self.assertEqual(process.returncode, 0)
                 self.assertEqual(process.stdout, "")
                 self.assertEqual(process.stderr, "")
+
+    def test_on_exit_empty_input_keeps_stdout_empty_with_diagnostics(self) -> None:
+        process = self.run_hook(
+            "on-exit.nautical",
+            "",
+            diagnostics=True,
+            extra_environment={
+                "NAUTICAL_CONFIG": str(Path(self.taskdata) / "missing.toml"),
+                "NAUTICAL_TRUST_CONFIG_PATH": "1",
+            },
+        )
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(process.stdout, "")
 
     def test_unicode_task_payload_keeps_strict_json_stdout(self) -> None:
         task = {
@@ -49,6 +182,7 @@ class HookInputContractTests(HookSubprocessFixture):
         added = self._run("on-add.nautical", json.dumps(task, ensure_ascii=False))
         self.assertEqual(added.returncode, 0)
         self.assertEqual(json.loads(added.stdout), task)
+        self.assertNotIn("\\u", added.stdout)
         self.assertEqual(added.stderr, "")
 
         modified_task = dict(task, description="updated café ăîșț", modified="20260101T000001Z")
@@ -58,25 +192,68 @@ class HookInputContractTests(HookSubprocessFixture):
         )
         self.assertEqual(modified.returncode, 0)
         self.assertEqual(json.loads(modified.stdout), modified_task)
+        self.assertNotIn("\\u", modified.stdout)
         self.assertEqual(modified.stderr, "")
 
     def test_diagnostics_never_contaminate_task_json_stdout(self) -> None:
-        task = {
-            "uuid": "22222222-2222-4222-8222-222222222222",
-            "description": "plain task",
-            "status": "pending",
-            "entry": "20260101T000000Z",
-            "modified": "20260101T000000Z",
+        task = {"uuid": "22222222-2222-4222-8222-222222222222", "description": "plain task", "status": "pending"}
+        latest = dict(task, description="changed task")
+        environment = {
+            "NAUTICAL_BENCH_FORCE_FULL": "1",
+            "NAUTICAL_CONFIG": str(Path(self.taskdata) / "missing.toml"),
         }
-        process = self._run(
-            "on-add.nautical",
-            json.dumps(task, ensure_ascii=False),
-            diagnostics=True,
+        cases = (
+            ("on-add.nautical", json.dumps(task, ensure_ascii=False), task),
+            (
+                "on-modify.nautical",
+                json.dumps(task, ensure_ascii=False) + "\n" + json.dumps(latest, ensure_ascii=False),
+                latest,
+            ),
         )
+        for hook, payload, expected in cases:
+            with self.subTest(hook=hook):
+                process = self.run_hook(
+                    hook, payload, diagnostics=True, extra_environment=environment,
+                )
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(len(process.stdout.splitlines()), 1)
+                self.assertIsInstance(json.loads(process.stdout), dict)
+                self.assertEqual(json.loads(process.stdout), expected)
+                self.assertNotIn("[nautical]", process.stdout)
+                self.assertIn("[nautical]", process.stderr)
+
+    def test_on_add_flushes_stdout_after_passthrough(self) -> None:
+        task = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
+        script = textwrap.dedent(
+            """
+            import io
+            import json
+            import sys
+            from nautical_core.hooks import add_impl
+
+            class FlushIO(io.StringIO):
+                flush_count = 0
+
+                def flush(self):
+                    self.flush_count += 1
+                    super().flush()
+
+            expected = json.loads(__EXPECTED__)
+            stdout = FlushIO()
+            sys.stdout = stdout
+            add_impl.main()
+            if stdout.flush_count < 1 or json.loads(stdout.getvalue()) != expected:
+                raise SystemExit(3)
+            """
+        ).replace("__EXPECTED__", repr(json.dumps(task)))
+        process = self.run_python_code(
+            script,
+            input=json.dumps(task),
+            cwd=ROOT,
+            timeout=15,
+        )
+
         self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertEqual(json.loads(process.stdout), task)
-        self.assertNotIn("[nautical]", process.stdout)
-        self.assertTrue(process.stderr == "" or "[nautical]" in process.stderr)
 
     def test_on_add_anchor_routes_keep_json_stdout_and_panel_stderr(self) -> None:
         task = {

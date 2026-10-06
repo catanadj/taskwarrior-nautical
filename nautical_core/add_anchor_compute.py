@@ -19,10 +19,7 @@ def _scheduler_business_calendar(core: Any) -> Any:
     configured = getattr(core, "business_calendar", None)
     if configured is not None:
         return configured
-    try:
-        return core._import_sibling("business_calendar").active_business_calendar()
-    except Exception:
-        return None
+    return core._import_sibling("business_calendar").active_business_calendar()
 
 
 def anchor_step_once(dnf: Any, prev_local_date: Any, interval_seed: Any, seed_base: Any, *, core: Any) -> Any:
@@ -339,23 +336,16 @@ def anchor_next_occurrence_after_local_dt(
     omit_dnf: Any = None,
     *,
     default_seed_date: Any = None,
-    core: Any | None = None,
+    core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]] | None = None,
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
     project_time: Callable[[Any, date], Any] | None = None,
 ) -> datetime | None:
     if default_seed_date is not None:
         interval_seed = default_seed_date
-    if core is None:
-        from . import _PKG_PROXY
-        import sys
-        package = sys.modules.get(__package__ or "nautical_core")
-        if package is not None:
-            _PKG_PROXY.__dict__.update(vars(package))
-        core = _PKG_PROXY
     if norm_t_mod is None:
-        from .anchor_inclusion import _norm_t_mod
-        norm_t_mod = _norm_t_mod
+        from .anchor_inclusion import normalize_time_modifiers
+        norm_t_mod = normalize_time_modifiers
     to_local = getattr(core, "to_local", None)
     if not callable(to_local):
         raise RuntimeError("Anchor scheduler core is missing the timezone conversion callback")
@@ -458,26 +448,25 @@ def anchor_until_summary(
         return None, None
     if evaluator is None:
         raise TypeError("anchor_until_summary requires the evaluator contract")
-    if evaluator is not None:
-        start_local = core.build_local_datetime(first_date_local, first_hhmm)
-        end_local = to_local_cached(until_dt)
-        events = evaluator.events_between(
-            start_local,
-            end_local,
-            limit=max_iterations,
-            fallback_hhmm=first_hhmm,
-            default_seed_date=interval_seed,
-            inclusive=True,
-            max_iterations=max_iterations,
-            include_omitted=False,
-        )
-        count = len(events)
-        if count <= 0:
-            return 0, None
-        last = events[-1].local_datetime
-        if last is None:
-            return max(0, count - 1), None
-        return max(0, count - 1), last.astimezone(timezone.utc)
+    start_local = core.build_local_datetime(first_date_local, first_hhmm)
+    end_local = to_local_cached(until_dt)
+    events = evaluator.events_between(
+        start_local,
+        end_local,
+        limit=max_iterations,
+        fallback_hhmm=first_hhmm,
+        default_seed_date=interval_seed,
+        inclusive=True,
+        max_iterations=max_iterations,
+        include_omitted=False,
+    )
+    count = len(events)
+    if count <= 0:
+        return 0, None
+    last = events[-1].local_datetime
+    if last is None:
+        return max(0, count - 1), None
+    return max(0, count - 1), last.astimezone(timezone.utc)
 
 
 def anchor_build_preview(
@@ -495,22 +484,21 @@ def anchor_build_preview(
 ) -> Any:
     if evaluator is None:
         raise TypeError("anchor_build_preview requires the evaluator contract")
-    if evaluator is not None:
-        events = evaluator.collect_after(
-            first_due_local_dt,
-            limit=preview_limit,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=interval_seed,
-            inclusive=False,
-        )
-        preview = []
-        colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
-        for i, event in enumerate(events):
-            if event.local_datetime is None:
-                continue
-            dt_utc = event.local_datetime.astimezone(timezone.utc)
-            if until_dt and compare_datetimes(dt_utc, until_dt) > 0:
-                break
-            color = colors[min(i, len(colors) - 1)]
-            preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
-        return OccurrenceBatch(preview, terminal=getattr(events, "terminal", None))
+    events = evaluator.collect_after(
+        first_due_local_dt,
+        limit=preview_limit,
+        fallback_hhmm=fallback_hhmm,
+        default_seed_date=interval_seed,
+        inclusive=False,
+    )
+    preview = []
+    colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
+    for i, event in enumerate(events):
+        if event.local_datetime is None:
+            continue
+        dt_utc = event.local_datetime.astimezone(timezone.utc)
+        if until_dt and compare_datetimes(dt_utc, until_dt) > 0:
+            break
+        color = colors[min(i, len(colors) - 1)]
+        preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
+    return OccurrenceBatch(preview, terminal=getattr(events, "terminal", None))

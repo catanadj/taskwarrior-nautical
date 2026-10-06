@@ -4,34 +4,112 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import acf_api, description_aliases, expansion_api, quarter_api, satisfiability
+import nautical_core.acf_api as acf_api
+import nautical_core.acf_support as acf_support
+import nautical_core.cache_payload as cache_payload
+import nautical_core.description_aliases as description_aliases
+import nautical_core.expansion_api as expansion_api
+import nautical_core.parser_api as parser_api
+import nautical_core.parsing.parser_support_api as parser_support_api
+import nautical_core.quarter_api as quarter_api
+import nautical_core.satisfiability as satisfiability
+import nautical_core.scheduler_api as scheduler_api
 
 
 class ParserOwnerApiContractTests(unittest.TestCase):
+    def test_parser_api_uses_parser_owners_without_root_callbacks(self) -> None:
+        namespace = vars(core).copy()
+        namespace["ParseError"] = core.ParseError
+        namespace["AndTermUnsatisfiable"] = core.AndTermUnsatisfiable
+        namespace["YearTokenFormatError"] = core.YearTokenFormatError
+        namespace.pop("_raise_on_bad_colon_year_tokens", None)
+        namespace.pop("_parse_atom_head", None)
+        namespace.pop("_parse_atom_mods", None)
+        namespace.pop("_skip_ws_pos", None)
+        namespace.pop("_raise_if_comma_joined_anchors", None)
+        namespace.pop("_rewrite_quarters_in_context", None)
+        namespace.pop("_weekly_spec_to_wset", None)
+        parser = parser_api.for_core(namespace=namespace)
+
+        with self.assertRaisesRegex(core.ParseError, "uses ':' between numbers"):
+            parser.parse_anchor_expr_to_dnf("y:01:02")
+        with self.assertRaisesRegex(core.ParseError, "Anchors must be joined"):
+            parser.parse_anchor_expr_to_dnf("m:31,w:sun")
+        self.assertEqual(parser.parse_anchor_expr_to_dnf("w:mon@t=09:00")[0][0]["mods"]["t"], (9, 0))
+        self.assertEqual(parser._weekday_set_from_weekly_atom({"typ": "w", "spec": "mon"}), {0})
+        self.assertTrue(parser.parse_anchor_expr_to_dnf("y:q1")[0][0]["spec"].startswith("01-01"))
+
     def test_incompatible_moon_phases_are_rejected_by_both_public_parsers(self) -> None:
         for parser in (core.validate_anchor_expr_strict, core.parse_anchor_expr_to_dnf):
             with self.subTest(parser=parser.__name__):
                 with self.assertRaisesRegex(Exception, "incompatible moon phases"):
                     parser("moon:full + moon:new")
 
+    def test_scheduler_uses_expansion_owner_without_root_callbacks(self) -> None:
+        namespace = vars(core).copy()
+        namespace.pop("_weekly_spec_to_wset", None)
+        namespace.pop("_doms_allowed_by_year", None)
+        namespace.pop("_doms_for_weekly_spec", None)
+        scheduler = scheduler_api.for_core(namespace=namespace)
+
+        self.assertEqual(scheduler._expand_weekly_cached_impl("mon"), [0])
+        term = [
+            {"typ": "w", "spec": "mon", "ival": 1, "mods": {}},
+            {"typ": "y", "spec": "01-05", "ival": 1, "mods": {}},
+        ]
+        self.assertEqual(
+            scheduler._term_candidates_in_month(term, 2026, 1, -1, False),
+            [date(2026, 1, 5)],
+        )
+
     def test_acf_spec_normalization_bounds_input_and_rejects_unknown_types(self) -> None:
-        self.assertEqual(core._normalize_spec_for_acf_cached("w", "mon", "MD"), "mon")
-        self.assertIsNone(core._normalize_spec_for_acf_cached("w", "x" * 300, "MD"))
-        self.assertIsNone(core._normalize_spec_for_acf_cached("q", "mon", "MD"))
+        self.assertEqual(self.acf._normalize_spec_for_acf_cached("w", "mon", "MD"), "mon")
+        self.assertIsNone(self.acf._normalize_spec_for_acf_cached("w", "x" * 300, "MD"))
+        self.assertIsNone(self.acf._normalize_spec_for_acf_cached("q", "mon", "MD"))
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.acf = acf_api.for_core(module=core)
         cls.expansion = expansion_api.for_core(module=core)
         cls.quarter = quarter_api.for_core(module=core)
+        cls.parser_support = parser_support_api.for_core(module=core)
+        cls.scheduler = scheduler_api.for_core(module=core)
 
     def test_acf_round_trip_rejects_checksum_corruption(self) -> None:
         packed = self.acf._build_acf_impl("w:mon")
         self.assertTrue(self.acf.is_valid_acf(packed))
         self.assertEqual(self.acf.acf_to_original_format(packed), "w:mon")
         self.assertFalse(self.acf.is_valid_acf(packed[:-1] + ("0" if packed[-1] != "0" else "1")))
+
+    def test_acf_validation_propagates_unexpected_unpacker_failures(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "unpacker invariant failed"):
+            acf_support.is_valid_acf(
+                __import__("hashlib").sha256(b"payload").hexdigest()[:16] + ":payload",
+                hashlib_mod=__import__("hashlib"),
+                acf_checksum_len=16,
+                acf_unpack=lambda _payload: (_ for _ in ()).throw(
+                    RuntimeError("unpacker invariant failed")
+                ),
+            )
+
+    def test_acf_builder_contains_expected_parse_errors_only(self) -> None:
+        with patch.object(
+            core,
+            "parse_anchor_expr_to_dnf_cached",
+            side_effect=core.ParseError("invalid anchor expression"),
+        ):
+            self.assertEqual(self.acf._build_acf_impl("w:mon"), "!PARSE_ERROR")
+
+        with patch.object(
+            core,
+            "parse_anchor_expr_to_dnf_cached",
+            side_effect=RuntimeError("parser implementation failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "parser implementation failed"):
+                self.acf._build_acf_impl("w:mon")
 
     def test_expansion_produces_hand_checked_weekdays_and_month_days(self) -> None:
         self.assertEqual(self.expansion._weekly_spec_to_wset("mon..wed,fri"), {0, 1, 2, 4})
@@ -203,7 +281,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             RecurrenceContext(chain_id="")
 
     def test_time_list_and_composable_schedule_parser_metadata_round_trip(self) -> None:
-        from nautical_core import anchor_files
+        import nautical_core.anchor_files as anchor_files
 
         parsed = core.parse_anchor_expr_to_dnf("w:mon@t=9,12:30,18")
         self.assertEqual(parsed[0][0]["mods"]["t"], [(9, 0), (12, 30), (18, 0)])
@@ -297,7 +375,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             "t": [[6, 0], [9, 0], [12, 0], [15, 0]],
         }}]]
         self.assertEqual(
-            core._normalize_dnf_cached(valid)[0][0]["mods"]["t"],
+            cache_payload.normalize_dnf_cached(valid)[0][0]["mods"]["t"],
             [(6, 0), (9, 0), (12, 0), (15, 0)],
         )
         for value in (
@@ -313,7 +391,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             }}]],
         ):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                core._normalize_dnf_cached(value)
+                cache_payload.normalize_dnf_cached(value)
 
         with self.assertRaisesRegex(core.ParseError, "cannot be combined"):
             core.validate_anchor_expr_strict([[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
@@ -326,12 +404,12 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         valid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
             "time_random": "rand(06:00..18:00/3)", "t": [],
         }}]]
-        core._normalize_dnf_cached(valid)
+        cache_payload.normalize_dnf_cached(valid)
         invalid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
             "time_random": "rand(06..18/3)", "t": [],
         }}]]
         with self.assertRaisesRegex(ValueError, "random"):
-            core._normalize_dnf_cached(invalid)
+            cache_payload.normalize_dnf_cached(invalid)
 
     def test_parser_rejects_term_explosion_before_cartesian_expansion(self) -> None:
         group = "(w:mon|w:tue|w:wed|w:thu|w:fri|w:sat)"
@@ -408,6 +486,37 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             )
         )
 
+    def test_satisfiability_hint_does_not_hide_normalization_defects(self) -> None:
+        def broken_normalization(_typ: str, _spec: str) -> str:
+            raise RuntimeError("normalization invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "normalization invariant failed"):
+            satisfiability.validate_and_terms_satisfiable(
+                [[
+                    {"typ": "w", "spec": "mon", "ival": 1},
+                    {"typ": "m", "spec": "1", "ival": 1},
+                ]],
+                date(2026, 1, 1),
+                quick_weekly_and_check=lambda _term: None,
+                quick_yearly_and_check=lambda _term: None,
+                quick_moon_and_check=lambda _term: None,
+                term_has_any_match_within=lambda *_args, **_kwargs: False,
+                normalize_spec_for_acf=broken_normalization,
+                month_from_alias=lambda _month: None,
+                and_term_unsatisfiable_cls=core.AndTermUnsatisfiable,
+            )
+
+    def test_yearly_satisfiability_does_not_hide_expansion_defects(self) -> None:
+        def broken_expansion(_spec: str, _year: int) -> list[date]:
+            raise RuntimeError("yearly expansion invariant failed")
+
+        with self.assertRaisesRegex(RuntimeError, "yearly expansion invariant failed"):
+            satisfiability.md_pairs_from_yearly_spec(
+                "01-01",
+                expand_yearly_cached=broken_expansion,
+                leap_year_for_checks=2028,
+            )
+
     def test_quarter_parser_selectors_schedule_in_expected_months(self) -> None:
         from datetime import date
 
@@ -432,7 +541,7 @@ class ParserOwnerApiContractTests(unittest.TestCase):
             core.parse_anchor_expr_to_dnf("m:2nd-mon + y:q1..q2")
 
     def test_astronomical_time_tokens_are_shared_by_parser_and_runtime(self) -> None:
-        from nautical_core import astronomy
+        import nautical_core.astronomy as astronomy
 
         for event in sorted(astronomy.EVENT_NAMES):
             with self.subTest(event=event):
@@ -478,9 +587,9 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         )
         for token, parsed in expected:
             with self.subTest(token=token):
-                self.assertEqual(core._parse_y_token(token), parsed)
-        self.assertIsNone(core._parse_y_token("13-01"))
-        self.assertIsNone(core._parse_y_token("31-04"))
+                self.assertEqual(self.parser_support._parse_y_token(token), parsed)
+        self.assertIsNone(self.parser_support._parse_y_token("13-01"))
+        self.assertIsNone(self.parser_support._parse_y_token("31-04"))
 
     def test_parser_rejects_commas_between_atoms_after_modifiers(self) -> None:
         with self.assertRaises(core.ParseError) as ctx:
@@ -673,27 +782,27 @@ class ParserOwnerApiContractTests(unittest.TestCase):
 
     def test_expansion_helpers_cover_business_and_yearly_ranges(self) -> None:
         self.assertEqual(
-            core._weekly_spec_to_wset("rand", mods={"bd": True}),
+            self.expansion._weekly_spec_to_wset("rand", mods={"bd": True}),
             {0, 1, 2, 3, 4},
         )
         self.assertEqual(
-            core._y_ranges_from_spec("rand-07,01-10..01-12"),
+            self.expansion._y_ranges_from_spec("rand-07,01-10..01-12"),
             [(7, 1, 7, 31), (1, 10, 1, 12)],
         )
         self.assertEqual(
-            core._doms_allowed_by_year(2026, 7, ["rand-07"]),
+            self.expansion._doms_allowed_by_year(2026, 7, ["rand-07"]),
             set(range(1, 32)),
         )
 
     def test_monthly_expansion_helpers_resolve_valid_occurrence_months(self) -> None:
         from datetime import date
 
-        self.assertEqual(core._doms_for_monthly_token("last-fri", 2026, 1), {30})
-        self.assertFalse(core._month_has_hit("5th-mon", 2026, 2))
-        self.assertTrue(core._month_has_hit("5th-mon", 2026, 3))
-        self.assertEqual(core._next_valid_month_on_or_after("5th-mon", 2026, 2), (2026, 3))
+        self.assertEqual(self.expansion._doms_for_monthly_token("last-fri", 2026, 1), {30})
+        self.assertFalse(self.scheduler._month_has_hit("5th-mon", 2026, 2))
+        self.assertTrue(self.scheduler._month_has_hit("5th-mon", 2026, 3))
+        self.assertEqual(self.scheduler._next_valid_month_on_or_after("5th-mon", 2026, 2), (2026, 3))
         self.assertEqual(
-            core._first_hit_after_probe_in_month("5th-mon", 2026, 3, date(2026, 3, 1)),
+            self.scheduler._first_hit_after_probe_in_month("5th-mon", 2026, 3, date(2026, 3, 1)),
             date(2026, 3, 30),
         )
 

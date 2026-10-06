@@ -12,14 +12,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from collections import OrderedDict
 import json
+import os
+import sys
 import uuid
 from typing import Any, MutableMapping
 
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
 from .task_codec import TaskCodec
-from .task_models import TaskDraft, NauticalTask
+from .task_models import TaskDraft, NauticalTask, TaskPayload
 from .task_datetime import TaskDatetimeParser, parser_for_core
+from . import timezone_facade
+from .parsing.parser_models import AnchorDNF
 
 
 _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
@@ -43,6 +47,19 @@ _RESERVED_DROP = frozenset(
     }
 )
 _RESERVED_OVERRIDE = frozenset({"due", "entry", "status", "chain", "prevLink", "link"})
+
+
+def _diagnose_optional_debug_failure(operation: str, exc: Exception) -> None:
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
+    try:
+        sys.stderr.write(
+            f"[nautical] debug wait-schedule state {operation} failed: {type(exc).__name__}\n"
+        )
+    except (OSError, UnicodeError, ValueError):
+        pass
+
+
 _UDA_CARRY_SKIP_LOWER = frozenset(
     {
         "id",
@@ -79,7 +96,7 @@ _UDA_CARRY_SKIP_LOWER = frozenset(
 
 ChildMetadata = dict[str, Any]
 CpChildDueResult = tuple[datetime | None, ChildMetadata | None]
-AnchorChildDueResult = tuple[datetime | None, ChildMetadata | None, Any]
+AnchorChildDueResult = tuple[datetime | None, ChildMetadata | None, AnchorDNF | None]
 
 
 class CarryFieldError(RuntimeError):
@@ -168,7 +185,7 @@ class ChainGenerationService:
         )
         return service
 
-    def parse_datetime(self, value: Any) -> tuple[datetime | None, str | None]:
+    def parse_datetime(self, value: object) -> tuple[datetime | None, str | None]:
         if self.datetime_parser is None:
             return None, "datetime parser unavailable"
         return self.datetime_parser.parse(value)
@@ -200,7 +217,7 @@ class ChainGenerationService:
             return cached
         # Capture the active timezone before calendar lookup; the calendar
         # adapter may refresh facade configuration as a side effect.
-        local_timezone = getattr(self.core, "_LOCAL_TZ", None)
+        local_timezone = timezone_facade.current_timezone()
         business_calendar = (
             self.core.business_calendar_for_task(task.observation)
             if str(task.get("bc") or "").strip()
@@ -409,10 +426,8 @@ class ChainGenerationService:
                     "delta": str(parent_delta),
                 },
             )
-        except Exception as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             self._record_carry_debug(field, {"ok": False, "reason": "conversion-failed"})
-            if isinstance(exc, CarryFieldError):
-                raise
             raise CarryFieldError(field, str(exc) or "timezone conversion failed") from exc
 
     def carry_relative_datetime(
@@ -440,13 +455,14 @@ class ChainGenerationService:
             return
         try:
             self.wait_sched_debug[field] = payload
-        except Exception:
+        except Exception as exc:
+            _diagnose_optional_debug_failure("record", exc)
             return
 
     def _carry_native_until(
         self,
         parent: NauticalTask,
-        child: dict[str, Any],
+        child: TaskPayload,
         child_due_utc: datetime,
         kind: str,
         *,
@@ -457,16 +473,13 @@ class ChainGenerationService:
         if not parent.get("until") or not parent.get(parent_anchor_field):
             return
         native_until = self.core._import_sibling("native_until")
-        try:
-            parent_target, target_error = self.parse_datetime(parent.get(parent_anchor_field))
-            parent_until, until_error = self.parse_datetime(parent.get("until"))
-            if target_error or until_error:
-                raise ValueError(target_error or until_error or "invalid recurrence timestamp")
-        except Exception as exc:
+        parent_target, target_error = self.parse_datetime(parent.get(parent_anchor_field))
+        parent_until, until_error = self.parse_datetime(parent.get("until"))
+        if target_error or until_error:
             raise native_until.NativeUntilCarryError(
                 native_until.CARRY_INVALID,
                 "native until carry requires valid recurrence timestamps",
-            ) from exc
+            )
         if not (parent_target and parent_until and isinstance(child_due_utc, datetime)):
             raise native_until.NativeUntilCarryError(
                 native_until.CARRY_INVALID,
@@ -486,7 +499,7 @@ class ChainGenerationService:
     def carry_native_until(
         self,
         parent: NauticalTask,
-        child: dict[str, Any],
+        child: TaskPayload,
         child_due_utc: datetime,
         kind: str,
         *,
@@ -512,7 +525,7 @@ class ChainGenerationService:
         parent_short: str,
         kind: str,
         cpmax: int,
-        until_dt: Any,
+        until_dt: datetime | None,
     ) -> TaskDraft:
         """Build a complete, validated child intent without exposing mappings."""
         parent_chain = self._require_chain_id(parent)
@@ -520,8 +533,8 @@ class ChainGenerationService:
         if self.debug_wait_sched and self.wait_sched_debug is not None:
             try:
                 self.wait_sched_debug.clear()
-            except Exception:
-                pass
+            except Exception as exc:
+                _diagnose_optional_debug_failure("cleanup", exc)
         # One explicit serialization creates the mutable Taskwarrior import
         # payload; all scheduling and carry decisions above use typed fields.
         parent_payload = parent_task.observation.to_mapping()

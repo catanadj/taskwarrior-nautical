@@ -26,6 +26,7 @@ def cache_context(core: Any, clear_caches: Any) -> Iterator[str]:
     saved_ttl = int(getattr(core, "ANCHOR_CACHE_TTL", 0) or 0)
     cache_bundle = getattr(core, "_cache_api", None)
     hint_bundle = getattr(core, "_hint_builder_api", None)
+    facade_config_synced = getattr(core, "_FACADE_CONFIG_SYNCED", None)
     saved_cache_binding = getattr(cache_bundle, "_bindings", None)
     saved_hint_binding = getattr(hint_bundle, "_bindings", None)
     with tempfile.TemporaryDirectory(prefix="nautical-perf-cache-") as td:
@@ -34,6 +35,8 @@ def cache_context(core: Any, clear_caches: Any) -> Iterator[str]:
             core.ANCHOR_CACHE_DIR_OVERRIDE = td
             core.ANCHOR_CACHE_TTL = 0
             core._CACHE_DIR = None
+            if facade_config_synced is not None:
+                core._FACADE_CONFIG_SYNCED = True
             if cache_bundle is not None:
                 cache_bundle._bindings = None
             if hint_bundle is not None:
@@ -54,6 +57,8 @@ def cache_context(core: Any, clear_caches: Any) -> Iterator[str]:
             if hint_bundle is not None:
                 hint_bundle._bindings = saved_hint_binding
             clear_caches()
+            if facade_config_synced is not None:
+                core._FACADE_CONFIG_SYNCED = facade_config_synced
 
 
 def cache_payload(expr: str, idx: int) -> dict[str, Any]:

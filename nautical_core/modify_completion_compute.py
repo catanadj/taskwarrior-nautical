@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
+from nautical_core.chain_generation import ChainGenerationService
+from nautical_core.cp_parser import CPSequenceToken
 from nautical_core.modify_models import (
     CapFromUntilAnchorCallback,
     CapFromUntilCpCallback,
@@ -10,9 +12,16 @@ from nautical_core.modify_models import (
     ComputeAnchorChildDueCallback,
     ComputeCpChildDueCallback,
     CompletionComputeResult,
+    CompletionFinals,
+    AnchorDNF,
+    AnchorOccurrenceEvaluatorForTask,
+    AnchorFileProviderFactory,
+    AnchorIncludedOccurrencesCallback,
+    OmitDNFFromParentCallback,
     CompletionLifecycleDiagnostic,
     CompletionLifecycleResult,
     CompletionComputeServices,
+    CompletionPreflightContext,
     DatetimeParserCallback,
     EndChainSummaryCallback,
     EstimateAnchorFinalCallback,
@@ -21,15 +30,23 @@ from nautical_core.modify_models import (
     PrintTaskCallback,
     SafeParseDatetimeCallback,
     DiagnosticCallback,
+    InvalidRelativeCarryReasonCallback,
     ValidateChainDurationCallback,
     ValidateUntilCallback,
 )
+from nautical_core.modify_generation_effects import ChainGenerationServicePort
 from nautical_core.scheduler_models import (
     OccurrenceSearchExhausted,
     occurrence_exhaustion_message,
 )
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.lifecycle_models import LifecycleEvent
+from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, TaskSnapshot
+from nautical_core.lifecycle.planner import (
+    LifecyclePreflight,
+    LifecyclePlanningError,
+    RecurrenceCandidate,
+    plan_candidate_successor,
+)
 from nautical_core.modify_lifecycle import apply_terminal_transition
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import TaskPayload
@@ -62,8 +79,8 @@ def completion_compute_child_due(
     panel: PanelCallback,
     print_task: PrintTaskCallback,
     diag: DiagnosticCallback | None = None,
-    on_terminal: Any | None = None,
-) -> tuple[datetime | None, dict[str, Any] | None, Any] | None:
+    on_terminal: Callable[[OccurrenceSearchExhausted], bool] | None = None,
+) -> tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None:
     task_row = dict(new)
     try:
         if kind in {"anchor", "anchor_file"}:
@@ -97,7 +114,7 @@ def completion_compute_child_due(
         )
         print_task(task_row)
         return None
-    except Exception as exc:
+    except (ValueError, OverflowError) as exc:
         if callable(diag):
             diag(f"compute next due failed: {exc}")
         reason = str(exc).strip() or type(exc).__name__
@@ -112,7 +129,7 @@ def completion_compute_child_due(
 
 def completion_until_or_fail(
     new: dict[str, Any],
-    now_utc: Any,
+    now_utc: datetime,
     *,
     safe_parse_datetime: SafeParseDatetimeCallback,
     validate_until_not_past: ValidateUntilCallback,
@@ -140,14 +157,14 @@ def completion_until_or_fail(
 
 def completion_until_guard_or_stop(
     new: dict[str, Any],
-    child_due: Any,
-    until_dt: Any,
-    now_utc: Any,
+    child_due: datetime | None,
+    until_dt: datetime | None,
+    now_utc: datetime,
     *,
     end_chain_summary: EndChainSummaryCallback,
     print_task: PrintTaskCallback,
 ) -> bool:
-    if until_dt and compare_datetimes(child_due, until_dt) > 0:
+    if child_due is not None and until_dt and compare_datetimes(child_due, until_dt) > 0:
         end_chain_summary(new, "Reached 'until' limit", now_utc)
         apply_terminal_transition(new, LifecycleEvent.CHAIN_UNTIL)
         print_task(new)
@@ -157,7 +174,7 @@ def completion_until_guard_or_stop(
 
 def completion_require_child_due_or_fail(
     new: dict[str, Any],
-    child_due: Any,
+    child_due: datetime | None,
     *,
     panel: PanelCallback,
     print_task: PrintTaskCallback,
@@ -175,9 +192,9 @@ def completion_require_child_due_or_fail(
 
 def completion_warn_unreasonable_duration(
     new: dict[str, Any],
-    child_due: Any,
-    until_dt: Any,
-    now_utc: Any,
+    child_due: datetime | None,
+    until_dt: datetime | None,
+    now_utc: datetime,
     *,
     validate_chain_duration_reasonable: ValidateChainDurationCallback,
     panel: PanelCallback,
@@ -192,8 +209,8 @@ def completion_warn_unreasonable_duration(
 def completion_caps(
     kind: str,
     new: dict[str, Any],
-    child_due: Any,
-    dnf: Any,
+    child_due: datetime | None,
+    dnf: AnchorDNF | None,
     *,
     coerce_int: CoerceIntCallback,
     dtparse: DatetimeParserCallback,
@@ -201,25 +218,25 @@ def completion_caps(
     estimate_anchor_final_by_max: EstimateAnchorFinalCallback,
     cap_from_until_cp: CapFromUntilCpCallback,
     cap_from_until_anchor: CapFromUntilAnchorCallback,
-) -> tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None]:
+) -> tuple[int, datetime | None, int | None, CompletionFinals, int | None]:
     cpmax = coerce_int(new.get("chainMax"), 0)
     until_dt = dtparse(new.get("chainUntil"))
     cap_no = cpmax if cpmax else None
-    finals = []
+    finals: CompletionFinals = []
 
     if kind == "cp" and cpmax:
         try:
             fmax = estimate_cp_final_by_max(new, child_due)
             if fmax:
                 finals.append(("max", fmax))
-        except Exception:
+        except (ValueError, OverflowError, OccurrenceSearchExhausted):
             pass
     if kind in {"anchor", "anchor_file"} and cpmax:
         try:
             fmax = estimate_anchor_final_by_max(new, child_due, dnf)
             if fmax:
                 finals.append(("max", fmax))
-        except Exception:
+        except (ValueError, OverflowError, OccurrenceSearchExhausted):
             pass
 
     until_cap_no = None
@@ -237,16 +254,16 @@ def completion_caps(
 
 
 def cap_from_until_cp(
-    task: dict[str, Any],
-    next_due_utc: Any,
+    task: TaskPayload,
+    next_due_utc: datetime | None,
     *,
     parse_datetime: DatetimeParserCallback,
-    parse_cp_sequence_tokens: Callable[[str], Any],
+    parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None],
     coerce_int: CoerceIntCallback,
-    sequence_period_for_link: Callable[[Any, str, int, str], Any],
-    add_period: Callable[[Any, Any], Any],
+    sequence_period_for_link: Callable[[list[CPSequenceToken], str, int, str], timedelta],
+    add_period: Callable[[datetime, timedelta], datetime],
     max_iterations: int,
-) -> tuple[int | None, Any]:
+) -> tuple[int | None, datetime | None]:
     """Return the final CP link and due date permitted by chainUntil."""
     until = parse_datetime(task.get("chainUntil"))
     if not until:
@@ -276,26 +293,28 @@ def cap_from_until_cp(
 
 
 def cap_from_until_anchor(
-    task: dict[str, Any],
-    next_due_utc: Any,
-    dnf: Any,
+    task: TaskPayload,
+    next_due_utc: datetime | None,
+    dnf: AnchorDNF | None,
     *,
-    parse_datetime: Any,
-    coerce_int: Any,
-    recurrence_seed_base: Any,
-    to_local_cached: Any,
-    safe_parse_datetime: Any,
-    anchor_file_fallback_hhmm: Any,
-    omit_dnf_from_parent: Any,
-    recurrence_evaluator_for_task: Any,
-    anchor_file_provider_for: Any,
-    anchor_included_occurrences: Any,
-    compare_datetimes: Any,
+    parse_datetime: DatetimeParserCallback,
+    coerce_int: CoerceIntCallback,
+    recurrence_seed_base: Callable[[TaskPayload], str],
+    to_local_cached: Callable[[datetime], datetime],
+    safe_parse_datetime: SafeParseDatetimeCallback,
+    anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]],
+    omit_dnf_from_parent: OmitDNFFromParentCallback,
+    recurrence_evaluator_for_task: AnchorOccurrenceEvaluatorForTask,
+    anchor_file_provider_for: AnchorFileProviderFactory,
+    anchor_included_occurrences: AnchorIncludedOccurrencesCallback,
+    compare_datetimes: Callable[[datetime, datetime], int],
     max_iterations: int,
-) -> tuple[int | None, Any]:
+) -> tuple[int | None, datetime | None]:
     """Return the final anchor link and due date permitted by ``chainUntil``."""
     until_utc = parse_datetime(task.get("chainUntil"))
     if not until_utc:
+        return None, None
+    if next_due_utc is None:
         return None, None
 
     current_link = coerce_int(task.get("link"), 1)
@@ -317,11 +336,15 @@ def cap_from_until_anchor(
         )
 
     count = 0
-    last_hit = None
-    cursor = next_local
+    last_hit: datetime | None = None
+    cursor: datetime | None = next_local
     iterations = 0
 
-    while iterations < max_iterations and compare_datetimes(cursor, until_local) <= 0:
+    while (
+        cursor is not None
+        and iterations < max_iterations
+        and compare_datetimes(cursor, until_local) <= 0
+    ):
         iterations += 1
         count += 1
         last_hit = cursor
@@ -362,19 +385,21 @@ def cap_from_until_anchor(
 
 
 def estimate_cp_final_by_max(
-    task: dict[str, Any],
-    next_due_utc: Any,
+    task: TaskPayload,
+    next_due_utc: datetime | None,
     *,
-    coerce_int: Any,
-    parse_cp_sequence_tokens: Any,
-    sequence_period_for_link: Any,
-    add_period: Any,
+    coerce_int: CoerceIntCallback,
+    parse_cp_sequence_tokens: Callable[[str], list[CPSequenceToken] | None],
+    sequence_period_for_link: Callable[[list[CPSequenceToken], str, int, str], timedelta],
+    add_period: Callable[[datetime, timedelta], datetime],
     max_iterations: int,
-    diagnostic: Any | None = None,
-) -> Any:
+    diagnostic: DiagnosticCallback | None = None,
+) -> datetime | None:
     """Estimate the final CP due date permitted by ``chainMax``."""
     chain_max = coerce_int(task.get("chainMax"), 0)
     if not chain_max:
+        return None
+    if next_due_utc is None:
         return None
     current_link = coerce_int(task.get("link"), 1)
     if current_link >= chain_max:
@@ -409,25 +434,27 @@ def estimate_cp_final_by_max(
 
 
 def estimate_anchor_final_by_max(
-    task: dict[str, Any],
-    next_due_utc: Any,
-    dnf: Any,
+    task: TaskPayload,
+    next_due_utc: datetime | None,
+    dnf: AnchorDNF | None,
     *,
-    coerce_int: Any,
-    recurrence_seed_base: Any,
-    to_local_cached: Any,
-    safe_parse_datetime: Any,
-    anchor_file_fallback_hhmm: Any,
-    omit_dnf_from_parent: Any,
-    recurrence_evaluator_for_task: Any,
-    anchor_file_provider_for: Any,
-    anchor_included_occurrences: Any,
-    diagnostic: Any | None = None,
+    coerce_int: CoerceIntCallback,
+    recurrence_seed_base: Callable[[TaskPayload], str],
+    to_local_cached: Callable[[datetime], datetime],
+    safe_parse_datetime: SafeParseDatetimeCallback,
+    anchor_file_fallback_hhmm: Callable[[TaskPayload, datetime], tuple[int, int]],
+    omit_dnf_from_parent: OmitDNFFromParentCallback,
+    recurrence_evaluator_for_task: AnchorOccurrenceEvaluatorForTask,
+    anchor_file_provider_for: AnchorFileProviderFactory,
+    anchor_included_occurrences: AnchorIncludedOccurrencesCallback,
+    diagnostic: DiagnosticCallback | None = None,
     max_iterations: int,
-) -> Any:
+) -> datetime | None:
     """Estimate the final anchor due date permitted by ``chainMax``."""
     chain_max = coerce_int(task.get("chainMax"), 0)
     if not chain_max:
+        return None
+    if next_due_utc is None:
         return None
     current_link = coerce_int(task.get("link"), 1)
     if current_link >= chain_max:
@@ -450,9 +477,9 @@ def estimate_anchor_final_by_max(
         )
 
     future_link = current_link + 1
-    future_local = next_local
+    future_local: datetime | None = next_local
     iterations = 0
-    while future_link < chain_max:
+    while future_link < chain_max and future_local is not None:
         iterations += 1
         if iterations > max_iterations:
             if callable(diagnostic):
@@ -487,6 +514,8 @@ def estimate_anchor_final_by_max(
         if future_local is None:
             return None
         future_link += 1
+    if future_local is None:
+        return None
     return future_local.astimezone(timezone.utc)
 
 
@@ -494,10 +523,10 @@ def first_recurrence_target(
     task: Mapping[str, Any],
     source: str,
     *,
-    parse_datetime: Any,
-    format_datetime: Any,
-    generation_service: Any,
-) -> Any:
+    parse_datetime: DatetimeParserCallback,
+    format_datetime: Callable[[datetime], str],
+    generation_service: Callable[[], ChainGenerationServicePort],
+) -> datetime | None:
     """Compute the first projected target used by recurrence-update panels."""
     target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
     if not target_field:
@@ -513,11 +542,12 @@ def first_recurrence_target(
             DEFAULT_TASK_CODEC.decode_row(parent, source_query="completion recurrence target")
         )
         if source in {"anchor", "anchor_file"}:
-            result = generation.compute_anchor_child_due(typed_parent)
+            anchor_result = generation.compute_anchor_child_due(typed_parent)
+            return anchor_result[0] if anchor_result else None
         else:
-            result = generation.compute_cp_child_due(typed_parent)
-        return result[0] if result else None
-    except Exception:
+            cp_result = generation.compute_cp_child_due(typed_parent)
+            return cp_result[0] if cp_result else None
+    except (ValueError, OverflowError, OccurrenceSearchExhausted):
         return None
 
 
@@ -539,44 +569,40 @@ def completion_cap_guard_or_stop(
 
 
 def attach_lifecycle_plan(
-    new: dict[str, Any],
+    new: TaskPayload,
     computed: CompletionComputeResult,
     next_no: int,
-    now_utc: Any,
+    now_utc: datetime,
     *,
-    preflight: Any | None,
-    generation: Any,
+    preflight: CompletionPreflightContext | None,
+    generation: ChainGenerationService,
     scheduler_fingerprint: str,
-    compare_datetimes: Any,
-    invalid_relative_carry_reason: Any,
-    lifecycle_planner: Any,
-    lifecycle_models: Any,
-    modify_models: Any,
+    compare_datetimes: Callable[[datetime, datetime], int],
+    invalid_relative_carry_reason: InvalidRelativeCarryReasonCallback,
     end_chain_summary: EndChainSummaryCallback,
-    ensure_terminal_chain_off: Any,
+    ensure_terminal_chain_off: Callable[[TaskPayload, str | None], bool],
     panel: PanelCallback,
     print_task: PrintTaskCallback,
     diag: DiagnosticCallback,
 ) -> CompletionComputeResult | CompletionLifecycleResult:
     """Attach the shared lifecycle successor plan to a computed result."""
     try:
-        candidate = lifecycle_planner.RecurrenceCandidate(
+        candidate = RecurrenceCandidate(
             child_due=computed.child_due,
             metadata=tuple(sorted(dict(computed.meta or {}).items())),
-            dnf=computed.dnf,
             until=computed.until_dt,
         )
-        plan = lifecycle_planner.plan_candidate_successor(
-            lifecycle_models.TaskSnapshot.from_observation(
+        plan = plan_candidate_successor(
+            TaskSnapshot.from_observation(
                 DEFAULT_TASK_CODEC.decode_row(new, source_query="modify completion")
             ),
-            lifecycle_models.LifecycleEvent.COMPLETE,
+            LifecycleEvent.COMPLETE,
             candidate,
             generation=generation,
             validated_configuration={"scheduler_fingerprint": scheduler_fingerprint},
             compare_datetimes=compare_datetimes,
             preflight=(
-                lifecycle_planner.LifecyclePreflight.from_context(
+                LifecyclePreflight.from_context(
                     base_link=preflight.base_no,
                     next_link=preflight.next_no,
                     kind=preflight.kind,
@@ -592,14 +618,14 @@ def attach_lifecycle_plan(
                 generation=generation,
             ),
         )
-        if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
+        if plan.action is LifecycleAction.FINALIZE_CHAIN:
             end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
             ensure_terminal_chain_off(new, "complete")
             print_task(new)
-            return modify_models.CompletionLifecycleResult(
+            return CompletionLifecycleResult(
                 state="terminal",
                 reason="successor limit reached",
-                diagnostic=modify_models.CompletionLifecycleDiagnostic(
+                diagnostic=CompletionLifecycleDiagnostic(
                     transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
                     chain_id=str(new.get("chainID") or "").strip(),
                     parent_link=int(str(new.get("link"))) if str(new.get("link") or "").isdigit() else None,
@@ -609,14 +635,14 @@ def attach_lifecycle_plan(
                 ),
             )
         computed.lifecycle_plan = plan
-    except Exception as exc:
+    except (LifecyclePlanningError, ValueError, OverflowError) as exc:
         diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
         panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")
         print_task(new)
-        return modify_models.CompletionLifecycleResult(
+        return CompletionLifecycleResult(
             state="retryable",
             reason=str(exc).strip() or "Could not construct a lifecycle successor plan",
-            diagnostic=modify_models.CompletionLifecycleDiagnostic(
+            diagnostic=CompletionLifecycleDiagnostic(
                 transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
                 chain_id=str(new.get("chainID") or "").strip(),
                 parent_link=int(str(new.get("link"))) if str(new.get("link") or "").isdigit() else None,

@@ -2,29 +2,44 @@
 
 from __future__ import annotations
 
-from typing import Any
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Callable, Literal, Protocol
 
+from .modify_models import MarkupStripper, PreviewLineFormatter
 from .task_models import TaskPayload
 
 
 @dataclass(frozen=True, slots=True)
 class HumanDeltaPort:
-    humanize: Any
+    humanize: Callable[[datetime, datetime, bool], str]
 
 
 @dataclass(frozen=True, slots=True)
 class LinePreviewPorts:
-    task_view: Any
-    format_line_preview: Any
-    core: Any
-    format_local: Any
+    format_line_preview: PreviewLineFormatter
+    core: MarkupStripper
+    format_local: Callable[[datetime], str]
     delta: HumanDeltaPort
 
 
-def line_preview_ports_for(host: Any) -> LinePreviewPorts:
+class _ModifyFeedback(Protocol):
+    format_line_preview: PreviewLineFormatter
+
+
+class _LinePreviewCore(MarkupStripper, Protocol):
+    humanize_delta: Callable[[datetime, datetime, bool], str]
+
+
+class LinePreviewHost(Protocol):
+    core: _LinePreviewCore
+    _fmtlocal: Callable[[datetime], str]
+
+    def _module(self, name: Literal["modify_feedback"]) -> _ModifyFeedback: ...
+
+
+def line_preview_ports_for(host: LinePreviewHost) -> LinePreviewPorts:
     return LinePreviewPorts(
-        task_view=host._module("modify_models").TaskView,
         format_line_preview=host._module("modify_feedback").format_line_preview,
         core=host.core,
         format_local=host._fmtlocal,
@@ -32,11 +47,21 @@ def line_preview_ports_for(host: Any) -> LinePreviewPorts:
     )
 
 
-def human_delta(port: HumanDeltaPort, start: Any, end: Any, prefer_months: bool = True) -> Any:
-    return port.humanize(start, end, use_months_days=bool(prefer_months))
+def human_delta(
+    port: HumanDeltaPort,
+    start: datetime,
+    end: datetime,
+    prefer_months: bool = True,
+) -> str:
+    return port.humanize(start, end, bool(prefer_months))
 
 
-def on_time_delta(port: HumanDeltaPort, due_dt: Any, end_dt: Any, tol_secs: int = 60) -> Any:
+def on_time_delta(
+    port: HumanDeltaPort,
+    due_dt: datetime | None,
+    end_dt: datetime | None,
+    tol_secs: int = 60,
+) -> str:
     if not (due_dt and end_dt):
         return ""
     diff = (end_dt - due_dt).total_seconds()
@@ -49,24 +74,66 @@ def on_time_delta(port: HumanDeltaPort, due_dt: Any, end_dt: Any, tol_secs: int 
     return "[green](on time)[/]"
 
 
+def format_timedelta_short(value: timedelta) -> str:
+    seconds = int(value.total_seconds())
+    if seconds < 0:
+        return "-" + format_timedelta_short(timedelta(seconds=-seconds))
+    if seconds % 86400 == 0:
+        return f"{seconds // 86400}d"
+    units = (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1))
+    parts: list[str] = []
+    remaining = seconds
+    for label, unit_seconds in units:
+        if remaining >= unit_seconds:
+            count, remaining = divmod(remaining, unit_seconds)
+            parts.append(f"{count}{label}")
+    return "".join(parts) if parts else "0s"
+
+
 def line_preview(
     ports: LinePreviewPorts,
     link_no: int,
     task: TaskPayload,
-    child_due_utc: Any,
+    child_due_utc: datetime | None,
     child_short: str,
-    now_utc: Any,
-    **kwargs: Any,
+    now_utc: datetime,
+    *,
+    child_field: str = "due",
+    cap_no: int | None = None,
+    until_dt: datetime | None = None,
+    until_no: int | None = None,
+    child_until_dt: datetime | None = None,
+    kind: str = "cp",
+    minimal: bool = False,
 ) -> str:
-    task_view = ports.task_view.from_mapping(task)
+    def format_on_time_delta(due: datetime | None, end: datetime | None) -> str:
+        return on_time_delta(ports.delta, due, end)
+
+    def format_human_delta(start: datetime, end: datetime, prefer: bool = True) -> str:
+        return human_delta(ports.delta, start, end, prefer)
+
     return ports.format_line_preview(
-        link_no, task_view, child_due_utc, child_short, now_utc,
+        link_no, task, child_due_utc, child_short, now_utc,
+        child_field=child_field,
+        cap_no=cap_no,
+        until_dt=until_dt,
+        until_no=until_no,
+        child_until_dt=child_until_dt,
+        kind=kind,
+        minimal=minimal,
         core=ports.core,
         format_local=ports.format_local,
-        on_time_delta=lambda due, end, tol=60: on_time_delta(ports.delta, due, end, tol),
-        human_delta=lambda start, end, prefer=True: human_delta(ports.delta, start, end, prefer),
-        **kwargs,
+        on_time_delta=format_on_time_delta,
+        human_delta=format_human_delta,
     )
 
 
-__all__ = ("HumanDeltaPort", "LinePreviewPorts", "line_preview_ports_for", "human_delta", "on_time_delta", "line_preview")
+__all__ = (
+    "HumanDeltaPort",
+    "LinePreviewPorts",
+    "line_preview_ports_for",
+    "human_delta",
+    "on_time_delta",
+    "format_timedelta_short",
+    "line_preview",
+)

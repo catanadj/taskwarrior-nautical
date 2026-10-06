@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from collections import OrderedDict
 import time
-from typing import Any, Protocol
+from typing import Protocol
 
 from .integration_context import IntegrationContext
 from .operator_models import OperatorContractError, OperatorLimits, OperatorRequest
@@ -63,20 +63,20 @@ class OperatorInvocationCache:
     """Bounded, invocation-local memoization with explicit reset semantics."""
 
     max_entries: int = 128
-    _entries: OrderedDict[str, Any] = field(default_factory=OrderedDict)
+    _entries: OrderedDict[str, object] = field(default_factory=OrderedDict)
 
     def __post_init__(self) -> None:
         if isinstance(self.max_entries, bool) or not isinstance(self.max_entries, int) or self.max_entries < 1:
             raise OperatorContextError("cache max_entries must be a positive integer")
         self._entries.clear()
 
-    def get(self, key: str) -> Any | None:
+    def get(self, key: str) -> object | None:
         value = self._entries.get(str(key))
         if value is not None:
             self._entries.move_to_end(str(key))
         return value
 
-    def put(self, key: str, value: Any) -> None:
+    def put(self, key: str, value: object) -> None:
         normalized = str(key)
         self._entries[normalized] = value
         self._entries.move_to_end(normalized)

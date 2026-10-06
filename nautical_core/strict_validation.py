@@ -101,7 +101,7 @@ def validate_anchor_atom_strict(
             if spec.startswith("rand-"):
                 try:
                     mm = int(spec.split("-", 1)[1])
-                except Exception:
+                except ValueError:
                     raise parse_error_cls(f"Invalid token 'y:{spec}'")
                 if not (1 <= mm <= 12):
                     raise parse_error_cls(f"Invalid month in y:{spec}")

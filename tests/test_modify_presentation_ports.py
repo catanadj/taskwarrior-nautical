@@ -5,12 +5,49 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 import inspect
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 import unittest
 
 
 class ModifyPresentationPortTests(unittest.TestCase):
+    def test_ui_factory_has_typed_host_contract(self) -> None:
+        from nautical_core.modify_ui_effects import ui_ports_for
+
+        self.assertIsNot(get_type_hints(ui_ports_for)["host"], Any)
+
+    def test_panel_forwards_configured_live_duration_and_semantic_themes(self) -> None:
+        from nautical_core.modify_ui_effects import UIEffectsPorts, panel
+
+        rendered: list[tuple[str, list[tuple[str, str]], dict[str, object]]] = []
+        themes = {"info": {"border": "cyan", "title": "white"}}
+        ui = SimpleNamespace(panel_themes=lambda: dict(themes))
+        core = SimpleNamespace(
+            _import_sibling=lambda _name: ui,
+            PANEL_MODE="live",
+            LIVE_PANEL_DURATION_MS=415,
+            LIVE_PANEL_FOOTER="NAUTICAL",
+            FAST_COLOR=True,
+            render_panel=lambda title, rows, **kwargs: rendered.append((title, rows, kwargs)),
+        )
+        ports = UIEffectsPorts(
+            core=lambda: core,
+            load_core=lambda: None,
+            override=lambda _name: None,
+            emit_passthrough_json=lambda _task: self.fail("unexpected passthrough"),
+            emit_task_json=lambda *_args, **_kwargs: self.fail("unexpected task output"),
+            stderr_write=lambda _message: None,
+        )
+
+        panel(ports, "Live duration", [("Key", "Value")], kind="info")
+
+        title, rows, options = rendered[0]
+        self.assertEqual(title, "Live duration")
+        self.assertEqual(rows, [("Key", "Value")])
+        self.assertEqual(options["live_duration_ms"], 415)
+        self.assertEqual(options["themes"], themes)
+
     def test_presentation_operations_do_not_accept_hook_host(self) -> None:
-        from nautical_core import modify_presentation_effects as presentation
+        import nautical_core.modify_presentation_effects as presentation
 
         operation_names = (
             "chain_colour_for_task",
@@ -59,11 +96,45 @@ class ModifyPresentationPortTests(unittest.TestCase):
 
         self.assertEqual(passthrough, [task])
 
+    def test_panel_does_not_hide_unexpected_stderr_failure_during_fallback(self) -> None:
+        from nautical_core.modify_ui_effects import UIEffectsPorts, panel
+
+        ports = UIEffectsPorts(
+            core=lambda: None,
+            load_core=lambda: (_ for _ in ()).throw(RuntimeError("core unavailable")),
+            override=lambda _name: None,
+            emit_passthrough_json=lambda _task: None,
+            emit_task_json=lambda *_args, **_kwargs: None,
+            stderr_write=lambda _message: (_ for _ in ()).throw(
+                RuntimeError("stderr writer defect")
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "stderr writer defect"):
+            panel(ports, "fallback", [])
+
     def test_lifecycle_result_renderer_uses_only_panel_port(self) -> None:
-        from nautical_core.modify_presentation_effects import LifecycleResultPort, render_lifecycle_result
+        from nautical_core.modify_models import CompletionLifecycleResult, TaskView
+        from nautical_core.modify_presentation_effects import (
+            ChainStylePorts,
+            LifecycleResultPort,
+            render_lifecycle_result,
+        )
+        from nautical_core.task_models import TaskPayload
+        from collections import abc
+        from typing import Any, get_type_hints
+
+        self.assertEqual(
+            get_type_hints(ChainStylePorts)["root_uuid"],
+            abc.Callable[[TaskPayload], str],
+        )
+        result_annotations = get_type_hints(render_lifecycle_result)
+        self.assertIs(result_annotations["result"], CompletionLifecycleResult)
+        self.assertIs(result_annotations["_task"], TaskView)
+        self.assertIsNot(get_type_hints(LifecycleResultPort)["panel"], Any)
 
         rendered: list[tuple[str, list[tuple[str, str]], str]] = []
-        result = SimpleNamespace(
+        result = CompletionLifecycleResult(
             state="manual_review",
             reason="ambiguous child",
             child_short="abc123",
@@ -75,7 +146,7 @@ class ModifyPresentationPortTests(unittest.TestCase):
                 panel=lambda title, rows, **options: rendered.append((title, rows, options["kind"]))
             ),
             result,
-            {},
+            TaskView.from_mapping({}),
         )
 
         self.assertEqual(rendered[0][0], "⛓ Chain warning")

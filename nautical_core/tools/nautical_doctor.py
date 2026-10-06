@@ -13,7 +13,7 @@ import tomllib
 import zoneinfo
 from datetime import timezone
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
 ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
 RICH_SPEC_FACTORY: Callable[[str], Any] = importlib.util.find_spec
@@ -107,6 +107,8 @@ def _color_enabled(stream: Any = None) -> bool:
     try:
         return bool(target.isatty())
     except Exception:
+        # Terminal capability is presentation-only; a broken stream must not
+        # prevent Doctor from reporting health in plain text.
         return False
 
 
@@ -171,13 +173,6 @@ def _diagnostic_read_uow(
         IntegrationAccess.READ_ONLY,
     )
     return TaskwarriorUnitOfWork.create(context, env=diagnostic_env)
-
-
-def _resolve_hooks_dir(unit_of_work: TaskwarriorUnitOfWork, taskdata: Path) -> Path:
-    ok, raw = _task_get(unit_of_work, "rc.hooks.location")
-    if ok and raw:
-        return Path(raw).expanduser().resolve()
-    return (taskdata / "hooks").resolve()
 
 
 def _check_runtime(
@@ -299,7 +294,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             fix="Create config-nautical.toml or set NAUTICAL_CONFIG to a valid configuration file.",
         )
         from nautical_core.astronomical_seasons import seasonal_events_utc
-        astronomy_preflight = cast(Callable[[object], dict[str, Any]], astronomy.preflight)
+        astronomy_preflight = astronomy.preflight
         report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(
             {}, effective={}, config_dir=taskdata, timezone_factory=ZONEINFO_FACTORY,
             seasonal_events=seasonal_events_utc,
@@ -311,7 +306,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         return
     try:
         data = tomllib.loads(config.read_text(encoding="utf-8"))
-    except Exception as exc:
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         _finding(
             findings,
             "config.invalid",
@@ -326,7 +321,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     effective_value = snapshot.get("values")
     effective = effective_value if isinstance(effective_value, dict) else {}
     from nautical_core.astronomical_seasons import seasonal_events_utc
-    astronomy_preflight = cast(Callable[[object], dict[str, Any]], astronomy.preflight)
+    astronomy_preflight = astronomy.preflight
     report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(
         data, effective=effective, config_dir=config.parent, timezone_factory=ZONEINFO_FACTORY,
         seasonal_events=seasonal_events_utc, astronomy_preflight=astronomy_preflight,
@@ -647,7 +642,7 @@ def main() -> int:
                 parsed = tomllib.loads(deep_config_path.read_text(encoding="utf-8"))
                 if isinstance(parsed, dict):
                     deep_data = parsed
-            except Exception:
+            except (OSError, UnicodeError, tomllib.TOMLDecodeError):
                 # The normal configuration check already reports parse errors.
                 deep_data = {}
         deep_resources: dict[str, object] = {}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from dev_tools.golden_tests import installer, operator, performance, recurrence
+from dev_tools.golden_tests import installer, navigator, operator
 from dev_tools.perf import (
     anchor_file_workloads,
     cache_workloads,
@@ -14,13 +14,14 @@ from dev_tools.perf import (
     scheduler_workloads,
     telemetry,
 )
-from nautical_core import callback_ports, lifecycle_outbox_codec
-from nautical_core.lifecycle_models import ExecutionStage
+import nautical_core.callback_ports as callback_ports
+import nautical_core.lifecycle.outbox_codec as lifecycle_outbox_codec
+from nautical_core.lifecycle.models import ExecutionStage
 
 
 class ExtractedWorkloadContractTests(unittest.TestCase):
     def test_extracted_golden_modules_register_callable_cases(self) -> None:
-        for module in (installer, operator, performance, recurrence):
+        for module in (installer, navigator, operator):
             self.assertTrue(module.TESTS)
             self.assertTrue(all(callable(case) for case in module.TESTS))
 

@@ -3,8 +3,13 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from nautical_core.modify_models import CoerceIntCallback
+    from nautical_core.task_models import TaskDraft
 
 
 _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
@@ -47,12 +52,12 @@ def categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
 
 
 def stable_child_uuid(
-    parent_task: Mapping[str, object] | None,
-    child_task: Mapping[str, object] | None,
+    parent_task: Mapping[str, Any] | None,
+    child_task: Mapping[str, Any] | None,
     *,
-    task_uuid_or_empty: Any,
-    coerce_int: Any,
-    stable_child_uuid_namespace: Any,
+    task_uuid_or_empty: Callable[[dict[str, Any]], str],
+    coerce_int: CoerceIntCallback,
+    stable_child_uuid_namespace: uuid.UUID,
 ) -> str:
     """Return a cross-device-stable UUID for a child slot when possible."""
     if not isinstance(parent_task, dict) or not isinstance(child_task, dict):
@@ -90,8 +95,8 @@ def child_uuid_for_spawn(
     child_task: dict | None,
     env: dict,
     *,
-    stable_child_uuid: Any,
-    generate_child_uuid_candidate: Any,
+    stable_child_uuid: Callable[[dict | None, dict | None], str],
+    generate_child_uuid_candidate: Callable[[Mapping[str, str]], str],
 ) -> str:
     stable = stable_child_uuid(parent_task, child_task)
     if stable:
@@ -104,10 +109,12 @@ def prepare_spawn_child_payload(
     parent_task: dict[str, Any] | None,
     env: dict[str, Any],
     *,
-    child_uuid_for_spawn: Any,
-    fmt_isoz: Any,
-    now_utc: Any,
-) -> tuple[object, str, str]:
+    child_uuid_for_spawn: Callable[
+        [dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]], str
+    ],
+    fmt_isoz: Callable[[datetime], str],
+    now_utc: Callable[[], datetime],
+) -> tuple[TaskDraft, str, str]:
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.task_models import NauticalTask, TaskDraft
 

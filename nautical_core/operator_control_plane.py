@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Any, cast
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Iterable
 from collections.abc import Sequence
 
+from .chain_integrity_context import IntegrityContext
 from .chain_integrity_models import IntegrityFinding
 from .chain_repair_planner import IntegrityPlanningResult
-from .lifecycle_models import LifecycleEvent, LifecyclePlan, TaskSnapshot
-from .lifecycle_planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
+from .lifecycle.models import LifecycleEvent, LifecyclePlan, TaskSnapshot
+from .lifecycle.planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
 from .chain_repair_planner import IntegrityRepairPlanner
 from .chain_integrity_engine import ChainIntegrityEngine
+from .chain_integrity_engine import IntegrityApplicationResult, IntegrityEngineResult
+from .chain_integrity_application import IntegrityMutationExecutor, IntegrityMutationRequestFactory
 from .chain_integrity_recovery import RecoveryAudit
 from .chain_generation import ChainGenerationService
+from .lifecycle.outbox_operations import LifecycleExecutionOutboxPort
 from .operator_application import DomainApplicationRegistry
 from .operator_domain_planner import OperatorDomainPlanner
 from .operator_domain_plans import DomainApplicationAuthorization
@@ -28,6 +35,8 @@ from .operator_context import OperatorBudgetLedger, OperatorInvocationContext
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .task_models import TaskObservation
 from .operator_health_service import OperatorHealthReport, OperatorHealthService
+from .taskwarrior_uow import TaskwarriorUnitOfWork
+from .integration_context import ValidatedNauticalConfiguration
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,10 +45,14 @@ class OperatorControlPlane:
 
     planner: OperatorDomainPlanner
     applications: DomainApplicationRegistry
-    configuration: Any | None = None
+    configuration: ValidatedNauticalConfiguration | None = None
 
     @classmethod
-    def from_configuration(cls, configuration: object, applications: DomainApplicationRegistry) -> "OperatorControlPlane":
+    def from_configuration(
+        cls,
+        configuration: ValidatedNauticalConfiguration | None,
+        applications: DomainApplicationRegistry,
+    ) -> "OperatorControlPlane":
         """Build the planner bundle from one already-validated configuration."""
         if configuration is None:
             raise ValueError("operator control plane requires validated configuration")
@@ -68,8 +81,8 @@ class OperatorControlPlane:
             schedule_fingerprint=str(configuration.scheduler_fingerprint),
         )
         return engine.plan_recovery_plan(
-            cast(Any, parent),
-            existing_children=cast(Any, existing_children),
+            parent.observation,
+            existing_children=[child.observation for child in existing_children],
             hook=hook,
             generation=generation,
         )
@@ -77,7 +90,9 @@ class OperatorControlPlane:
     def plan_recovery_candidates(
         self,
         candidates: Sequence[TaskSnapshot],
-        children_for: object,
+        children_for: Callable[
+            [TaskSnapshot], tuple[TaskSnapshot, ...] | list[TaskSnapshot]
+        ],
         *,
         hook: object,
         generation: ChainGenerationService | None = None,
@@ -97,32 +112,40 @@ class OperatorControlPlane:
 
     def drain_integrity(
         self,
-        outbox: object,
+        outbox: LifecycleExecutionOutboxPort,
         *,
-        unit_of_work: object,
-        executor: object,
-        request_factory: object,
+        unit_of_work: TaskwarriorUnitOfWork,
+        executor: IntegrityMutationExecutor,
+        request_factory: IntegrityMutationRequestFactory,
         owner: str,
-    ) -> tuple[object, ...]:
+    ) -> tuple[IntegrityApplicationResult, ...]:
         """Drain durable integrity work through the control-plane engine."""
         configuration = self.configuration
         if configuration is None:
             raise ValueError("integrity drain requires validated configuration")
-        snapshots = OperatorSnapshotProvider.for_unit_of_work(cast(Any, unit_of_work))
+        snapshots = OperatorSnapshotProvider.for_unit_of_work(unit_of_work)
         engine = ChainIntegrityEngine(
             snapshots,
             configuration_fingerprint=str(configuration.fingerprint),
             schedule_fingerprint=str(configuration.scheduler_fingerprint),
         )
         return engine.drain(
-            cast(Any, outbox),
+            outbox,
             owner=owner,
-            executor=cast(Any, executor),
-            request_factory=cast(Any, request_factory),
+            executor=executor,
+            request_factory=request_factory,
         )
 
-    def audit_native_until(self, rows: object, *, predecessor: object, safe_parse_datetime: object,
-                           fmt_isoz: object, utc_to_local_naive: object, local_naive_to_utc: object) -> RecoveryAudit:
+    def audit_native_until(
+        self,
+        rows: Iterable[TaskObservation],
+        *,
+        predecessor: Callable[[TaskObservation], TaskObservation | None],
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        fmt_isoz: Callable[[datetime], str],
+        utc_to_local_naive: Callable[[datetime], datetime],
+        local_naive_to_utc: Callable[[datetime], datetime],
+    ) -> RecoveryAudit:
         """Audit native-until windows through the shared integrity engine."""
         engine = ChainIntegrityEngine.lifecycle_only(
             configuration_fingerprint="reconcile-recovery",
@@ -137,13 +160,49 @@ class OperatorControlPlane:
             local_naive_to_utc=local_naive_to_utc,
         )
 
-    def apply_native_until(self, candidate: object, previous: object, item: object, **kwargs: object) -> object:
+    def apply_native_until(
+        self,
+        row: TaskObservation,
+        previous: TaskObservation | None,
+        item: dict[str, Any],
+        *,
+        repaired: str,
+        taskdata: Path | None,
+        lease_held: bool,
+        mutation_lock: Callable[[Path, bool], AbstractContextManager[bool]],
+        parent_lock: Callable[[str], AbstractContextManager[bool]],
+        refresh_parent: Callable[[TaskObservation], TaskObservation | None],
+        refresh_previous: Callable[[TaskObservation], TaskObservation | None],
+        guard_error: Callable[
+            [TaskObservation, TaskObservation | None, TaskObservation | None], str | None
+        ],
+        configuration: Callable[[], tuple[str, str]],
+        mutate: Callable[[TaskObservation, str], None],
+        verify: Callable[[TaskObservation | None, str], bool],
+        on_lock_busy: Callable[[str], None],
+    ) -> str | None:
         """Apply one guarded native-until repair through the shared engine."""
         engine = ChainIntegrityEngine.lifecycle_only(
             configuration_fingerprint="reconcile-recovery",
             schedule_fingerprint="reconcile-recovery",
         )
-        return engine.apply_native_until_candidate(candidate, previous, item, **kwargs)
+        return engine.apply_native_until_candidate(
+            row,
+            previous,
+            item,
+            repaired=repaired,
+            taskdata=taskdata,
+            lease_held=lease_held,
+            mutation_lock=mutation_lock,
+            parent_lock=parent_lock,
+            refresh_parent=refresh_parent,
+            refresh_previous=refresh_previous,
+            guard_error=guard_error,
+            configuration=configuration,
+            mutate=mutate,
+            verify=verify,
+            on_lock_busy=on_lock_busy,
+        )
 
 
     def plan_lifecycle(
@@ -156,7 +215,11 @@ class OperatorControlPlane:
     ) -> LifecyclePlan:
         return self.planner.plan_lifecycle(snapshot, event, preflight=preflight, carry_validator=carry_validator)
 
-    def plan_integrity(self, context: object, findings: tuple[IntegrityFinding, ...]) -> IntegrityPlanningResult:
+    def plan_integrity(
+        self,
+        context: IntegrityContext,
+        findings: tuple[IntegrityFinding, ...],
+    ) -> IntegrityPlanningResult:
         return self.planner.plan_integrity(context, findings)
 
     def apply_domain(self, operation: str, authorization: DomainApplicationAuthorization) -> OperatorResult:
@@ -202,6 +265,8 @@ class OperatorControlPlane:
             if not isinstance(result, OperatorResult):
                 raise OperatorContractError("domain owner returned an untyped result")
         except Exception as exc:
+            # An owner can fail after an external effect has started; report an
+            # uncertain, retryable phase outcome instead of implying no effect.
             phases.append(
                 OperatorPhaseResult(
                     OperatorPhase.APPLY,
@@ -333,23 +398,23 @@ class OperatorControlPlane:
         return inspect_occurrence_collection(collection, scope=scope)
 
     def audit_integrity(
-        self, unit_of_work: object, rows: Sequence[TaskObservation]
-    ) -> tuple[object | None, list[dict[str, object]]]:
+        self, unit_of_work: TaskwarriorUnitOfWork, rows: Sequence[TaskObservation]
+    ) -> tuple[IntegrityEngineResult | None, list[dict[str, object]]]:
         """Audit an authoritative task snapshot through the shared integrity service."""
         from .integrity_audit_service import audit_authoritative_rows
 
-        return audit_authoritative_rows(cast(Any, unit_of_work), rows)
+        return audit_authoritative_rows(unit_of_work, rows)
 
     def diagnose_chains(
         self,
-        unit_of_work: object,
+        unit_of_work: TaskwarriorUnitOfWork,
         *,
         budget: OperatorBudgetLedger | None = None,
     ) -> tuple[dict[str, int], list[dict[str, object]]]:
         """Export and audit chain state as one read-only diagnosis request."""
         from .integration_models import Absent, Found, Unavailable
 
-        repository = getattr(unit_of_work, "repository", None)
+        repository = unit_of_work.repository
         if repository is None:
             return {"tasks": 0, "nautical_tasks": 0, "chains": 0}, [{
                 "id": "chains.export",

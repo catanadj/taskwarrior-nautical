@@ -46,12 +46,9 @@ def build_and_cache_hints(
         # but validate the stored DNF as a second line of defense.  This keeps
         # manually restored or legacy entries from bypassing current parser
         # and satisfiability checks.
-        try:
-            current_dnf = validate_anchor_expr_strict(anchor_expr)
-            if _canonical(cached.get("dnf")) == _canonical(current_dnf):
-                return cached
-        except Exception:
-            pass
+        current_dnf = validate_anchor_expr_strict(anchor_expr)
+        if _canonical(cached.get("dnf")) == _canonical(current_dnf):
+            return cached
 
     dnf = validate_anchor_expr_strict(anchor_expr)
     natural = describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)

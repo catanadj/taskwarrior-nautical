@@ -4,6 +4,7 @@ import json
 from datetime import timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Hashable, Mapping, get_type_hints
 import unittest
 
 from nautical_core.integration_models import (
@@ -58,6 +59,22 @@ def unit_of_work(taskdata: str | Path):
 
 
 class TaskReadSnapshotContractTests(unittest.TestCase):
+    def test_snapshot_index_helpers_require_hashable_keys(self) -> None:
+        from nautical_core.task_read_repository import _append_index, _freeze_index
+
+        append_hints = get_type_hints(_append_index)
+        key_type = append_hints["key"]
+        self.assertEqual(key_type.__bound__, Hashable)
+        self.assertEqual(append_hints["row"], TaskObservation)
+        self.assertEqual(
+            append_hints["index"],
+            dict[key_type, list[TaskObservation]],
+        )
+        self.assertEqual(
+            get_type_hints(_freeze_index)["return"],
+            Mapping[key_type, tuple[TaskObservation, ...]],
+        )
+
     def test_repository_metrics_report_total_and_slowest_command_duration(self) -> None:
         class Client:
             def execute(self, args, *, purpose, timeout, **_kwargs):

@@ -4,9 +4,78 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
-from typing import Any
+from datetime import date, datetime, timedelta
+from typing import NoReturn, Protocol
 
+from .modify_models import PanelCallback
+from .parsing.parser_models import ParseError
+from .recurrence_context import RecurrenceContext
 from .task_models import TaskPayload
+
+
+class NormalizeTimeSlots(Protocol):
+    def __call__(
+        self,
+        value: object,
+        target_date: date | None = None,
+    ) -> list[tuple[int, int]]: ...
+
+
+class CollectAnchorTimeSlots(Protocol):
+    def __call__(
+        self,
+        dnf: object,
+        anchor_file_value: object,
+        fallback_hhmm: tuple[int, int],
+        *,
+        normalize_time_slots: NormalizeTimeSlots,
+        anchor_file_dir: str,
+        target_date: date,
+        resolve_time_slots: Callable[[object, date], list[tuple[int, int]]],
+        recurrence_context: RecurrenceContext,
+    ) -> tuple[tuple[int, int], ...]: ...
+
+
+class ValidateCalendarSlots(Protocol):
+    def __call__(
+        self,
+        until_dt: datetime | None,
+        target_dt: datetime | None,
+        slots: tuple[tuple[int, int], ...],
+        *,
+        to_local: Callable[[datetime], datetime],
+    ) -> tuple[bool, str | None]: ...
+
+
+class ValidationPanel(Protocol):
+    def __call__(
+        self,
+        title: str,
+        rows: list[tuple[str, str]],
+        *,
+        kind: str,
+    ) -> object: ...
+
+
+class NativeUntilSlotsValidationOperation(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        validate_anchor: Callable[[str], object],
+        collect_time_slots: CollectAnchorTimeSlots,
+        validate_time_slots: ValidateCalendarSlots,
+        normalize_time_slots: NormalizeTimeSlots,
+        anchor_file_dir: str,
+        recurrence_context: Callable[[TaskPayload], RecurrenceContext],
+        to_local: Callable[[datetime], datetime],
+        format_local: Callable[[datetime], str],
+        astronomy_is_error: Callable[[BaseException], bool],
+        astronomy_error_message: Callable[[BaseException], str],
+        panel: ValidationPanel,
+        abort: Callable[[int], NoReturn],
+    ) -> None: ...
 
 
 @dataclass(slots=True)
@@ -15,14 +84,13 @@ class CompletionValidationServices:
     reject_conflicting_types: Callable[[str, str, str], None]
     validate_omit: Callable[[str, str, str, str], None]
     validate_chain_limits: Callable[[TaskPayload], None]
-    parse_cp_sequence: Callable[[str], Any]
+    parse_cp_sequence: Callable[[str], list[timedelta] | None]
     cp_sequence_parse_error: Callable[[str], str | None]
     field_changed: Callable[[TaskPayload, TaskPayload, str], bool]
     validate_anchor: Callable[[str], None]
-    validate_cp: Callable[[str, Any, Any], None]
+    validate_cp: Callable[[str, object, object], None]
     apply_transition: Callable[[TaskPayload, TaskPayload], None]
-    fail: Callable[[str, str], Any]
-    diagnostic: Callable[[str], None]
+    fail: Callable[[str, str], NoReturn]
 
 
 def validate_completion_cp_and_anchor(
@@ -50,16 +118,10 @@ def validate_completion_cp_and_anchor(
         services.validate_chain_limits(new)
 
     if new_cp:
-        try:
-            sequence = services.parse_cp_sequence(new_cp)
-            if not sequence:
-                reason = services.cp_sequence_parse_error(new_cp) or f"invalid duration format '{new_cp}'"
-                raise ValueError(reason)
-        except ValueError as exc:
-            services.fail("Invalid CP", str(exc))
-        except Exception as exc:
-            services.diagnostic(f"cp parse unexpected error: {exc}")
-            services.fail("CP parsing error", "Unexpected error while parsing cp")
+        sequence = services.parse_cp_sequence(new_cp)
+        if not sequence:
+            reason = services.cp_sequence_parse_error(new_cp) or f"invalid duration format '{new_cp}'"
+            services.fail("Invalid CP", reason)
 
         if (
             services.field_changed(old, new, "anchor")
@@ -77,7 +139,7 @@ def validate_completion_cp_and_anchor(
 
         try:
             services.apply_transition(old, new)
-        except Exception as exc:
+        except ValueError as exc:
             services.fail(
                 "Nautical recurrence activation failed",
                 f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}",
@@ -86,43 +148,15 @@ def validate_completion_cp_and_anchor(
     return new_cp, new_anchor, new_anchor_file
 
 
-def validate_anchor_on_modify(
-    expr: str,
-    *,
-    parse_anchor_expr: Any,
-    validate_anchor_expr: Any,
-) -> None:
-    """Mirror strict on-add anchor checks for ordinary modifications."""
-    if not expr or not expr.strip():
-        raise ValueError("anchor is required if chaining by anchor")
-    try:
-        parse_anchor_expr(expr)
-    except Exception as exc:
-        raise ValueError(f"anchor syntax error: {exc}") from exc
-    try:
-        validate_anchor_expr(expr)
-    except Exception as exc:
-        raise ValueError(f"anchor validation failed: {exc}") from exc
-
-
-def validate_omit_on_modify(expr: str, *, validate_omit_expr: Any) -> None:
-    if not expr or not expr.strip():
-        return
-    try:
-        validate_omit_expr(expr)
-    except Exception as exc:
-        raise ValueError(f"omit validation failed: {exc}") from exc
-
-
 def validate_cp_on_modify(
     cp_value: str,
-    chain_max_value: Any,
-    chain_until_value: Any,
+    chain_max_value: object,
+    chain_until_value: object,
     *,
-    parse_cp_sequence: Any,
-    cp_sequence_parse_error: Any,
-    parse_chain_max: Any,
-    parse_datetime: Any,
+    parse_cp_sequence: Callable[[str], list[timedelta] | None],
+    cp_sequence_parse_error: Callable[[str], str | None],
+    parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+    parse_datetime: Callable[[object], datetime | None],
 ) -> None:
     """Validate a CP value and its optional chain limits."""
     if not cp_value or not cp_value.strip():
@@ -134,7 +168,7 @@ def validate_cp_on_modify(
     _cpmax, chain_max_error = parse_chain_max(chain_max_value)
     if chain_max_error:
         raise ValueError(chain_max_error)
-    chain_until = (chain_until_value or "").strip()
+    chain_until = str(chain_until_value or "").strip()
     if chain_until and parse_datetime(chain_until) is None:
         raise ValueError(f"Invalid chainUntil '{chain_until}'")
 
@@ -142,11 +176,13 @@ def validate_cp_on_modify(
 def validate_chain_limits_on_modify(
     task: TaskPayload,
     *,
-    parse_chain_max: Any,
-    parse_datetime: Any,
-    validate_until_not_past: Any,
-    now_utc: Any,
-    fail: Any,
+    parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+    parse_datetime: Callable[[object], datetime | None],
+    validate_until_not_past: Callable[
+        [datetime, datetime], tuple[bool, str | None]
+    ],
+    now_utc: Callable[[], datetime],
+    fail: Callable[[str, str], object],
 ) -> None:
     """Normalize and validate chainMax/chainUntil during modification."""
     cpmax, chain_max_error = parse_chain_max(task.get("chainMax"))
@@ -170,13 +206,17 @@ def validate_chain_limits_on_modify(
 def validate_native_until_after_target_or_fail(
     task: TaskPayload,
     *,
-    validate_anchor_mode: Any,
-    safe_parse_datetime: Any,
-    validate_after_target: Any,
-    format_local: Any,
-    panel: Any,
-    fail: Any,
-    abort: Any,
+    validate_anchor_mode: Callable[
+        [object, object, object, object], tuple[bool, str | None]
+    ],
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+    validate_after_target: Callable[
+        [datetime | None, datetime | None, str], tuple[bool, str | None]
+    ],
+    format_local: Callable[[datetime], str],
+    panel: PanelCallback,
+    fail: Callable[[str, str], NoReturn],
+    abort: Callable[[int], NoReturn],
 ) -> None:
     """Reject native expiration windows that cannot contain the target."""
     until_raw = task.get("until")
@@ -232,19 +272,19 @@ def validate_native_until_after_target_or_fail(
 def validate_native_until_anchor_slots_or_fail(
     task: TaskPayload,
     *,
-    safe_parse_datetime: Any,
-    validate_anchor: Any,
-    collect_time_slots: Any,
-    validate_time_slots: Any,
-    normalize_time_slots: Any,
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+    validate_anchor: Callable[[str], object],
+    collect_time_slots: CollectAnchorTimeSlots,
+    validate_time_slots: ValidateCalendarSlots,
+    normalize_time_slots: NormalizeTimeSlots,
     anchor_file_dir: str,
-    recurrence_context: Any,
-    to_local: Any,
-    format_local: Any,
-    astronomy_is_error: Any,
-    astronomy_error_message: Any,
-    panel: Any,
-    abort: Any,
+    recurrence_context: Callable[[TaskPayload], RecurrenceContext],
+    to_local: Callable[[datetime], datetime],
+    format_local: Callable[[datetime], str],
+    astronomy_is_error: Callable[[BaseException], bool],
+    astronomy_error_message: Callable[[BaseException], str],
+    panel: ValidationPanel,
+    abort: Callable[[int], NoReturn],
 ) -> None:
     """Reject native expiration windows before every timed anchor slot."""
     until_raw = task.get("until")
@@ -263,7 +303,7 @@ def validate_native_until_anchor_slots_or_fail(
     if anchor_value:
         try:
             dnf = validate_anchor(anchor_value)
-        except Exception:
+        except (ParseError, ValueError):
             return
     target_local = to_local(target_dt)
     try:
@@ -285,7 +325,7 @@ def validate_native_until_anchor_slots_or_fail(
                 kind="error",
             )
             abort(1)
-        return
+        raise
     is_valid, reason = validate_time_slots(
         until_dt,
         target_dt,
@@ -307,10 +347,8 @@ def validate_native_until_anchor_slots_or_fail(
 
 
 __all__ = (
-    "validate_anchor_on_modify",
     "validate_chain_limits_on_modify",
     "validate_cp_on_modify",
     "validate_native_until_after_target_or_fail",
     "validate_native_until_anchor_slots_or_fail",
-    "validate_omit_on_modify",
 )

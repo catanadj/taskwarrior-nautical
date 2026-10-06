@@ -1,32 +1,47 @@
 from __future__ import annotations
 
+from datetime import datetime
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 from dataclasses import dataclass
-from typing import Any
-
-from .callback_ports import CallbackPort
+from typing import Any, Callable
 
 
 @dataclass(frozen=True, slots=True)
 class QueryPorts:
-    root_uuid: CallbackPort
-    tw_get_cached: CallbackPort
-    dtparse: CallbackPort
-    tolocal: CallbackPort
-    cache_get: CallbackPort
-    cache_set: CallbackPort
-    diag_count: CallbackPort
+    root_uuid: Callable[[TaskPayload], str]
+    tw_get_cached: Callable[[str], str]
+    dtparse: Callable[[object], datetime | None]
+    tolocal: Callable[[datetime], datetime]
+    cache_get: Callable[[str, object], object]
+    cache_set: Callable[[str, object, object], None]
+    diag_count: Callable[[str], None]
+    diagnostic: Callable[[str], None]
+
+
+def _diagnose_optional_failure(
+    diagnostic: Callable[[str], None] | None,
+    operation: str,
+    exc: Exception,
+) -> None:
+    if diagnostic is None:
+        return
+    try:
+        diagnostic(f"optional {operation} failed ({type(exc).__name__})")
+    except Exception:
+        # Diagnostics must not turn optional display context into hook failure.
+        pass
 
 
 def chain_root_and_age(
     task: TaskPayload,
-    now_utc: Any,
+    now_utc: datetime,
     *,
-    root_uuid_from: Any,
-    tw_get_cached: Any,
-    dtparse: Any,
-    tolocal: Any,
+    root_uuid_from: Callable[[TaskPayload], str],
+    tw_get_cached: Callable[[str], str],
+    dtparse: Callable[[object], datetime | None],
+    tolocal: Callable[[datetime], datetime],
+    diagnostic: Callable[[str], None] | None = None,
 ) -> tuple[str, int | None]:
     try:
         root_short = root_uuid_from(task)
@@ -41,11 +56,18 @@ def chain_root_and_age(
                 if age_days < 0:
                     age_days = 0
         return root_short or "—", age_days
-    except Exception:
+    except Exception as exc:
+        # Chain age is optional display context; never fail a task mutation for it.
+        _diagnose_optional_failure(diagnostic, "chain-root context", exc)
         return "—", None
 
 
-def format_root_and_age(task: TaskPayload, now_utc: Any, *, chain_root_and_age: Any) -> str:
+def format_root_and_age(
+    task: TaskPayload,
+    now_utc: datetime,
+    *,
+    chain_root_and_age: Callable[[TaskPayload, datetime], tuple[str, int | None]],
+) -> str:
     root_short, age_days = chain_root_and_age(task, now_utc)
     if not root_short or root_short == "—":
         return "—"
@@ -54,11 +76,15 @@ def format_root_and_age(task: TaskPayload, now_utc: Any, *, chain_root_and_age: 
     return root_short
 
 
-def cached_chain_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc: Any) -> tuple[str, int | None]:
+def cached_chain_root_and_age(
+    ports: QueryPorts, task: TaskPayload, now_utc: datetime
+) -> tuple[str, int | None]:
     """Resolve and cache chain root age within the current modify invocation."""
     try:
         cache_key = (ports.root_uuid(task), str(ports.tolocal(now_utc).date()))
-    except Exception:
+    except Exception as exc:
+        # A cache key is only an optimization; recompute the context uncached.
+        _diagnose_optional_failure(ports.diagnostic, "chain-root cache key", exc)
         cache_key = None
     if cache_key is not None:
         cached = ports.cache_get("chain_root_age", cache_key)
@@ -73,17 +99,22 @@ def cached_chain_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc: Any
         tw_get_cached=ports.tw_get_cached,
         dtparse=ports.dtparse,
         tolocal=ports.tolocal,
+        diagnostic=ports.diagnostic,
     )
     if cache_key is not None:
         ports.cache_set("chain_root_age", cache_key, result)
     return result
 
 
-def cached_format_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc: Any) -> str:
+def cached_format_root_and_age(
+    ports: QueryPorts, task: TaskPayload, now_utc: datetime
+) -> str:
     """Format a cached chain root/age value for presentation consumers."""
     try:
         cache_key = (ports.root_uuid(task), str(ports.tolocal(now_utc).date()))
-    except Exception:
+    except Exception as exc:
+        # A cache key is only an optimization; recompute the formatted context.
+        _diagnose_optional_failure(ports.diagnostic, "formatted-root cache key", exc)
         cache_key = None
     if cache_key is not None:
         cached = ports.cache_get("format_root_age", cache_key)
@@ -112,4 +143,5 @@ def query_ports_for(host: Any) -> QueryPorts:
         cache_get=host._query_ctx_get,
         cache_set=host._query_ctx_set,
         diag_count=host._diag_count,
+        diagnostic=host._diag,
     )

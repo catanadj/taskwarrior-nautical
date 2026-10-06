@@ -2,37 +2,255 @@ from __future__ import annotations
 
 import os
 import importlib
+from typing import BinaryIO, Protocol
 from types import MappingProxyType
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, TypedDict, cast, overload
 
 from . import config_schema
 
-cache_support: Any = None
-config_support: Any = None
-diagnostic_warnings: Any = None
+if TYPE_CHECKING:
+    from .config_support import ConfigReadResultPort as ConfigSupportReadResultPort
 
 
-def _load_support_module(name: str) -> Any:
+class TomlParserPort(Protocol):
+    """Parser shape for the lazily loaded stdlib/optional TOML module."""
+
+    def load(self, fp: BinaryIO) -> dict: ...
+
+
+class ValidatedUserDirPort(Protocol):
+    def __call__(
+        self,
+        path_value: str,
+        *,
+        label: str,
+        trust_env: str = "",
+        env_map: Mapping[str, Any] | None = None,
+        warn_on_error: bool = True,
+    ) -> str: ...
+
+
+class CacheDirectorySupportPort(Protocol):
+    def nautical_cache_dir(
+        self, *, validated_user_dir: ValidatedUserDirPort
+    ) -> str: ...
+
+
+class DiagnosticWarningsPort(Protocol):
+    def warn_once_per_day(
+        self,
+        key: str,
+        message: str,
+        *,
+        cache_dir: str,
+        require_diag: bool,
+    ) -> None: ...
+
+    def warn_rate_limited_any(
+        self,
+        key: str,
+        message: str,
+        *,
+        cache_dir: str,
+        min_interval_s: float = 3600.0,
+    ) -> None: ...
+
+    def warn_missing_toml_parser(
+        self,
+        config_path: str,
+        *,
+        warn_once_per_day: Callable[[str, str], None],
+        warn_once_per_day_any: Callable[[str, str], None],
+    ) -> None: ...
+
+    def warn_toml_parse_error(
+        self,
+        config_path: str,
+        err: Exception,
+        *,
+        warn_once_per_day: Callable[[str, str], None],
+        warn_once_per_day_any: Callable[[str, str], None],
+    ) -> None: ...
+
+
+class ConfigReadResultPort(Protocol):
+    @property
+    def data(self) -> dict: ...
+
+    @property
+    def is_absent(self) -> bool: ...
+
+    @property
+    def is_invalid(self) -> bool: ...
+
+
+class ConfigSupportPort(Protocol):
+    def env_flag_true(self, name: str, env_map: Mapping[str, object] | None = None) -> bool: ...
+
+    def path_input_error(self, path_value: str) -> str | None: ...
+
+    def normalized_abspath(self, path_value: str) -> str: ...
+
+    def nearest_existing_dir(self, path_value: str) -> str | None: ...
+
+    def world_writable_without_sticky(self, mode: int) -> bool: ...
+
+    def path_safety_error(self, path_value: str, *, expect_dir: bool = True) -> str | None: ...
+
+    def validated_user_dir(
+        self,
+        path_value: str,
+        *,
+        label: str,
+        trust_env: str = "",
+        env_map: Mapping[str, object] | None = None,
+        warn_on_error: bool = True,
+    ) -> str: ...
+
+    def warn_env_config_missing(
+        self,
+        env_path: str,
+        *,
+        warn_once_per_day_any: Callable[[str, str], None],
+    ) -> None: ...
+
+    def read_toml_result(
+        self,
+        path: str,
+        *,
+        tomllib_mod: TomlParserPort | None,
+        warn_missing_toml_parser: Callable[[str], None],
+        warn_toml_parse_error: Callable[[str, Exception], None],
+        error_sink: Callable[[str], None] | None = None,
+    ) -> ConfigSupportReadResultPort: ...
+
+    def config_paths(
+        self,
+        *,
+        warn_env_config_missing: Callable[[str], None],
+        taskdata: str | None = None,
+        error_sink: Callable[[str], None] | None = None,
+    ) -> list[str]: ...
+
+    def normalize_keys(self, data: dict) -> dict: ...
+
+    def load_config(
+        self,
+        *,
+        defaults: dict,
+        config_paths: Callable[[], list[str]],
+        read_toml_result: Callable[[str], ConfigSupportReadResultPort],
+        normalize_keys: Callable[[dict], dict],
+    ) -> dict: ...
+
+    def get_config(
+        self, conf_cache: dict | None, *, load_config: Callable[[], dict]
+    ) -> tuple[dict, dict]: ...
+
+    def conf_raw(self, conf: Mapping[str, object], key: str) -> object: ...
+
+    def conf_str(self, conf: Mapping[str, object], key: str, default: str) -> str: ...
+
+    def conf_int(
+        self,
+        conf: Mapping[str, object],
+        key: str,
+        default: int,
+        min_value: int | None = None,
+        max_value: int | None = None,
+    ) -> int: ...
+
+    def conf_bool(
+        self,
+        conf: Mapping[str, object],
+        key: str,
+        default: bool = False,
+        true_values: set[str] | None = None,
+        false_values: set[str] | None = None,
+    ) -> bool: ...
+
+    def conf_csv_or_list(
+        self,
+        conf: Mapping[str, object],
+        key: str,
+        default: list[str] | None = None,
+        lower: bool = False,
+    ) -> list[str]: ...
+
+    def conf_uda_field_list(
+        self, conf: Mapping[str, object], key: str
+    ) -> list[str]: ...
+
+    def trueish(self, value: object, default: bool = False) -> bool: ...
+
+
+SupportModuleName = Literal["config_support", "cache_support", "diagnostic_warnings"]
+SupportModule = ConfigSupportPort | CacheDirectorySupportPort | DiagnosticWarningsPort
+
+
+if TYPE_CHECKING:
+    from . import cache_support as _cache_support_module
+    from . import config_support as _config_support_module
+    from . import diagnostic_warnings as _diagnostic_warnings_module
+
+    _cache_support_contract: CacheDirectorySupportPort = _cache_support_module
+    _config_support_contract: ConfigSupportPort = _config_support_module
+    _diagnostic_warnings_contract: DiagnosticWarningsPort = _diagnostic_warnings_module
+
+
+cache_support: CacheDirectorySupportPort | None = None
+config_support: ConfigSupportPort | None = None
+diagnostic_warnings: DiagnosticWarningsPort | None = None
+
+
+@overload
+def _load_support_module(name: Literal["config_support"]) -> ConfigSupportPort: ...
+
+
+@overload
+def _load_support_module(name: Literal["cache_support"]) -> CacheDirectorySupportPort: ...
+
+
+@overload
+def _load_support_module(name: Literal["diagnostic_warnings"]) -> DiagnosticWarningsPort: ...
+
+
+def _load_support_module(name: SupportModuleName) -> SupportModule:
     global cache_support, config_support, diagnostic_warnings
-    module = globals().get(name)
-    if module is None:
-        module = importlib.import_module(f"nautical_core.{name}")
-        globals()[name] = module
-    return module
+    if name == "config_support":
+        if config_support is None:
+            config_support = cast(
+                ConfigSupportPort,
+                importlib.import_module("nautical_core.config_support"),
+            )
+        return config_support
+    if name == "cache_support":
+        if cache_support is None:
+            cache_support = cast(
+                CacheDirectorySupportPort,
+                importlib.import_module("nautical_core.cache_support"),
+            )
+        return cache_support
+    if diagnostic_warnings is None:
+        diagnostic_warnings = cast(
+            DiagnosticWarningsPort,
+            importlib.import_module("nautical_core.diagnostic_warnings"),
+        )
+    return diagnostic_warnings
 
-tomllib: Any = None
+tomllib: TomlParserPort | None = None
 
 
-def _load_tomllib() -> Any:
+def _load_tomllib() -> TomlParserPort | None:
     global tomllib
     if tomllib is not None:
         return tomllib
     try:
         tomllib = importlib.import_module("tomllib")  # Python 3.11+
-    except Exception:
+    except ImportError:
         try:
             tomllib = importlib.import_module("tomli")
-        except Exception:
+        except ImportError:
             tomllib = None
     return tomllib
 
@@ -70,7 +288,7 @@ class ConfigReloadResult(TypedDict, total=False):
     scheduler_fingerprint: str
 
 
-def env_flag_true(name: str, env_map: dict | None = None) -> bool:
+def env_flag_true(name: str, env_map: Mapping[str, Any] | None = None) -> bool:
     return _load_support_module("config_support").env_flag_true(name, env_map=env_map)
 
 
@@ -99,7 +317,7 @@ def validated_user_dir(
     *,
     label: str,
     trust_env: str = "",
-    env_map: dict | None = None,
+    env_map: Mapping[str, Any] | None = None,
     warn_on_error: bool = True,
 ) -> str:
     return _load_support_module("config_support").validated_user_dir(
@@ -146,7 +364,7 @@ def _read_toml(path: str) -> dict:
     return _read_toml_result(path).data
 
 
-def _read_toml_result(path: str) -> Any:
+def _read_toml_result(path: str) -> ConfigReadResultPort:
     return _load_support_module("config_support").read_toml_result(
         path,
         tomllib_mod=_load_tomllib(),
@@ -190,7 +408,7 @@ def configuration_error() -> str:
         return _CONFIG_ERROR if active_path == os.path.abspath(_CONFIG_ERROR_PATH) else ""
     try:
         active_paths = {os.path.abspath(path) for path in _config_paths()}
-    except Exception:
+    except (OSError, TypeError, ValueError):
         active_paths = set()
     return _CONFIG_ERROR if os.path.abspath(_CONFIG_ERROR_PATH) in active_paths else ""
 
@@ -254,7 +472,7 @@ def effective_config_snapshot() -> dict:
                 if os.path.isfile(path):
                     source = os.path.abspath(path)
                     break
-    except Exception:
+    except (OSError, TypeError, ValueError):
         source = "auto"
     source_stat = None
     if source not in {"defaults", "auto"}:
@@ -264,7 +482,7 @@ def effective_config_snapshot() -> dict:
                 int(getattr(stat_result, "st_mtime_ns", int(stat_result.st_mtime * 1_000_000_000))),
                 int(stat_result.st_size),
             )
-        except Exception:
+        except OSError:
             source_stat = None
     fingerprint_payload = {"values": values, "source": source, "source_stat": source_stat}
     fingerprint = hashlib.sha256(
@@ -288,7 +506,7 @@ def _config_source_hint() -> str:
         # identity. File edits are checked by configuration_drift(), not by
         # every hot cache-key call.
         return _CONFIG_SOURCE_PATH_CACHE or "auto"
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return "auto"
 
 

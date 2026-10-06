@@ -4,8 +4,10 @@ import contextlib
 import io
 import json
 import unittest
+from typing import get_type_hints
 
-from nautical_core import hook_protocol, hook_results
+import nautical_core.hook_protocol as hook_protocol
+import nautical_core.hook_results as hook_results
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.taskwarrior_io import TaskDocument
 
@@ -62,6 +64,16 @@ class HookIoContractTests(unittest.TestCase):
         self.assertIs(task_result.task, task)
         self.assertEqual(exit_result.exit_code, 3)
 
+    def test_task_response_profiler_requires_only_timing_sink_capability(self) -> None:
+        self.assertEqual(
+            get_type_hints(hook_results.TaskHookResponse)["prof"],
+            hook_results.TimingProfilerSink | None,
+        )
+        self.assertEqual(
+            get_type_hints(hook_results.emit_task_json)["prof"],
+            hook_results.TimingProfilerSink | None,
+        )
+
 
 class TaskDocumentTests(unittest.TestCase):
     """Direct contracts for lossless Taskwarrior task-document access."""
@@ -92,6 +104,9 @@ class TaskDocumentTests(unittest.TestCase):
         assert document is not None
         self.assertEqual(document.integer("link", 4), 4)
         self.assertFalse(document.boolean("chain", False))
+
+    def test_document_rejects_non_json_values_inside_task_fields(self) -> None:
+        self.assertIsNone(TaskDocument.from_object({"custom": {"nested": object()}}))
 
 
 class TaskCodecBoundaryTests(unittest.TestCase):

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta
+from collections.abc import Callable
+from typing import get_type_hints
 
 from nautical_core.hook_validation_pipeline import (
     ValidationFinding,
@@ -12,8 +15,14 @@ from nautical_core.hook_validation_pipeline import (
     build_default_validation_pipeline,
     validate_task_transition,
     normalize_description_uda_aliases,
+    validate_anchor_expression,
+    validate_omit_expression,
+    validate_recurrence_files,
+    validate_recurrence_limits,
 )
 from nautical_core.hook_workflow_models import WorkflowRoute
+from nautical_core.parsing.parser_models import ParseError
+from nautical_core.parsing.parser_models import AnchorDNF
 from nautical_core.task_models import TaskObservation
 
 
@@ -32,6 +41,60 @@ def _observation() -> TaskObservation:
 
 
 class ValidationPipelineTests(unittest.TestCase):
+    def test_shared_validation_callbacks_use_domain_types(self) -> None:
+        limits = get_type_hints(validate_recurrence_limits)
+        self.assertEqual(limits["parse_cp_sequence"], Callable[[str], list[timedelta] | None])
+        self.assertEqual(limits["parse_datetime"], Callable[[object], datetime | None])
+        self.assertEqual(limits["return"], tuple[int | None, datetime | None, tuple[ValidationFinding, ...]])
+
+        anchor = get_type_hints(validate_anchor_expression)
+        self.assertEqual(anchor["expr"], str | AnchorDNF)
+
+    def test_recurrence_file_validation_wraps_expected_file_errors_only(self) -> None:
+        missing = validate_recurrence_files(
+            "",
+            "missing.txt",
+            "",
+            "",
+            load_anchor_file=lambda _value: (_ for _ in ()).throw(FileNotFoundError("missing file")),
+            load_omit_file=lambda _value: None,
+        )
+        self.assertEqual(len(missing), 1)
+        self.assertEqual(missing[0].code, "anchor_file_invalid")
+        self.assertEqual(missing[0].reason, "missing file")
+
+        with self.assertRaisesRegex(RuntimeError, "loader invariant failed"):
+            validate_recurrence_files(
+                "",
+                "dates.txt",
+                "",
+                "",
+                load_anchor_file=lambda _value: (_ for _ in ()).throw(RuntimeError("loader invariant failed")),
+                load_omit_file=lambda _value: None,
+            )
+
+    def test_anchor_expression_wraps_only_expected_parse_errors(self) -> None:
+        with self.assertRaisesRegex(ValueError, "anchor syntax error: invalid token"):
+            validate_anchor_expression(
+                "invalid",
+                parse_anchor_expr=lambda _expr: (_ for _ in ()).throw(ParseError("invalid token")),
+                validate_anchor_expr=lambda _expr: None,
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "parser invariant failed"):
+            validate_anchor_expression(
+                "w:mon",
+                parse_anchor_expr=lambda _expr: (_ for _ in ()).throw(RuntimeError("parser invariant failed")),
+                validate_anchor_expr=lambda _expr: None,
+            )
+
+    def test_omit_expression_propagates_unexpected_validator_failures(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "validator invariant failed"):
+            validate_omit_expression(
+                "w:sun",
+                validate_omit_expr=lambda _expr: (_ for _ in ()).throw(RuntimeError("validator invariant failed")),
+            )
+
     def test_default_domain_pipeline_rejects_mixed_recurrence_sources(self) -> None:
         task = _observation().to_mapping()
         task["anchor"] = "w:mon"
@@ -93,6 +156,39 @@ class ValidationPipelineTests(unittest.TestCase):
         self.assertTrue(normalize_description_uda_aliases(task, enabled=True))
         self.assertEqual(task["description"], "review")
         self.assertNotIn("anchor_mode", task)
+
+        cleared_anchor = {"description": "task a:", "anchor": "w:mon"}
+        self.assertTrue(
+            normalize_description_uda_aliases(
+                cleared_anchor,
+                previous={"description": "task", "anchor": "w:mon"},
+                enabled=True,
+            )
+        )
+        self.assertEqual(cleared_anchor, {"description": "task"})
+
+    def test_enabled_alias_normalization_expands_canonical_fields(self) -> None:
+        task = {"description": "test task a:w:mon am:all"}
+
+        self.assertTrue(normalize_description_uda_aliases(task, enabled=True))
+
+        self.assertEqual(
+            task,
+            {"description": "test task", "anchor": "w:mon", "anchor_mode": "all"},
+        )
+
+    def test_alias_only_input_preserves_description_and_updates_anchor(self) -> None:
+        task = {"description": "test task a:w:fri", "anchor": "w:mon"}
+
+        self.assertTrue(
+            normalize_description_uda_aliases(
+                task,
+                previous={"description": "test task", "anchor": "w:mon"},
+                enabled=True,
+            )
+        )
+
+        self.assertEqual(task, {"description": "test task", "anchor": "w:fri"})
 
     def test_alias_normalization_is_disabled_without_mutation(self) -> None:
         task = {"description": "review am:all"}

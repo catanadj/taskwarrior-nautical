@@ -68,7 +68,7 @@ def decode_leading_json_objects(raw: str, max_objects: int = 2) -> tuple[list[ob
             break
         try:
             obj, end = decoder.raw_decode(raw, idx)
-        except Exception as exc:
+        except (json.JSONDecodeError, RecursionError) as exc:
             raise ModifyProtocolError("Invalid JSON input") from exc
         objs.append(obj)
         if end <= idx:

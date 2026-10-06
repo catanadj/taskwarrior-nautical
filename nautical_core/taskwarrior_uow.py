@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from .integration_context import (
     DiagnosticEvent,
@@ -63,7 +63,7 @@ class SnapshotProvenance:
 
 @dataclass(frozen=True, slots=True)
 class CachedAuthoritativeRead:
-    value: Any
+    value: object
     provenance: SnapshotProvenance
 
 
@@ -82,7 +82,7 @@ class InvocationReadCache:
     def put(
         self,
         scope: QueryScope,
-        value: Any,
+        value: object,
         *,
         covers: tuple[QueryScope, ...] = (),
         mutation_epoch: int,
@@ -242,7 +242,7 @@ class TaskwarriorUnitOfWork:
     def cache_read(
         self,
         scope: QueryScope,
-        value: Any,
+        value: object,
         *,
         covers: tuple[QueryScope, ...] = (),
     ) -> CachedAuthoritativeRead:

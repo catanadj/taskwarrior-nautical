@@ -5,46 +5,29 @@ Shared core for Taskwarrior Nautical hooks.
 
 """
 from __future__ import annotations
-import math
 import os, re, sys
 from collections import OrderedDict
-from typing import Any, Callable, Mapping, TYPE_CHECKING, TypeAlias, cast
-from functools import partial
+from datetime import timedelta
+from typing import Any, Callable, Mapping, Sequence, TYPE_CHECKING
+
+from .integration_models import TaskCommandResult
+from .cp_parser import CPSequenceToken
 
 if TYPE_CHECKING:
-    from .parsing.parser_models import AnchorDNF as AnchorDNFType
     from .core_config import ConfigReloadResult
 
     resolve_anchor_presets: Callable[..., str]
     resolve_omit_presets: Callable[..., str]
     validate_anchor_expr_strict: Callable[..., Any]
 import importlib
-import types
 from types import MappingProxyType
 from . import compat_api as _compat_api
-from .hint_models import AnchorHintsPayload, HintLimits, HintMeta, HintMetaCfg, HintPerYear
-fcntl: Any
-try:
-    import fcntl  # POSIX advisory lock
-except Exception:
-    fcntl = None
-
 _PKG_BASENAME = os.path.basename(os.path.dirname(__file__))
-_PKG_DIR = os.path.dirname(__file__)
 
 if not __package__:
     __package__ = (__name__ if __name__ != _PKG_BASENAME else _PKG_BASENAME)
 
 _PKG_IMPORT_ROOT = str(__package__ or _PKG_BASENAME)
-_PKG_PROXY = sys.modules.get(_PKG_IMPORT_ROOT)
-if _PKG_PROXY is None:
-    _PKG_PROXY = types.ModuleType(_PKG_IMPORT_ROOT)
-    sys.modules[_PKG_IMPORT_ROOT] = _PKG_PROXY
-_PKG_PROXY.__file__ = __file__
-_PKG_PROXY.__package__ = _PKG_IMPORT_ROOT
-_PKG_PROXY.__path__ = [_PKG_DIR]
-
-
 
 _PUBLIC_MODEL_NAMES = _compat_api.PUBLIC_MODEL_NAMES
 
@@ -54,7 +37,6 @@ def _ensure_public_models() -> None:
 
 
 def _import_sibling(module_name: str) -> Any:
-    _PKG_PROXY.__dict__.update(globals())
     return importlib.import_module(f"{_PKG_IMPORT_ROOT}.{module_name}")
 
 
@@ -94,16 +76,12 @@ def _bind_lazy_api_aliases(bundle: Any) -> None:
 if TYPE_CHECKING:
     # These names are installed by lazy API bundles below.  They are declared
     # for diagnostics/cache helpers without eagerly resolving those bundles.
-    _normalize_spec_for_acf_cached: Any
     _year_pair_cached: Any
     _parse_y_token_cached: Any
     expand_monthly_cached: Any
     expand_weekly_cached: Any
     _cache_key_for_task_cached: Any
     _selection_inner_matcher: Any
-
-
-TaskDict: TypeAlias = dict[str, Any]
 
 
 # ==============================================================================
@@ -126,7 +104,6 @@ _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[tuple[int, int, int, int], dict, float]] = OrderedDict()
 _core_config = _LazySibling("core_config")
 _configuration_facade = _LazySibling("configuration_facade")
-_cache_facade = _LazySibling("cache_facade")
 _timezone_facade = _LazySibling("timezone_facade")
 
 
@@ -151,9 +128,6 @@ _warn_env_config_missing = _config_call("_warn_env_config_missing")
 _normalize_keys = _config_call("_normalize_keys")
 _load_config = _config_call("_load_config")
 _nautical_cache_dir = _config_call("nautical_cache_dir")
-_warn_once_per_day = _config_call("warn_once_per_day")
-_warn_once_per_day_any = _config_call("warn_once_per_day_any")
-_warn_rate_limited_any = _config_call("warn_rate_limited_any")
 _warn_toml_parse_error = _config_call("_warn_toml_parse_error")
 _get_config = _config_call("_get_config")
 def effective_config_snapshot() -> dict:
@@ -175,35 +149,6 @@ _conf_csv_or_list = _config_call("conf_csv_or_list")
 _conf_uda_field_list = _config_call("conf_uda_field_list")
 _trueish = _config_call("trueish")
 _ttl_lru_cache = _config_call("ttl_lru_cache")
-
-
-def _emit_cache_metrics() -> None:
-    _cache_facade.emit_metrics(
-        (
-            ("normalize_acf", _normalize_spec_for_acf_cached),
-            ("year_pair", _year_pair_cached),
-            ("parse_y_token", _parse_y_token_cached),
-            ("expand_monthly", expand_monthly_cached),
-            ("expand_weekly", expand_weekly_cached),
-        ),
-        _warn_once_per_day,
-    )
-
-
-def _clear_all_caches() -> None:
-    _cache_facade.clear_all(
-        _CACHE_LOAD_MEM,
-        (
-            _normalize_spec_for_acf_cached,
-            _year_pair_cached,
-            _parse_y_token_cached,
-            expand_monthly_cached,
-            expand_weekly_cached,
-            _cache_key_for_task_cached,
-        ),
-        position_selection=_position_selection,
-        selection_matcher=_selection_inner_matcher,
-    )
 
 
 # -------- UI helpers ----------------------------------------------------------
@@ -229,18 +174,38 @@ panel_line_from_rows = _lazy_ui_call("panel_line_from_rows")
 panel_line = _lazy_ui_call("panel_line")
 panel_themes = _lazy_ui_call("panel_themes")
 
-_panel_colours = _LazySibling("panel_colours")
-
-
-def chain_colour_root(*args: Any, **kwargs: Any) -> Any:
-    return _panel_colours.chain_colour_root(*args, **kwargs)
-
-
-def render_panel(*args: Any, **kwargs: Any) -> Any:
+def render_panel(
+    title: Any,
+    rows: Any,
+    *,
+    kind: str = "info",
+    panel_mode: str = "rich",
+    live_duration_ms: int | float = 160,
+    live_footer: str = "NAUTICAL",
+    fast_color: bool = True,
+    themes: dict | None = None,
+    allow_line: bool = True,
+    line_force_rich_kinds: set[str] | None = None,
+    label_width_min: int = 6,
+    label_width_max: int = 14,
+) -> None:
     ui = _ui._resolve()
     ui.panel_line = panel_line
     ui.text_line = text_line
-    return ui.render_panel(*args, **kwargs)
+    return ui.render_panel(
+        title,
+        rows,
+        kind=kind,
+        panel_mode=panel_mode,
+        live_duration_ms=live_duration_ms,
+        live_footer=live_footer,
+        fast_color=fast_color,
+        themes=themes,
+        allow_line=allow_line,
+        line_force_rich_kinds=line_force_rich_kinds,
+        label_width_min=label_width_min,
+        label_width_max=label_width_max,
+    )
 
 ANCHOR_YEAR_FMT = "MD"
 WRAND_SALT = "nautical|wrand|v4"
@@ -358,16 +323,15 @@ try:
 except Exception:
     _zoneinfo = None
 
-_LOCAL_TZ: Any = None
-_TIMEZONE_CONFIG_ERROR = ""
+def _warn_timezone_once_per_day(key: str, message: str) -> None:
+    _core_config.warn_once_per_day(key, message)
 
 
 def _refresh_timezone() -> None:
-    global _LOCAL_TZ, _TIMEZONE_CONFIG_ERROR
-    _LOCAL_TZ, _TIMEZONE_CONFIG_ERROR = _timezone_facade.resolve(
+    _timezone_facade.resolve(
         LOCAL_TZ_NAME,
         _zoneinfo,
-        _warn_once_per_day,
+        _warn_timezone_once_per_day,
     )
 
 
@@ -380,23 +344,23 @@ def scheduling_configuration_error() -> str:
     return _configuration_facade.scheduling_error(
         _core_config,
         CONFIG_ERROR,
-        _TIMEZONE_CONFIG_ERROR,
+        _timezone_facade.configuration_error(),
     )
 
 
 configured_business_calendars: Callable[[], Any]
 
 
-def validate_scheduling_configuration() -> None:
+def _validate_scheduling_configuration() -> None:
     _configuration_facade.validate_scheduling(
         core_config=_core_config,
         astronomy_config=ASTRONOMY_CONFIG,
         anchor_presets=ANCHOR_PRESETS,
         omit_presets=OMIT_PRESETS,
-        resolve_anchor_presets=resolve_anchor_presets,
-        validate_anchor_expr=validate_anchor_expr_strict,
-        resolve_omit_presets=resolve_omit_presets,
-        configured_business_calendars=configured_business_calendars,
+        resolve_anchor_presets=_parser_api.resolve_anchor_presets,
+        validate_anchor_expr=_parser_api.validate_anchor_expr_strict,
+        resolve_omit_presets=_parser_api.resolve_omit_presets,
+        configured_business_calendars=_business_calendar_api.configured_business_calendars,
         import_sibling=_import_sibling,
     )
 
@@ -455,7 +419,7 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResu
     globals()["_CONF"] = _core_config._CONF
     CONFIG_ERROR = _core_config.configuration_error()
     _refresh_timezone()
-    validate_scheduling_configuration()
+    _validate_scheduling_configuration()
     _configure_season_support()
     error = scheduling_configuration_error()
     if error:
@@ -467,11 +431,6 @@ def _refresh_facade_config_exports() -> None:
     """Resolve deferred config and synchronize facade compatibility exports."""
     global CONFIG_ERROR, _CONF, MAX_ANCHOR_DNF_TERMS, _FACADE_CONFIG_SYNCED
     _core_config.ensure_loaded()
-    configured_hemisphere = getattr(_core_config, "SEASON_HEMISPHERE", "north")
-    season_override = (
-        not _FACADE_CONFIG_SYNCED
-        and _season_support.active_hemisphere() != configured_hemisphere
-    )
     names = (
         "WRAND_SALT", "LOCAL_TZ_NAME", "SEASON_HEMISPHERE", "SEASON_MODE",
         "ANCHOR_FILE_DIR", "OMIT_FILE_DIR", "ANCHOR_PRESETS", "OMIT_PRESETS",
@@ -634,20 +593,25 @@ def _hook_arg_value(*args: Any, **kwargs: Any) -> Any:
     return _runtime.hook_arg_value(*args, **kwargs)
 
 
-def resolve_task_data_context(*args: Any, **kwargs: Any) -> Any:
-    return _runtime.resolve_task_data_context(*args, **kwargs)
+def resolve_task_data_context(
+    *,
+    argv: list[str] | None = None,
+    env: Mapping[str, Any] | None = None,
+    tw_dir: str | None = None,
+) -> tuple[str, bool, str]:
+    return _runtime.resolve_task_data_context(argv=argv, env=env, tw_dir=tw_dir)
 
 
-def diag_log_redact(*args: Any, **kwargs: Any) -> Any:
-    return _runtime.diag_log_redact(*args, **kwargs)
+def diag_log_redact(msg: str, redact_keys: frozenset | None = None) -> Any:
+    return _runtime.diag_log_redact(msg, redact_keys)
 
 
-def diag_log(*args: Any, **kwargs: Any) -> Any:
-    return _runtime.diag_log(*args, **kwargs)
+def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
+    return _runtime.diag_log(msg, hook_name, data_dir)
 
 
-def diag(*args: Any, **kwargs: Any) -> Any:
-    return _runtime.diag(*args, **kwargs)
+def diag(msg: Any, hook_name: str = "nautical", data_dir: str | None = None) -> None:
+    return _runtime.diag(msg, hook_name, data_dir)
 
 
 def _runtime_command_module() -> Any:
@@ -655,8 +619,27 @@ def _runtime_command_module() -> Any:
     return _import_sibling("runtime_command")
 
 
-def run_task_result(*args: Any, **kwargs: Any) -> Any:
-    return _runtime_command_module().run_task_result(*args, **kwargs)
+def run_task_result(
+    cmd: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    attempts: int = 2,
+    retry_delay: float = 0.15,
+    use_tempfiles: bool = False,
+    purpose: str = "Nautical hook command",
+) -> TaskCommandResult:
+    return _runtime_command_module().run_task_result(
+        cmd,
+        env=env,
+        input_text=input_text,
+        timeout=timeout,
+        attempts=attempts,
+        retry_delay=retry_delay,
+        use_tempfiles=use_tempfiles,
+        purpose=purpose,
+    )
 
 
 # ---- Core iterator over DNF ---------------------------------------------------
@@ -732,15 +715,15 @@ def _months_since(seed_local: Any, year: int, month: int) -> int:
 _cp_parser = _LazySibling("cp_parser")
 
 
-def parse_cp_duration(dur: str) -> Any:
+def parse_cp_duration(dur: str) -> timedelta | None:
     return _cp_parser.parse_cp_duration(dur)
 
 
-def parse_cp_sequence_tokens(cp: str) -> Any:
+def parse_cp_sequence_tokens(cp: str) -> list[CPSequenceToken] | None:
     return _cp_parser.parse_cp_sequence_tokens(cp)
 
 
-def parse_cp_sequence(cp: str) -> Any:
+def parse_cp_sequence(cp: str) -> list[timedelta] | None:
     return _cp_parser.parse_cp_sequence(cp)
 
 
@@ -748,7 +731,14 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     return _cp_parser.cp_sequence_parse_error(cp)
 
 
-def cp_sequence_interval_for_token(token: Any, *, cp: str, link_no: int, token_index: int, chain_id: str | None = None) -> Any:
+def cp_sequence_interval_for_token(
+    token: CPSequenceToken,
+    *,
+    cp: str,
+    link_no: int,
+    token_index: int,
+    chain_id: str | None = None,
+) -> timedelta | None:
     return _cp_parser.cp_sequence_interval_for_token(
         token,
         cp=cp,
@@ -758,7 +748,11 @@ def cp_sequence_interval_for_token(token: Any, *, cp: str, link_no: int, token_i
     )
 
 
-def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = None) -> Any:
+def cp_sequence_interval_for_link(
+    cp: str,
+    link_no: int | None,
+    chain_id: str | None = None,
+) -> Any:
     return _cp_parser.cp_sequence_interval_for_link(cp, link_no, chain_id)
 
 
@@ -773,16 +767,12 @@ _quarter_api = _LazyApiBundle(
         "_quarters_from_start_day_tokens",
         "_quarters_from_end_day_tokens",
         "_format_quarter_set",
-        "_rewrite_quarter_spec_mode",
         "_quarter_atom_spec",
         "_has_quarter_tokens",
         "_has_plain_quarter_tokens",
         "_is_start_month_selector",
         "_is_end_month_selector",
-        "_quarter_month_selector_mode",
-        "_term_quarter_rewrite_mode",
         "_rewrite_quarter_year_atoms",
-        "_rewrite_quarters_in_context",
     ),
     core=sys.modules[__name__],
 )
@@ -798,7 +788,6 @@ _acf_api = _LazyApiBundle(
         "_year_pair_cached",
         "_year_pair",
         "_normalize_spec_for_acf_uncached",
-        "_normalize_spec_for_acf_cached",
         "_normalize_spec_for_acf",
         "_mods_to_acf",
         "_acf_mods_to_string",
@@ -817,11 +806,6 @@ _expansion_api = _LazyApiBundle(
         "_days_in_month",
         "_wd_idx",
         "_wday_idx_any",
-        "_weekly_spec_to_wset",
-        "_doms_for_weekly_spec",
-        "_doms_for_monthly_token",
-        "_y_ranges_from_spec",
-        "_doms_allowed_by_year",
         "_month_allowed_doms_for_monthly_atom",
         "_intersect_monthly_atoms_allowed",
     ),
@@ -832,16 +816,9 @@ _bind_lazy_api_aliases(_expansion_api)
 _parser_support_api = _LazyApiBundle(
     "parsing.parser_support_api",
     (
-        "_parse_hhmm",
-        "_parse_atom_head",
-        "_parse_atom_mods",
         "_parse_y_token_cached",
         "_parse_y_token",
         "_rewrite_year_month_aliases_in_context",
-        "_fatal_bad_colon_in_year_tail",
-        "_raise_on_bad_colon_year_tokens",
-        "_skip_ws_pos",
-        "_raise_if_comma_joined_anchors",
         "_parse_anchor_expr_to_dnf_cached_obj",
         "_parse_anchor_expr_to_dnf_cached_impl",
         "_validate_weekly_spec",
@@ -867,27 +844,19 @@ _parser_api = _LazyApiBundle(
         "_resolve_preset_refs",
         "_resolve_anchor_presets_impl",
         ("_resolve_omit_presets_impl", "resolve_omit_presets"),
-        "_normalize_anchor_expr_input",
         "_normalize_monthly_ordinal_spec",
-        "_build_anchor_atom_dnf",
-        "_parse_anchor_atom_at",
         "_yearly_pair_from_fmt",
         "_yearly_mmdd_error",
         "_validate_yearly_token_allowlist",
         "_validate_yearly_token_detailed",
-        "_validate_yearly_token_format",
         "_validate_year_tokens_in_dnf",
         "_validate_yearly_token",
         "_yearly_last_day",
         "_yearly_check_day_month",
-        "_validate_yearly_spec_token",
         "_validate_yearly_spec",
         "_weekday_set_from_weekly_atom",
         "_md_pairs_from_yearly_spec",
-        "_quick_weekly_and_check",
-        "_quick_yearly_and_check",
         "_quick_moon_and_check",
-        "_term_has_any_match_within",
         "_validate_and_terms_satisfiable",
         "parse_anchor_expr_to_dnf",
         "parse_anchor_expr_to_dnf_cached",
@@ -914,10 +883,6 @@ _business_calendar_api = _LazyApiBundle(
         "get_configured_business_calendar",
         "business_calendar_for_task",
         "normalize_task_business_calendar_in_place",
-        (
-            "normalize_task_business_calendar",
-            _compat_api.LEGACY_COMPATIBILITY_ALIASES["normalize_task_business_calendar"][1],
-        ),
         "business_calendar_fingerprint",
         "use_business_calendar",
         "use_task_business_calendar",
@@ -954,13 +919,8 @@ _scheduler_api = _LazyApiBundle(
         "_expand_weekly_cached_mods_impl",
         "_expand_yearly_cached_impl",
         "_expand_monthly_cached_impl",
-        "_expand_monthly_for_month_impl",
-        "_expand_weekly_impl",
-        "_expand_yearly_for_year_strict_impl",
         "_roll_apply_impl",
         "_month_doms_safe",
-        "_month_has_hit",
-        "_first_hit_after_probe_in_month",
         "_next_valid_month_on_or_after",
         "_advance_k_valid_months",
         "_monthly_align_base_for_interval",
@@ -986,22 +946,16 @@ _scheduler_api = _LazyApiBundle(
         "expand_weekly_cached_mods",
         "expand_yearly_cached",
         "expand_monthly_cached",
-        "expand_monthly_for_month",
-        "expand_weekly",
-        "expand_yearly_for_year_strict",
         "roll_apply",
         "apply_day_offset",
         "base_next_after_atom",
-        ("_interval_allowed_for_atom", "interval_allowed_for_atom"),
         ("_advance_probe_for_interval_bucket", "advance_probe_for_interval_bucket"),
-        ("_accept_roll_candidate", "accept_roll_candidate"),
         "next_after_atom_with_mods",
         "atom_matches_on",
         "next_after_factor",
         "factor_matches_on",
         "next_after_term",
         "next_after_expr",
-        "_weeks_between",
         "_resolve_moon_phase_date",
         "_moon_phase_matches_date",
     ),
@@ -1070,7 +1024,6 @@ _natural_language_api = _LazyApiBundle(
         "_normalize_range_token",
         "_rand_bucket_time_from_mods",
         "_rand_bucket_merge_mods",
-        "_rand_bucket_signature",
         "_try_bucket_rand_monthly",
         "describe_anchor_expr",
         "describe_anchor_dnf",
@@ -1088,8 +1041,6 @@ _cache_api = _LazyApiBundle(
         "_safe_lock_stale_pid",
         "_safe_lock_fcntl_context",
         "_safe_lock_excl_context",
-        "safe_lock",
-        "_cache_lock",
         "_is_atom_like",
         "_is_dnf_like",
         "_clone_mod_value",
@@ -1099,10 +1050,8 @@ _cache_api = _LazyApiBundle(
         "_clone_cache_payload",
         "_normalize_dnf_cached",
         "_cache_payload_shape_ok",
-        "_cache_atomic_replace",
         "_cache_dir",
         "_cache_key",
-        "_cache_path",
         "_cache_lock_path",
         "_quarantine_cache",
         "_cache_load_impl",
@@ -1147,14 +1096,6 @@ def __getattr__(name: str) -> Any:
     }:
         _ensure_business_calendar_exports()
         return globals()[name]
-    if name == "_DIAG_LOG_REDACT_KEYS":
-        value = _runtime.DIAG_LOG_REDACT_KEYS
-        globals()[name] = value
-        return value
-    if name == "tempfile":
-        value = importlib.import_module("tempfile")
-        globals()[name] = value
-        return value
     if name == "RecurrenceModeResult":
         value = _import_sibling("recurrence_evaluator").RecurrenceModeResult
         globals()[name] = value

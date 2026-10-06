@@ -26,7 +26,7 @@ def run_task_result(
     env: Mapping[str, str] | None = None,
     input_text: str | None = None,
     timeout: float = 6.0,
-    retries: int = 1,
+    attempts: int = 1,
     retry_delay: float = 0.0,
     use_tempfiles: bool = False,
 ) -> TaskCommandResult:
@@ -35,7 +35,7 @@ def run_task_result(
         "env": env,
         "input_text": input_text,
         "timeout": timeout,
-        "retries": retries,
+        "attempts": attempts,
         "retry_delay": retry_delay,
     }
     if use_tempfiles:

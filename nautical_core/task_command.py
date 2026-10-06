@@ -52,7 +52,7 @@ def run_task_command(
     input_text: str | None = None,
     env: Mapping[str, str] | None = None,
     timeout: float = 60.0,
-    retry_locks: bool = False,
+    attempts: int = 1,
     retry_delay: float = 0.1,
     purpose: str = "Taskwarrior command",
     budget: OperatorBudgetLedger | None = None,
@@ -66,7 +66,7 @@ def run_task_command(
         purpose=purpose,
         timeout=timeout,
         input_text=input_text,
-        attempts=2 if retry_locks else 1,
+        attempts=max(1, int(attempts)),
         retry_delay=retry_delay,
     )
 

@@ -6,9 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import business_calendar
-from nautical_core import business_calendar_api
-from nautical_core import business_calendar_config
+import nautical_core.business_calendar as business_calendar
+import nautical_core.business_calendar_api as business_calendar_api
+import nautical_core.business_calendar_config as business_calendar_config
 
 
 class BusinessCalendarHelperContractTests(unittest.TestCase):

@@ -140,6 +140,7 @@ class ChainIntegrityModelTests(unittest.TestCase):
             mutation_epoch = 0
 
             def __init__(self) -> None:
+                self.context = None
                 self.repository = Repository()
 
         unit = Unit()

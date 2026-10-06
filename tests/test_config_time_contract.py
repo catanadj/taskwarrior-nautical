@@ -1,11 +1,13 @@
 import unittest
 from datetime import date, datetime, timezone
 from types import MappingProxyType
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import nautical_core as core
-from nautical_core import business_calendar_config
-from nautical_core import timeutil
+import nautical_core.business_calendar_config as business_calendar_config
+import nautical_core.timeutil as timeutil
+from nautical_core.parsing.parser_models import ParseError
 
 
 class BusinessCalendarConfigContractTests(unittest.TestCase):
@@ -147,7 +149,14 @@ class BusinessCalendarConfigContractTests(unittest.TestCase):
             load_anchor_file_dates=lambda *_args: frozenset(),
             load_omit_file_dates=lambda *_args: frozenset(),
         )
-        with self.assertRaisesRegex(business_calendar_config.BusinessCalendarConfigError, "Invalid business_calendar.work.anchor"):
+        with self.assertRaisesRegex(RuntimeError, "bad expression"):
+            business_calendar_config.resolve_business_calendars(base, **kwargs)
+
+        kwargs["validate_anchor_expr"] = lambda _value: (_ for _ in ()).throw(ParseError("bad syntax"))
+        with self.assertRaisesRegex(
+            business_calendar_config.BusinessCalendarConfigError,
+            "Invalid business_calendar.work.anchor: bad syntax",
+        ):
             business_calendar_config.resolve_business_calendars(base, **kwargs)
 
         file_config = {"work": {"anchor_file": "missing.txt"}}
@@ -159,6 +168,10 @@ class BusinessCalendarConfigContractTests(unittest.TestCase):
         kwargs["unmatched_anchor_file_patterns"] = lambda *_args: ()
         kwargs["load_anchor_file_dates"] = lambda *_args: (_ for _ in ()).throw(OSError("unreadable"))
         with self.assertRaisesRegex(business_calendar_config.BusinessCalendarConfigError, "Invalid business_calendar.work.anchor_file"):
+            business_calendar_config.resolve_business_calendars(file_config, **kwargs)
+
+        kwargs["load_anchor_file_dates"] = lambda *_args: (_ for _ in ()).throw(RuntimeError("loader defect"))
+        with self.assertRaisesRegex(RuntimeError, "loader defect"):
             business_calendar_config.resolve_business_calendars(file_config, **kwargs)
 
 
@@ -208,7 +221,8 @@ class TimeUtilContractTests(unittest.TestCase):
         self.assertEqual((local.hour, local.minute), (12, 0))
 
     def test_schedule_and_completion_share_the_time_comparator(self):
-        from nautical_core import modify_completion_effects, modify_schedule_effects
+        import nautical_core.modify_completion_effects as modify_completion_effects
+        import nautical_core.modify_schedule_effects as modify_schedule_effects
 
         self.assertIs(modify_schedule_effects.compare_datetimes, timeutil.compare_datetimes)
         self.assertIs(modify_completion_effects.compare_datetimes, timeutil.compare_datetimes)
@@ -251,6 +265,39 @@ class TimeUtilContractTests(unittest.TestCase):
         self.assertEqual(timeutil.parse_dt_any("2026-01-02 trailing", formats), datetime(2026, 1, 2, tzinfo=timezone.utc))
         self.assertIsNone(timeutil.parse_dt_any("", formats))
         self.assertIsNone(timeutil.parse_dt_any("not-a-date", formats))
+
+    def test_parse_dt_any_does_not_hide_unexpected_configured_format_failure(self):
+        class DatetimeParser:
+            calls = 0
+
+            @staticmethod
+            def fromisoformat(_value):
+                raise ValueError("not ISO format")
+
+            @classmethod
+            def strptime(cls, _value, _format):
+                cls.calls += 1
+                if cls.calls == 1:
+                    raise RuntimeError("configured format parser failed")
+                raise ValueError("not a supported date")
+
+        with patch.object(timeutil, "datetime", DatetimeParser):
+            with self.assertRaisesRegex(RuntimeError, "configured format parser failed"):
+                timeutil.parse_dt_any("not-a-date", ("%d/%m/%Y",))
+
+    def test_parse_dt_any_does_not_hide_unexpected_iso_date_fallback_failure(self):
+        class DatetimeParser:
+            @staticmethod
+            def fromisoformat(_value):
+                raise ValueError("not ISO format")
+
+            @staticmethod
+            def strptime(_value, _format):
+                raise RuntimeError("ISO date parser failed")
+
+        with patch.object(timeutil, "datetime", DatetimeParser):
+            with self.assertRaisesRegex(RuntimeError, "ISO date parser failed"):
+                timeutil.parse_dt_any("not-a-date", ())
 
 
 if __name__ == "__main__":

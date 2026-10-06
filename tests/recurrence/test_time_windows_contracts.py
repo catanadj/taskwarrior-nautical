@@ -4,7 +4,7 @@ import unittest
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
-from nautical_core import file_resource_limits
+import nautical_core.file_resource_limits as file_resource_limits
 from nautical_core.time_windows import (
     parse_random_time_window_spec,
     parse_time_schedule_spec,

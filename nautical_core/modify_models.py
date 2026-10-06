@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
-from datetime import datetime
-from typing import Any, Iterator, Literal, Protocol, TypeAlias, Mapping
+from datetime import date, datetime
+from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol, TypeAlias, Mapping, overload
 from types import MappingProxyType
 
+from .integration_models import TaskRead
+from .anchor_omit import OmitState
+from .occurrence_provider import OccurrenceProvider
+from .parsing.parser_models import AnchorDNF
 from .task_models import (
     ChainIdentity,
     ChainID,
@@ -21,7 +25,11 @@ from .task_models import (
     TemporalState,
     TaskPayload,
 )
-from .lifecycle_models import LifecyclePlan
+from .lifecycle.models import LifecyclePlan
+from .modify_generation_effects import ChainGenerationServicePort
+
+if TYPE_CHECKING:
+    from .lifecycle.read_service import LifecycleReadService
 
 
 # Hook implementations are intentionally assembled at runtime, but the
@@ -29,7 +37,16 @@ from .lifecycle_models import LifecyclePlan
 # task data and result values.  ``Any`` remains the payload type because hook
 # modules support Taskwarrior's heterogeneous JSON fields.
 TaskRow: TypeAlias = TaskPayload
+WaitScheduleDebug: TypeAlias = Mapping[str, Mapping[str, object]]
+CompletionFinalBoundary: TypeAlias = tuple[Literal["max", "until"], datetime]
+CompletionFinals: TypeAlias = list[CompletionFinalBoundary]
 ShortUuidCallback: TypeAlias = Callable[[Any], str]
+FirstRecurrenceTargetCallback: TypeAlias = Callable[
+    [TaskPayload, str], datetime | None
+]
+ExistingNextLookupCallback: TypeAlias = Callable[
+    [TaskPayload, int], TaskRead[TaskObservation] | None
+]
 
 
 class TaskView(Mapping[str, Any]):
@@ -147,6 +164,18 @@ class DiagnosticCallback(Protocol):
         ...
 
 
+class NativeCarryDescription(Protocol):
+    """Describe the expiration carry policy for a changed recurrence target."""
+
+    def __call__(
+        self,
+        until_dt: datetime | None,
+        target_dt: datetime | None,
+        *,
+        to_local: Callable[[datetime], datetime],
+    ) -> str | None: ...
+
+
 class RootAgeFormatter(Protocol):
     def __call__(self, task: TaskRow, now_utc: datetime) -> str:
         ...
@@ -155,9 +184,9 @@ class RootAgeFormatter(Protocol):
 class WaitScheduleRowsCallback(Protocol):
     def __call__(
         self,
-        rows: list[tuple[str, Any]],
+        rows: list[tuple[str, str]],
         task: TaskRow,
-        anchor_due: Any,
+        anchor_due: datetime | None,
         *,
         anchor_field: str = "due",
     ) -> None:
@@ -169,9 +198,9 @@ class TimelineLinesCallback(Protocol):
         self,
         kind: str,
         task: TaskRow,
-        child_due: Any,
+        child_due: datetime | None,
         child_short: str,
-        dnf: Any,
+        dnf: AnchorDNF | None,
         *,
         next_count: int = 3,
         cap_no: int | None = None,
@@ -190,24 +219,53 @@ class FeedbackRowsFormatter(Protocol):
         ...
 
 
+class MarkupStripper(Protocol):
+    def strip_rich_markup(self, text: str) -> str: ...
+
+
 class PreviewLineFormatter(Protocol):
     def __call__(
         self,
         link_no: int,
         task: TaskRow,
-        child_due: Any,
+        child_due: datetime | None,
         child_short: str,
-        now_utc: Any,
+        now_utc: datetime,
         *,
         child_field: str = "due",
         cap_no: int | None = None,
-        until_dt: Any = None,
+        until_dt: datetime | None = None,
         until_no: int | None = None,
-        child_until_dt: Any = None,
+        child_until_dt: datetime | None = None,
         kind: str = "cp",
         minimal: bool = False,
+        core: MarkupStripper,
+        format_local: Callable[[datetime], str],
+        on_time_delta: Callable[[datetime | None, datetime | None], str],
+        human_delta: Callable[[datetime, datetime, bool], str],
     ) -> str:
         ...
+
+
+class CompletionPreviewFormatter(Protocol):
+    """Render one completion preview with dependencies bound at composition."""
+
+    def __call__(
+        self,
+        link_no: int,
+        task: TaskRow,
+        child_due: datetime | None,
+        child_short: str,
+        now_utc: datetime,
+        *,
+        child_field: str = "due",
+        cap_no: int | None = None,
+        until_dt: datetime | None = None,
+        until_no: int | None = None,
+        child_until_dt: datetime | None = None,
+        kind: str = "cp",
+        minimal: bool = False,
+    ) -> str: ...
 
 
 class PanelLineCallback(Protocol):
@@ -260,12 +318,15 @@ class StripQuotesCallback(Protocol):
 
 
 class HumanDeltaCallback(Protocol):
-    def __call__(self, start: Any, end: Any, prefer_months: bool = True) -> str:
+    def __call__(self, start: datetime, end: datetime, prefer_months: bool = True) -> str:
         ...
 
 
 class ComputeAnchorChildDueCallback(Protocol):
-    def __call__(self, task: TaskRow) -> tuple[datetime | None, dict[str, Any] | None, Any]:
+    def __call__(
+        self,
+        task: TaskRow,
+    ) -> tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None]:
         ...
 
 
@@ -275,47 +336,111 @@ class ComputeCpChildDueCallback(Protocol):
 
 
 class SafeParseDatetimeCallback(Protocol):
-    def __call__(self, value: Any) -> tuple[datetime | None, str | None]:
+    def __call__(self, value: object) -> tuple[datetime | None, str | None]:
         ...
 
 
 class ValidateUntilCallback(Protocol):
-    def __call__(self, until_dt: datetime, now_utc: Any) -> tuple[bool, str | None]:
+    def __call__(self, until_dt: datetime, now_utc: datetime) -> tuple[bool, str | None]:
         ...
 
 
 class ValidateChainDurationCallback(Protocol):
-    def __call__(self, child_due: Any, until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
+    def __call__(
+        self,
+        child_due: datetime | None,
+        until_dt: datetime | None,
+        now_utc: datetime,
+    ) -> tuple[bool, str | None]:
         ...
 
 
 class CoerceIntCallback(Protocol):
-    def __call__(self, value: Any, default: int = 0) -> int:
-        ...
+    @overload
+    def __call__(self, value: Any, default: None = None) -> int | None: ...
+
+    @overload
+    def __call__(self, value: Any, default: int) -> int: ...
 
 
 class DatetimeParserCallback(Protocol):
-    def __call__(self, value: Any) -> datetime | None:
+    def __call__(self, value: object) -> datetime | None:
+        ...
+
+
+class AnchorOccurrenceEvaluator(Protocol):
+    def _default_next_occurrence_after_local_dt(
+        self,
+        dnf: AnchorDNF | None,
+        after_local_dt: datetime,
+        *,
+        default_seed_date: date | None,
+        seed_base: str,
+        omit_dnf: OmitState | None = None,
+        fallback_hhmm: tuple[int, int] | None = None,
+    ) -> datetime | None:
+        ...
+
+
+AnchorOccurrenceEvaluatorForTask: TypeAlias = Callable[
+    [TaskPayload], AnchorOccurrenceEvaluator
+]
+OmitDNFFromParentCallback: TypeAlias = Callable[
+    [TaskPayload], tuple[str, OmitState | None]
+]
+
+
+class AnchorFileProviderFactory(Protocol):
+    def __call__(
+        self,
+        anchor_file: str,
+        *,
+        fallback_hhmm: tuple[int, int],
+        seed_base: str,
+    ) -> OccurrenceProvider | None:
+        ...
+
+
+class AnchorIncludedOccurrencesCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        after_local_dt: datetime,
+        inclusive: bool,
+        limit: int,
+        fallback_hhmm: tuple[int, int],
+        omit_dnf: OmitState | None,
+        seed_base: str,
+        default_seed_date: date | None,
+        dnf: AnchorDNF | None,
+        anchor_file_provider: OccurrenceProvider | None,
+    ) -> list[datetime]:
         ...
 
 
 class EstimateCpFinalCallback(Protocol):
-    def __call__(self, task: TaskRow, child_due: Any) -> Any:
+    def __call__(self, task: TaskRow, child_due: datetime | None) -> datetime | None:
         ...
 
 
 class EstimateAnchorFinalCallback(Protocol):
-    def __call__(self, task: TaskRow, child_due: Any, dnf: Any) -> Any:
+    def __call__(self, task: TaskRow, child_due: datetime | None, dnf: AnchorDNF | None) -> datetime | None:
         ...
 
 
 class CapFromUntilCpCallback(Protocol):
-    def __call__(self, task: TaskRow, child_due: Any) -> tuple[int | None, Any]:
+    def __call__(self, task: TaskRow, child_due: datetime | None) -> tuple[int | None, datetime | None]:
         ...
 
 
 class CapFromUntilAnchorCallback(Protocol):
-    def __call__(self, task: TaskRow, child_due: Any, dnf: Any) -> tuple[int | None, Any]:
+    def __call__(
+        self,
+        task: TaskRow,
+        child_due: datetime | None,
+        dnf: AnchorDNF | None,
+    ) -> tuple[int | None, datetime | None]:
         ...
 
 
@@ -324,10 +449,22 @@ class EndChainSummaryCallback(Protocol):
         self,
         current: TaskRow,
         reason: str,
-        now_utc: Any,
+        now_utc: datetime,
         *,
         current_task: TaskRow | None = None,
     ) -> None:
+        ...
+
+
+class InvalidRelativeCarryReasonCallback(Protocol):
+    def __call__(
+        self,
+        parent: TaskObservation,
+        child: TaskDraft,
+        *,
+        child_field: str,
+        generation: ChainGenerationServicePort,
+    ) -> str | None:
         ...
 
 
@@ -343,7 +480,7 @@ CompletionExistingNextCallback: TypeAlias = Callable[
     [TaskRow, int, "CompletionChainSnapshot | None"], bool
 ]
 CompletionChildDueCallback: TypeAlias = Callable[
-    [TaskRow, str], tuple[datetime | None, dict[str, Any] | None, Any] | None
+    [TaskRow, str], tuple[datetime | None, dict[str, Any] | None, AnchorDNF | None] | None
 ]
 CompletionUntilCallback: TypeAlias = Callable[
     [TaskRow, datetime], datetime | None | Literal[False]
@@ -352,13 +489,20 @@ CompletionUntilGuardCallback: TypeAlias = Callable[[TaskRow, datetime | None, da
 CompletionChildRequiredCallback: TypeAlias = Callable[[TaskRow, datetime | None], bool]
 CompletionDurationWarningCallback: TypeAlias = Callable[[TaskRow, datetime | None, datetime | None, datetime], None]
 CompletionCapsCallback: TypeAlias = Callable[
-    [str, TaskRow, datetime | None, Any], tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None]
+    [str, TaskRow, datetime | None, AnchorDNF | None], tuple[int, datetime | None, int | None, CompletionFinals, int | None]
 ]
 CompletionCapGuardCallback: TypeAlias = Callable[
     [TaskRow, int, int | None, datetime], bool
 ]
+class CompletionRuntimeState(Protocol):
+    panel_chain_by_link: dict[int, list[TaskObservation]] | None
+    panel_chain_by_short: dict[str, TaskObservation] | None
+    panel_chain_snapshot_loaded: bool
+
+
+ModifyChainStateCallback: TypeAlias = Callable[[], CompletionRuntimeState]
 BuildChildDraftCallback: TypeAlias = Callable[
-    [TaskRow, datetime | None, str, int, str, str, int, datetime | None], TaskDraft
+    [TaskRow, datetime, str, int, str, str, int, datetime | None], TaskDraft
 ]
 class SpawnChildCallback(Protocol):
     def __call__(
@@ -366,12 +510,11 @@ class SpawnChildCallback(Protocol):
         child: TaskDraft | TaskRow,
         parent: TaskRow,
         *,
-            lifecycle_plan: "LifecyclePlan | None" = None,
+        lifecycle_plan: "LifecyclePlan | None",
     ) -> tuple[str, list[str], bool, bool, str | None, str | None]:
         ...
-ModifyChainStateCallback: TypeAlias = Callable[[], Any]
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
-DiagnosticSummaryCallback: TypeAlias = Callable[[], Any]
+DiagnosticSummaryCallback: TypeAlias = Callable[[], None]
 
 
 class BuildAndSpawnCallback(Protocol):
@@ -487,11 +630,11 @@ class CompletionPreflightContext:
 class CompletionComputeResult:
     child_due: datetime | None
     meta: Any
-    dnf: Any
+    dnf: AnchorDNF | None
     until_dt: datetime | None
     cpmax: int
     cap_no: int | None
-    finals: list[tuple[str, Any]]
+    finals: CompletionFinals
     until_cap_no: int | None
     lifecycle_plan: "LifecyclePlan | None" = None
 
@@ -521,14 +664,14 @@ class CompletionComputeServices:
 
 @dataclass(slots=True)
 class CpCompletionFeedbackModel:
-    new: TaskView
-    child: TaskView
+    new: TaskPayload
+    child: TaskPayload
     child_due: datetime | None
     child_short: str
     next_no: int
     parent_short: str
     cap_no: int | None
-    finals: list[tuple[str, Any]]
+    finals: CompletionFinals
     now_utc: datetime
     until_dt: datetime | None
     until_cap_no: int | None
@@ -544,18 +687,18 @@ class CpCompletionFeedbackModel:
 
 @dataclass(slots=True)
 class AnchorCompletionFeedbackModel:
-    new: TaskView
-    child: TaskView
+    new: TaskPayload
+    child: TaskPayload
     child_due: datetime | None
     child_short: str
     next_no: int
     parent_short: str
     cap_no: int | None
-    finals: list[tuple[str, Any]]
+    finals: CompletionFinals
     now_utc: datetime
     until_dt: datetime | None
     until_cap_no: int | None
-    dnf: Any
+    dnf: AnchorDNF | None
     meta: dict[str, Any]
     stripped_attrs: list[str]
     deferred_spawn: bool
@@ -647,13 +790,27 @@ class CompletionLifecycleResult:
         object.__setattr__(self, "reason", str(self.reason or "").strip())
 
 
+class CompletionComputeCallback(Protocol):
+    """Compute one successor with the optional preflight snapshot context."""
+
+    def __call__(
+        self,
+        new: TaskPayload,
+        kind: str,
+        next_no: int,
+        now_utc: datetime,
+        *,
+        preflight: CompletionPreflightContext | None = None,
+    ) -> CompletionComputeResult | CompletionLifecycleResult | None: ...
+
+
 @dataclass(slots=True)
 class CompletionSpawnServices:
     build_child_draft: BuildChildDraftCallback
     spawn_child_atomic: SpawnChildCallback
     panel: PanelCallback
     print_task: PrintTaskCallback
-    diag: DiagnosticCallback
+    diag: Callable[[str], None]
 
 
 @dataclass(slots=True)
@@ -661,7 +818,7 @@ class CompletionFinalizeServices:
     build_and_spawn_child: BuildAndSpawnCallback
     seed_runtime_lookup_tasks: SeedLookupCallback
     modify_chain_state: ModifyChainStateCallback
-    lifecycle_read_service: Any
+    lifecycle_read_service: LifecycleReadService
     chain_health_advice: ChainHealthCallback
     chain_integrity_warnings: ChainIntegrityCallback
     render_anchor_completion_feedback: AnchorCompletionRenderCallback
@@ -675,11 +832,31 @@ class CompletionFinalizeServices:
     diagnostic: DiagnosticCallback | None = None
 
 
+class CompletionFinalizeCallback(Protocol):
+    """Finalize a computed successor through explicit orchestration inputs."""
+
+    def __call__(
+        self,
+        *,
+        new: TaskPayload,
+        ctx: CompletionPreflightContext,
+        computed: CompletionComputeResult,
+        now_utc: datetime,
+        need_chain: bool,
+        chain_snapshot_loaded: bool,
+        preloaded_chain: list[TaskObservation],
+        preloaded_chain_by_link: dict[int, list[TaskObservation]],
+        preloaded_chain_by_short: dict[str, TaskObservation],
+        chain_id: str,
+        services: CompletionFinalizeServices,
+    ) -> CompletionLifecycleResult: ...
+
+
 @dataclass(slots=True)
 class AnchorFeedbackServices:
     core: Any
     debug_wait_sched: bool
-    last_wait_sched_debug: Any
+    last_wait_sched_debug: WaitScheduleDebug | None
     diag_enabled: bool
     format_root_and_age: RootAgeFormatter
     append_next_wait_sched_rows: WaitScheduleRowsCallback
@@ -688,7 +865,7 @@ class AnchorFeedbackServices:
     root_uuid_from: Callable[[TaskRow], str]
     short: ShortUuidCallback
     format_next_anchor_rows: FeedbackRowsFormatter
-    format_line_preview: PreviewLineFormatter
+    format_line_preview: CompletionPreviewFormatter
     panel_line: PanelLineCallback
     text_line: TextLineCallback
     panel: FeedbackPanelCallback
@@ -707,7 +884,7 @@ class CpFeedbackServices:
     timeline_lines: TimelineLinesCallback
     show_timeline_gaps: bool
     format_next_cp_rows: FeedbackRowsFormatter
-    format_line_preview: PreviewLineFormatter
+    format_line_preview: CompletionPreviewFormatter
     panel_line: PanelLineCallback
     text_line: TextLineCallback
     panel: FeedbackPanelCallback

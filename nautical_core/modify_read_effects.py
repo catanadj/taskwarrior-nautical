@@ -2,64 +2,148 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, Protocol, overload
+
+from .lifecycle.read_service import (
+    ChainCacheStore,
+    ChainSnapshotRepository,
+    CoerceInt,
+    Counter,
+    Diagnostic,
+    LifecycleReadService,
+    ReadQuery,
+    TokenMatcher,
+    TokenParser,
+)
+from .integration_models import TaskCommandResult
+from .modify_command_effects import CommandHost, CommandPorts
+from .task_models import TaskObservation
+
+
+class ChainExportReader(Protocol):
+    def get_chain_export(self, chain_id: str) -> list[TaskObservation] | None: ...
+
+
+class TaskRowDecoder(Protocol):
+    def __call__(
+        self, row: Mapping[str, Any], *, source_query: str
+    ) -> TaskObservation: ...
+
+
+class TaskFieldReader(Protocol):
+    def get(self, key: str, default: Any = None) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
 class LifecycleReadCapabilities:
     """Explicit collaborators required to construct lifecycle read services."""
 
-    coerce_int: Any
-    parse_extra_tokens: Any
-    token_matcher: Any
-    read_query_get: Any
-    read_query_missing: Any
+    coerce_int: CoerceInt
+    parse_extra_tokens: TokenParser
+    token_matcher: TokenMatcher
+    read_query_get: ReadQuery
+    read_query_missing: object
     max_chain_walk: int
-    diag: Any
-    record_stat: Any
-    cache_store: Any
-    repository: Any
+    diag: Diagnostic
+    record_stat: Counter
+    cache_store: ChainCacheStore
+    repository: ChainSnapshotRepository | None
 
 
 @dataclass(frozen=True, slots=True)
 class ExtraTokenPort:
-    parse: Any
+    parse: Callable[[str | None], list[str] | None]
 
 
 @dataclass(frozen=True, slots=True)
 class ChainExportPort:
-    service: Any
+    service: ChainExportReader
 
 
 @dataclass(frozen=True, slots=True)
 class SeedLookupPorts:
-    service: Any
-    decode_row: Any
-    cache_set: Any
+    service: LifecycleReadService
+    decode_row: TaskRowDecoder
+    cache_set: Callable[[str, Any, Any], None]
 
 
 @dataclass(frozen=True, slots=True)
 class PreviousChainPorts:
-    service: Any
-    panel_chain_by_link: Any
-    panel_chain_snapshot_loaded: Any
+    service: LifecycleReadService
+    panel_chain_by_link: dict[int, list[TaskObservation]]
+    panel_chain_snapshot_loaded: bool
 
 
 @dataclass(frozen=True, slots=True)
 class TwGetPorts:
-    service: Any
-    cache_get: Any
-    cache_set: Any
-    count: Any
-    diagnostic: Any
-    run_task: Any
-    command_prefix: Any
-    environment: Any
+    service: LifecycleReadService
+    cache_get: Callable[[str, str], object]
+    cache_set: Callable[[str, str, object], None]
+    count: Callable[[str], None]
+    diagnostic: Callable[[str], None]
+    run_task: "TwGetTaskCommand"
+    command_prefix: Callable[[], list[str]]
+    environment: Callable[[], dict[str, str]]
 
 
-def _token_match(coerce_int: Any, task: Any, token: str) -> bool:
+class TwGetTaskCommand(Protocol):
+    def __call__(
+        self,
+        argv: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        input_text: str | None = None,
+        timeout: float = 3.0,
+        attempts: int = 2,
+        retry_delay: float = 0.15,
+        use_tempfiles: bool = False,
+    ) -> TaskCommandResult: ...
+
+
+class _TwGetCommandEffects(Protocol):
+    def command_ports_for(self, host: CommandHost) -> CommandPorts: ...
+
+    def run_task_result(
+        self,
+        ports: CommandPorts,
+        cmd: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        input_text: str | None = None,
+        timeout: float = 3.0,
+        attempts: int = 2,
+        retry_delay: float = 0.15,
+        use_tempfiles: bool = False,
+    ) -> TaskCommandResult: ...
+
+
+class _TwGetCompositionEffects(Protocol):
+    lifecycle_read_service_for: Callable[[object], LifecycleReadService]
+
+
+class _Environment(Protocol):
+    def copy(self) -> dict[str, str]: ...
+
+
+class _OperatingSystem(Protocol):
+    environ: _Environment
+
+
+class TwGetHost(CommandHost, Protocol):
+    os: _OperatingSystem
+    _query_ctx_get: Callable[[str, str], object]
+    _query_ctx_set: Callable[[str, str, object], None]
+
+    @overload
+    def _module(self, name: Literal["modify_command_effects"]) -> _TwGetCommandEffects: ...
+
+    @overload
+    def _module(self, name: Literal["modify_composition"]) -> _TwGetCompositionEffects: ...
+
+
+def _token_match(coerce_int: CoerceInt, task: TaskFieldReader, token: str) -> bool:
     if not hasattr(task, "get") or not isinstance(token, str) or not token:
         return False
     if token.startswith("+"):
@@ -84,7 +168,12 @@ def parse_extra_tokens(port: ExtraTokenPort, extra: str | None) -> list[str] | N
     return port.parse(extra)
 
 
-def seed_runtime_lookup_task(ports: SeedLookupPorts, payload: dict[str, Any] | None, *, lookup_short: str | None = None) -> Any:
+def seed_runtime_lookup_task(
+    ports: SeedLookupPorts,
+    payload: dict[str, Any] | None,
+    *,
+    lookup_short: str | None = None,
+) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     uuid_str = str(payload.get("uuid") or "").strip()
@@ -102,12 +191,18 @@ def seed_runtime_lookup_task(ports: SeedLookupPorts, payload: dict[str, Any] | N
     return task_obj.to_mapping()
 
 
-def seed_runtime_lookup_tasks(ports: SeedLookupPorts, *tasks: dict | None) -> None:
+def seed_runtime_lookup_tasks(
+    ports: SeedLookupPorts, *tasks: dict[str, Any] | None
+) -> None:
     for task in tasks:
         seed_runtime_lookup_task(ports, task)
 
 
-def collect_prev_two(ports: PreviousChainPorts, current_task: dict[str, Any], chain_by_link: Any = None) -> Any:
+def collect_prev_two(
+    ports: PreviousChainPorts,
+    current_task: TaskObservation,
+    chain_by_link: dict[int, list[TaskObservation]] | None = None,
+) -> list[TaskObservation]:
     from .integration_models import Absent, Found, Unavailable
 
     read = ports.service.collect_prev_two(
@@ -126,30 +221,50 @@ def collect_prev_two(ports: PreviousChainPorts, current_task: dict[str, Any], ch
     return list(read.value)
 
 
-def export_chain_required(port: ChainExportPort, seed_payload: dict[str, Any], env: Any = None) -> Any:
+def export_chain_required(
+    port: ChainExportPort, seed_payload: Mapping[str, Any]
+) -> list[TaskObservation]:
     chain_id = seed_payload.get("chainID")
     if not chain_id:
         raise RuntimeError("ChainID is required (legacy chain traversal removed). Run chainID backfill, then retry.")
-    if env is not None:
-        raise RuntimeError("chain reads must use the invocation Taskwarrior repository")
     rows = port.service.get_chain_export(chain_id)
     if rows is None:
         raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
     return rows
 
 
-def tw_get_ports_for(host: Any) -> TwGetPorts:
+def tw_get_ports_for(host: TwGetHost) -> TwGetPorts:
     command = host._module("modify_command_effects")
     composition = host._module("modify_composition")
+
+    def run_task(
+        argv: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        input_text: str | None = None,
+        timeout: float = 3.0,
+        attempts: int = 2,
+        retry_delay: float = 0.15,
+        use_tempfiles: bool = False,
+    ) -> TaskCommandResult:
+        return command.run_task_result(
+            command.command_ports_for(host),
+            argv,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            attempts=attempts,
+            retry_delay=retry_delay,
+            use_tempfiles=use_tempfiles,
+        )
+
     return TwGetPorts(
         service=composition.lifecycle_read_service_for(host),
         cache_get=host._query_ctx_get,
         cache_set=host._query_ctx_set,
         count=host._diag_count,
         diagnostic=host._diag,
-        run_task=lambda argv, **kwargs: command.run_task_result(
-            command.command_ports_for(host), argv, **kwargs
-        ),
+        run_task=run_task,
         command_prefix=host._task_cmd_prefix,
         environment=lambda: host.os.environ.copy(),
     )
@@ -157,32 +272,29 @@ def tw_get_ports_for(host: Any) -> TwGetPorts:
 
 def tw_get_cached(ports: TwGetPorts, ref: str) -> str:
     """Return one cached Taskwarrior ``_get`` value for the current hook."""
-    try:
-        if ref.endswith(".entry"):
-            short = ref[:-6].strip()
-            cached, cache_chain_id = ports.service.lookup_short(short) if short else (None, "")
-            if short and isinstance(cached, Mapping):
-                ports.count("tw_get_cache_hits")
-                return (str(cached.get("entry") or "")).strip()
-            if short and cache_chain_id:
-                ports.count("unexpected_cache_misses")
-                ports.diagnostic(f"cache miss: _get {ref} (chainID={cache_chain_id})")
-        cached = ports.cache_get("tw_get", ref)
-        if isinstance(cached, str):
+    if ref.endswith(".entry"):
+        short = ref[:-6].strip()
+        cached, cache_chain_id = ports.service.lookup_short(short) if short else (None, "")
+        if short and isinstance(cached, Mapping):
             ports.count("tw_get_cache_hits")
-            return cached
-        ports.count("tw_get_cache_misses")
-        result = ports.run_task(
-            ports.command_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],
-            env=ports.environment(),
-            timeout=3.0,
-            retries=2,
-        )
-        out = (result.stdout or "").strip() if result.ok else ""
-        ports.cache_set("tw_get", ref, out or "")
-        return out
-    except Exception:
-        return ""
+            return (str(cached.get("entry") or "")).strip()
+        if short and cache_chain_id:
+            ports.count("unexpected_cache_misses")
+            ports.diagnostic(f"cache miss: _get {ref} (chainID={cache_chain_id})")
+    cached_value = ports.cache_get("tw_get", ref)
+    if isinstance(cached_value, str):
+        ports.count("tw_get_cache_hits")
+        return cached_value
+    ports.count("tw_get_cache_misses")
+    result = ports.run_task(
+        ports.command_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],
+        env=ports.environment(),
+        timeout=3.0,
+        attempts=2,
+    )
+    out = (result.stdout or "").strip() if result.ok else ""
+    ports.cache_set("tw_get", ref, out or "")
+    return out
 
 
 __all__ = ("parse_extra_tokens", "SeedLookupPorts", "PreviousChainPorts", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "ChainExportPort", "export_chain_required", "TwGetPorts", "tw_get_ports_for", "tw_get_cached")

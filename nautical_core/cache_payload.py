@@ -1,7 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, ContextManager, Literal, Protocol, TypedDict
 
+from .core_context import CacheState
+from .cache_ports import (
+    AtomicReplacePort,
+    Base64Port,
+    ClockPort,
+    CompressionPort,
+    FilesystemPort,
+    JsonPort,
+    TemporaryFilePort,
+)
 from .season_support import SEASON_NAMES
 from .time_windows import parse_random_time_window_spec, validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
 
@@ -14,7 +24,28 @@ _CACHE_VERSION_KEY = "_nautical_cache_version"
 _SELECTION_SCOPES = frozenset(("week", "month", "quarter", "year", "season", *SEASON_NAMES))
 
 
-def is_atom_like(atom: Any) -> bool:
+class CacheGcResult(TypedDict):
+    removed: int
+    bytes: int
+    temporary: int
+    expired: int
+    overflow: int
+    locks_removed: int
+    locks_skipped: int
+    errors: int
+
+
+class _CacheKeyCallback(Protocol):
+    def __call__(
+        self,
+        acf: str,
+        anchor_mode: str,
+        *,
+        business_calendar_fingerprint: str = "",
+    ) -> str: ...
+
+
+def is_atom_like(atom: object) -> bool:
     if not isinstance(atom, dict):
         return False
     typ = atom.get("typ") or atom.get("type")
@@ -29,7 +60,7 @@ def is_atom_like(atom: Any) -> bool:
     return True
 
 
-def is_selection_like(value: Any) -> bool:
+def is_selection_like(value: object) -> bool:
     if not isinstance(value, dict) or value.get("kind") != "select":
         return False
     if value.get("scope") not in _SELECTION_SCOPES:
@@ -45,13 +76,13 @@ def is_selection_like(value: Any) -> bool:
     return is_dnf_like(value.get("expr"), is_atom_like=is_factor_like)
 
 
-def is_factor_like(value: Any) -> bool:
+def is_factor_like(value: object) -> bool:
     if isinstance(value, dict) and value.get("kind") == "select":
         return is_selection_like(value)
     return is_atom_like(value)
 
 
-def is_dnf_like(dnf: Any, *, is_atom_like: Any) -> bool:
+def is_dnf_like(dnf: object, *, is_atom_like: Callable[[object], bool]) -> bool:
     if not isinstance(dnf, list):
         return False
     for term in dnf:
@@ -186,35 +217,34 @@ def normalize_dnf_cached(dnf: Any) -> Any:
     return dnf
 
 
-def cache_payload_shape_ok(obj: dict, *, is_dnf_like: Any) -> bool:
-    try:
-        if "dnf" in obj and not is_dnf_like(obj.get("dnf")):
+def cache_payload_shape_ok(obj: object, *, is_dnf_like: Callable[[object], bool]) -> bool:
+    if not isinstance(obj, dict):
+        return False
+    if "dnf" in obj and not is_dnf_like(obj.get("dnf")):
+        return False
+    natural = obj.get("natural")
+    if natural is not None and not isinstance(natural, str):
+        return False
+    next_dates = obj.get("next_dates")
+    if next_dates is not None:
+        if not isinstance(next_dates, list):
             return False
-        natural = obj.get("natural")
-        if natural is not None and not isinstance(natural, str):
-            return False
-        next_dates = obj.get("next_dates")
-        if next_dates is not None:
-            if not isinstance(next_dates, list):
+        for item in next_dates:
+            if not isinstance(item, str):
                 return False
-            for item in next_dates:
-                if not isinstance(item, str):
-                    return False
-        meta = obj.get("meta")
-        if meta is not None and not isinstance(meta, dict):
-            return False
-        per_year = obj.get("per_year")
-        if per_year is not None and not isinstance(per_year, dict):
-            return False
-        limits = obj.get("limits")
-        if limits is not None and not isinstance(limits, dict):
-            return False
-    except Exception:
+    meta = obj.get("meta")
+    if meta is not None and not isinstance(meta, dict):
+        return False
+    per_year = obj.get("per_year")
+    if per_year is not None and not isinstance(per_year, dict):
+        return False
+    limits = obj.get("limits")
+    if limits is not None and not isinstance(limits, dict):
         return False
     return True
 
 
-def _bounded_decompress(blob: bytes, zlib_mod: Any, limit: int) -> bytes:
+def _bounded_decompress(blob: bytes, zlib_mod: CompressionPort, limit: int) -> bytes:
     decompressor = zlib_mod.decompressobj()
     data = decompressor.decompress(blob, limit + 1)
     if len(data) > limit:
@@ -227,50 +257,45 @@ def _bounded_decompress(blob: bytes, zlib_mod: Any, limit: int) -> bytes:
     return data
 
 
-def cache_atomic_replace(src: str, dst: str, *, os_mod: Any) -> None:
+def cache_atomic_replace(src: str, dst: str, *, os_mod: AtomicReplacePort) -> None:
     try:
         os_mod.replace(src, dst)
         return
     except OSError:
         if os_mod.name != "nt":
             raise
-    try:
-        import ctypes
+    import ctypes
 
-        flags = 0x1 | 0x8
-        kernel32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
-        move_file = getattr(kernel32, "MoveFileExW", None)
-        if move_file is None:
-            raise OSError("MoveFileExW is unavailable")
-        ok = move_file(str(src), str(dst), flags)
-        if ok:
-            return
-        err = getattr(ctypes, "GetLastError", lambda: 0)()
-        raise OSError(err, "MoveFileExW failed")
-    except Exception:
-        raise
+    flags = 0x1 | 0x8
+    kernel32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
+    move_file = getattr(kernel32, "MoveFileExW", None)
+    if move_file is None:
+        raise OSError("MoveFileExW is unavailable")
+    ok = move_file(str(src), str(dst), flags)
+    if ok:
+        return
+    err = getattr(ctypes, "GetLastError", lambda: 0)()
+    raise OSError(err, "MoveFileExW failed")
 
 
 def cache_load(
     key: str,
     *,
     enable_anchor_cache: bool,
-    cache_path: Any,
+    cache_path: Callable[[str], str],
     anchor_cache_ttl: int,
-    time_mod: Any,
-    cache_load_mem: Any,
-    cache_load_mem_ttl: int,
-    clone_cache_payload: Any,
-    normalize_dnf_cached: Any,
-    cache_payload_shape_ok: Any,
-    cache_load_mem_max: int,
-    diag: Any,
-    os_mod: Any,
-    json_mod: Any,
-    zlib_mod: Any,
-    base64_mod: Any,
-    quarantine_cache: Any = None,
-) -> Any:
+    time_mod: ClockPort,
+    cache_state: CacheState,
+    clone_cache_payload: Callable[[dict], dict],
+    normalize_dnf_cached: Callable[[object], object],
+    cache_payload_shape_ok: Callable[[object], bool],
+    diag: Callable[[str], None],
+    os_mod: FilesystemPort,
+    json_mod: JsonPort,
+    zlib_mod: CompressionPort,
+    base64_mod: Base64Port,
+    quarantine_cache: Callable[[str, str], object] | None = None,
+) -> dict | None:
     if not enable_anchor_cache:
         return None
     path = cache_path(key)
@@ -293,20 +318,20 @@ def cache_load(
 
         stamp = _stamp(st)
         now = time_mod.time()
-        if cache_load_mem_ttl > 0 and cache_load_mem:
+        if cache_state.ttl > 0 and cache_state.memory:
             expired = [
                 memo_key
-                for memo_key, (_stamp, _obj, loaded_at) in cache_load_mem.items()
-                if (now - loaded_at) > cache_load_mem_ttl
+                for memo_key, (_stamp, _obj, loaded_at) in cache_state.memory.items()
+                if (now - loaded_at) > cache_state.ttl
             ]
             for memo_key in expired:
-                cache_load_mem.pop(memo_key, None)
-        memo = cache_load_mem.get(key)
+                cache_state.memory.pop(memo_key, None)
+        memo = cache_state.memory.get(key)
         if memo and memo[0] == stamp:
-            if cache_load_mem_ttl <= 0 or (now - memo[2]) <= cache_load_mem_ttl:
-                cache_load_mem.move_to_end(key)
+            if cache_state.ttl <= 0 or (now - memo[2]) <= cache_state.ttl:
+                cache_state.memory.move_to_end(key)
                 return clone_cache_payload(memo[1])
-            cache_load_mem.pop(key, None)
+            cache_state.memory.pop(key, None)
         # Atomic replacement protects each individual read, but a reader can
         # still stat one generation and open the next. Confirm the stamp after
         # reading and retry once before treating the cache as unavailable.
@@ -342,10 +367,10 @@ def cache_load(
                 if quarantine_cache is not None:
                     quarantine_cache(key, path)
                 return None
-            cache_load_mem[key] = (stamp, obj, now)
-            cache_load_mem.move_to_end(key)
-            if len(cache_load_mem) > cache_load_mem_max:
-                cache_load_mem.popitem(last=False)
+            cache_state.memory[key] = (stamp, obj, now)
+            cache_state.memory.move_to_end(key)
+            if len(cache_state.memory) > cache_state.max_entries:
+                cache_state.memory.popitem(last=False)
             return clone_cache_payload(obj)
         if quarantine_cache is not None:
             quarantine_cache(key, path)
@@ -363,17 +388,17 @@ def cache_save(
     obj: dict,
     *,
     enable_anchor_cache: bool,
-    json_mod: Any,
-    zlib_mod: Any,
-    base64_mod: Any,
-    cache_path: Any,
-    cache_dir: Any,
-    cache_lock: Any,
-    diag: Any,
-    os_mod: Any,
-    tempfile_mod: Any,
-    cache_atomic_replace: Any,
-    cache_load_mem: Any,
+    json_mod: JsonPort,
+    zlib_mod: CompressionPort,
+    base64_mod: Base64Port,
+    cache_path: Callable[[str], str],
+    cache_dir: Callable[[], str],
+    cache_lock: Callable[[str], ContextManager[bool]],
+    diag: Callable[[str], None],
+    os_mod: FilesystemPort,
+    tempfile_mod: TemporaryFilePort,
+    cache_atomic_replace: Callable[[str, str], None],
+    cache_state: CacheState,
 ) -> bool:
     if not enable_anchor_cache:
         return False
@@ -404,16 +429,16 @@ def cache_save(
                     if name.startswith(f".{key}.") and name.endswith(".tmp"):
                         try:
                             os_mod.unlink(os_mod.path.join(base, name))
-                        except Exception:
+                        except OSError:
                             pass
-            except Exception:
+            except OSError:
                 pass
             fd, tmpf = tempfile_mod.mkstemp(dir=base, prefix=f".{key}.", suffix=".tmp")
             try:
-                os_mod.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            try:
+                try:
+                    os_mod.fchmod(fd, 0o600)
+                except OSError:
+                    pass
                 written = 0
                 while written < len(blob):
                     n = os_mod.write(fd, blob[written:])
@@ -426,7 +451,7 @@ def cache_save(
             finally:
                 try:
                     os_mod.close(fd)
-                except Exception:
+                except OSError:
                     pass
             cache_atomic_replace(tmpf, path)
             ok_saved = True
@@ -434,11 +459,11 @@ def cache_save(
         if os_mod.environ.get("NAUTICAL_DIAG") == "1":
             diag(f"cache_save failed: {exc}")
     finally:
-        cache_load_mem.pop(key, None)
+        cache_state.memory.pop(key, None)
         if tmpf and os_mod.path.exists(tmpf):
             try:
                 os_mod.unlink(tmpf)
-            except Exception:
+            except OSError:
                 pass
     return ok_saved
 
@@ -450,13 +475,13 @@ def cache_gc(
     max_entries: int = 512,
     stale_tmp_age: float = 86400.0,
     stale_lock_age: float = 86400.0,
-    cache_lock: Any,
-    stale_lock_check: Any,
-    time_mod: Any,
-    os_mod: Any,
-) -> dict:
+    cache_lock: Callable[[str], ContextManager[bool]],
+    stale_lock_check: Callable[[str, float], bool],
+    time_mod: ClockPort,
+    os_mod: FilesystemPort,
+) -> CacheGcResult:
     """Prune expired/temporary cache files without touching active writers."""
-    result = {
+    result: CacheGcResult = {
         "removed": 0,
         "bytes": 0,
         "temporary": 0,
@@ -470,10 +495,15 @@ def cache_gc(
         return result
     now = time_mod.time()
 
-    def remove_path(path: str, *, kind: str, key: str = "") -> bool:
+    def remove_path(
+        path: str,
+        *,
+        kind: Literal["temporary", "expired", "overflow"],
+        key: str = "",
+    ) -> bool:
         try:
             size = int(os_mod.path.getsize(path))
-        except Exception:
+        except OSError:
             size = 0
         try:
             if key:
@@ -489,21 +519,21 @@ def cache_gc(
             result["bytes"] += size
             result[kind] += 1
             return True
-        except Exception:
+        except OSError:
             result["errors"] += 1
             return False
 
     entries = []
     try:
         names = os_mod.listdir(base)
-    except Exception:
+    except OSError:
         return result
     for name in names:
         path = os_mod.path.join(base, name)
         try:
             stat_result = os_mod.stat(path)
             age = max(0.0, now - float(stat_result.st_mtime))
-        except Exception:
+        except OSError:
             continue
         if name.startswith(".") and name.endswith(".tmp"):
             if age >= max(0.0, float(stale_tmp_age)):
@@ -516,10 +546,7 @@ def cache_gc(
             if not key:
                 result["locks_skipped"] += 1
                 continue
-            try:
-                stale = bool(stale_lock_check(path, float(stale_lock_age)))
-            except Exception:
-                stale = False
+            stale = bool(stale_lock_check(path, float(stale_lock_age)))
             if stale:
                 try:
                     size = int(os_mod.path.getsize(path))
@@ -527,7 +554,7 @@ def cache_gc(
                     result["removed"] += 1
                     result["bytes"] += size
                     result["locks_removed"] += 1
-                except Exception:
+                except OSError:
                     result["errors"] += 1
             else:
                 result["locks_skipped"] += 1
@@ -558,14 +585,11 @@ def cache_key_for_task_cached(
     fmt: str,
     business_calendar_fingerprint: str = "",
     *,
-    build_acf: Any,
-    cache_key: Any,
+    build_acf: Callable[[str], str],
+    cache_key: _CacheKeyCallback,
 ) -> str:
     _ = fmt
-    try:
-        acf = build_acf(anchor_expr)
-    except Exception:
-        acf = (anchor_expr or "").strip()
+    acf = build_acf(anchor_expr)
     return cache_key(
         acf,
         anchor_mode or "",

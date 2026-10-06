@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+import re
 
 import nautical_core as core
 import nautical_core.natural_language as natural_language
-from nautical_core import natural_language_api
+import nautical_core.natural_language_api as natural_language_api
 
 
 class NaturalLanguageContractTests(unittest.TestCase):
@@ -60,6 +62,75 @@ class NaturalLanguageContractTests(unittest.TestCase):
                 self.assertEqual(direct, expected)
                 self.assertEqual(public, expected)
                 self.assertEqual(direct, public)
+
+    def test_monthly_integer_conversion_propagates_unexpected_failures(self) -> None:
+        with patch.object(
+            natural_language,
+            "int",
+            side_effect=RuntimeError("integer conversion defect"),
+            create=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "integer conversion defect"):
+                natural_language.fmt_monthly_atom(
+                    "1..2",
+                    monthly_alias={},
+                    safe_match=lambda *_args: None,
+                    nth_wd_re=re.compile(r"$^"),
+                    bd_re=re.compile(r"$^"),
+                )
+
+    def test_random_month_bucket_sort_propagates_unexpected_integer_failures(self) -> None:
+        import builtins
+
+        def convert(value, *args, **kwargs):
+            if isinstance(value, str):
+                raise RuntimeError("bucket ordering defect")
+            return builtins.int(value, *args, **kwargs)
+
+        with patch.object(
+            natural_language,
+            "int",
+            side_effect=convert,
+            create=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "bucket ordering defect"):
+                natural_language.try_bucket_rand_monthly(
+                    [[{"type": "m", "spec": "1rand"}]],
+                    {},
+                    rand_bucket_signature=lambda _term: (1, "09:30", True, "1–7"),
+                )
+
+    def test_anchor_description_propagates_unexpected_parser_failures(self) -> None:
+        from nautical_core.parsing.parser_models import ParseError
+
+        with self.assertRaisesRegex(RuntimeError, "parser defect"):
+            natural_language.describe_anchor_expr(
+                "w:mon",
+                parse_anchor_expr_to_dnf_cached=lambda _expression: (_ for _ in ()).throw(
+                    RuntimeError("parser defect")
+                ),
+                describe_anchor_expr_from_dnf=lambda _dnf, **_kwargs: "",
+            )
+
+        self.assertEqual(
+            natural_language.describe_anchor_expr(
+                "malformed",
+                parse_anchor_expr_to_dnf_cached=lambda _expression: (_ for _ in ()).throw(
+                    ParseError("bad anchor expression")
+                ),
+                describe_anchor_expr_from_dnf=lambda _dnf, **_kwargs: "unexpected",
+            ),
+            "",
+        )
+
+    def test_anchor_term_description_does_not_silently_drop_failed_branches(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "term formatter defect"):
+            natural_language.describe_anchor_expr_from_dnf(
+                [[{"type": "w", "spec": "mon"}]],
+                describe_anchor_term=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError("term formatter defect")
+                ),
+            )
 
     def test_mode_tails_are_bound_to_direct_dnf_formatter(self) -> None:
         expression = "w:mon"

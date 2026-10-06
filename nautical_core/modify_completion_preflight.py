@@ -1,19 +1,28 @@
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
 
 from nautical_core.integration_models import Absent, Found, Unavailable
-from nautical_core.modify_models import CompletionPreflightContext
+from nautical_core.modify_models import (
+    CoerceIntCallback,
+    CompletionPreflightContext,
+    CompletionPreflightServices,
+    EndChainSummaryCallback,
+    ExistingNextLookupCallback,
+    PanelCallback,
+    PrintTaskCallback,
+    ShortUuidCallback,
+)
 from nautical_core.task_models import TaskPayload
 
 
 def completion_link_numbers_or_fail(
     new: TaskPayload,
     *,
-    coerce_int: Any,
+    coerce_int: CoerceIntCallback,
     max_link_number: int,
-    panel: Any,
-    print_task: Any,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
 ) -> tuple[int, int] | None:
     base_no = coerce_int(new.get("link"), 1)
     if base_no < 1 or base_no > max_link_number:
@@ -38,11 +47,11 @@ def completion_link_numbers_or_fail(
 
 def completion_kind_or_stop(
     new: TaskPayload,
-    now_utc: Any,
+    now_utc: datetime,
     *,
-    panel: Any,
-    print_task: Any,
-    end_chain_summary: Any,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
+    end_chain_summary: EndChainSummaryCallback,
 ) -> str | None:
     raw_ch = (new.get("chain") or "").strip().lower()
     has_anchor = bool((new.get("anchor") or "").strip())
@@ -69,7 +78,12 @@ def completion_kind_or_stop(
     return kind
 
 
-def completion_chain_id_or_fail(new: TaskPayload, *, panel: Any, print_task: Any) -> str | None:
+def completion_chain_id_or_fail(
+    new: TaskPayload,
+    *,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
+) -> str | None:
     chain_id = (new.get("chainID") or "").strip()
     if chain_id:
         return chain_id
@@ -89,10 +103,10 @@ def completion_existing_next_or_fail(
     new: TaskPayload,
     next_no: int,
     *,
-    existing_next_lookup: Any,
-    short: Any,
-    panel: Any,
-    print_task: Any,
+    existing_next_lookup: ExistingNextLookupCallback,
+    short: ShortUuidCallback,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
 ) -> bool:
     declared_next = str(new.get("nextLink") or "").strip()
     if declared_next:
@@ -120,13 +134,14 @@ def completion_existing_next_or_fail(
         return False
     if isinstance(existing_next, Absent):
         return True
+    candidate: object = existing_next
     if isinstance(existing_next, Found):
-        existing_next = existing_next.value
-    if not existing_next:
+        candidate = existing_next.value
+    if not candidate:
         return True
-    if hasattr(existing_next, "to_mapping"):
-        existing_next = existing_next.to_mapping()
-    if not isinstance(existing_next, dict):
+    if hasattr(candidate, "to_mapping"):
+        candidate = candidate.to_mapping()
+    if not isinstance(candidate, dict):
         panel(
             "⚠ Chain lookup unavailable",
             [
@@ -137,9 +152,9 @@ def completion_existing_next_or_fail(
         )
         print_task(new)
         return False
-    ex_uuid = (existing_next.get("uuid") or "").strip()
+    ex_uuid = (candidate.get("uuid") or "").strip()
     ex_short = short(ex_uuid)
-    ex_status = ((existing_next.get("status") or "").strip() or "unknown").lower()
+    ex_status = ((candidate.get("status") or "").strip() or "unknown").lower()
     panel(
         "ℹ Spawn skipped",
         [
@@ -154,9 +169,9 @@ def completion_existing_next_or_fail(
 
 def completion_preflight_context(
     new: TaskPayload,
-    now_utc: Any,
+    now_utc: datetime,
     *,
-    services: Any,
+    services: CompletionPreflightServices,
 ) -> CompletionPreflightContext | None:
     short = services.short
     completion_link_numbers_or_fail = services.completion_link_numbers_or_fail

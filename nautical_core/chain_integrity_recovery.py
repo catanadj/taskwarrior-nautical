@@ -7,7 +7,10 @@ and presentation are performed by the outer application services.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import chain_integrity_lifecycle as lifecycle
@@ -20,7 +23,7 @@ from .integration_models import (
     MutationRequest,
     NativeUntilRepairPayload,
 )
-from .lifecycle_models import recurrence_fingerprint
+from .lifecycle.models import recurrence_fingerprint
 from .task_models import FieldPresence, TaskObservation
 
 
@@ -128,10 +131,10 @@ class IntegrityRecoveryService:
         rows: Iterable[TaskObservation],
         *,
         predecessor: Callable[[TaskObservation], TaskObservation | None],
-        safe_parse_datetime: Callable[[Any], tuple[Any, str | None]],
-        fmt_isoz: Callable[[Any], str],
-        utc_to_local_naive: Callable[[Any], Any],
-        local_naive_to_utc: Callable[[Any], Any],
+        safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+        fmt_isoz: Callable[[datetime], str],
+        utc_to_local_naive: Callable[[datetime], datetime],
+        local_naive_to_utc: Callable[[datetime], datetime],
     ) -> RecoveryAudit:
         materialized = tuple(rows)
         by_chain_link = {
@@ -214,10 +217,10 @@ class IntegrityRecoveryService:
         item: dict[str, Any],
         *,
         repaired: str,
-        taskdata: Any,
+        taskdata: Path | None,
         lease_held: bool,
-        mutation_lock: Callable[[Any, bool], Any],
-        parent_lock: Callable[[str], Any],
+        mutation_lock: Callable[[Path, bool], AbstractContextManager[bool]],
+        parent_lock: Callable[[str], AbstractContextManager[bool]],
         refresh_parent: Callable[[TaskObservation], TaskObservation | None],
         refresh_previous: Callable[[TaskObservation], TaskObservation | None],
         guard_error: Callable[[TaskObservation, TaskObservation | None, TaskObservation | None], str | None],
@@ -271,6 +274,9 @@ class IntegrityRecoveryService:
                                 else:
                                     item["applied"] = True
                             except Exception as exc:
+                                # Mutation or verification may fail after
+                                # Taskwarrior accepted the update; retain an
+                                # explicit repair error for reconciliation.
                                 item["action"] = "repair_error"
                                 item["repair_error"] = str(exc).strip() or type(exc).__name__
         return item.get("repair_error") if item.get("action") == "repair_error" else None

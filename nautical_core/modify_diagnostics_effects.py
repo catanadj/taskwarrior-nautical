@@ -3,66 +3,281 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
-from .task_datetime import datetime_value, parser_for_host
+from functools import partial
+from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, Sequence, overload
+from .task_datetime import TaskDatetimeParser, datetime_value, parser_for_host
 from dataclasses import dataclass
+from .modify_chain_summary import ChainSummaryRenderServices, SpanHumanDelta
+from .modify_read_effects import ChainExportReader
+from .task_models import TaskObservation, TaskPayload
+
+if TYPE_CHECKING:
+    from .modify_format_effects import HumanDeltaPort as HumanDeltaPortType
+
+
+class CPSequenceIntervalProvider(Protocol):
+    def cp_sequence_interval_for_link(
+        self, cp: str, link_no: int | None, chain_id: str | None = None
+    ) -> timedelta | None: ...
+
+
+class AnalyticsService(Protocol):
+    def chain_health_advice(
+        self,
+        chain: Sequence[TaskObservation],
+        kind: str,
+        task: TaskPayload,
+        *,
+        core: CPSequenceIntervalProvider,
+        parse_datetime: Callable[[Any], datetime | None],
+        format_delta: Callable[[timedelta], str],
+        coerce_int: Callable[[Any, Any], int | None],
+        tol_secs: int,
+        style: str,
+    ) -> str | None: ...
+
+    def chain_integrity_warnings(
+        self,
+        chain: list[TaskObservation],
+        *,
+        expected_chain_id: str | None = None,
+        coerce_int: Callable[[Any, Any], int | None],
+        short: Callable[[Any], str],
+    ) -> list[str]: ...
+
+    def lateness_stats(
+        self,
+        chain: list[TaskObservation],
+        *,
+        parse_datetime: Callable[[Any], datetime | None],
+        tol_secs: int = 60,
+    ) -> dict[str, Any]: ...
+
+    def sort_chain_for_analytics(
+        self,
+        chain: list[TaskObservation],
+        *,
+        coerce_int: Callable[[Any, Any], int | None],
+        parse_datetime: Callable[[Any], datetime | None],
+    ) -> list[TaskObservation]: ...
+
+
+class _AnalyticsCore(CPSequenceIntervalProvider, Protocol):
+    coerce_int: Callable[[Any, Any], int | None]
+    short_uuid: Callable[[Any], str]
+
+
+class _AnalyticsFormattingEffects(Protocol):
+    format_delta: Callable[[timedelta], str]
+
+
+class AnalyticsHost(Protocol):
+    @property
+    def core(self) -> _AnalyticsCore: ...
+
+    @overload
+    def _module(self, name: Literal["modify_analytics"]) -> AnalyticsService: ...
+
+    @overload
+    def _module(
+        self, name: Literal["modify_value_effects"]
+    ) -> _AnalyticsFormattingEffects: ...
 
 
 @dataclass(frozen=True, slots=True)
 class DatetimeValuePort:
-    parser: Any
+    parser: TaskDatetimeParser
 
 
 @dataclass(frozen=True, slots=True)
 class AnalyticsPorts:
-    core: Any
-    parse_datetime: Any
-    format_delta: Any
-    coerce_int: Any
-    short_uuid: Any
+    core: CPSequenceIntervalProvider
+    service: AnalyticsService
+    parse_datetime: Callable[[object], datetime | None]
+    format_delta: Callable[[timedelta], str]
+    coerce_int: Callable[[Any, Any], int | None]
+    short_uuid: Callable[[Any], str]
+
+
+class TimelineSummaryService(Protocol):
+    def last_n_timeline(
+        self,
+        chain: list[TaskObservation],
+        n: int = 6,
+        *,
+        coerce_int: Callable[[Any, Any], int | None],
+        parse_datetime: Callable[[Any], datetime | None],
+        format_local: Callable[[Any], str],
+        format_on_time_delta: Callable[[Any, Any], str],
+        short_uuid: Callable[[Any], str],
+    ) -> list[str]: ...
+
+
+class SpanSummaryService(Protocol):
+    def span_fields(
+        self,
+        chain_id: str,
+        chain: list[TaskObservation],
+        *,
+        stop_at: datetime | None = None,
+        stopped_by_delete: bool = False,
+        export_endpoint: Callable[[str, str], TaskObservation | None],
+        parse_datetime: Callable[[Any], datetime | None],
+        human_delta: SpanHumanDelta,
+    ) -> tuple[datetime | None, datetime | None, str]: ...
+
+
+class EndChainSummaryRenderer(Protocol):
+    def render_chain_summary(
+        self,
+        current: TaskPayload,
+        reason: str,
+        now_utc: datetime,
+        current_task: TaskPayload | None = None,
+        *,
+        services: ChainSummaryRenderServices,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class ChainExportPorts:
-    service: Any
-    coerce_int: Any
+    service: ChainExportReader
+    coerce_int: Callable[[Any, Any], int | None]
+
+
+class _ChainExportCore(Protocol):
+    coerce_int: Callable[[Any, Any], int | None]
+
+
+class _ChainExportComposition(Protocol):
+    lifecycle_read_service_for: Callable[[object], ChainExportReader]
+
+
+class ChainExportHost(Protocol):
+    @property
+    def core(self) -> _ChainExportCore: ...
+
+    def _module(self, name: Literal["modify_composition"]) -> _ChainExportComposition: ...
 
 
 @dataclass(frozen=True, slots=True)
 class TimelineSummaryPorts:
-    summary: Any
-    coerce_int: Any
-    parse_datetime: Any
-    format_local: Any
-    format_on_time_delta: Any
-    short_uuid: Any
+    summary: TimelineSummaryService
+    coerce_int: Callable[[Any, Any], int | None]
+    parse_datetime: Callable[[object], datetime | None]
+    format_local: Callable[[Any], str]
+    format_on_time_delta: Callable[[datetime, datetime], str]
+    short_uuid: Callable[[Any], str]
+
+
+class _TimelineSummaryCore(Protocol):
+    coerce_int: Callable[[Any, Any], int | None]
+    humanize_delta: Callable[[datetime, datetime, bool], str]
+    short_uuid: Callable[[Any], str]
+
+
+class _TimelineFormattingEffects(Protocol):
+    HumanDeltaPort: type[HumanDeltaPortType]
+    on_time_delta: Callable[[HumanDeltaPortType, datetime, datetime], str]
+
+
+class TimelineSummaryHost(Protocol):
+    @property
+    def core(self) -> _TimelineSummaryCore: ...
+
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+    _fmtlocal: Callable[[Any], str]
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_format_effects"],
+    ) -> _TimelineFormattingEffects: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_chain_summary"],
+    ) -> TimelineSummaryService: ...
 
 
 @dataclass(frozen=True, slots=True)
 class SpanFieldsPorts:
-    summary: Any
-    export_endpoint: Any
-    parse_datetime: Any
-    human_delta: Any
+    summary: SpanSummaryService
+    export_endpoint: Callable[[str, str], TaskObservation | None]
+    parse_datetime: Callable[[object], datetime | None]
+    human_delta: SpanHumanDelta
+
+
+class _SpanFieldsCore(Protocol):
+    coerce_int: Callable[[Any, Any], int | None]
+    humanize_delta: Callable[[datetime, datetime, bool], str]
+
+
+class _SpanFormattingEffects(Protocol):
+    HumanDeltaPort: type[HumanDeltaPortType]
+    human_delta: Callable[[HumanDeltaPortType, datetime, datetime, bool], str]
+
+
+class SpanFieldsHost(Protocol):
+    @property
+    def core(self) -> _SpanFieldsCore: ...
+
+    _TASK_DATETIME_PARSER: TaskDatetimeParser
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_composition"],
+    ) -> _ChainExportComposition: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_chain_summary"],
+    ) -> SpanSummaryService: ...
+
+    @overload
+    def _module(
+        self,
+        name: Literal["modify_format_effects"],
+    ) -> _SpanFormattingEffects: ...
 
 
 @dataclass(frozen=True, slots=True)
 class SecondsDeltaPort:
-    humanize: Any
+    humanize: Callable[[datetime, datetime, bool], str]
+
+
+class _SecondsDeltaCore(Protocol):
+    humanize_delta: Callable[[datetime, datetime, bool], str]
+
+
+class SecondsDeltaHost(Protocol):
+    @property
+    def core(self) -> _SecondsDeltaCore: ...
 
 
 @dataclass(frozen=True, slots=True)
 class EndChainSummaryPorts:
-    summary: Any
-    services: Any
+    summary: EndChainSummaryRenderer
+    services: ChainSummaryRenderServices
 
 
-def _parse_datetime_value(port: DatetimeValuePort, value: object) -> Any:
+def _parse_datetime_value(port: DatetimeValuePort, value: object) -> datetime | None:
     return datetime_value(port.parser, value)
 
 
-def chain_health_advice(ports: AnalyticsPorts, chain: Any, kind: str, task: Any, tol_secs: int, style: str) -> Any:
-    return ports.core._import_sibling("modify_analytics").chain_health_advice(
+def chain_health_advice(
+    ports: AnalyticsPorts,
+    chain: Sequence[TaskObservation],
+    kind: str,
+    task: TaskPayload,
+    *,
+    tol_secs: int = 60,
+    style: str,
+) -> str | None:
+    return ports.service.chain_health_advice(
         chain,
         kind,
         task,
@@ -75,8 +290,12 @@ def chain_health_advice(ports: AnalyticsPorts, chain: Any, kind: str, task: Any,
     )
 
 
-def chain_integrity_warnings(ports: AnalyticsPorts, chain: Any, expected_chain_id: str | None = None) -> list[str]:
-    return ports.core._import_sibling("modify_analytics").chain_integrity_warnings(
+def chain_integrity_warnings(
+    ports: AnalyticsPorts,
+    chain: list[TaskObservation],
+    expected_chain_id: str | None = None,
+) -> list[str]:
+    return ports.service.chain_integrity_warnings(
         chain,
         expected_chain_id=expected_chain_id,
         coerce_int=ports.coerce_int,
@@ -84,9 +303,10 @@ def chain_integrity_warnings(ports: AnalyticsPorts, chain: Any, expected_chain_i
     )
 
 
-def analytics_ports_for(host: Any) -> AnalyticsPorts:
+def analytics_ports_for(host: AnalyticsHost) -> AnalyticsPorts:
     return AnalyticsPorts(
         core=host.core,
+        service=host._module("modify_analytics"),
         parse_datetime=lambda value: _parse_datetime_value(DatetimeValuePort(parser_for_host(host)), value),
         format_delta=host._module("modify_value_effects").format_delta,
         coerce_int=host.core.coerce_int,
@@ -94,56 +314,71 @@ def analytics_ports_for(host: Any) -> AnalyticsPorts:
     )
 
 
-def lateness_stats(ports: AnalyticsPorts, chain: Any, tol_secs: int = 60) -> dict[str, Any]:
-    return ports.core._import_sibling("modify_analytics").lateness_stats(
+def lateness_stats(
+    ports: AnalyticsPorts, chain: list[TaskObservation], tol_secs: int = 60
+) -> dict[str, Any]:
+    return ports.service.lateness_stats(
         chain, parse_datetime=ports.parse_datetime, tol_secs=tol_secs
     )
 
 
-def sort_chain_for_analytics(ports: AnalyticsPorts, chain: Any) -> Any:
-    return ports.core._import_sibling("modify_analytics").sort_chain_for_analytics(
+def sort_chain_for_analytics(
+    ports: AnalyticsPorts, chain: list[TaskObservation]
+) -> list[TaskObservation]:
+    return ports.service.sort_chain_for_analytics(
         chain, coerce_int=ports.coerce_int, parse_datetime=ports.parse_datetime
     )
 
 
-def chain_export_ports_for(host: Any) -> ChainExportPorts:
+def chain_export_ports_for(host: ChainExportHost) -> ChainExportPorts:
     return ChainExportPorts(
         service=host._module("modify_composition").lifecycle_read_service_for(host),
         coerce_int=host.core.coerce_int,
     )
 
 
-def export_chain_endpoint(ports: ChainExportPorts, chain_id: str, direction: str) -> Any:
+def export_chain_endpoint(
+    ports: ChainExportPorts, chain_id: str, direction: str
+) -> TaskObservation | None:
     """Return a chain endpoint from the invocation's authoritative snapshot."""
     rows = ports.service.get_chain_export(chain_id)
     if rows is None:
         raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
-    with_links = [
-        (ports.coerce_int(row.get("link"), None), row)
-        for row in rows
-    ]
-    with_links = [(link, row) for link, row in with_links if link is not None]
+    with_links: list[tuple[int, TaskObservation]] = []
+    for row in rows:
+        link = ports.coerce_int(row.get("link"), None)
+        if link is not None:
+            with_links.append((link, row))
     if not with_links:
         return None
     with_links.sort(key=lambda item: item[0])
     return with_links[0 if direction == "first" else -1][1]
 
 
-def timeline_summary_ports_for(host: Any) -> TimelineSummaryPorts:
+def timeline_summary_ports_for(host: TimelineSummaryHost) -> TimelineSummaryPorts:
     formatting = host._module("modify_format_effects")
+    humanize_delta = host.core.humanize_delta
+
+    def format_on_time_delta(due: datetime, end: datetime) -> str:
+        return formatting.on_time_delta(
+            formatting.HumanDeltaPort(humanize_delta),
+            due,
+            end,
+        )
+
     return TimelineSummaryPorts(
         summary=host._module("modify_chain_summary"),
         coerce_int=host.core.coerce_int,
         parse_datetime=lambda value: _parse_datetime_value(DatetimeValuePort(parser_for_host(host)), value),
         format_local=host._fmtlocal,
-        format_on_time_delta=lambda due, end, tol=60: formatting.on_time_delta(
-            formatting.HumanDeltaPort(host.core.humanize_delta), due, end, tol
-        ),
+        format_on_time_delta=format_on_time_delta,
         short_uuid=host.core.short_uuid,
     )
 
 
-def last_n_timeline(ports: TimelineSummaryPorts, chain: Any, n: int = 6) -> list[str]:
+def last_n_timeline(
+    ports: TimelineSummaryPorts, chain: list[TaskObservation], n: int = 6
+) -> list[str]:
     return ports.summary.last_n_timeline(
         chain,
         n,
@@ -155,21 +390,28 @@ def last_n_timeline(ports: TimelineSummaryPorts, chain: Any, n: int = 6) -> list
     )
 
 
-def span_fields_ports_for(host: Any) -> SpanFieldsPorts:
+def span_fields_ports_for(host: SpanFieldsHost) -> SpanFieldsPorts:
     formatting = host._module("modify_format_effects")
     export_ports = chain_export_ports_for(host)
     return SpanFieldsPorts(
         summary=host._module("modify_chain_summary"),
         export_endpoint=lambda chain_id, direction: export_chain_endpoint(export_ports, chain_id, direction),
         parse_datetime=lambda value: _parse_datetime_value(DatetimeValuePort(parser_for_host(host)), value),
-        human_delta=lambda start, end, prefer=True, *, prefer_months=None: formatting.human_delta(
+        human_delta=partial(
+            formatting.human_delta,
             formatting.HumanDeltaPort(host.core.humanize_delta),
-            start, end, prefer if prefer_months is None else prefer_months,
         ),
     )
 
 
-def span_fields(ports: SpanFieldsPorts, chain_id: str, chain: Any, *, stop_at: Any = None, stopped_by_delete: bool = False) -> Any:
+def span_fields(
+    ports: SpanFieldsPorts,
+    chain_id: str,
+    chain: list[TaskObservation],
+    *,
+    stop_at: datetime | None = None,
+    stopped_by_delete: bool = False,
+) -> tuple[datetime | None, datetime | None, str]:
     return ports.summary.span_fields(
         chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete,
         export_endpoint=ports.export_endpoint,
@@ -178,7 +420,7 @@ def span_fields(ports: SpanFieldsPorts, chain_id: str, chain: Any, *, stop_at: A
     )
 
 
-def seconds_delta_port_for(host: Any) -> SecondsDeltaPort:
+def seconds_delta_port_for(host: SecondsDeltaHost) -> SecondsDeltaPort:
     return SecondsDeltaPort(host.core.humanize_delta)
 
 
@@ -188,7 +430,7 @@ def format_seconds_delta(port: SecondsDeltaPort, secs: float | None) -> str:
     base = datetime(2000, 1, 1, tzinfo=timezone.utc)
     target = base + timedelta(seconds=secs)
     value = (
-        port.humanize(base, target, use_months_days=False)
+        port.humanize(base, target, False)
         .replace("in ", "")
         .replace("overdue by ", "")
     )
@@ -224,7 +466,9 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
     max_chain_walk = host._MAX_CHAIN_WALK
     diagnostic = host._diag
 
-    def export_sorted_chain(chain_id: str, actual_current: dict[str, Any]) -> list[Any]:
+    def export_sorted_chain(
+        chain_id: str, actual_current: TaskPayload
+    ) -> list[TaskObservation]:
         chain = read_effects.export_chain_required(chain_export_port, actual_current)
         if actual_current and chain:
             for index, task in enumerate(chain):
@@ -233,17 +477,20 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
                         actual_current, source_query=f"chain:{chain_id}:current"
                     )
                     break
-        try:
-            return sort_chain_for_analytics(analytics_ports, chain)
-        except Exception:
-            return chain
+        return sort_chain_for_analytics(analytics_ports, chain)
 
-    def render_span_fields(chain_id: str, chain: list[dict[str, Any]], *, stop_at: Any = None, stopped_by_delete: bool = False) -> Any:
+    def render_span_fields(
+        chain_id: str,
+        chain: list[TaskObservation],
+        *,
+        stop_at: datetime | None = None,
+        stopped_by_delete: bool = False,
+    ) -> tuple[datetime | None, datetime | None, str]:
         return span_fields(
             span_ports, chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete
         )
 
-    def kind_rows(rows: list[Any], kind: str, task: Any) -> None:
+    def kind_rows(rows: list[tuple[str, str]], kind: str, task: TaskPayload) -> None:
         summary.kind_rows(
             rows,
             kind,
@@ -253,16 +500,17 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
             describe_anchor=describe_anchor,
         )
 
-    def stats_rows(rows: list[Any], chain: Any, clock: Any) -> None:
+    def stats_rows(
+        rows: list[tuple[str, str]], chain: list[TaskObservation]
+    ) -> None:
         summary.stats_rows(
             rows,
             chain,
-            clock,
             lateness_stats=lambda value: lateness_stats(analytics_ports, value),
-            format_seconds_delta=lambda _now, value: format_seconds_delta(seconds_port, value),
+            format_seconds_delta=lambda value: format_seconds_delta(seconds_port, value),
         )
 
-    def limits_row(rows: list[Any], task: Any) -> None:
+    def limits_row(rows: list[tuple[str, str]], task: TaskPayload) -> None:
         summary.limits_row(
             rows,
             task,
@@ -293,7 +541,13 @@ def end_chain_summary_ports_for(host: Any) -> EndChainSummaryPorts:
     return EndChainSummaryPorts(summary=summary, services=render_services)
 
 
-def end_chain_summary(ports: EndChainSummaryPorts, current: dict[str, Any], reason: str, now_utc: Any, current_task: dict[str, Any] | None = None) -> None:
+def end_chain_summary(
+    ports: EndChainSummaryPorts,
+    current: TaskPayload,
+    reason: str,
+    now_utc: datetime,
+    current_task: TaskPayload | None = None,
+) -> None:
     ports.summary.render_chain_summary(
         current,
         reason,

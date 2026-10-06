@@ -7,9 +7,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import os
 import unittest
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import nautical_core as core
+import nautical_core.timezone_facade as timezone_facade
 from nautical_core.occurrence_outcomes import FoundOccurrence
 from nautical_core.occurrence_provider import Occurrence
 from nautical_core.recurrence_context import RecurrenceContext
@@ -50,6 +52,13 @@ def _astral_test_available() -> bool:
 
 
 class SchedulerCrossPathConformanceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        timezone_override = patch.object(
+            timezone_facade, "_local_timezone", timezone.utc
+        )
+        timezone_override.start()
+        self.addCleanup(timezone_override.stop)
+
     def assert_monotonic(self, items: tuple[Occurrence, ...], name: str) -> None:
         signatures = tuple(_occurrence_signature(item) for item in items)
         self.assertTrue(
@@ -132,6 +141,82 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
             self.assertIsInstance(first, FoundOccurrence, "file next path did not find an occurrence")
             self.assertTrue(ranged.occurrences and ranged.occurrences[0].description == "first", "file range lost description")
             self.assertEqual(_occurrence_signature(first.occurrence), _occurrence_signature(ranged.occurrences[0]), "file next/range diverged")
+
+    def test_skip_preview_matches_chain_generation_for_recurrence_matrix(self) -> None:
+        """The pure preview and successor owners choose the same skip-mode occurrence."""
+        from types import SimpleNamespace
+
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        from nautical_core.task_models import NauticalTask
+        from nautical_core.timeutil import fmt_isoz
+
+        cases = (
+            ("w:mon,wed,fri@t=09:00", "", date(2026, 1, 5), (9, 0)),
+            ("w:mon,wed,fri + y:apr@t=09:00", "", date(2026, 4, 1), (9, 0)),
+            ("m:-1bd@t=09:00", "", date(2026, 1, 30), (9, 0)),
+            ("w/2:fri@t=09:00", "", date(2026, 1, 2), (9, 0)),
+            ("w:mon@t=09:00,12:00,18:00", "", date(2026, 1, 5), (9, 0)),
+            ("w:mon,wed,fri@t=09:00", "w:wed", date(2026, 1, 5), (9, 0)),
+            ("y:rand + w:sat@t=09:00", "", date(2026, 1, 1), (9, 0)),
+        )
+        core_port = SimpleNamespace(
+            parse_dt_any=core.parse_dt_any,
+            to_local=lambda value: value.astimezone(timezone.utc),
+            DEFAULT_BUSINESS_CALENDAR=None,
+            ASTRONOMY_CONFIG=None,
+            ANCHOR_FILE_DIR="",
+        )
+        generation = ChainGenerationService.from_core(core_port)
+
+        for index, (expression, omit, seed_day, hhmm) in enumerate(cases):
+            with self.subTest(expression=expression, omit=omit):
+                chain_id = f"skip-conformance-{index}"
+                current_utc = datetime.combine(seed_day, datetime.min.time()).replace(
+                    hour=hhmm[0], minute=hhmm[1], tzinfo=timezone.utc
+                )
+                context = RecurrenceContext(chain_id=chain_id, timezone=timezone.utc)
+                for step in range(4):
+                    parent = {
+                        "uuid": f"00000000-0000-4000-8000-{index:012d}",
+                        "description": "skip-mode conformance fixture",
+                        "status": "completed",
+                        "chain": "on",
+                        "chainID": chain_id,
+                        "link": 1,
+                        "anchor": expression,
+                        "anchor_mode": "skip",
+                        "due": fmt_isoz(current_utc),
+                        "end": fmt_isoz(current_utc),
+                    }
+                    if omit:
+                        parent["omit"] = omit
+                    observation = DEFAULT_TASK_CODEC.decode_row(
+                        parent, source_query="skip-mode conformance"
+                    )
+                    typed_parent = NauticalTask.from_observation(observation)
+                    preview = _scheduler_for_fixture(parent, context=context)
+                    selected = preview.select_mode(
+                        "skip",
+                        due_local=current_utc,
+                        end_local=current_utc,
+                        fallback_hhmm=hhmm,
+                        default_seed_date=seed_day,
+                    )
+
+                    generated_utc, metadata, _dnf = generation.compute_anchor_child_due(
+                        typed_parent
+                    )
+
+                    self.assertIsNotNone(selected.selected_occurrence)
+                    self.assertEqual(
+                        selected.selected_occurrence.astimezone(timezone.utc),
+                        generated_utc,
+                        f"{expression} omit={omit!r} step={step + 1}",
+                    )
+                    self.assertEqual(selected.basis, metadata.get("basis"))
+                    self.assertGreater(generated_utc, current_utc)
+                    current_utc = generated_utc
 
     def test_generated_recurrence_matrix_is_monotonic_timezone_aware_and_repeatable(self) -> None:
         import random
@@ -278,6 +363,7 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
                 configuration=SimpleNamespace(fingerprint="domain-parity"),
             ),
             repository=Repository(),
+            mutation_epoch=0,
         )
         query_request = OccurrenceQueryRequest.from_mapping(
             {
@@ -304,7 +390,7 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
         self.assertEqual(projected[0], expected_local)
 
         with patch.object(core, "LOCAL_TZ_NAME", "Europe/Sofia"), patch.object(
-            core, "_LOCAL_TZ", zone
+            timezone_facade, "_local_timezone", zone
         ):
             recovery = plan_recovery_decision(observation, existing_children=[], hook=None)
         self.assertEqual(recovery.plan.action.value, "spawn_child")
@@ -326,9 +412,9 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
         # Force lazy timezone configuration before capturing the context.
         due_utc = core.build_local_datetime(date(2026, 8, 3), (9, 0))
         end_utc = core.build_local_datetime(date(2026, 8, 3), (10, 0))
-        local_timezone = core._LOCAL_TZ
         due_local = core.to_local(due_utc)
         end_local = core.to_local(end_utc)
+        local_timezone = due_local.tzinfo
         for index, expression in enumerate(cases):
             with self.subTest(expression=expression):
                 chain_id = f"time-mode-parity-{index}"
@@ -378,7 +464,7 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
 
         core.to_local(datetime(2026, 1, 1, tzinfo=timezone.utc))
         local_timezone = ZoneInfo("America/New_York")
-        with patch.object(core, "_LOCAL_TZ", local_timezone):
+        with patch.object(timezone_facade, "_local_timezone", local_timezone):
             due_utc = core.build_local_datetime(date(2025, 3, 9), (1, 30))
             end_utc = core.build_local_datetime(date(2025, 3, 9), (2, 0))
             due_local = core.to_local(due_utc)
@@ -418,6 +504,38 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
         self.assertEqual(selected.basis, metadata.get("basis"))
         self.assertEqual(selected.source, metadata.get("source"))
 
+    def test_chain_generation_completion_advances_past_second_dst_fold(self) -> None:
+        from nautical_core.chain_generation import ChainGenerationService
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        from nautical_core.task_models import NauticalTask
+
+        zone = ZoneInfo("Europe/Bucharest")
+        due = datetime(2026, 10, 25, 3, 0, tzinfo=zone, fold=0)
+        completed = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+        task = {
+            "uuid": "00000000-0000-4000-8000-000000000740",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "dst-second-fold",
+            "link": 1,
+            "anchor": "w:sun@t=03:20",
+            "anchor_mode": "skip",
+            "due": due.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+            "end": completed.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        }
+        parent = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(task, source_query="second-fold completion")
+        )
+
+        with patch.object(timezone_facade, "_local_timezone", zone):
+            child_due, _metadata, _dnf = ChainGenerationService.from_core(
+                core
+            ).compute_anchor_child_due(parent)
+            child_local = child_due.astimezone(zone)
+
+        self.assertEqual(child_local.date(), date(2026, 11, 1))
+        self.assertEqual((child_local.hour, child_local.minute), (3, 20))
+
     def test_chain_generation_matches_evaluator_with_business_calendar(self) -> None:
         from unittest.mock import patch
 
@@ -432,8 +550,8 @@ class SchedulerCrossPathConformanceTests(unittest.TestCase):
             def is_business_day(self, value: date) -> bool:
                 return value in {date(2026, 1, 2), date(2026, 1, 7)}
 
-        core.to_local(datetime(2026, 1, 1, tzinfo=timezone.utc))
-        local_timezone = core._LOCAL_TZ
+        timezone_probe = core.to_local(datetime(2026, 1, 1, tzinfo=timezone.utc))
+        local_timezone = timezone_probe.tzinfo
         policy = SetCalendar()
         due_utc = core.build_local_datetime(date(2026, 1, 1), (9, 0))
         end_utc = core.build_local_datetime(date(2026, 1, 1), (10, 0))

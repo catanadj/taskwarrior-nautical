@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from .api_bindings import ApiBinding, core_namespace
 from .core_context import CoreContext
+from . import timezone_facade
 
 
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
@@ -16,16 +17,16 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return timeutil.now_utc()
 
     def to_local(dt_utc: Any) -> Any:
-        return timeutil.to_local(dt_utc, core["_LOCAL_TZ"])
+        return timeutil.to_local(dt_utc, timezone_facade.current_timezone())
 
     def utc_to_local_naive(dt_utc: Any) -> Any:
-        return timeutil.utc_to_local_naive(dt_utc, core["_LOCAL_TZ"])
+        return timeutil.utc_to_local_naive(dt_utc, timezone_facade.current_timezone())
 
     def local_naive_to_utc(dt_local_naive: Any) -> Any:
-        return timeutil.local_naive_to_utc(dt_local_naive, core["_LOCAL_TZ"])
+        return timeutil.local_naive_to_utc(dt_local_naive, timezone_facade.current_timezone())
 
     def fmt_dt_local(dt_utc: Any) -> Any:
-        return timeutil.fmt_dt_local(dt_utc, core["_LOCAL_TZ"])
+        return timeutil.fmt_dt_local(dt_utc, timezone_facade.current_timezone())
 
     def fmt_isoz(dt_utc: Any) -> Any:
         return timeutil.fmt_isoz(dt_utc)
@@ -72,7 +73,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     def build_local_datetime(d: Any, hhmm: Any = (core["DEFAULT_DUE_HOUR"], 0)) -> Any:
-        return timeutil.build_local_datetime(d, hhmm, core["_LOCAL_TZ"])
+        return timeutil.build_local_datetime(d, hhmm, timezone_facade.current_timezone())
 
     return ApiBinding.from_kwargs(
         now_utc=now_utc,

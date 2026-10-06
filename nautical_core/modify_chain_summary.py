@@ -5,28 +5,90 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
-from .callback_ports import CallbackPort
+from .modify_analytics import LatenessStats
+from .modify_models import FeedbackPanelCallback
+from .parsing.parser_models import AnchorDNF, ParseError
 from .task_models import TaskObservation, TaskPayload
+
+
+class SpanHumanDelta(Protocol):
+    def __call__(
+        self,
+        start: datetime,
+        end: datetime,
+        prefer_months: bool = True,
+    ) -> str: ...
+
+
+class SpanFieldsCallback(Protocol):
+    def __call__(
+        self,
+        chain_id: str,
+        chain: list[TaskObservation],
+        *,
+        stop_at: datetime | None = None,
+        stopped_by_delete: bool = False,
+    ) -> tuple[datetime | None, datetime | None, str]: ...
+
+
+class SummaryKindRows(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        kind: str,
+        current: TaskPayload,
+    ) -> None: ...
+
+
+class SummaryStatsRows(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        chain: list[TaskObservation],
+    ) -> None: ...
+
+
+class SummaryLimitsRow(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        current: TaskPayload,
+    ) -> None: ...
+
+
+class SummaryTimelineRows(Protocol):
+    def __call__(
+        self,
+        chain: list[TaskObservation],
+        n: int = 6,
+    ) -> list[str]: ...
+
+
+class SummaryRowsFormatter(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+    ) -> list[tuple[str | None, str]]: ...
 
 
 @dataclass(frozen=True, slots=True)
 class ChainSummaryRenderServices:
-    export_sorted_chain: Callable[[str, dict[str, Any]], list[TaskObservation]]
-    root_uuid_from: Callable[[dict[str, Any]], Any]
-    short_uuid: Callable[[Any], str]
-    format_root_and_age: Callable[[dict[str, Any], Any], str]
-    kind_rows: Callable[..., None]
-    span_fields: Callable[..., tuple[datetime | None, datetime | None, str]]
-    stats_rows: Callable[..., None]
-    limits_row: Callable[..., None]
-    last_n_timeline_rows: Callable[..., list[str]]
-    format_rows: Callable[..., list[tuple[str | None, str]]]
-    coerce_int: Callable[[Any, Any], int | None]
-    format_local: Callable[[Any], str]
+    export_sorted_chain: Callable[[str, TaskPayload], list[TaskObservation]]
+    root_uuid_from: Callable[[TaskPayload], str]
+    short_uuid: Callable[[str | None], str]
+    format_root_and_age: Callable[[TaskPayload, datetime], str]
+    kind_rows: SummaryKindRows
+    span_fields: SpanFieldsCallback
+    stats_rows: SummaryStatsRows
+    limits_row: SummaryLimitsRow
+    last_n_timeline_rows: SummaryTimelineRows
+    format_rows: SummaryRowsFormatter
+    coerce_int: Callable[[object, int], int | None]
+    format_local: Callable[[datetime], str]
     max_chain_walk: int
-    panel: CallbackPort
+    panel: FeedbackPanelCallback
     diagnostic: Callable[[str], None]
 
 
@@ -45,8 +107,8 @@ def span_fields(
     stop_at: datetime | None = None,
     stopped_by_delete: bool = False,
     export_endpoint: Callable[[str, str], TaskObservation | None],
-    parse_datetime: Callable[[Any], datetime | None],
-    human_delta: Callable[..., str],
+    parse_datetime: Callable[[object], datetime | None],
+    human_delta: SpanHumanDelta,
 ) -> tuple[datetime | None, datetime | None, str]:
     first_task = chain[0] if chain else None
     last_task = chain[-1] if chain else None
@@ -68,11 +130,11 @@ def span_fields(
 def kind_rows(
     rows: list[tuple[str, str]],
     kind: str,
-    current: dict,
+    current: TaskPayload,
     *,
     anchor_preset_display: Callable[[str], tuple[str, str] | None],
-    validate_anchor: Callable[[str], Any],
-    describe_anchor: Callable[[Any, dict], str],
+    validate_anchor: Callable[[str], AnchorDNF],
+    describe_anchor: Callable[[AnchorDNF, dict[str, Any]], str],
 ) -> None:
     mode = (current.get("anchor_mode") or "skip").lower()
     tag = {"skip": "[cyan]SKIP[/]", "all": "[yellow]ALL[/]", "flex": "[magenta]FLEX[/]"}.get(
@@ -81,19 +143,17 @@ def kind_rows(
     )
     if kind == "anchor":
         expr = (current.get("anchor") or "").strip()
-        try:
-            preset_display = anchor_preset_display(expr)
-        except Exception:
-            preset_display = None
+        preset_display = anchor_preset_display(expr)
         if preset_display:
             label, text = preset_display
             rows.append((label, f"{text}  {tag}"))
         else:
             rows.append(("Pattern", f"{expr}  {tag}"))
         try:
-            rows.append(("Natural", describe_anchor(validate_anchor(expr), current)))
-        except Exception:
-            pass
+            anchor_dnf = validate_anchor(expr)
+        except ParseError:
+            return
+        rows.append(("Natural", describe_anchor(anchor_dnf, dict(current))))
         return
     if kind == "anchor_file":
         expr = (current.get("anchor_file") or "").strip()
@@ -106,25 +166,24 @@ def kind_rows(
 def stats_rows(
     rows: list[tuple[str, str]],
     chain: list[TaskObservation],
-    now_utc: Any,
     *,
-    lateness_stats: Callable[..., dict[str, Any]],
-    format_seconds_delta: Callable[[Any, float | None], str],
+    lateness_stats: Callable[[list[TaskObservation]], LatenessStats],
+    format_seconds_delta: Callable[[float | None], str],
 ) -> None:
     stats = lateness_stats(chain)
     rows.append(("Performance", f"early {stats['early']}, on-time {stats['on_time']}, late {stats['late']}"))
-    rows.append(("Avg lateness", format_seconds_delta(now_utc, stats["avg"])))
-    rows.append(("Median lateness", format_seconds_delta(now_utc, stats["median"])))
-    rows.append(("Best early", format_seconds_delta(now_utc, stats["best_early"])))
-    rows.append(("Worst late", format_seconds_delta(now_utc, stats["worst_late"])))
+    rows.append(("Avg lateness", format_seconds_delta(stats["avg"])))
+    rows.append(("Median lateness", format_seconds_delta(stats["median"])))
+    rows.append(("Best early", format_seconds_delta(stats["best_early"])))
+    rows.append(("Worst late", format_seconds_delta(stats["worst_late"])))
 
 
 def limits_row(
     rows: list[tuple[str, str]],
-    current: dict,
+    current: TaskPayload,
     *,
-    coerce_int: Callable[[Any, Any], int | None],
-    parse_datetime: Callable[[Any], datetime | None],
+    coerce_int: Callable[[object, int], int | None],
+    parse_datetime: Callable[[object], datetime | None],
     format_local: Callable[[datetime], str],
 ) -> None:
     cpmax = coerce_int(current.get("chainMax"), 0)
@@ -141,11 +200,11 @@ def last_n_timeline(
     chain: list[TaskObservation],
     n: int = 6,
     *,
-    coerce_int: Callable[[Any, Any], int | None],
-    parse_datetime: Callable[[Any], datetime | None],
-    format_local: Callable[[Any], str],
-    format_on_time_delta: Callable[[Any, Any], str],
-    short_uuid: Callable[[Any], str],
+    coerce_int: Callable[[object, int], int | None],
+    parse_datetime: Callable[[object], datetime | None],
+    format_local: Callable[[datetime], str],
+    format_on_time_delta: Callable[[datetime | None, datetime | None], str],
+    short_uuid: Callable[[str | None], str],
 ) -> list[str]:
     """Render the compact recent-history rows used by chain summaries."""
     if not chain:
@@ -205,9 +264,9 @@ def last_n_timeline(
 
 
 def render_chain_summary(
-    current: dict[str, Any],
+    current: TaskPayload,
     reason: str,
-    now_utc: Any,
+    now_utc: datetime,
     current_task: TaskPayload | None = None,
     *,
     services: ChainSummaryRenderServices,
@@ -233,9 +292,17 @@ def render_chain_summary(
     try:
         chain = services.export_sorted_chain(chain_id, dict(actual_current))
     except Exception as exc:
+        # Chain history is supplemental context; preserve the primary summary
+        # while showing that this optional read was unavailable.
         chain = []
         chain_read_error = str(exc) or "chain export unavailable"
-        services.diagnostic(f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}")
+        try:
+            services.diagnostic(
+                f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}"
+            )
+        except Exception:
+            # The diagnostic is secondary; it must not suppress the summary.
+            pass
 
     link_no = services.coerce_int(current.get("link"), len(chain))
     root = services.short_uuid(services.root_uuid_from(current))
@@ -266,7 +333,7 @@ def render_chain_summary(
     if stopped_by_delete:
         rows.append(("Stopped at", services.format_local(now_utc)))
     rows.append(("Span", span))
-    services.stats_rows(rows, chain, now_utc)
+    services.stats_rows(rows, chain)
     services.limits_row(rows, current)
     tail = services.last_n_timeline_rows(chain, 6)
     if tail:
@@ -277,9 +344,9 @@ def render_chain_summary(
 
 
 def render_chain_summary_with_services(
-    current: dict[str, Any],
+    current: TaskPayload,
     reason: str,
-    now_utc: Any,
+    now_utc: datetime,
     current_task: TaskPayload | None,
     *,
     services: ChainSummaryRenderServices,

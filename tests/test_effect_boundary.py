@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
+from typing import get_type_hints
 import unittest
 from unittest.mock import patch
 
@@ -26,19 +27,21 @@ from nautical_core.taskwarrior_uow import InvocationReadCache, QueryScope, Query
 from nautical_core.modify_feedback import lifecycle_result_feedback_facts
 from nautical_core.hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from nautical_core.feedback_renderer import PanelView, panel_view_from_facts, render_panel_view
-from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
-from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import _LifecycleOutboxRepository
+from nautical_core.lifecycle.application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
+from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.lifecycle.outbox import _LifecycleOutboxRepository
 from nautical_core.task_models import TaskObservation
+from nautical_core.task_models import TaskTimestamp
+from nautical_core.modify_carry_workflow import TemporalCarryDecision
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
-from nautical_core.lifecycle_models import recurrence_fingerprint
+from nautical_core.lifecycle.models import recurrence_fingerprint
 from nautical_core.operator_models import OperatorOperation, OperatorResult, OperatorStatus
 from nautical_core.operator_presentation import render_result
 from tests.support.lifecycle_execution import LifecycleExecutionFixture
 
 ROOT = Path(__file__).resolve().parents[1]
 PURE_WORKFLOW_MODULES = (
-    "nautical_core/lifecycle_planner.py",
+    "nautical_core/lifecycle/planner.py",
     "nautical_core/chain_repair_planner.py",
     "nautical_core/modify_feedback.py",
     "nautical_core/panel_diagnostics.py",
@@ -46,7 +49,7 @@ PURE_WORKFLOW_MODULES = (
 )
 FORBIDDEN_IMPORTS = {
     "subprocess",
-    "nautical_core.lifecycle_outbox",
+    "nautical_core.lifecycle.outbox",
     "nautical_core.runtime_command",
     "nautical_core.taskwarrior_mutations",
     "nautical_core.task_command",
@@ -54,6 +57,11 @@ FORBIDDEN_IMPORTS = {
 
 
 class EffectBoundaryTests(unittest.TestCase):
+    def test_feedback_contract_is_typed_json(self) -> None:
+        return_type = get_type_hints(FeedbackFacts.to_contract)["return"]
+        self.assertIs(getattr(return_type, "__origin__", None), dict)
+        self.assertNotIn("Any", repr(return_type))
+
     def test_read_only_mutation_gateway_rejects_before_dispatch(self) -> None:
         task_uuid = "11111111-1111-4111-8111-111111111111"
         guard = MutationGuard(
@@ -104,7 +112,8 @@ class EffectBoundaryTests(unittest.TestCase):
         self.assertEqual(core.describe_anchor_expr("malformed"), "")
 
     def test_modify_command_boundary_has_no_legacy_text_wrappers(self) -> None:
-        from nautical_core import modify_command_effects, modify_queries
+        import nautical_core.modify_command_effects as modify_command_effects
+        import nautical_core.modify_queries as modify_queries
 
         self.assertFalse(hasattr(modify_queries, "task_text"))
         self.assertFalse(hasattr(modify_queries, "tw_get"))
@@ -292,7 +301,7 @@ class EffectBoundaryTests(unittest.TestCase):
         self.assertEqual(result.to_dict(), before)
 
     def test_production_feedback_paths_use_shared_renderer(self) -> None:
-        from nautical_core import modify_feedback
+        import nautical_core.modify_feedback as modify_feedback
 
         rendered: list[PanelView] = []
 
@@ -300,10 +309,14 @@ class EffectBoundaryTests(unittest.TestCase):
             rendered.append(view)
             return True
 
-        adjustment = SimpleNamespace(
-            target_old=SimpleNamespace(value=datetime(2026, 1, 1, tzinfo=timezone.utc)),
-            target_new=SimpleNamespace(value=datetime(2026, 1, 2, tzinfo=timezone.utc)),
-            adjustments=(),
+        adjustment = TemporalCarryDecision(
+            "unchanged",
+            target_old=TaskTimestamp(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+            target_new=TaskTimestamp(datetime(2026, 1, 2, tzinfo=timezone.utc)),
+        )
+        self.assertIs(
+            get_type_hints(modify_feedback.render_cp_schedule_adjusted_panel)["adjustment"],
+            TemporalCarryDecision,
         )
         with patch.object(modify_feedback, "render_panel_view", side_effect=record):
             modify_feedback.render_cp_schedule_adjusted_panel(

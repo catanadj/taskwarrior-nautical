@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from nautical_core.integration_models import (
     Absent,
@@ -15,15 +16,404 @@ from nautical_core.integration_models import (
     MutationOperation,
     MutationOutcomeKind,
     MutationRequest,
+    ParentLinkPayload,
     TaskCommand,
     Unavailable,
 )
-from nautical_core.lifecycle_models import recurrence_fingerprint
+from nautical_core.lifecycle.models import recurrence_fingerprint
 from nautical_core.task_models import TaskObservation
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
 
 class MutationHardeningTests(unittest.TestCase):
+    def test_parent_guard_does_not_hide_internal_fingerprint_failures(self) -> None:
+        parent: dict[str, str | int] = {
+            "uuid": "00000000-0000-4000-8000-000000000924",
+            "status": "completed", "chain": "on", "chainID": "chain-guard",
+            "link": 7, "modified": "20260813T100000Z", "anchor": "w:mon", "cp": "1d",
+        }
+        guard = MutationGuard(
+            task_uuid=str(parent["uuid"]), status=str(parent["status"]),
+            chain_id=str(parent["chainID"]), link=int(parent["link"]),
+            recurrence_identity=recurrence_fingerprint(parent),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, str(parent["modified"])),),
+            expected_mutation_epoch=0, chain="on",
+        )
+        row = TaskObservation.from_mapping(parent, source_query="mutation-guard-test")
+
+        with patch(
+            "nautical_core.taskwarrior_mutations.recurrence_fingerprint",
+            side_effect=RuntimeError("fingerprint invariant failed"),
+        ), self.assertRaisesRegex(RuntimeError, "fingerprint invariant failed"):
+            TaskwarriorMutationService._guard_mismatch(guard, row)
+
+    def test_parent_guard_classifies_malformed_fingerprint_input(self) -> None:
+        parent: dict[str, str | int] = {
+            "uuid": "00000000-0000-4000-8000-000000000925",
+            "status": "completed", "chain": "on", "chainID": "chain-guard",
+            "link": 7, "modified": "20260813T100000Z", "anchor": "w:mon", "cp": "1d",
+        }
+        guard = MutationGuard(
+            task_uuid=str(parent["uuid"]), status=str(parent["status"]),
+            chain_id=str(parent["chainID"]), link=int(parent["link"]),
+            recurrence_identity="not-the-current-fingerprint",
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, str(parent["modified"])),),
+            expected_mutation_epoch=0, chain="on",
+        )
+        row = TaskObservation.from_mapping(parent, source_query="mutation-guard-test")
+
+        with patch(
+            "nautical_core.taskwarrior_mutations.recurrence_fingerprint",
+            side_effect=ValueError("malformed recurrence value"),
+        ):
+            reason = TaskwarriorMutationService._guard_mismatch(guard, row)
+
+        self.assertIn("guard recurrence identity unavailable", reason)
+
+    def test_parent_guard_changes_never_dispatch_a_link_mutation(self) -> None:
+        parent = {
+            "uuid": "00000000-0000-4000-8000-000000000924",
+            "status": "completed", "chain": "on", "chainID": "chain-guard",
+            "link": 7, "modified": "20260813T100000Z", "anchor": "w:mon", "cp": "1d",
+        }
+        child_short_uuid = "00000000"
+        guard = MutationGuard(
+            task_uuid=parent["uuid"], status=parent["status"], chain_id=parent["chainID"],
+            link=parent["link"], recurrence_identity=recurrence_fingerprint(parent),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+            expected_mutation_epoch=0, chain="on",
+        )
+        request = MutationRequest(
+            MutationOperation.PARENT_LINK, guard,
+            ParentLinkPayload(parent["uuid"], child_short_uuid),
+        )
+
+        class Repository:
+            def by_uuid(self, uuid_value, *, refresh=False):
+                del refresh
+                if uuid_value != parent["uuid"]:
+                    return Absent(f"uuid:{uuid_value}", "not present")
+                observation = TaskObservation.from_mapping(parent, source_query="mutation-guard-test")
+                return Found(observation, f"uuid:{uuid_value}")
+
+        class Client:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def execute(self, *_args, **_kwargs):
+                self.calls.append(_args)
+                raise AssertionError("stale parent guard must stop before Taskwarrior dispatch")
+
+        client = Client()
+        service = TaskwarriorMutationService(SimpleNamespace(
+            context=SimpleNamespace(mutation_capable=True),
+            repository=Repository(), client=client, mutation_epoch=0,
+            record_mutation=lambda **_kwargs: 1,
+        ))
+        changed_fields = (
+            ("status", "pending"),
+            ("chain", "off"),
+            ("chainID", "user-chain"),
+            ("link", 8),
+            ("anchor", "w:tue"),
+            ("cp", "2d"),
+            ("modified", "20260813T100001Z"),
+            ("nextLink", "user-edit"),
+        )
+
+        for field, value in changed_fields:
+            with self.subTest(field=field):
+                original = parent.get(field)
+                parent[field] = value
+                outcome = service.apply(request)
+                self.assertIs(outcome.kind, MutationOutcomeKind.CONFLICT)
+                self.assertEqual(client.calls, [])
+                if original is None:
+                    parent.pop(field)
+                else:
+                    parent[field] = original
+
+    def test_batch_postverification_fails_closed_for_untrusted_snapshots(self) -> None:
+        from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+
+        parent_uuid = "00000000-0000-4000-8000-000000000930"
+        child_uuid = "00000000-0000-4000-8000-000000000931"
+        parent = {
+            "uuid": parent_uuid, "status": "completed", "chain": "on",
+            "chainID": "batch-verify", "link": 1,
+            "modified": "20260813T120000Z", "cp": "1d",
+            "nextLink": child_uuid[:8],
+        }
+        child = {
+            "uuid": child_uuid, "chainID": "batch-verify", "link": 2,
+            "prevLink": parent_uuid[:8], "status": "pending", "chain": "on",
+            "cp": "1d",
+        }
+        guard = MutationGuard(
+            task_uuid=parent_uuid, status=parent["status"], chain_id=parent["chainID"],
+            link=parent["link"], recurrence_identity=recurrence_fingerprint(parent),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+            expected_mutation_epoch=0, chain="on",
+        )
+        child_payload = ChildImportPayload(
+            parent_uuid=parent_uuid, child_uuid=child_uuid,
+            chain_id=child["chainID"], target_link=2, fields=tuple(child.items()),
+        )
+        child_request = MutationRequest(MutationOperation.CHILD_IMPORT, guard, child_payload)
+        parent_request = MutationRequest(
+            MutationOperation.PARENT_LINK,
+            guard,
+            ParentLinkPayload(parent_uuid, child_uuid[:8]),
+        )
+
+        class Repository:
+            def __init__(self, mode):
+                self.mode = mode
+
+            def read_uuid_set(self, request):
+                if self.mode == "unavailable":
+                    evidence = FailureEvidence(
+                        TaskCommand(("task", "export"), "verify", 1.0),
+                        CommandFailureKind.BUSY, 1, 1, 0.01, True, "lock active",
+                    )
+                    return SetReadResult(
+                        SetReadStatus.UNAVAILABLE, request.uuids, failures=(evidence,),
+                    )
+                if self.mode == "malformed":
+                    return SetReadResult(
+                        SetReadStatus.MALFORMED, request.uuids, evidence=("malformed",),
+                    )
+                found = {child_uuid: dict(child), parent_uuid: dict(parent)}
+                if self.mode == "stale":
+                    found[child_uuid]["link"] = 99
+                    found[parent_uuid]["nextLink"] = "stale00"
+                return SetReadResult(
+                    SetReadStatus.DUPLICATE if self.mode == "duplicate" else SetReadStatus.COMPLETE,
+                    request.uuids,
+                    found=found,
+                    complete_for_requested_identities=self.mode != "duplicate",
+                    evidence=("duplicate identity",) if self.mode == "duplicate" else (),
+                )
+
+        for mode, expected in (
+            ("unavailable", MutationOutcomeKind.RETRYABLE),
+            ("malformed", MutationOutcomeKind.MANUAL_REVIEW),
+            ("stale", MutationOutcomeKind.MANUAL_REVIEW),
+            ("duplicate", MutationOutcomeKind.MANUAL_REVIEW),
+        ):
+            with self.subTest(snapshot=mode):
+                service = TaskwarriorMutationService(SimpleNamespace(
+                    repository=Repository(mode), mutation_epoch=0,
+                ))
+                child_outcome = service.verify_lifecycle_children((child_request,))[child_uuid]
+                parent_outcome = service.verify_lifecycle_parents((parent_request,))[parent_uuid]
+                self.assertIs(child_outcome.kind, expected)
+                self.assertIs(parent_outcome.kind, expected)
+
+        from nautical_core.taskwarrior_mutations import _child_import_matches
+
+        null_payload = ChildImportPayload(
+            parent_uuid=parent_uuid, child_uuid=child_uuid,
+            chain_id=child["chainID"], target_link=2,
+            fields=tuple(dict(child, anchor_file="null").items()),
+        )
+        self.assertTrue(_child_import_matches(child, null_payload, parent_uuid))
+
+    def test_lifecycle_child_prefetch_reuses_authoritative_uuid_set_read(self) -> None:
+        from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+
+        parent_uuid = "00000000-0000-4000-8000-000000000928"
+        child_uuid = "00000000-0000-4000-8000-000000000929"
+        parent = {
+            "uuid": parent_uuid, "status": "completed", "chain": "on",
+            "chainID": "prefetch-chain", "link": 1,
+            "modified": "20260813T120000Z",
+        }
+        payload = ChildImportPayload(
+            parent_uuid=parent_uuid,
+            child_uuid=child_uuid,
+            chain_id="prefetch-chain",
+            target_link=2,
+            fields=(("uuid", child_uuid), ("chainID", "prefetch-chain"),
+                    ("link", 2), ("prevLink", parent_uuid[:8])),
+        )
+
+        class Repository:
+            def __init__(self) -> None:
+                self.requests = []
+                self.uuid_reads = []
+                self.broad_reads = 0
+
+            def read_uuid_set(self, request):
+                self.requests.append(request)
+                return SetReadResult(
+                    SetReadStatus.COMPLETE,
+                    request.uuids,
+                    found={parent_uuid: parent},
+                    absent=tuple(identity for identity in request.uuids if identity != parent_uuid),
+                    complete_for_requested_identities=True,
+                )
+
+            def by_uuid(self, uuid_value, *, refresh=False):
+                del refresh
+                self.uuid_reads.append(uuid_value)
+                return Found(parent, f"uuid:{uuid_value}")
+
+            def broad_snapshot(self, **_kwargs):
+                self.broad_reads += 1
+                return Unavailable("unexpected broad read")
+
+        repository = Repository()
+        service = TaskwarriorMutationService(SimpleNamespace(
+            repository=repository, mutation_epoch=0,
+        ))
+        service.preflight_lifecycle_batch(
+            (payload,), parent_expectations=((parent_uuid, child_uuid[:8]),),
+        )
+
+        self.assertEqual(len(repository.requests), 1)
+        self.assertEqual(set(repository.requests[0].uuids), {parent_uuid, child_uuid})
+        self.assertEqual(repository.uuid_reads, [])
+        self.assertEqual(repository.broad_reads, 0)
+        self.assertIn(child_uuid.lower(), service._prefetched_children)
+        self.assertEqual(service._prefetched_parents.get(parent_uuid), parent)
+
+    def test_lifecycle_batch_prefetch_uses_one_union_uuid_set_read(self) -> None:
+        from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+
+        parent_uuids = tuple(f"00000000-0000-4000-8000-00000000093{i}" for i in range(3))
+        child_uuids = tuple(f"00000000-0000-4000-8000-00000000094{i}" for i in range(3))
+        parents = {
+            uuid: {
+                "uuid": uuid, "status": "completed", "chain": "on",
+                "chainID": "prefetch-batch", "link": index + 1,
+                "modified": "20260813T120000Z",
+            }
+            for index, uuid in enumerate(parent_uuids)
+        }
+        payloads = tuple(
+            ChildImportPayload(
+                parent_uuid=parent_uuid,
+                child_uuid=child_uuid,
+                chain_id="prefetch-batch",
+                target_link=index + 2,
+                fields=(("uuid", child_uuid), ("chainID", "prefetch-batch"),
+                        ("link", index + 2), ("prevLink", parent_uuid[:8])),
+            )
+            for index, (parent_uuid, child_uuid) in enumerate(zip(parent_uuids, child_uuids))
+        )
+
+        class Repository:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def read_uuid_set(self, request):
+                self.requests.append(request)
+                return SetReadResult(
+                    SetReadStatus.COMPLETE,
+                    request.uuids,
+                    found=parents,
+                    absent=tuple(identity for identity in request.uuids if identity not in parents),
+                    complete_for_requested_identities=True,
+                )
+
+        repository = Repository()
+        service = TaskwarriorMutationService(SimpleNamespace(
+            repository=repository, mutation_epoch=0,
+        ))
+        service.preflight_lifecycle_batch(
+            payloads,
+            parent_expectations=tuple(
+                (uuid, f"{index + 2:08x}") for index, uuid in enumerate(parent_uuids)
+            ),
+        )
+
+        self.assertEqual(len(repository.requests), 1)
+        self.assertEqual(set(repository.requests[0].uuids), set(parent_uuids + child_uuids))
+
+    def test_existing_child_is_acknowledged_only_when_complete_and_matching(self) -> None:
+        parent = {
+            "uuid": "00000000-0000-4000-8000-000000000926",
+            "status": "completed", "chain": "on", "chainID": "child-check",
+            "link": 4, "modified": "20260813T110000Z",
+        }
+        child = {
+            "uuid": "00000000-0000-4000-8000-000000000927",
+            "chainID": "child-check", "link": 5, "prevLink": parent["uuid"][:8],
+            "status": "pending", "chain": "on", "cp": "1d", "description": "child",
+            "due": "20260814T090000Z",
+        }
+        payload = ChildImportPayload(
+            parent_uuid=parent["uuid"], child_uuid=child["uuid"],
+            chain_id=child["chainID"], target_link=5, fields=tuple(child.items()),
+        )
+        guard = MutationGuard(
+            task_uuid=parent["uuid"], status=parent["status"], chain_id=parent["chainID"],
+            link=parent["link"], recurrence_identity=recurrence_fingerprint(parent),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+            expected_mutation_epoch=0, chain="on",
+        )
+
+        class Repository:
+            def __init__(self, existing):
+                self.rows = {parent["uuid"]: dict(parent), child["uuid"]: existing}
+
+            def by_uuid(self, uuid_value, *, refresh=False):
+                del refresh
+                row = self.rows.get(uuid_value)
+                if row is None:
+                    return Absent(f"uuid:{uuid_value}", "not present")
+                return Found(TaskObservation.from_mapping(row, source_query="uuid"), "uuid")
+
+            def exact_child_slot(self, chain_id, link, **_kwargs):
+                row = next((item for item in self.rows.values()
+                            if item.get("chainID") == chain_id and int(item.get("link", 0)) == link), None)
+                if row is None:
+                    return Absent("slot", "not present")
+                return Found(TaskObservation.from_mapping(row, source_query="slot"), "slot")
+
+        class Client:
+            def execute(self, *_args, **_kwargs):
+                raise AssertionError("an existing child must not trigger a mutation")
+
+        def apply(existing, payload_values=None):
+            request_payload = payload
+            if payload_values is not None:
+                request_payload = ChildImportPayload(
+                    parent_uuid=parent["uuid"], child_uuid=child["uuid"],
+                    chain_id=str(payload_values["chainID"]), target_link=int(payload_values["link"]),
+                    fields=tuple(payload_values.items()),
+                )
+            repository = Repository(existing)
+            service = TaskwarriorMutationService(SimpleNamespace(
+                context=SimpleNamespace(mutation_capable=True), repository=repository,
+                client=Client(), mutation_epoch=0, record_mutation=lambda **_kwargs: 1,
+            ))
+            return service.apply(MutationRequest(MutationOperation.CHILD_IMPORT, guard, request_payload))
+
+        invalid_rows = (
+            ("missing prevLink", {key: value for key, value in child.items() if key != "prevLink"}),
+            ("wrong status", dict(child, status="completed")),
+            ("disabled chain", dict(child, chain="off")),
+            ("changed recurrence metadata", dict(child, cp="2d")),
+            ("sync replacement", dict(child, chainID="replacement-chain", link=99)),
+            ("future deleted child", dict(child, status="deleted", until="29990101T000000Z")),
+        )
+        for label, existing in invalid_rows:
+            with self.subTest(existing=label):
+                outcome = apply(existing)
+                self.assertIs(outcome.kind, MutationOutcomeKind.CONFLICT)
+                self.assertFalse(outcome.postconditions)
+
+        expired_values = dict(child, status="deleted", until="20000101T000000Z")
+        expired = apply(expired_values, payload_values=expired_values)
+        self.assertIs(expired.kind, MutationOutcomeKind.ALREADY_APPLIED, expired)
+        future_values = dict(child, status="deleted", until="29990101T000000Z")
+        future = apply(future_values, payload_values=future_values)
+        self.assertIs(future.kind, MutationOutcomeKind.CONFLICT)
+        valid = apply(dict(child))
+        self.assertIs(valid.kind, MutationOutcomeKind.ALREADY_APPLIED)
+
     def test_child_import_refuses_ambiguous_slot_before_dispatch(self) -> None:
         parent = {
             "uuid": "11111111-1111-4111-8111-111111111111",

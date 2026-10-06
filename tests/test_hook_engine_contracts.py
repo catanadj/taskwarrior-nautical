@@ -1,13 +1,87 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import Any, get_type_hints
 
-from nautical_core.hook_engine import handle_on_modify
-from nautical_core.modify_models import CompletionLifecycleResult
+from nautical_core.hook_context import HookRuntimeContext, OnAddRequest, OnExitRequest, OnModifyRequest
+from nautical_core.hook_engine import OnAddServices, handle_on_add, handle_on_modify
+from nautical_core.modify_models import CompletionLifecycleDiagnostic, CompletionLifecycleResult
 
 
 class HookEngineContractTests(unittest.TestCase):
+    def test_add_core_dependency_is_limited_to_clock_capabilities(self) -> None:
+        from nautical_core.add_composition import AddCompositionServices
+        from nautical_core.hook_engine import OnAddCoreClock, OnAddServices
+
+        self.assertIs(get_type_hints(OnAddServices.core)["return"], OnAddCoreClock)
+        self.assertIs(
+            get_type_hints(
+                AddCompositionServices.core,
+                localns={"OnAddCoreClock": OnAddCoreClock},
+            )["return"],
+            OnAddCoreClock,
+        )
+
+    def test_on_add_engine_uses_typed_request_and_profiler_contracts(self) -> None:
+        self.assertIs(get_type_hints(handle_on_add)["request"], OnAddRequest)
+        self.assertIsNot(get_type_hints(OnAddRequest)["prof"], Any)
+        self.assertIsNot(get_type_hints(OnAddServices.result)["prof"], Any)
+
+    def test_modify_and_exit_engines_use_typed_request_models(self) -> None:
+        from nautical_core.hook_engine import OnModifyServices, handle_on_exit, handle_on_modify
+        from nautical_core.modify_models import CompletionLifecycleResult
+
+        self.assertIs(get_type_hints(handle_on_modify)["request"], OnModifyRequest)
+        self.assertIs(get_type_hints(handle_on_exit)["request"], OnExitRequest)
+        self.assertEqual(
+            get_type_hints(OnModifyServices.handle_completion)["return"],
+            CompletionLifecycleResult | None,
+        )
+        self.assertEqual(
+            get_type_hints(OnModifyServices.handle_deleted)["terminal_decision"],
+            object | None,
+        )
+        self.assertEqual(get_type_hints(OnModifyRequest)["terminal_decision"], object | None)
+        self.assertEqual(
+            get_type_hints(HookRuntimeContext)["lifecycle_result"],
+            CompletionLifecycleResult | None,
+        )
+
+    def test_on_add_profiler_assignment_does_not_hide_internal_failures(self) -> None:
+        class BrokenProfiler:
+            enabled = True
+
+            @property
+            def import_ms(self):
+                return None
+
+            @import_ms.setter
+            def import_ms(self, _value):
+                raise RuntimeError("profiler assignment invariant failed")
+
+            @staticmethod
+            def section(_name):
+                return nullcontext()
+
+        class Services:
+            @staticmethod
+            def has_nautical_fields(_task):
+                return True
+
+            @staticmethod
+            def load_core():
+                return None
+
+        request = SimpleNamespace(
+            task={"chainID": "typed"},
+            prof=BrokenProfiler(),
+            runtime=SimpleNamespace(import_ms=12.0),
+        )
+        with self.assertRaisesRegex(RuntimeError, "profiler assignment invariant failed"):
+            handle_on_add(request, Services())
+
     def test_delete_route_loads_core_only_for_nautical_tasks(self) -> None:
         calls = {"load": 0, "deleted": 0, "completion": 0, "non_completion": 0}
 
@@ -49,7 +123,7 @@ class HookEngineContractTests(unittest.TestCase):
             }, 1, 1),
         ):
             new = dict(task, status="deleted")
-            request = SimpleNamespace(
+            request = OnModifyRequest(
                 old=task,
                 new=new,
                 runtime=SimpleNamespace(uow=object(), lifecycle_result=None),
@@ -68,7 +142,7 @@ class HookEngineContractTests(unittest.TestCase):
             reason="planner unavailable",
         )
         runtime = SimpleNamespace(lifecycle_result=None, uow=object())
-        request = SimpleNamespace(
+        request = OnModifyRequest(
             old={
                 "uuid": "00000000-0000-4000-8000-000000000303",
                 "status": "pending",
@@ -112,14 +186,58 @@ class HookEngineContractTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIs(runtime.lifecycle_result, lifecycle)
 
+    def test_completion_preflight_skip_is_a_valid_noop_result(self) -> None:
+        runtime = SimpleNamespace(lifecycle_result=None, uow=object())
+        request = OnModifyRequest(
+            old={
+                "uuid": "00000000-0000-4000-8000-000000000333",
+                "status": "pending",
+                "chainID": "chain333",
+            },
+            new={
+                "uuid": "00000000-0000-4000-8000-000000000333",
+                "status": "completed",
+                "chainID": "chain333",
+            },
+            runtime=runtime,
+        )
+
+        class Services:
+            def result(self, *, task, sanitize):
+                return {"task": task, "sanitize": sanitize}
+
+            def has_nautical_fields(self, task):
+                return bool(task.get("chainID"))
+
+            def load_core(self):
+                return None
+
+            def diag(self, _message):
+                return None
+
+            def fail_and_exit(self, *_args):
+                raise AssertionError("preflight skip must not fail completion")
+
+            def handle_completion(self, *_args):
+                return None
+
+            def handle_non_completion(self, *_args):
+                raise AssertionError("non-completion route selected")
+
+            def handle_deleted(self, *_args):
+                raise AssertionError("delete route selected")
+
+        self.assertIsNone(handle_on_modify(request, Services()))
+        self.assertIsNone(runtime.lifecycle_result)
+
     def test_scheduler_completion_failure_vetoes_taskwarrior_completion(self) -> None:
-        lifecycle = SimpleNamespace(
+        lifecycle = CompletionLifecycleResult(
             state="retryable",
             reason="These anchors joined with '+' don't share any possible date.",
-            diagnostic=SimpleNamespace(failure_kind="scheduler_error"),
+            diagnostic=CompletionLifecycleDiagnostic(failure_kind="scheduler_error"),
         )
         runtime = SimpleNamespace(lifecycle_result=None, uow=object())
-        request = SimpleNamespace(
+        request = OnModifyRequest(
             old={"uuid": "00000000-0000-4000-8000-000000000304", "status": "pending", "chainID": "chain304"},
             new={"uuid": "00000000-0000-4000-8000-000000000304", "status": "completed", "chainID": "chain304"},
             runtime=runtime,

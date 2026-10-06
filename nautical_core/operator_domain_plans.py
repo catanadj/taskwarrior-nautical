@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 from .chain_integrity_models import IntegrityRepairPlan
-from .lifecycle_models import LifecyclePlan
+from .lifecycle.models import LifecyclePlan
 from .operator_models import OperatorContractError, OperatorCoverage, OperatorRequest, OperatorScope
 
 

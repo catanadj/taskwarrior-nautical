@@ -2,11 +2,15 @@
 
 import sys
 import unittest
+from collections import abc
+from inspect import signature
+from typing import Any, get_type_hints
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import nautical_core as core
-from nautical_core import hook_support, modify_command_effects, runtime_command
+import nautical_core.hook_support as hook_support
+import nautical_core.modify_command_effects as modify_command_effects
+import nautical_core.runtime_command as runtime_command
 from nautical_core.integration_models import (
     CommandFailureKind,
     TaskCommand,
@@ -16,6 +20,109 @@ from nautical_core.task_command import failure_message, run_task_command
 
 
 class TaskCommandContractTests(unittest.TestCase):
+    def test_command_runner_vocabulary_uses_attempts_everywhere(self) -> None:
+        import nautical_core
+
+        runners = (
+            runtime_command.run_task_result,
+            hook_support.run_task_result,
+            modify_command_effects.run_task_result,
+            nautical_core.run_task_result,
+        )
+        for runner in runners:
+            with self.subTest(runner=runner):
+                params = signature(runner).parameters
+                self.assertIn("attempts", params)
+                self.assertNotIn("retries", params)
+
+    def test_modify_command_ports_have_typed_task_and_diagnostic_contracts(self) -> None:
+        from nautical_core.modify_command_effects import (
+            CommandPorts,
+            DiagCounter,
+            RunTaskRecorder,
+            TaskCommandExecutor,
+        )
+
+        annotations = get_type_hints(CommandPorts)
+        self.assertEqual(
+            annotations,
+            {
+                "execute": TaskCommandExecutor,
+                "purpose_bucket": abc.Callable[[list[str]], str],
+                "diag_count": DiagCounter,
+                "diag_record": RunTaskRecorder,
+                "diag": abc.Callable[[str], None],
+                "task_cmd_prefix": abc.Callable[[], list[str]],
+            },
+        )
+        self.assertNotIn(Any, annotations.values())
+
+    def test_modify_task_runner_has_explicit_command_options(self) -> None:
+        from collections.abc import Mapping
+        from nautical_core.modify_command_effects import CommandPorts, run_task_result
+
+        annotations = get_type_hints(run_task_result)
+        self.assertEqual(
+            annotations,
+            {
+                "ports": CommandPorts,
+                "cmd": list[str],
+                "env": Mapping[str, str] | None,
+                "input_text": str | None,
+                "timeout": float,
+                "attempts": int,
+                "retry_delay": float,
+                "use_tempfiles": bool,
+                "return": TaskCommandResult,
+            },
+        )
+
+    def test_modify_run_task_diagnostics_classify_commands_and_accumulate_stats(self) -> None:
+        from nautical_core.hooks import modify_impl
+
+        state = SimpleNamespace(diag_stats={})
+        commands = (
+            (["task", "rc.hooks=off", "rc.verbose=nothing", "_get", "beeswax.entry"], "get"),
+            (["task", "rc.hooks=off", "uuid:beeswax", "export"], "other"),
+            (["task", "rc.json.array=on", "chainID:cid", "export"], "export_chain"),
+            (["task", "import", "-"], "import"),
+        )
+
+        with patch.object(modify_impl, "_modify_runtime_state", return_value=state):
+            for command, expected in commands:
+                with self.subTest(command=command):
+                    self.assertEqual(modify_impl._run_task_diag_bucket(command), expected)
+
+            modify_impl._diag_record_run_task(commands[0][0], ok=True, elapsed=0.25)
+            modify_impl._diag_record_run_task(commands[1][0], ok=False, elapsed=0.5)
+            modify_impl._diag_record_run_task(commands[2][0], ok=True, elapsed=0.75)
+
+        self.assertEqual(state.diag_stats["run_task_calls_get"], 1)
+        self.assertEqual(state.diag_stats["run_task_calls_export_chain"], 1)
+        self.assertEqual(state.diag_stats["run_task_failures_other"], 1)
+        self.assertEqual(state.diag_stats["run_task_seconds_get"], 0.25)
+        self.assertEqual(state.diag_stats["run_task_seconds_other"], 0.5)
+        self.assertEqual(state.diag_stats["run_task_seconds_export_chain"], 0.75)
+
+    def test_run_task_bucket_failure_is_reported_only_when_diagnostics_are_enabled(self) -> None:
+        import os
+        from nautical_core.hooks import modify_impl
+
+        class UnprintableCommand:
+            def __str__(self) -> str:
+                raise RuntimeError("command contents must not leak")
+
+        with (
+            patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}),
+            patch.object(modify_impl, "_diag") as diagnostic,
+        ):
+            result = modify_impl._run_task_diag_bucket([UnprintableCommand()])
+
+        self.assertEqual(result, "other")
+        diagnostic.assert_called_once_with(
+            "run-task diagnostic bucket failed (RuntimeError)"
+        )
+
     def test_client_observation_preserves_evidence_without_command_contents(self) -> None:
         observations = []
 
@@ -69,29 +176,29 @@ class TaskCommandContractTests(unittest.TestCase):
         self.assertIs(rejected.kind, CommandFailureKind.REJECTED)
         self.assertEqual(failure_message(rejected, "task export"), "bad command")
 
-    def test_lock_retries_are_opt_in(self) -> None:
+    def test_attempts_are_explicit_for_lock_retries(self) -> None:
         args = [
             "-c",
             "import sys; print('database is locked', file=sys.stderr); sys.exit(1)",
         ]
         retried = run_task_command(
-            sys.executable, args, retry_locks=True, retry_delay=0.0
+            sys.executable, args, attempts=2, retry_delay=0.0
         )
         self.assertIs(retried.kind, CommandFailureKind.BUSY)
         self.assertEqual(retried.attempt, 2)
 
-        single_attempt = run_task_command(sys.executable, args)
+        single_attempt = run_task_command(sys.executable, args, attempts=1)
         self.assertIs(single_attempt.kind, CommandFailureKind.BUSY)
         self.assertEqual(single_attempt.attempt, 1)
 
 
-class RuntimeFacadeCommandTests(unittest.TestCase):
+class RuntimeCommandTests(unittest.TestCase):
     def test_run_task_result_preserves_text_input_with_temporary_output(self) -> None:
-        result = core.run_task_result(
+        result = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
             input_text="hello\n",
             timeout=2.0,
-            retries=1,
+            attempts=1,
             use_tempfiles=True,
         )
 
@@ -99,39 +206,49 @@ class RuntimeFacadeCommandTests(unittest.TestCase):
         self.assertEqual(result.stdout, "hello\n")
 
     def test_run_task_result_classifies_temporary_output_timeout(self) -> None:
-        result = core.run_task_result(
+        result = runtime_command.run_task_result(
             [sys.executable, "-c", "import time; time.sleep(0.25); print('late')"],
             timeout=0.05,
-            retries=1,
+            attempts=1,
             use_tempfiles=True,
         )
 
         self.assertFalse(result.ok)
         self.assertIs(result.kind, CommandFailureKind.TIMEOUT)
 
+    def test_shared_runtime_runner_classifies_captured_output_timeout(self) -> None:
+        result = runtime_command.run_task_result(
+            [sys.executable, "-c", "import time; time.sleep(2)"],
+            timeout=0.02,
+            attempts=1,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIs(result.kind, CommandFailureKind.TIMEOUT)
+
     def test_run_task_result_preserves_metadata_and_retry_policy(self) -> None:
-        success = core.run_task_result(
-            [sys.executable, "-c", "print('typed')"], timeout=2.0, retries=1
+        success = runtime_command.run_task_result(
+            [sys.executable, "-c", "print('typed')"], timeout=2.0, attempts=1
         )
         self.assertTrue(success.ok, success)
         self.assertEqual(success.stdout.strip(), "typed")
         self.assertEqual(success.attempt, 1)
         self.assertEqual(success.command.timeout, 2.0)
 
-        busy = core.run_task_result(
+        busy = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(3)"],
             timeout=1.0,
-            retries=3,
+            attempts=3,
             retry_delay=0.0,
         )
         self.assertFalse(busy.ok)
         self.assertIs(busy.kind, CommandFailureKind.BUSY)
         self.assertEqual(busy.attempt, 3)
 
-        rejected = core.run_task_result(
+        rejected = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; print('invalid task', file=sys.stderr); sys.exit(3)"],
             timeout=1.0,
-            retries=3,
+            attempts=3,
             retry_delay=0.0,
         )
         self.assertFalse(rejected.ok)
@@ -143,11 +260,11 @@ class RuntimeFacadeCommandTests(unittest.TestCase):
             "nautical_core.taskwarrior_client.tempfile.TemporaryFile",
             side_effect=OSError("tempfile unavailable"),
         ):
-            result = core.run_task_result(
+            result = runtime_command.run_task_result(
                 [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
                 input_text="abc ✓\n",
                 timeout=1.0,
-                retries=1,
+                attempts=1,
                 use_tempfiles=True,
             )
 
@@ -177,19 +294,19 @@ class HookCommandBoundaryTests(unittest.TestCase):
             run_task=runner,
             cmd=["task", "export"],
             timeout=3.0,
-            retries=2,
+            attempts=2,
             use_tempfiles=True,
         )
 
         self.assertIs(result, expected)
         self.assertEqual(received["command"], ["task", "export"])
         self.assertEqual(received["kwargs"]["timeout"], 3.0)
-        self.assertEqual(received["kwargs"]["retries"], 2)
+        self.assertEqual(received["kwargs"]["attempts"], 2)
         self.assertTrue(received["kwargs"]["use_tempfiles"])
 
     def test_shared_runtime_runner_preserves_utf8_output_and_failure_status(self) -> None:
         success = runtime_command.run_task_result(
-            [sys.executable, "-c", "print('shared ✓')"], timeout=2.0, retries=1
+            [sys.executable, "-c", "print('shared ✓')"], timeout=2.0, attempts=1
         )
         self.assertTrue(success.ok, success)
         self.assertEqual(success.stdout.strip(), "shared ✓")
@@ -197,12 +314,12 @@ class HookCommandBoundaryTests(unittest.TestCase):
         failed = runtime_command.run_task_result(
             [sys.executable, "-c", "import sys; sys.exit(3)"],
             timeout=2.0,
-            retries=1,
+            attempts=1,
         )
         self.assertFalse(failed.ok)
         self.assertEqual(failed.returncode, 3)
 
-    def test_modify_command_effects_records_success_and_nonzero_failure(self) -> None:
+    def test_modify_command_effects_records_success_nonzero_and_timeout(self) -> None:
         counters = []
         records = []
         host = SimpleNamespace(
@@ -215,19 +332,29 @@ class HookCommandBoundaryTests(unittest.TestCase):
         ports = modify_command_effects.command_ports_for(host)
 
         succeeded = modify_command_effects.run_task_result(
-            ports, [sys.executable, "-c", "print('ok')"], timeout=2.0, retries=1
+            ports, [sys.executable, "-c", "print('ok')"], timeout=2.0, attempts=1
         )
         failed = modify_command_effects.run_task_result(
             ports,
             [sys.executable, "-c", "import sys; sys.exit(2)"],
             timeout=2.0,
-            retries=1,
+            attempts=1,
+        )
+        timed_out = modify_command_effects.run_task_result(
+            ports,
+            [sys.executable, "-c", "import time; time.sleep(2)"],
+            timeout=0.02,
+            attempts=1,
         )
 
         self.assertTrue(succeeded.ok)
         self.assertFalse(failed.ok)
-        self.assertEqual(len(records), 2)
-        self.assertIn(("run_task_failures",), counters)
+        self.assertFalse(timed_out.ok)
+        self.assertIs(timed_out.kind, CommandFailureKind.TIMEOUT)
+        self.assertEqual(len(records), 3)
+        self.assertFalse(records[-1][1]["ok"])
+        self.assertEqual(counters.count(("run_task_calls",)), 3)
+        self.assertEqual(counters.count(("run_task_failures",)), 2)
 
 
 if __name__ == "__main__":

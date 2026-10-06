@@ -14,6 +14,7 @@ import json
 from typing import Any, Mapping
 
 from .recurrence_spec import RecurrenceSpec
+from .recurrence_context import RecurrenceContext
 from .task_models import NauticalTask, TaskObservation
 
 
@@ -158,7 +159,6 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
 
     parser = parser_api.for_core()
     parse_anchor_expr_to_dnf_cached = parser.parse_anchor_expr_to_dnf_cached
-    resolve_anchor_presets = parser.resolve_anchor_presets
     resolve_omit_presets = parser.resolve_omit_presets
     validate_anchor_expr_strict = parser.validate_anchor_expr_strict
 
@@ -227,10 +227,9 @@ def _stable_context_value(value: Any) -> Any:
             return str(marker)
     fingerprint = getattr(value, "fingerprint", None)
     if callable(fingerprint):
-        try:
-            return str(fingerprint())
-        except Exception:
-            pass
+        return str(fingerprint())
+    if fingerprint is not None:
+        return str(fingerprint)
     return f"{type(value).__module__}.{type(value).__qualname__}"
 
 
@@ -283,14 +282,24 @@ class CompiledSchedule:
         )
 
     @classmethod
-    def from_observation(cls, observation: TaskObservation, **kwargs: Any) -> "CompiledSchedule":
+    def from_observation(
+        cls,
+        observation: TaskObservation,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "CompiledSchedule":
         """Compile one validated Taskwarrior observation without thawing it."""
-        return cls.from_spec(RecurrenceSpec.from_observation(observation, **kwargs))
+        return cls.from_spec(RecurrenceSpec.from_observation(observation, context=context))
 
     @classmethod
-    def from_task(cls, task: NauticalTask, **kwargs: Any) -> "CompiledSchedule":
+    def from_task(
+        cls,
+        task: NauticalTask,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "CompiledSchedule":
         """Compile an already validated domain task."""
-        return cls.from_spec(RecurrenceSpec.from_task(task, **kwargs))
+        return cls.from_spec(RecurrenceSpec.from_task(task, context=context))
 
     def to_dict(self) -> dict[str, Any]:
         return {

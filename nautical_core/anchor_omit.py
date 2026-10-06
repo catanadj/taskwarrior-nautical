@@ -180,7 +180,7 @@ def omit_expr_fires_on_date(
         return False
     except OccurrenceSearchExhausted:
         raise
-    except Exception as exc:
+    except ValueError as exc:
         raise ValueError(
             f"Unable to evaluate omit rule for {d.isoformat()}: {exc}"
         ) from exc

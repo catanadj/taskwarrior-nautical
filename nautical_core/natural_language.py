@@ -5,6 +5,7 @@ import re
 from calendar import month_name
 from typing import Any
 
+from .parsing.parser_models import ParseError
 from .time_windows import parse_random_time_window_spec
 
 
@@ -274,7 +275,7 @@ def fmt_monthly_atom(
                 return ordinal(value) if value > 0 else f"{ordinal(abs(value))} last day"
 
             return f"days {_dword(i_left)}–{_dword(i_right)} of each month"
-        except Exception:
+        except ValueError:
             pass
 
     try:
@@ -284,7 +285,7 @@ def fmt_monthly_atom(
         if nth < 0:
             return f"the {ordinal(abs(nth))} last day of each month"
         return f"the {ordinal(nth)} day of each month"
-    except Exception:
+    except ValueError:
         return f"[unknown monthly token '{spec}']"
 
 
@@ -949,10 +950,7 @@ def describe_anchor_term(
 def describe_anchor_expr_from_dnf(dnf: list, default_due_dt: Any = None, *, describe_anchor_term: Any) -> str:
     nat_terms = []
     for term in dnf or []:
-        try:
-            text = describe_anchor_term(term, default_due_dt=default_due_dt)
-        except Exception:
-            text = ""
+        text = describe_anchor_term(term, default_due_dt=default_due_dt)
         if text:
             nat_terms.append(text)
 
@@ -973,7 +971,7 @@ def describe_anchor_expr(anchor_expr: str, default_due_dt: Any = None, *, parse_
         return ""
     try:
         dnf = parse_anchor_expr_to_dnf_cached(anchor_expr)
-    except Exception:
+    except ParseError:
         return ""
     return describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)
 
@@ -1191,7 +1189,7 @@ def try_bucket_rand_monthly(dnf: list[list[dict]], task: dict, *, rand_bucket_si
         left = range_text.split("–", 1)[0]
         try:
             return int(left)
-        except Exception:
+        except ValueError:
             return 0
 
     ranges = sorted(ranges, key=_start_val)

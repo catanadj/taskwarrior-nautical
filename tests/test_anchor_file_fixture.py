@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import nautical_core.anchor_files as anchor_files
-from nautical_core import business_calendar
+import nautical_core.business_calendar as business_calendar
 from nautical_core.recurrence_context import RecurrenceContext
 from nautical_core.scheduler_cursor import OccurrenceCursor
 from nautical_core.scheduler_service import SchedulerService

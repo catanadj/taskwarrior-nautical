@@ -2,14 +2,205 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, NoReturn
+from datetime import date, datetime, timedelta, timezone, tzinfo
+from typing import Any, Callable, NoReturn, Protocol, TypeAlias
 
 from . import panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch
+from .modify_models import CoerceIntCallback, HumanDeltaCallback
+from .anchor_omit import OmitState
+from .occurrence_outcomes import OccurrenceCollectionResult, OccurrenceOutcome
+from .parsing.parser_models import AnchorDNF
+from .scheduler_cursor import OccurrenceCursor
 from .scheduler_models import occurrence_exhaustion_message
+from .recurrence_protocols import PickOccurrenceCallback
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
+
+
+PreparedOmissionState: TypeAlias = OmitState | dict[str, Any] | AnchorDNF | None
+PreviewEvent: TypeAlias = Occurrence | tuple[datetime, bool] | datetime
+
+
+class PreviewPanelCallback(Protocol):
+    def __call__(
+        self,
+        title: str,
+        rows: list[tuple[str | None, Any]],
+        *,
+        kind: str = "info",
+        task: TaskPayload | None = None,
+    ) -> Any: ...
+
+
+class AddCalendarFeedbackCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        occurrence: date | datetime,
+        *,
+        panel: PreviewPanelCallback,
+    ) -> bool: ...
+
+
+class AnchorDurationValidator(Protocol):
+    def __call__(
+        self,
+        until_dt: datetime,
+        now_utc: datetime,
+        first_due: datetime,
+        kind: str,
+    ) -> tuple[bool, str | None]: ...
+
+
+class AnchorModeValidator(Protocol):
+    def __call__(self, mode_str: Any) -> tuple[str, str | None]: ...
+
+
+class PreviewWaitScheduleRowsCallback(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        task: TaskPayload,
+        due_utc: datetime,
+        *,
+        auto_due: bool,
+        anchor_field: str = "due",
+    ) -> None: ...
+
+
+class PreviewProfiler(Protocol):
+    def add_ms(self, name: str, milliseconds: float) -> None: ...
+
+
+class AnchorDnfPreparationCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        anchor_str: str,
+        due_dt: datetime,
+        rows: list[tuple[str, str]],
+        prof: PreviewProfiler,
+    ) -> tuple[AnchorDNF, str]: ...
+
+
+class AnchorLintCallback(Protocol):
+    def __call__(
+        self,
+        anchor_str: str,
+        prof: PreviewProfiler,
+        *,
+        panel: PreviewPanelCallback,
+    ) -> None: ...
+
+
+class AppendDstAdjustmentCallback(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        dnf: AnchorDNF | None,
+        occurrence_local: datetime,
+    ) -> None: ...
+
+
+class NativeUntilTargetValidator(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        target_dt: datetime,
+        target_field: str,
+    ) -> None: ...
+
+
+class NativeUntilAnchorSlotsValidator(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        target_dt: datetime,
+        dnf: AnchorDNF | None,
+        anchor_file_value: str,
+        fallback_hhmm: tuple[int, int],
+    ) -> None: ...
+
+
+class AppendFirstExpirationRowCallback(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, str]],
+        task: TaskPayload,
+        target_dt: datetime,
+        target_field: str,
+    ) -> None: ...
+
+
+class AnchorNaturalDescriptionCallback(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        dnf: AnchorDNF | None,
+        anchor_file_str: str,
+    ) -> str: ...
+
+
+class OmitDescriptionCallback(Protocol):
+    def __call__(self, task: TaskPayload, day: date) -> str | None: ...
+
+
+class AnchorUntilSummaryCallback(Protocol):
+    def __call__(
+        self,
+        dnf: AnchorDNF,
+        until_dt: datetime | None,
+        first_date_local: date,
+        first_hhmm: tuple[int, int],
+        interval_seed: date,
+        seed_base: str,
+        *,
+        omit_dnf: Any = None,
+        evaluator: Any | None = None,
+    ) -> tuple[int | None, datetime | None]: ...
+
+
+class PreviewSchedulerContext(Protocol):
+    timezone: tzinfo | None
+
+
+class PreviewSchedulerEvaluator(Protocol):
+    context: PreviewSchedulerContext
+
+
+class PreviewSchedulerSession(Protocol):
+    evaluator: PreviewSchedulerEvaluator
+
+
+class AnchorPreviewSchedulerService(Protocol):
+    session: PreviewSchedulerSession
+
+    def next(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_file_skips: int = 512,
+    ) -> OccurrenceOutcome: ...
+
+    def collect(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        limit: int,
+        count_omitted: bool | None = None,
+        omission_policy: str = "exclude",
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
+        anchor_file_provider: Any | None = None,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
+    ) -> OccurrenceCollectionResult: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,61 +209,61 @@ class AnchorExpressionPreviewServices:
 
     panel_mode: str
     panel_warnings: Callable[[TaskPayload], list[str]]
-    prepare_anchor_dnf: Callable[..., tuple[Any, str]]
-    describe_anchor_natural: Callable[[TaskPayload, Any, str], str]
-    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
-    scheduler_service_for_task: Callable[[TaskPayload], Any]
+    prepare_anchor_dnf: AnchorDnfPreparationCallback
+    describe_anchor_natural: AnchorNaturalDescriptionCallback
+    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], PreparedOmissionState]
+    scheduler_service_for_task: Callable[[TaskPayload], AnchorPreviewSchedulerService]
     to_local: Callable[[datetime], datetime]
-    fmt_dt_local: Callable[[Any], str]
-    coerce_int: Callable[..., Any]
-    expr_has_m_or_y: Callable[[Any], bool]
-    append_dst_adjustment: Callable[[list[tuple[str, str]], Any, datetime], None]
-    render_business_calendar_displacement: Callable[..., Any]
-    lint_and_validate: Callable[..., None]
-    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
+    fmt_dt_local: Callable[[datetime], str]
+    coerce_int: CoerceIntCallback
+    expr_has_m_or_y: Callable[[AnchorDNF], bool]
+    append_dst_adjustment: AppendDstAdjustmentCallback
+    render_business_calendar_displacement: AddCalendarFeedbackCallback
+    lint_and_validate: AnchorLintCallback
+    omit_description_for_task_date: OmitDescriptionCallback
     root_uuid_from: Callable[[TaskPayload], str | None]
-    short: Callable[[Any], str]
-    validate_anchor_mode: Callable[..., Any]
-    validate_chain_duration_reasonable: Callable[..., Any]
-    append_wait_sched_rows: Callable[..., Any]
-    anchor_until_summary: Callable[..., Any]
-    to_local_cached: Callable[..., Any]
-    fmt_local_for_task: Callable[..., Any]
-    format_anchor_rows: Callable[..., Any]
-    panel: Callable[..., Any]
-    human_delta: Callable[..., Any]
-    error_and_exit: Callable[..., Any]
-    validate_native_until_after_target: Callable[..., Any]
-    validate_native_until_anchor_slots: Callable[..., Any]
-    append_first_expiration_row: Callable[..., Any]
+    short: Callable[[str | None], str]
+    validate_anchor_mode: AnchorModeValidator
+    validate_chain_duration_reasonable: AnchorDurationValidator
+    append_wait_sched_rows: PreviewWaitScheduleRowsCallback
+    anchor_until_summary: AnchorUntilSummaryCallback
+    to_local_cached: Callable[[datetime], datetime]
+    fmt_local_for_task: Callable[[datetime], str]
+    format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]]
+    panel: PreviewPanelCallback
+    human_delta: HumanDeltaCallback
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn]
+    validate_native_until_after_target: NativeUntilTargetValidator
+    validate_native_until_anchor_slots: NativeUntilAnchorSlotsValidator
+    append_first_expiration_row: AppendFirstExpirationRowCallback
 
 
 @dataclass(frozen=True, slots=True)
 class AnchorFilePreviewServices:
     panel_mode: str
     timezone_fallback_warning: Callable[[str], bool]
-    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
-    scheduler_service_for_task: Callable[[TaskPayload], Any]
+    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], PreparedOmissionState]
+    scheduler_service_for_task: Callable[[TaskPayload], AnchorPreviewSchedulerService]
     to_local: Callable[[datetime], datetime]
-    fmt_dt_local: Callable[[Any], str]
-    coerce_int: Callable[..., Any]
-    render_business_calendar_displacement: Callable[..., Any]
-    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
-    append_wait_sched_rows: Callable[..., Any]
-    validate_chain_duration_reasonable: Callable[..., Any]
-    format_anchor_rows: Callable[..., Any]
-    panel: Callable[..., Any]
-    fmt_local_for_task: Callable[..., Any]
-    human_delta: Callable[..., Any]
-    error_and_exit: Callable[..., Any]
+    fmt_dt_local: Callable[[datetime], str]
+    coerce_int: CoerceIntCallback
+    render_business_calendar_displacement: AddCalendarFeedbackCallback
+    omit_description_for_task_date: OmitDescriptionCallback
+    append_wait_sched_rows: PreviewWaitScheduleRowsCallback
+    validate_chain_duration_reasonable: AnchorDurationValidator
+    format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]]
+    panel: PreviewPanelCallback
+    fmt_local_for_task: Callable[[datetime], str]
+    human_delta: HumanDeltaCallback
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn]
 
 
-def _event_datetime(event: Any) -> datetime | None:
+def _event_datetime(event: PreviewEvent) -> datetime | None:
     value = event.local_datetime if isinstance(event, Occurrence) else (event[0] if isinstance(event, tuple) and event else event)
     return value if isinstance(value, datetime) else None
 
 
-def _event_on_or_before(event: Any, boundary: datetime) -> bool:
+def _event_on_or_before(event: PreviewEvent, boundary: datetime) -> bool:
     value = _event_datetime(event)
     return value is not None and compare_datetimes(value, boundary) <= 0
 
@@ -109,7 +300,7 @@ def _anchor_omit_natural_text(task: TaskPayload, *, core: Any) -> str:
     return ' and '.join(part for part in parts if part)
 
 
-def _anchor_preview_natural_text(task: TaskPayload, dnf: Any, anchor_file_str: str, *, core: Any) -> str:
+def _anchor_preview_natural_text(task: TaskPayload, dnf: AnchorDNF | None, anchor_file_str: str, *, core: Any) -> str:
     natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
     omit_text = _anchor_omit_natural_text(task, core=core)
     if omit_text and (task.get('anchor_mode') or 'skip').lower() == 'skip':
@@ -133,7 +324,7 @@ def anchor_preview_prepare_dnf(
     *,
     core: Any,
     validate_anchor_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
-    validate_anchor_mode: Callable[[Any], tuple[str, str | None]],
+    validate_anchor_mode: AnchorModeValidator,
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
 ) -> tuple[list[list[dict[str, Any]]], str]:
     _ = due_dt
@@ -179,9 +370,9 @@ def anchor_preview_prepare_omit_dnf(
     rows: list[tuple[str, str]],
     *,
     core: Any,
-    validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
+    validate_omit_syntax_strict: Callable[[str | AnchorDNF], tuple[AnchorDNF | None, str | None]],
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
-) -> Any:
+) -> PreparedOmissionState:
     omit_str = str(task.get("omit") or "").strip()
     omit_file = str(task.get("omit_file") or "").strip()
     omit_dnf = None
@@ -220,7 +411,7 @@ def anchor_preview_prepare_omit_dnf(
                 omit_file,
                 getattr(core, "OMIT_FILE_DIR", ""),
             )
-        except Exception as e:
+        except (OSError, UnicodeError, ValueError) as e:
             error_and_exit([("Invalid omit_file", str(e))])
         rows.append(("Omit file", f"[white]{omit_file}[/]"))
     if not omit_dnf and not omit_dates:
@@ -292,7 +483,7 @@ def anchor_preview_first_due(
     prof: Any,
     fmt_dt_local: Callable[[Any], str],
     to_local_cached: Callable[[datetime], datetime],
-    scheduler_service: Any,
+    scheduler_service: AnchorPreviewSchedulerService,
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
     fmt_local_for_task: Callable[[datetime], str],
 ) -> tuple[Any, datetime, datetime, Any, tuple[int, int]]:
@@ -414,11 +605,11 @@ def anchor_preview_limit_rows(
     exact_until_count: int | None,
     final_until_dt: datetime | None,
     now_utc: datetime,
-    fmt_dt_local: Callable[[Any], str],
-    human_delta: Callable[[Any, Any, bool], str],
+    fmt_dt_local: Callable[[datetime], str],
+    human_delta: Callable[[datetime, datetime, bool], str],
     final_max_dt: datetime | None = None,
 ) -> None:
-    def _fmt(dt: Any) -> str:
+    def _fmt(dt: datetime) -> str:
         return fmt_dt_local(dt)
 
     future_counts = []
@@ -446,7 +637,7 @@ def _preview_omit_label(
     task: TaskPayload,
     item_local: datetime,
     *,
-    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None],
+    omit_description_for_task_date: OmitDescriptionCallback,
 ) -> str:
     omit_file = str(task.get("omit_file") or "").strip()
     if not omit_file:
@@ -466,7 +657,7 @@ def _preview_occurrence_lines(
     first_due_local_dt: datetime,
     preview_limit: int,
     fmt_dt_local: Callable[[Any], str],
-    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None],
+    omit_description_for_task_date: OmitDescriptionCallback,
     task: TaskPayload,
 ) -> list[str]:
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
@@ -507,7 +698,7 @@ def _collect_included_with_provider(
     default_seed_date: Any,
     max_iterations: int = 512,
     return_occurrences: bool = False,
-    scheduler_service: Any,
+    scheduler_service: AnchorPreviewSchedulerService,
 ) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
     stream = _collect_events_with_provider(
@@ -539,7 +730,7 @@ def _collect_events_with_provider(
     default_seed_date: Any,
     max_iterations: int = 512,
     return_occurrences: bool = False,
-    scheduler_service: Any,
+    scheduler_service: AnchorPreviewSchedulerService,
     ) -> list[Any]:
     from .scheduler_cursor import OccurrenceCursor
 
@@ -599,7 +790,7 @@ def handle_anchor_file_preview_on_add(
     rows.append(("Anchor file", f"[white]{anchor_file_str}[/]  [bold bright_cyan]SKIP[/]"))
     if not compact_presentation:
         rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
-    omit_dnf = services.prepare_omit_dnf(task, rows)
+    services.prepare_omit_dnf(task, rows)
     t_occ = time.perf_counter()
     scheduler_service = services.scheduler_service_for_task(task)
     all_occurrences = _collect_included_with_provider(
@@ -739,16 +930,16 @@ def handle_anchor_file_preview_on_add(
     panel("⚓︎ Anchor Preview", format_anchor_rows(rows), kind="preview_anchor", task=task)
 
 
-def _timezone_fallback_warning_needed(core: Any, anchor_str: str, anchor_file_str: str) -> bool:
+def _timezone_fallback_warning_needed(anchor_str: str, anchor_file_str: str) -> bool:
     from .modify_models import TaskView
 
     task = TaskView.from_mapping({"anchor": anchor_str, "anchor_file": anchor_file_str})
-    return bool(panel_diagnostics.recurrence_timezone_warning(core, task))
+    return bool(panel_diagnostics.recurrence_timezone_warning(task))
 
 
 def _append_dst_adjustment_row(
     rows: list[tuple[str, str]],
-    dnf: Any,
+    dnf: AnchorDNF | None,
     occurrence_local: datetime,
     *,
     core: Any,
@@ -776,7 +967,7 @@ def _append_dst_adjustment_row(
                     resolved_local = core.to_local(
                         core.build_local_datetime(requested_day, (int(hour), int(minute)))
                     )
-                except Exception:
+                except (TypeError, ValueError, OverflowError):
                     continue
                 if compare_datetimes(resolved_local, occurrence_local) != 0:
                     continue

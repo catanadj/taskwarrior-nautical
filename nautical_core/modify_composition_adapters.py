@@ -2,18 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from .chain_generation import CarryFieldError
+from .modify_carry_workflow import TemporalCarryDecision
 from .task_datetime import datetime_value, parser_for_host
 from .task_models import TaskPayload
+
+if TYPE_CHECKING:
+    from .modify_models import (
+        AnchorCompletionFeedbackModel,
+        CompletionLifecycleResult,
+        CpCompletionFeedbackModel,
+    )
+    from .modify_composition import ModifyRuntimeServices as ModifyCompositionRuntimeServices
+    from .task_changes import TaskTransition
+    from .taskwarrior_uow import TaskwarriorUnitOfWork
 
 
 def _capabilities(host: Any) -> Any:
     return host._module("modify_composition").capabilities_for(host)
 
 
-def _runtime(host: Any, runtime: Any = None) -> Any:
+def _runtime(
+    host: Any,
+    runtime: ModifyCompositionRuntimeServices | None = None,
+) -> ModifyCompositionRuntimeServices:
     composition = host._module("modify_composition")
     return runtime or composition.ModifyRuntimeServices.from_host(host)
 
@@ -53,11 +68,8 @@ def expiration_recovery_warning_for(host: Any, new: TaskPayload, reason: str) ->
     capabilities = _capabilities(host)
     modify_expiration = capabilities.modify_expiration
     if modify_expiration is not None:
-        try:
-            modify_expiration.render_recovery_warning(new, reason, services=expiration_services_for(host))
-            return
-        except Exception as exc:
-            host._diag(f"expiration recovery warning render failed: {exc}")
+        modify_expiration.render_recovery_warning(new, reason, services=expiration_services_for(host))
+        return
     ui = capabilities.modify_ui_effects
     ui.panel(
         ui.ui_ports_for(host),
@@ -76,17 +88,16 @@ def handle_non_completion(
     host: Any,
     old: TaskPayload,
     new: TaskPayload,
-    unit_of_work: Any,
+    unit_of_work: TaskwarriorUnitOfWork,
     *,
-    transition: Any = None,
-    runtime: Any = None,
+    transition: TaskTransition | None = None,
+    runtime: ModifyCompositionRuntimeServices | None = None,
 ) -> None:
     runtime = _runtime(host, runtime)
     runtime.runtime_state().task_repository = unit_of_work.repository
     capabilities = runtime.non_completion
     modify_ordinary = capabilities.modify_ordinary
     modify_lifecycle = capabilities.modify_lifecycle
-    diagnostics = capabilities.modify_diagnostics_effects
     validation = capabilities.modify_validation_effects
     ui = capabilities.modify_ui_effects
     ui_ports = ui.ui_ports_for(host)
@@ -146,11 +157,11 @@ def handle_completion(
     host: Any,
     old: TaskPayload,
     new: TaskPayload,
-    unit_of_work: Any,
+    unit_of_work: TaskwarriorUnitOfWork,
     *,
-    transition: Any = None,
-    runtime: Any = None,
-) -> Any:
+    transition: TaskTransition | None = None,
+    runtime: ModifyCompositionRuntimeServices | None = None,
+) -> CompletionLifecycleResult | None:
     runtime = _runtime(host, runtime)
     runtime.runtime_state().task_repository = unit_of_work.repository
     capabilities = runtime.completion
@@ -263,7 +274,9 @@ def render_recurrence_updated_panel_for(host: Any, changes: list[tuple[str, str,
     )
 
 
-def first_recurrence_target_for(host: Any, new: TaskPayload, source: str) -> Any:
+def first_recurrence_target_for(
+    host: Any, new: TaskPayload, source: str
+) -> datetime | None:
     task_view = host._module("modify_models").TaskView.from_mapping(new)
     generation = host._module("modify_generation_effects")
     return host._module("modify_completion_compute").first_recurrence_target(
@@ -287,7 +300,7 @@ def recurrence_enabled_rows_for(host: Any, new: TaskPayload, source: str) -> lis
     )
 
 
-def render_cp_schedule_adjusted_panel_for(host: Any, adjustment: Any) -> None:
+def render_cp_schedule_adjusted_panel_for(host: Any, adjustment: TemporalCarryDecision) -> None:
     ui = host._module("modify_ui_effects")
     ui_ports = ui.ui_ports_for(host)
     host._module("modify_feedback").render_cp_schedule_adjusted_panel(
@@ -355,31 +368,34 @@ def ensure_terminal_chain_off_for(host: Any, task: TaskPayload, event: str | Non
     return host._module("modify_lifecycle").ensure_terminal_chain_off(task)
 
 
-def render_anchor_completion_feedback_for(host: Any, *, request: Any) -> None:
+def render_anchor_completion_feedback_for(
+    host: Any, *, request: AnchorCompletionFeedbackModel
+) -> None:
     feedback = host._module("modify_feedback")
-    models = host._module("modify_models")
     ui = host._module("modify_ui_effects")
     ui_ports = ui.ui_ports_for(host)
     feedback.orchestrate_anchor_completion_feedback(
         request=request,
         core=host.core,
         panel=lambda title, rows, **options: ui.panel(ui_ports, title, rows, **options),
-        calendar_feedback=host.importlib.import_module("nautical_core.calendar_feedback"),
-        panel_diagnostics=host._module("panel_diagnostics"),
-        modify_models=models,
-        modify_runtime=host._module("modify_runtime"),
+        render_business_calendar_displacement=host.importlib.import_module(
+            "nautical_core.calendar_feedback"
+        ).render_business_calendar_displacement,
+        panel_warnings=host._module("panel_diagnostics").panel_warnings,
+        build_feedback_services=host._module("modify_runtime").build_anchor_feedback_services,
         build_runtime_services=lambda: runtime_services_for(host),
     )
 
 
-def render_cp_completion_feedback_for(host: Any, *, request: Any) -> None:
+def render_cp_completion_feedback_for(
+    host: Any, *, request: CpCompletionFeedbackModel
+) -> None:
     feedback = host._module("modify_feedback")
     feedback.orchestrate_cp_completion_feedback(
         request=request,
         core=host.core,
-        panel_diagnostics=host._module("panel_diagnostics"),
-        modify_models=host._module("modify_models"),
-        modify_runtime=host._module("modify_runtime"),
+        panel_warnings=host._module("panel_diagnostics").panel_warnings,
+        build_feedback_services=host._module("modify_runtime").build_cp_feedback_services,
         build_runtime_services=lambda: runtime_services_for(host),
     )
 

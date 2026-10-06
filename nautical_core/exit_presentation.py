@@ -7,7 +7,7 @@ import sys
 import time
 from typing import Any
 
-from .lifecycle_models import LifecycleDrainProgress
+from .lifecycle.models import LifecycleDrainProgress
 from .operator_presentation import ProgressView
 
 

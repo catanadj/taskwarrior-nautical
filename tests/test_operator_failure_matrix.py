@@ -170,7 +170,7 @@ class OperatorFailureMatrixTests(unittest.TestCase):
 
     def test_effect_budget_crossing_after_boundary_remains_visible_and_retryable(self) -> None:
         """Post-boundary budget crossings do not hide an effect or claim clean accounting."""
-        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+        from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
         from nautical_core.operator_control_plane import OperatorControlPlane
         from nautical_core.operator_domain_plans import DomainApplicationAuthorization
         from nautical_core.operator_control_plane import DomainApplicationRegistry

@@ -1,8 +1,4 @@
-"""Stable public export contract for the Nautical core facade.
-
-The explicit ``normalize_task_business_calendar_in_place`` name is the public
-mutator.  Its shorter predecessor remains a facade-only compatibility alias.
-"""
+"""Stable public export contract for the Nautical core facade."""
 
 from __future__ import annotations
 
@@ -15,37 +11,22 @@ from .api_bindings import ApiBinding
 from .core_context import CoreContext
 
 PUBLIC_EXPORTS = (
-    'AnchorMods', 'AnchorAtom', 'AnchorTerm', 'AnchorDNF', 'TaskDict',
-    'AnchorValidationResult', 'chain_colour_root', 'HintMetaCfg', 'HintMeta',
-    'HintPerYear', 'HintLimits', 'AnchorHintsPayload', 'ParseError',
+    'ParseError',
     'YearTokenFormatError', 'AndTermUnsatisfiable', 'OccurrenceSearchExhausted', 'BusinessCalendarConfigError',
     'ANCHOR_CACHE_DIR_OVERRIDE', 'BUSINESS_CALENDAR_CONFIG', 'ASTRONOMY_CONFIG',
     'effective_config_snapshot', 'effective_config_fingerprint', 'reload_taskdata_config',
-    'scheduling_configuration_error', 'validate_scheduling_configuration',
+    'scheduling_configuration_error',
     'scheduler_config_fingerprint', 'configuration_drift', 'DEFAULT_BUSINESS_CALENDAR',
     'ENABLE_ANCHOR_CACHE', 'LOCAL_TZ_NAME', 'SEASON_HEMISPHERE', 'SEASON_MODE', 'OMIT_FILE_DIR',
     'MAX_LINK_NUMBER', 'PANEL_MODE', 'LIVE_PANEL_DURATION_MS', 'LIVE_PANEL_FOOTER',
-    'EXIT_PROGRESS', 'DEFAULT_DUE_HOUR', '_LOCAL_TZ', '_build_anchor_atom_dnf',
-    '_cache_atomic_replace', '_cache_lock', '_cache_path', '_clear_all_caches',
-    '_doms_allowed_by_year', '_doms_for_monthly_token', '_doms_for_weekly_spec',
-    '_emit_cache_metrics', '_fatal_bad_colon_in_year_tail',
-    '_first_hit_after_probe_in_month', '_interval_allowed_for_atom', '_month_has_hit',
-    '_normalize_anchor_expr_input',
-    '_normalize_spec_for_acf_cached', '_parse_anchor_atom_at', '_parse_atom_head',
-    '_parse_atom_mods', '_quarter_month_selector_mode', '_quick_weekly_and_check',
-    '_quick_yearly_and_check', '_raise_on_bad_colon_year_tokens',
-    '_rand_bucket_signature', '_rewrite_quarter_spec_mode', '_rewrite_quarters_in_context',
-    '_term_has_any_match_within', '_term_quarter_rewrite_mode',
-    '_validate_yearly_spec_token', '_validate_yearly_token_format',
-    '_warn_once_per_day', '_warn_once_per_day_any', '_warn_rate_limited_any',
-    '_weekly_spec_to_wset', '_weeks_between', '_y_ranges_from_spec',
+    'EXIT_PROGRESS', 'DEFAULT_DUE_HOUR',
     'anchor_preset_display', 'build_acf',
     'build_and_cache_hints', 'build_local_datetime', 'business_calendar_fingerprint',
     'business_calendar_displacement_for_date', 'business_calendar_for_task',
     'business_calendar_definitions', 'cache_key_for_task', 'cache_load', 'cache_save',
     'cache_gc', 'capture_business_calendar_displacements', 'coerce_int',
     'describe_anchor_dnf', 'describe_anchor_expr', 'DiagnosticEvent', 'RecurrenceModeResult', 'diag',
-    'fcntl', 'fmt_dt_local', 'fmt_isoz',
+    'fmt_dt_local', 'fmt_isoz',
     'configured_business_calendars', 'get_configured_business_calendar',
     'lint_anchor_expr', 'normalize_task_business_calendar_in_place', 'now_utc',
     'omit_preset_display', 'panel_line', 'parse_anchor_expr_to_dnf',
@@ -54,8 +35,8 @@ PUBLIC_EXPORTS = (
     'cp_sequence_interval_for_link', 'cp_sequence_interval_for_token', 'parse_dt_any',
     'pick_hhmm_from_dnf_for_date', 'render_panel',
     'resolve_anchor_presets', 'resolve_business_calendar_config', 'resolve_omit_presets',
-    'resolve_task_data_context', 'safe_lock',
-    'short_uuid', 'strip_rich_markup', 'tempfile',
+    'resolve_task_data_context',
+    'short_uuid', 'strip_rich_markup',
     'term_width_stderr', 'to_local', 'utc_to_local_naive', 'local_naive_to_utc',
     'use_business_calendar', 'use_task_business_calendar', 'validate_anchor_expr_strict',
 )
@@ -68,23 +49,10 @@ __all__ = ('PUBLIC_EXPORTS',)
 # facade as their provisional owner until their group is migrated.
 PUBLIC_OWNER_MODULES = {name: "nautical_core" for name in PUBLIC_EXPORTS}
 PUBLIC_OWNER_MODULES.update({
-    "AnchorMods": "nautical_core.parsing.parser_models",
-    "AnchorAtom": "nautical_core.parsing.parser_models",
-    "AnchorTerm": "nautical_core.parsing.parser_models",
-    "AnchorDNF": "nautical_core.parsing.parser_models",
-    "AnchorValidationResult": "nautical_core.parsing.parser_models",
     "ParseError": "nautical_core.parsing.parser_models",
     "YearTokenFormatError": "nautical_core.parsing.parser_models",
     "AndTermUnsatisfiable": "nautical_core.parsing.parser_models",
     "OccurrenceSearchExhausted": "nautical_core.scheduler_models",
-    "_parse_atom_head": "nautical_core.parsing.parser_support_api",
-    "_parse_atom_mods": "nautical_core.parsing.parser_support_api",
-    "_parse_anchor_atom_at": "nautical_core.parser_api",
-    "_normalize_anchor_expr_input": "nautical_core.parser_api",
-    "_fatal_bad_colon_in_year_tail": "nautical_core.parsing.parser_support_api",
-    "_raise_on_bad_colon_year_tokens": "nautical_core.parsing.parser_support_api",
-    "_validate_yearly_spec_token": "nautical_core.parser_api",
-    "_validate_yearly_token_format": "nautical_core.parser_api",
     "build_acf": "nautical_core.parser_api",
     "describe_anchor_dnf": "nautical_core.parser_api",
     "describe_anchor_expr": "nautical_core.parser_api",
@@ -105,7 +73,6 @@ PUBLIC_OWNER_MODULES.update({
     "effective_config_fingerprint": "nautical_core.core_config",
     "reload_taskdata_config": "nautical_core.core_config",
     "scheduling_configuration_error": "nautical_core.core_config",
-    "validate_scheduling_configuration": "nautical_core.core_config",
     "scheduler_config_fingerprint": "nautical_core.core_config",
     "configuration_drift": "nautical_core.core_config",
     "ANCHOR_CACHE_DIR_OVERRIDE": "nautical_core.core_config",
@@ -138,15 +105,7 @@ PUBLIC_OWNER_MODULES.update({
     "cache_load": "nautical_core.cache_api",
     "cache_save": "nautical_core.cache_api",
     "cache_gc": "nautical_core.cache_api",
-    "_cache_atomic_replace": "nautical_core.cache_api",
-    "_cache_lock": "nautical_core.cache_api",
-    "_cache_path": "nautical_core.cache_api",
-    "_clear_all_caches": "nautical_core.cache_api",
-    "_emit_cache_metrics": "nautical_core.cache_api",
-    "_normalize_spec_for_acf_cached": "nautical_core.cache_api",
-    "parse_anchor_expr_to_dnf_cached": "nautical_core.cache_api",
     "build_and_cache_hints": "nautical_core.hint_builder_api",
-    "TaskDict": "nautical_core.task_models",
     "DiagnosticEvent": "nautical_core.diagnostic_models",
     "RecurrenceModeResult": "nautical_core.recurrence_evaluator",
     "build_local_datetime": "nautical_core.time_api",
@@ -160,64 +119,26 @@ PUBLIC_OWNER_MODULES.update({
     "coerce_int": "nautical_core.common",
     "short_uuid": "nautical_core.common",
     "pick_hhmm_from_dnf_for_date": "nautical_core.schedule_utils",
-    "chain_colour_root": "nautical_core.panel_colours",
     "strip_rich_markup": "nautical_core.ui",
     "term_width_stderr": "nautical_core.ui",
     "panel_line": "nautical_core.ui",
     "render_panel": "nautical_core.ui",
     "diag": "nautical_core.runtime",
-    "_warn_once_per_day": "nautical_core.diagnostic_warnings",
-    "_warn_once_per_day_any": "nautical_core.diagnostic_warnings",
-    "_warn_rate_limited_any": "nautical_core.diagnostic_warnings",
-    "_LOCAL_TZ": "nautical_core.core_config",
-    "_build_anchor_atom_dnf": "nautical_core.parser_api",
-    "_doms_allowed_by_year": "nautical_core.parser_api",
-    "_doms_for_monthly_token": "nautical_core.parser_api",
-    "_doms_for_weekly_spec": "nautical_core.parser_api",
-    "_first_hit_after_probe_in_month": "nautical_core.parser_api",
-    "_interval_allowed_for_atom": "nautical_core.scheduler_api",
-    "_month_has_hit": "nautical_core.parser_api",
-    "_quarter_month_selector_mode": "nautical_core.parser_api",
-    "_quick_weekly_and_check": "nautical_core.parser_api",
-    "_quick_yearly_and_check": "nautical_core.parser_api",
-    "_rand_bucket_signature": "nautical_core.parser_api",
-    "_rewrite_quarter_spec_mode": "nautical_core.parser_api",
-    "_rewrite_quarters_in_context": "nautical_core.parser_api",
-    "_term_has_any_match_within": "nautical_core.parser_api",
-    "_term_quarter_rewrite_mode": "nautical_core.parser_api",
-    "_weekly_spec_to_wset": "nautical_core.parser_api",
-    "_weeks_between": "nautical_core.scheduler_api",
-    "_y_ranges_from_spec": "nautical_core.parser_api",
     "anchor_preset_display": "nautical_core.parser_api",
     "omit_preset_display": "nautical_core.parser_api",
-    "safe_lock": "nautical_core.cache_api",
     "resolve_task_data_context": "nautical_core.runtime",
-    "HintMetaCfg": "nautical_core.hint_models",
-    "HintMeta": "nautical_core.hint_models",
-    "HintPerYear": "nautical_core.hint_models",
-    "HintLimits": "nautical_core.hint_models",
-    "AnchorHintsPayload": "nautical_core.hint_models",
-    "fcntl": "fcntl",
-    "tempfile": "tempfile",
 })
 
-# Every exported name is deliberately classified before any compatibility
-# removal is considered.  Private helpers remain test seams; hook/bootstrap
-# entry points are installed-runtime contracts; the remainder are supported
-# public API until a documented deprecation changes that status.
+# Every root export is either part of Nautical's supported Python API or an
+# executable runtime requirement. Test seams remain in their owner modules.
 PUBLIC_EXPORT_CATEGORIES = {
     name: (
-        "test_seam" if name.startswith("_") or name in {"fcntl", "tempfile"}
-        else "installed_runtime" if name in {"diag", "resolve_task_data_context"}
+        "installed_runtime" if name in {"diag", "resolve_task_data_context"}
         else "supported_public_api"
     )
     for name in PUBLIC_EXPORTS
 }
-PUBLIC_EXPORT_CATEGORIES["normalize_task_business_calendar"] = "legacy_compatibility_alias"
-
-
 PUBLIC_MODEL_NAMES = (
-    "AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF", "AnchorValidationResult",
     "ParseError", "YearTokenFormatError", "AndTermUnsatisfiable", "OccurrenceSearchExhausted",
 )
 _PUBLIC_CALL_PARAMETERS = {
@@ -233,14 +154,6 @@ _PUBLIC_CALL_PARAMETERS = {
     "local_naive_to_utc": ("dt_local_naive",),
     "parse_dt_any": ("s",),
 }
-LEGACY_COMPATIBILITY_ALIASES = {
-    "normalize_task_business_calendar": (
-        "business_calendar_api",
-        "normalize_task_business_calendar_in_place",
-    ),
-}
-
-
 def ensure_public_models(
     namespace: dict[str, Any],
     package_name: str,

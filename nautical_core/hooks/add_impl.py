@@ -24,7 +24,7 @@ _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
 HOOK_DIR = _IMPL_CORE_DIR.parent
 _TW_DIR_BOOT = _IMPL_CORE_DIR.parent
 try:
-    import hook_bootstrap
+    import hook_bootstrap  # type: ignore[import-not-found]  # standalone hook fallback
 except ModuleNotFoundError:
     hook_bootstrap = None
     _bootstrap_paths = [
@@ -39,7 +39,7 @@ except ModuleNotFoundError:
                 _core_path / 'hook_bootstrap.py',
                 _core_path / 'nautical_core' / 'hook_bootstrap.py',
             ])
-        except Exception:
+        except (OSError, RuntimeError, TypeError):
             pass
     for _bootstrap_path in _bootstrap_paths:
         try:
@@ -51,7 +51,7 @@ except ModuleNotFoundError:
                 _spec.loader.exec_module(_bootstrap_mod)
                 hook_bootstrap = _bootstrap_mod
                 break
-        except Exception:
+        except (AttributeError, ImportError, OSError, SyntaxError):
             continue
     if hook_bootstrap is None:
         raise
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     if _protocol is not None:
         try:
             _EARLY_PROTOCOL_RESULT = _protocol.read_on_add(max_bytes=_MAX_JSON_BYTES)
-        except Exception:
+        except (OSError, TypeError, UnicodeError, ValueError):
             _EARLY_PROTOCOL_RESULT = None
         if (
             _EARLY_PROTOCOL_RESULT is not None
@@ -124,7 +124,7 @@ if __name__ == "__main__":
 import atexit
 import re
 from contextlib import contextmanager, nullcontext
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -284,18 +284,6 @@ _TASK_DATETIME_PARSER = None
 _CORE_IMPORT_TARGET = None
 _CORE_IMPORT_ERROR = None
 
-
-def _resolve_task_data_context() -> tuple[str, bool]:
-    return hook_bootstrap.resolve_task_data_context_lazy(
-        core=core,
-        core_import_error=_CORE_IMPORT_ERROR,
-        core_import_target=_CORE_IMPORT_TARGET,
-        core_base=_CORE_BASE,
-        tw_dir=str(TW_DIR),
-        argv=sys.argv[1:],
-        env=os.environ,
-    )
-
 _TASKDATA_RAW = ""
 _USE_RC_DATA_LOCATION = False
 TW_DATA_DIR = Path(TW_DIR).expanduser()
@@ -400,11 +388,13 @@ def _human_delta(a: Any, b: Any, use_months_days: bool = True) -> str:
     return core.humanize_delta(a, b, use_months_days=use_months_days)
 
 
-def _short(u: Any) -> str:
+def _short(u: object) -> str:
     try:
         s = str(u)
         return s[:8] if s else "—"
     except Exception:
+        # Preview identity is optional presentation; malformed values must not
+        # prevent the on-add hook from returning its required response.
         return "—"
 
 
@@ -435,7 +425,9 @@ def _panel(title: str, rows: Any, kind: str = "info", task: dict | None = None) 
         task_view = _module("modify_models").TaskView.from_mapping(task)
         theme = dict(themes[kind])
         colour_kind = "cp" if kind == "preview_cp" else "anchor"
-        colour = core.chain_colour_root(colour_kind, str(task_view.get("chainID") or ""))
+        from nautical_core.panel_colours import chain_colour_root
+
+        colour = chain_colour_root(colour_kind, str(task_view.get("chainID") or ""))
         theme["border"] = colour
         theme["title"] = colour
         themes[kind] = theme
@@ -681,6 +673,18 @@ def _validate_native_until_anchor_slots_or_fail(
     until_dt, until_err = _validate_datetime_field(until_raw, "until")
     if until_err or until_dt is None:
         return
+    astronomy = core._import_sibling("astronomy")
+    scheduler_models = core._import_sibling("scheduler_models")
+    expected_failures = (
+        OSError,
+        UnicodeError,
+        ValueError,
+        OverflowError,
+        scheduler_models.OccurrenceSearchExhausted,
+        astronomy.AstronomyUnavailableError,
+        astronomy.AstronomyEventUnavailableError,
+        astronomy.AstronomyConfigurationError,
+    )
     try:
         valid, reason, slots = core._import_sibling("astronomy_validation").validate_native_until_slots(
             until_dt=until_dt,
@@ -696,8 +700,7 @@ def _validate_native_until_anchor_slots_or_fail(
             to_local=core.to_local,
             validate_time_slots=core._import_sibling("native_until").validate_calendar_slots,
         )
-    except Exception as exc:
-        astronomy = core._import_sibling("astronomy")
+    except expected_failures as exc:
         if astronomy.is_astronomy_error(exc):
             _panel("❌ Invalid astronomy time", [("Required", astronomy.scheduling_error_message(exc))], kind="error")
             sys.exit(1)
@@ -770,7 +773,7 @@ def _validate_anchor_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[l
             validate_anchor_expr=_validate_anchor_expr_cached,
         )
         return dnf, None
-    except Exception as exc:
+    except (core.ParseError, ValueError) as exc:
         return None, str(exc)
 
 
@@ -778,7 +781,7 @@ def _validate_omit_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[lis
     try:
         dnf = _validate_omit_expr_cached(str(expr))
         return dnf, None
-    except Exception as exc:
+    except (core.ParseError, ValueError) as exc:
         return None, str(exc)
 
 
@@ -790,26 +793,6 @@ def _load_omit_file_dates(name: str) -> Any:
 def _load_anchor_file_dates(name: str) -> Any:
     anchor_files = core._import_sibling("anchor_files")
     return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
-
-
-def _validate_anchor_file_or_fail(anchor_file: str) -> None:
-    if not anchor_file:
-        return
-    try:
-        _load_anchor_file_dates(anchor_file)
-    except Exception as exc:
-        _error_and_exit([("Invalid anchor_file", str(exc))])
-
-
-def _validate_omit_file_for_anchor_or_fail(anchor_str: str, anchor_file_str: str, omit_file: str) -> None:
-    if omit_file and not (anchor_str or anchor_file_str):
-        _error_and_exit([("Invalid omit_file", "omit_file requires anchor or anchor_file")])
-    if not omit_file:
-        return
-    try:
-        _load_omit_file_dates(omit_file)
-    except Exception as exc:
-        _error_and_exit([("Invalid omit_file", str(exc))])
 
 
 def _validate_anchor_mode(mode_str: Any) -> tuple[str, str | None]:
@@ -861,7 +844,7 @@ def _stamp_chain_id_on_add(task: dict) -> None:
         return
     try:
         chain_id = str(core.short_uuid(task.get("uuid")) or "").strip()
-    except Exception as exc:
+    except ValueError as exc:
         _fail_and_exit(
             "Chain identity unavailable",
             "Could not derive the required chainID for this recurring root: "
@@ -909,13 +892,6 @@ def _resolve_time_slots(v: Any, target_date: Any) -> Any:
     )
 
 
-def _anchor_step_once(dnf: Any, prev_local_date: Any, interval_seed: Any, seed_base: Any, omit_dnf: Any = None) -> Any:
-    add_anchor_compute = _module("add_anchor_compute")
-    return add_anchor_compute.anchor_step_once_with_omit(
-        dnf, prev_local_date, interval_seed, seed_base, omit_dnf=omit_dnf, core=core
-    )
-
-
 def _anchor_until_summary(
     dnf: Any,
     until_dt: Any,
@@ -938,32 +914,6 @@ def _anchor_until_summary(
         core=core,
         to_local_cached=_to_local_cached,
         max_iterations=_MAX_ITERATIONS,
-        evaluator=evaluator,
-    )
-
-
-def _anchor_build_preview(
-    dnf: Any,
-    first_due_local_dt: Any,
-    preview_limit: int,
-    until_dt: Any,
-    fallback_hhmm: Any,
-    interval_seed: Any,
-    seed_base: Any,
-    omit_dnf: Any = None,
-    evaluator: Any = None,
-) -> Any:
-    add_anchor_compute = _module("add_anchor_compute")
-    return add_anchor_compute.anchor_build_preview(
-        dnf,
-        first_due_local_dt,
-        preview_limit,
-        until_dt,
-        fallback_hhmm,
-        interval_seed,
-        seed_base,
-        omit_dnf=omit_dnf,
-        core=core,
         evaluator=evaluator,
     )
 
@@ -999,6 +949,7 @@ def _append_first_expiration_row(
 
 class _NoopProfiler:
     enabled = False
+    import_ms: float | None = None
 
     @contextmanager
     def section(self, _name: str) -> Any:
@@ -1062,7 +1013,7 @@ def _read_on_add_task(prof: Any) -> dict:
                 )
                 task = observation.to_mapping()
                 _PARSED_OBSERVATION = observation
-        except Exception:
+        except codec.TaskCodecError:
             _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
     if not isinstance(task, dict):
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
@@ -1109,7 +1060,10 @@ def _due_matches_entry_timestamp_on_add(task: dict) -> bool:
     return _module("add_composition")._due_matches_entry(host, task)
 
 
-def _due_context_on_add(task: dict, now_utc: datetime) -> Any:
+def _due_context_on_add(
+    task: dict,
+    now_utc: datetime,
+) -> tuple[bool, str, datetime, str | None, date, tuple[int, int]]:
     host = sys.modules.get(__name__, SimpleNamespace(**globals()))
     return _module("add_composition").due_context(host, task, now_utc)
 
@@ -1135,7 +1089,7 @@ def main() -> None:
         )
     try:
         calendar_context = core.use_task_business_calendar(task)
-    except Exception as exc:
+    except core.BusinessCalendarConfigError as exc:
         _error_and_exit([("Invalid business calendar", str(exc))])
         return
     displacement_context = (

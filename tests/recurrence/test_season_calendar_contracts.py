@@ -5,15 +5,14 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import date, datetime, timedelta
+from unittest.mock import patch
 
 import nautical_core as core
-from nautical_core import (
-    acf_support,
-    astronomical_seasons,
-    cache_payload,
-    position_selection,
-    season_support,
-)
+import nautical_core.acf_support as acf_support
+import nautical_core.astronomical_seasons as astronomical_seasons
+import nautical_core.cache_payload as cache_payload
+import nautical_core.position_selection as position_selection
+import nautical_core.season_support as season_support
 
 
 class SeasonCalendarContractTests(unittest.TestCase):
@@ -246,6 +245,13 @@ class SeasonCalendarContractTests(unittest.TestCase):
                 season_support.configure_mode("sidereal")
             with self.assertRaisesRegex(ValueError, "invalid or unavailable"):
                 season_support.configure_timezone("Not/A_Timezone")
+            with patch.object(
+                season_support,
+                "ZoneInfo",
+                side_effect=RuntimeError("timezone loader invariant failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "loader invariant"):
+                    season_support.configure_timezone("UTC")
         finally:
             season_support.configure_mode(previous_mode)
             season_support.configure_hemisphere(previous_hemisphere)

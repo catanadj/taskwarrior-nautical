@@ -249,7 +249,7 @@ class TaskDomainModelTests(unittest.TestCase):
             OutboxOutcomeKind,
             OutboxStage,
         )
-        from nautical_core.lifecycle_models import LifecycleEvent, LifecycleIdentity
+        from nautical_core.lifecycle.models import LifecycleEvent, LifecycleIdentity
 
         guard = MutationGuard(
             "parent-uuid",

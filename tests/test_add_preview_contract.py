@@ -1,8 +1,14 @@
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, get_type_hints
+from unittest.mock import patch
 
-from nautical_core import add_anchor_compute, add_anchor_preview, add_preview_composition, anchor_omit
+import nautical_core.add_anchor_compute as add_anchor_compute
+import nautical_core.add_anchor_preview as add_anchor_preview
+import nautical_core.add_preview_composition as add_preview_composition
+import nautical_core.anchor_omit as anchor_omit
+import nautical_core.timezone_facade as timezone_facade
 from nautical_core.occurrence_provider import Occurrence, OccurrenceBatch
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 
@@ -35,6 +41,44 @@ class _Host:
 
 
 class AddPreviewCompositionTests(unittest.TestCase):
+    def test_dst_preview_propagates_unexpected_timezone_failures(self) -> None:
+        local = datetime(2026, 10, 4, 9, tzinfo=UTC)
+        dnf = [[{"mods": {"t": [(0, 9, 0)]}}]]
+        core = SimpleNamespace(
+            build_local_datetime=lambda *_args: local,
+            to_local=lambda _value: (_ for _ in ()).throw(
+                RuntimeError("unexpected timezone failure")
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected timezone failure"):
+            add_anchor_preview._append_dst_adjustment_row(
+                [], dnf, local, core=core
+            )
+
+    def test_preview_event_time_accepts_only_supported_scheduler_shapes(self) -> None:
+        local = datetime(2026, 10, 4, 9, tzinfo=UTC)
+        occurrence = Occurrence(local.date(), 9, 0, local_datetime=local)
+
+        self.assertEqual(add_anchor_preview._event_datetime(occurrence), local)
+        self.assertEqual(add_anchor_preview._event_datetime((local, False)), local)
+        self.assertEqual(add_anchor_preview._event_datetime(local), local)
+        self.assertIsNone(add_anchor_preview._event_datetime(object()))
+
+        hints = get_type_hints(add_anchor_preview._event_datetime)
+        self.assertNotIn(Any, hints.values())
+        self.assertEqual(hints["return"], datetime | None)
+
+    def test_add_scheduler_calendar_loader_propagates_unexpected_failures(self) -> None:
+        class FailingCalendar:
+            @staticmethod
+            def active_business_calendar():
+                raise RuntimeError("calendar configuration failed")
+
+        core = SimpleNamespace(_import_sibling=lambda _name: FailingCalendar)
+        with self.assertRaisesRegex(RuntimeError, "calendar configuration failed"):
+            add_anchor_compute._scheduler_business_calendar(core)
+
     def test_omit_natural_text_propagates_unexpected_conversion_failures(self):
         class FailingParser:
             @staticmethod
@@ -90,32 +134,55 @@ class AddPreviewCompositionTests(unittest.TestCase):
                 error_and_exit=lambda _rows: None,
             )
 
+    def test_omit_file_loader_propagates_unexpected_runtime_failures(self) -> None:
+        def fail_loading(*_args):
+            raise RuntimeError("omit file loader failed internally")
+
+        core = SimpleNamespace(
+            _import_sibling=lambda _name: SimpleNamespace(
+                load_omit_file_data=fail_loading
+            )
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "omit file loader failed internally"):
+            add_anchor_preview.anchor_preview_prepare_omit_dnf(
+                {"omit_file": "dates.csv"},
+                [],
+                core=core,
+                validate_omit_syntax_strict=lambda _value: (None, None),
+                error_and_exit=lambda _rows: self.fail(
+                    "unexpected loader failures are not invalid user files"
+                ),
+            )
+
     def test_compact_anchor_preview_requests_only_its_first_occurrence(self):
         self.assertEqual(add_anchor_preview._initial_occurrence_limit(200, True), 1)
         self.assertEqual(add_anchor_preview._initial_occurrence_limit(3, False), 19)
 
     def test_timezone_fallback_warning_requires_a_timed_or_recurrence_source(self):
-        core = SimpleNamespace(_LOCAL_TZ=None)
-        self.assertTrue(
-            add_anchor_preview._timezone_fallback_warning_needed(
-                core, "w:mon@t=09:00", ""
+        with patch.object(timezone_facade, "_local_timezone", None):
+            self.assertTrue(
+                add_anchor_preview._timezone_fallback_warning_needed(
+                    "w:mon@t=09:00", ""
+                )
             )
-        )
-        self.assertTrue(
-            add_anchor_preview._timezone_fallback_warning_needed(
-                core, "", "calendar.csv@t=09:00"
+            self.assertTrue(
+                add_anchor_preview._timezone_fallback_warning_needed(
+                    "", "calendar.csv@t=09:00"
+                )
             )
-        )
-        self.assertTrue(
-            add_anchor_preview._timezone_fallback_warning_needed(core, "w:mon", "")
-        )
-        self.assertFalse(add_anchor_preview._timezone_fallback_warning_needed(core, "", ""))
-        core._LOCAL_TZ = object()
-        self.assertFalse(
-            add_anchor_preview._timezone_fallback_warning_needed(
-                core, "w:mon@t=09:00", ""
+            self.assertTrue(
+                add_anchor_preview._timezone_fallback_warning_needed("w:mon", "")
             )
-        )
+            self.assertFalse(
+                add_anchor_preview._timezone_fallback_warning_needed("", "")
+            )
+        with patch.object(timezone_facade, "_local_timezone", UTC):
+            self.assertFalse(
+                add_anchor_preview._timezone_fallback_warning_needed(
+                    "w:mon@t=09:00", ""
+                )
+            )
 
     def test_daily_period_preserves_local_clock_and_sequence_preview(self):
         host = _Host()
@@ -172,6 +239,7 @@ class AddAnchorComputeTests(unittest.TestCase):
 
         class FakeCore:
             MAX_ANCHOR_ITER = 1
+            business_calendar = object()
 
             @staticmethod
             def _import_sibling(_name):
@@ -197,6 +265,7 @@ class AddAnchorComputeTests(unittest.TestCase):
 
         class FakeCore:
             MAX_ANCHOR_ITER = 1
+            business_calendar = object()
 
             @staticmethod
             def _import_sibling(_name):

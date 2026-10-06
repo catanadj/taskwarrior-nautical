@@ -4,31 +4,64 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import sys
-from typing import Any
+from typing import Any, Callable, Literal, Protocol
 
-from .callback_ports import CallbackPort
+from .task_models import TaskPayload
+
+
+class EmitTaskJson(Protocol):
+    def __call__(
+        self,
+        task: TaskPayload,
+        *,
+        sanitize: bool = False,
+        core: Any = None,
+        prof: Any = None,
+    ) -> None: ...
+
+
+class _HookResults(Protocol):
+    def emit_passthrough_json(self, task: TaskPayload) -> None: ...
+
+    def emit_task_json(
+        self,
+        task: TaskPayload,
+        *,
+        sanitize: bool = False,
+        core: Any = None,
+        prof: Any = None,
+    ) -> None: ...
+
+
+class UIEffectsHost(Protocol):
+    @property
+    def core(self) -> object | None: ...
+
+    def _load_core(self) -> None: ...
+
+    def _module(self, name: Literal["hook_results"]) -> _HookResults: ...
 
 
 @dataclass(frozen=True)
 class UIEffectsPorts:
     """Process-boundary capabilities required by modify UI effects."""
 
-    core: CallbackPort
-    load_core: CallbackPort
-    override: CallbackPort
-    emit_passthrough_json: CallbackPort
-    emit_task_json: CallbackPort
-    stderr_write: CallbackPort
+    core: Callable[[], Any]
+    load_core: Callable[[], None]
+    override: Callable[[str], Callable[..., Any] | None]
+    emit_passthrough_json: Callable[[TaskPayload], None]
+    emit_task_json: EmitTaskJson
+    stderr_write: Callable[[str], int]
 
 
-def ui_ports_for(host: Any) -> UIEffectsPorts:
+def ui_ports_for(host: UIEffectsHost) -> UIEffectsPorts:
     """Adapt the hook host once at the composition boundary."""
     values = getattr(host, "_values", None)
     if values is None and hasattr(host, "__dict__"):
         values = vars(host)
     values_map = values if isinstance(values, dict) else {}
 
-    def test_override(name: str) -> Any:
+    def test_override(name: str) -> Callable[..., Any] | None:
         override = values_map.get(name)
         is_root_delegate = callable(override) and getattr(override, "__name__", "") == name and (
             getattr(getattr(override, "__code__", None), "co_filename", "") == values_map.get("__file__")
@@ -39,8 +72,14 @@ def ui_ports_for(host: Any) -> UIEffectsPorts:
         core=lambda: host.core,
         load_core=host._load_core,
         override=test_override,
-        emit_passthrough_json=lambda task: host._module("hook_results").emit_passthrough_json(task),
-        emit_task_json=lambda task, **kwargs: host._module("hook_results").emit_task_json(task, **kwargs),
+        emit_passthrough_json=lambda task: host._module("hook_results").emit_passthrough_json(
+            task
+        ),
+        emit_task_json=(
+            lambda task, *, sanitize=False, core=None, prof=None: host._module(
+                "hook_results"
+            ).emit_task_json(task, sanitize=sanitize, core=core, prof=prof)
+        ),
         stderr_write=sys.stderr.write,
     )
 
@@ -62,8 +101,8 @@ def print_task(ports: UIEffectsPorts, task: Any) -> None:
 
 def panel(
     ports: UIEffectsPorts,
-    title: Any,
-    rows: Any,
+    title: str,
+    rows: list[tuple[str | None, Any]],
     kind: str = "info",
     border_style: str | None = None,
     title_style: str | None = None,
@@ -79,7 +118,7 @@ def panel(
         except Exception:
             try:
                 ports.stderr_write(f"[nautical] {title}\n")
-            except Exception:
+            except (OSError, UnicodeError, ValueError):
                 pass
             return
         core = ports.core()

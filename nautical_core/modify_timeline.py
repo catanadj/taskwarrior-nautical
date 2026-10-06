@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from datetime import date, datetime, timezone
+from typing import Any, Callable, TypeAlias
 
-from .callback_ports import CallbackPort
+from .anchor_omit import OmitState
+from .parsing.parser_models import AnchorDNF
+from .modify_models import CoerceIntCallback, ShortUuidCallback
+from .modify_format_effects import format_timedelta_short
+from .recurrence_evaluator import RecurrenceEvaluator
+from .scheduler_service import SchedulerService
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskObservation, TaskPayload
@@ -13,31 +18,33 @@ from .task_models import TaskObservation, TaskPayload
 @dataclass(frozen=True, slots=True)
 class TimelineProjectionServices:
     max_iterations: int
-    collect_prev_two: CallbackPort
-    dtparse: CallbackPort
-    to_local_cached: CallbackPort
-    safe_parse_datetime: CallbackPort
-    omit_dnf_from_parent: CallbackPort
-    omit_description_for_date: Callable[[Any, Any], str | None] | None
-    recurrence_evaluator_for_task: CallbackPort
-    scheduler_service_for_task: CallbackPort
+    collect_prev_two: Callable[[TaskPayload], list[TaskObservation]]
+    dtparse: Callable[[object], datetime | None]
+    to_local_cached: Callable[[datetime], datetime]
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]]
+    omit_dnf_from_parent: Callable[[TaskPayload], tuple[str, OmitState | None]]
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None
+    recurrence_evaluator_for_task: Callable[[TaskPayload], RecurrenceEvaluator]
+    scheduler_service_for_task: Callable[[TaskPayload], SchedulerService]
 
 
 @dataclass(frozen=True, slots=True)
 class TimelineFormattingServices:
-    future_style_for_chain: CallbackPort
-    coerce_int: CallbackPort
-    fmt_on_time_delta: CallbackPort
-    fmtlocal: CallbackPort
-    fmt_dt_local: CallbackPort
-    short: CallbackPort
-    format_gap: CallbackPort
+    future_style_for_chain: Callable[[TaskPayload, str], str]
+    coerce_int: CoerceIntCallback
+    fmt_on_time_delta: Callable[[datetime | None, datetime | None], str]
+    fmtlocal: Callable[[datetime], str]
+    fmt_dt_local: Callable[[datetime], str]
+    short: ShortUuidCallback
+    format_gap: Callable[[datetime | None, datetime | None, str, bool], str]
 
 
-TimelineItem = tuple[object, Any, TaskPayload, str]
+TimelineItem: TypeAlias = tuple[object, datetime | None, TaskPayload, str]
 
 
-def _build_slot_datetime(day: Any, hhmm: Any) -> datetime:
+def _build_slot_datetime(day: date, hhmm: tuple[int, int]) -> datetime:
     return datetime.combine(day, datetime.min.time().replace(hour=int(hhmm[0]), minute=int(hhmm[1])))
 
 
@@ -47,17 +54,16 @@ def _timeline_seed_base(task: TaskPayload) -> str:
 
 
 def _timeline_omit_label(
-    omit_dnf: Any,
-    omit_date: Any,
+    omit_dnf: OmitState | None,
+    omit_date: date,
     *,
-    omit_description_for_date: Callable[[Any, Any], str | None] | None,
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None,
 ) -> str | None:
     if omit_description_for_date is None:
         return None
-    try:
-        text = str(omit_description_for_date(omit_dnf, omit_date) or "").strip()
-    except Exception:
-        return None
+    text = str(omit_description_for_date(omit_dnf, omit_date) or "").strip()
     if not text:
         return None
     if len(text) <= 14:
@@ -65,7 +71,7 @@ def _timeline_omit_label(
     return text[:14] + "..."
 
 
-def _timeline_warning(message: str) -> tuple[object, None, dict[str, Any], str]:
+def _timeline_warning(message: str) -> TimelineItem:
     return ("!", None, {"message": message}, "warning")
 
 
@@ -87,23 +93,12 @@ def _timeline_styles(
     return prev_style, cur_style, next_style, future_style
 
 
-def _format_td_short(td: timedelta) -> str:
-    secs = int(td.total_seconds())
-    if secs < 0:
-        return "-" + _format_td_short(timedelta(seconds=-secs))
-    if secs % 86400 == 0:
-        return f"{secs // 86400}d"
-    units = (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1))
-    parts: list[str] = []
-    rem = secs
-    for label, unit_secs in units:
-        if rem >= unit_secs:
-            n, rem = divmod(rem, unit_secs)
-            parts.append(f"{n}{label}")
-    return "".join(parts) if parts else "0s"
-
-
-def format_gap(prev_dt: Any, next_dt: Any, kind: str = "cp", round_hours: bool = True) -> str:
+def format_gap(
+    prev_dt: datetime | None,
+    next_dt: datetime | None,
+    kind: str = "cp",
+    round_hours: bool = True,
+) -> str:
     """Format the time gap between two timeline items as a compact annotation."""
     if not (prev_dt and next_dt):
         return ""
@@ -132,12 +127,12 @@ def _timeline_initial_items(
     task: TaskPayload,
     cur_no: int,
     nxt_no: int,
-    child_due_utc: Any,
+    child_due_utc: datetime,
     child_short: str,
     *,
-    coerce_int: CallbackPort,
+    coerce_int: CoerceIntCallback,
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
-    dtparse: Callable[[Any], Any],
+    dtparse: Callable[[object], datetime | None],
 ) -> list[TimelineItem]:
     items: list[TimelineItem] = []
     prevs = collect_prev_two(task)
@@ -161,15 +156,15 @@ def _timeline_future_cp_items(
     allowed_future: int,
     cap_no: int | None,
     max_iterations: int,
-    evaluator: Any,
-) -> list[tuple[int, datetime, dict[str, Any], str]]:
+    evaluator: RecurrenceEvaluator,
+) -> list[TimelineItem]:
     cp_str = str(task.get("cp") or "")
     tokens = evaluator.cp_tokens
     if not tokens:
         return []
     cp_tokens = [p.strip() for p in cp_str.split(",")]
     show_interval = len(tokens) > 1 or any(t.get("kind") == "rand" for t in tokens)
-    items: list[tuple[int, datetime, dict[str, Any], str]] = []
+    items: list[TimelineItem] = []
     fut_dt = child_due_utc
     fut_no = start_no
     iterations = 0
@@ -177,7 +172,6 @@ def _timeline_future_cp_items(
         if iterations >= max_iterations:
             break
         iterations += 1
-        token_idx = (max(1, fut_no) - 1) % len(tokens)
         td = evaluator.cp_interval_for_link(fut_no)
         if td is None:
             break
@@ -190,7 +184,7 @@ def _timeline_future_cp_items(
             step_idx = (max(1, fut_no - 1) - 1) % len(tokens)
             if 0 <= step_idx < len(cp_tokens):
                 if tokens[step_idx].get("kind") == "rand":
-                    meta["cp_interval"] = _format_td_short(td)
+                    meta["cp_interval"] = format_timedelta_short(td)
                 else:
                     meta["cp_interval"] = cp_tokens[step_idx]
         items.append((fut_no, fut_dt, meta, "future"))
@@ -199,22 +193,23 @@ def _timeline_future_cp_items(
 
 def _timeline_future_anchor_items(
     task: TaskPayload,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     child_due_utc: datetime,
     *,
     start_no: int,
     allowed_future: int,
     cap_no: int | None,
     to_local_cached: Callable[[datetime], datetime],
-    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
-    scheduler_service: Any,
-    omit_dnf: Any,
-    omit_description_for_date: Callable[[Any, Any], str | None] | None,
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+    scheduler_service: SchedulerService,
+    omit_dnf: OmitState | None,
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None,
     max_iterations: int,
-) -> list[tuple[object, Any, dict[str, Any], str]]:
-    items: list[tuple[object, Any, dict[str, Any], str]] = []
+) -> list[TimelineItem]:
+    items: list[TimelineItem] = []
     fut_no = start_no
-    seed_base = _timeline_seed_base(task)
     nxt_local = to_local_cached(child_due_utc)
     fallback_hhmm = (nxt_local.hour, nxt_local.minute)
     due0, _ = safe_parse_datetime(task.get("due"))
@@ -303,25 +298,26 @@ def _timeline_future_anchor_items(
 
 def _timeline_omitted_before_next_anchor_items(
     task: TaskPayload,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     child_due_utc: datetime,
     *,
-    dtparse: Callable[[Any], Any],
+    dtparse: Callable[[object], datetime | None],
     to_local_cached: Callable[[datetime], datetime],
-    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
-    scheduler_service: Any,
-    omit_dnf: Any,
-    omit_description_for_date: Callable[[Any, Any], str | None] | None,
+    safe_parse_datetime: Callable[[object], tuple[datetime | None, str | None]],
+    scheduler_service: SchedulerService,
+    omit_dnf: OmitState | None,
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None,
     max_iterations: int,
-) -> list[tuple[object, Any, dict[str, Any], str]]:
+) -> list[TimelineItem]:
     if not omit_dnf:
         return []
     cur_end = dtparse(task.get("end"))
     if not cur_end:
         return []
 
-    items: list[tuple[object, Any, dict[str, Any], str]] = []
-    seed_base = _timeline_seed_base(task)
+    items: list[TimelineItem] = []
     child_local = to_local_cached(child_due_utc)
     after_local = to_local_cached(cur_end)
     fallback_hhmm = (child_local.hour, child_local.minute)
@@ -376,7 +372,7 @@ def _timeline_no_text(no: object) -> str:
 
 def _timeline_base_line(
     no: object,
-    dt: Any,
+    dt: datetime | None,
     obj: TaskPayload,
     item_type: str,
     *,
@@ -386,11 +382,11 @@ def _timeline_base_line(
     cur_style: str,
     next_style: str,
     future_style: str,
-    fmt_dt_local: Callable[[Any], str],
-    dtparse: Callable[[Any], Any],
-    fmt_on_time_delta: Callable[[Any, Any], str],
-    fmtlocal: Callable[[Any], str],
-    short: Callable[[Any], str],
+    fmt_dt_local: Callable[[datetime], str],
+    dtparse: Callable[[object], datetime | None],
+    fmt_on_time_delta: Callable[[datetime | None, datetime | None], str],
+    fmtlocal: Callable[[datetime], str],
+    short: ShortUuidCallback,
 ) -> str:
     no_text = _timeline_no_text(no)
     if item_type == "prev":
@@ -410,7 +406,8 @@ def _timeline_base_line(
 
     if item_type == "next":
         is_last = cap_no is not None and no == cap_no
-        next_text = f"{no_text} {'►':<2}{fmt_dt_local(dt)} {short(obj.get('uuid'))}"
+        next_date = fmt_dt_local(dt) if dt is not None else "(date unavailable)"
+        next_text = f"{no_text} {'►':<2}{next_date} {short(obj.get('uuid'))}"
         if is_last:
             return f"[{next_style}]{next_text} [bold red](last link)[/][/]"
         return f"[{next_style}]{next_text}[/]"
@@ -421,7 +418,8 @@ def _timeline_base_line(
             omit_label = omit_label.replace("[", "(").replace("]", ")")
         else:
             omit_label = "omitted"
-        return f"[dim red]{no_text} {'×':<2}{fmt_dt_local(dt)} [italic]({omit_label})[/][/]"
+        omitted_date = fmt_dt_local(dt) if dt is not None else "(date unavailable)"
+        return f"[dim red]{no_text} {'×':<2}{omitted_date} [italic]({omit_label})[/][/]"
 
     if item_type == "warning":
         message = str(obj.get("message") or "Timeline projection unavailable")
@@ -429,7 +427,8 @@ def _timeline_base_line(
         return f"[bright_yellow]{no_text} {'⚠':<2}{message}[/]"
 
     is_last = cap_no is not None and no == cap_no
-    future_text = f"{no_text} {'»':<2}{fmt_dt_local(dt)}"
+    future_date = fmt_dt_local(dt) if dt is not None else "(date unavailable)"
+    future_text = f"{no_text} {'»':<2}{future_date}"
     cp_interval = str(obj.get("cp_interval") or "").strip()
     if cp_interval:
         future_text = f"{future_text} [dim]({cp_interval})[/]"
@@ -446,7 +445,9 @@ def _timeline_with_gap(
     show_gaps: bool,
     kind: str,
     round_anchor_gaps: bool,
-    format_gap: Callable[[Any, Any, str, bool], str],
+    format_gap: Callable[
+        [datetime | None, datetime | None, str, bool], str
+    ],
 ) -> str:
     if not show_gaps or idx >= len(items) - 1:
         return base_line
@@ -470,21 +471,23 @@ def anchor_file_timeline_lines(
     cur_no: int | None,
     show_gaps: bool,
     round_anchor_gaps: bool,
-    coerce_int: CallbackPort,
-    fmt_dt_local: Callable[[Any], str],
+    coerce_int: CoerceIntCallback,
+    fmt_dt_local: Callable[[datetime], str],
     max_iterations: int,
     future_style_for_chain: Callable[[TaskPayload, str], str],
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
-    dtparse: Callable[[Any], Any],
-    fmt_on_time_delta: Callable[[Any, Any], str],
-    fmtlocal: Callable[[Any], str],
-    short: Callable[[Any], str],
+    dtparse: Callable[[object], datetime | None],
+    fmt_on_time_delta: Callable[[datetime | None, datetime | None], str],
+    fmtlocal: Callable[[datetime], str],
+    short: ShortUuidCallback,
     to_local_cached: Callable[[datetime], datetime],
-    scheduler_service: Any,
-    evaluator: Any,
-    omit_dnf: Any,
-    omit_description_for_date: Callable[[Any, Any], str | None] | None,
-    format_gap: Callable[[Any, Any, str, bool], str],
+    scheduler_service: SchedulerService,
+    evaluator: RecurrenceEvaluator,
+    omit_dnf: OmitState | None,
+    omit_description_for_date: Callable[
+        [OmitState | None, date], str | None
+    ] | None,
+    format_gap: Callable[[datetime | None, datetime | None, str, bool], str],
 ) -> list[str]:
     """Project anchor-file events and render their timeline rows."""
     child_local = to_local_cached(child_due_utc)
@@ -610,7 +613,7 @@ def timeline_lines(
     task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     *,
     next_count: int = 3,
     cap_no: int | None = None,
@@ -619,9 +622,9 @@ def timeline_lines(
     round_anchor_gaps: bool = True,
     projection: TimelineProjectionServices,
     formatting: TimelineFormattingServices,
-    scheduler_service: Any | None,
-    omit_dnf: Any,
-    evaluator: Any | None,
+    scheduler_service: SchedulerService | None,
+    omit_dnf: OmitState | None,
+    evaluator: RecurrenceEvaluator | None,
 ) -> list[str]:
     cur_no = formatting.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
     nxt_no = cur_no + 1
@@ -641,23 +644,47 @@ def timeline_lines(
         collect_prev_two=projection.collect_prev_two,
         dtparse=projection.dtparse,
     )
+    projection_available = True
     if kind == "anchor":
-        omitted_before_next = _timeline_omitted_before_next_anchor_items(
-            task,
-            dnf,
-            child_due_utc,
-            dtparse=projection.dtparse,
-            to_local_cached=projection.to_local_cached,
-            safe_parse_datetime=projection.safe_parse_datetime,
-            scheduler_service=scheduler_service,
-            omit_dnf=omit_dnf,
-            omit_description_for_date=projection.omit_description_for_date,
-            max_iterations=projection.max_iterations,
+        if scheduler_service is None:
+            items.append(
+                _timeline_warning(
+                    "Projection unavailable: scheduler service is not available"
+                )
+            )
+            projection_available = False
+        else:
+            omitted_before_next = _timeline_omitted_before_next_anchor_items(
+                task,
+                dnf,
+                child_due_utc,
+                dtparse=projection.dtparse,
+                to_local_cached=projection.to_local_cached,
+                safe_parse_datetime=projection.safe_parse_datetime,
+                scheduler_service=scheduler_service,
+                omit_dnf=omit_dnf,
+                omit_description_for_date=projection.omit_description_for_date,
+                max_iterations=projection.max_iterations,
+            )
+            if omitted_before_next:
+                items = items[:-1] + omitted_before_next + items[-1:]
+    elif kind == "cp" and evaluator is None:
+        items.append(
+            _timeline_warning(
+                "Projection unavailable: recurrence evaluator is not available"
+            )
         )
-        if omitted_before_next:
-            items = items[:-1] + omitted_before_next + items[-1:]
-    if allowed_future > 0:
+        projection_available = False
+    elif kind != "cp" and scheduler_service is None:
+        items.append(
+            _timeline_warning(
+                "Projection unavailable: scheduler service is not available"
+            )
+        )
+        projection_available = False
+    if allowed_future > 0 and projection_available:
         if kind == "cp":
+            assert evaluator is not None
             items.extend(
                 _timeline_future_cp_items(
                     task,
@@ -670,6 +697,7 @@ def timeline_lines(
                 )
             )
         else:
+            assert scheduler_service is not None
             items.extend(
                 _timeline_future_anchor_items(
                     task,
@@ -725,7 +753,7 @@ def timeline_lines_for_task(
     task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
-    dnf: Any,
+    dnf: AnchorDNF | None,
     *,
     next_count: int = 3,
     cap_no: int | None = None,
@@ -738,8 +766,8 @@ def timeline_lines_for_task(
     """Resolve recurrence projection independently from rendering services."""
     if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):
         _omit_expr, omit_dnf = projection.omit_dnf_from_parent(task)
-        scheduler_service = projection.scheduler_service_for_task(task)
-        evaluator = scheduler_service.session.evaluator
+        anchor_scheduler_service = projection.scheduler_service_for_task(task)
+        anchor_evaluator = anchor_scheduler_service.session.evaluator
         return anchor_file_timeline_lines(
             task,
             child_due_utc,
@@ -759,8 +787,8 @@ def timeline_lines_for_task(
             fmtlocal=formatting.fmtlocal,
             short=formatting.short,
             to_local_cached=projection.to_local_cached,
-            scheduler_service=scheduler_service,
-            evaluator=evaluator,
+            scheduler_service=anchor_scheduler_service,
+            evaluator=anchor_evaluator,
             omit_dnf=omit_dnf,
             omit_description_for_date=projection.omit_description_for_date if omit_dnf else None,
             format_gap=formatting.format_gap,

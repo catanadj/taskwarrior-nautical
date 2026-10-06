@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import json
+import io
+import os
 import sqlite3
+import stat
 import unittest
+from contextlib import redirect_stderr
+from inspect import signature
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from typing import Any, ContextManager, get_type_hints
+from unittest.mock import patch
 
-from nautical_core.lifecycle_models import ExecutionStage
-from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_execution_policy import (
+import nautical_core.lifecycle.outbox as outbox_module
+from nautical_core.lifecycle.models import ExecutionStage
+from nautical_core.lifecycle.models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.lifecycle.execution_policy import (
     FailureDisposition,
     MUTATION_TO_APPLICATION,
     OUTBOX_TO_APPLICATION,
@@ -19,7 +27,7 @@ from nautical_core.lifecycle_execution_policy import (
     remaining_drain_work,
 )
 from nautical_core.integration_models import MutationOutcomeKind
-from nautical_core.lifecycle_outbox import (
+from nautical_core.lifecycle.outbox import (
     OUTBOX_LEGACY_SCHEMA_VERSION,
     OUTBOX_SCHEMA_VERSION,
     LifecycleOutboxError,
@@ -28,13 +36,417 @@ from nautical_core.lifecycle_outbox import (
     OutboxResult,
     OutboxProcessingState,
     OutboxResultKind,
+    lifecycle_outbox_path,
 )
 
 
 class LifecycleOutboxContractTests(unittest.TestCase):
+    def test_metadata_repair_uses_public_integration_freeze_operation(self) -> None:
+        import inspect
+        import nautical_core.lifecycle.application as application
+
+        self.assertNotIn("_freeze_pairs", inspect.getsource(application))
+
+    def test_operations_port_status_matches_repository_retention_contract(self) -> None:
+        from inspect import signature
+        from nautical_core.lifecycle.outbox_operations import LifecycleOutboxOperationsPort
+        from nautical_core.lifecycle.outbox import OUTBOX_ACK_RETENTION_SECONDS
+
+        parameters = signature(LifecycleOutboxOperationsPort.status).parameters
+        self.assertEqual(parameters["retention_seconds"].default, OUTBOX_ACK_RETENTION_SECONDS)
+
+    def test_integrity_enqueue_accepts_the_typed_envelope(self) -> None:
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+
+        annotation = _LifecycleOutboxRepository.enqueue_integrity.__annotations__["envelope"]
+        self.assertEqual(annotation, "IntegrityOutboxEnvelope")
+        namespace = vars(outbox_module).copy()
+        namespace["IntegrityOutboxEnvelope"] = IntegrityOutboxEnvelope
+        self.assertIs(
+            get_type_hints(
+                _LifecycleOutboxRepository.enqueue_integrity,
+                globalns=namespace,
+            )["envelope"],
+            IntegrityOutboxEnvelope,
+        )
+
+    def test_claim_lease_adapter_has_concrete_operation_signatures(self) -> None:
+        from nautical_core.lifecycle import outbox_claims
+        from nautical_core.lifecycle.outbox_claims import LifecycleOutboxClaimPort
+
+        expected = {
+            "claim_batch": {"self", "owner", "lease_seconds", "limit"},
+            "claim_intents": {"self", "intent_ids", "owner", "lease_seconds"},
+            "renew_lease": {"self", "intent_id", "owner", "lease_seconds"},
+            "renew_leases": {"self", "intent_ids", "owner", "lease_seconds"},
+            "advance_stages": {"self", "stages", "owner"},
+        }
+        self.assertFalse(hasattr(outbox_claims, "RepositoryClaimLeasePort"))
+        for name, parameters in expected.items():
+            with self.subTest(operation=name):
+                method = getattr(LifecycleOutboxClaimPort, name)
+                self.assertEqual(set(signature(method).parameters), parameters)
+                hints = get_type_hints(method)
+                self.assertNotIn(Any, hints.values())
+
+    def test_integrity_outbox_ports_use_record_models(self) -> None:
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxRecord
+        from nautical_core.lifecycle import outbox_operations
+
+        from nautical_core.lifecycle.outbox import LifecycleOutboxRecord
+
+        expected_claim = tuple[OutboxResult, tuple[IntegrityOutboxRecord, ...]]
+        expected_snapshot = tuple[
+            OutboxResult,
+            tuple[LifecycleOutboxRecord | IntegrityOutboxRecord, ...],
+        ]
+        operations_namespace = {
+            **vars(outbox_operations),
+            "IntegrityOutboxRecord": IntegrityOutboxRecord,
+        }
+        repository_namespace = {
+            **vars(outbox_module),
+            "IntegrityOutboxRecord": IntegrityOutboxRecord,
+        }
+        self.assertEqual(
+            get_type_hints(
+                outbox_operations.LifecycleExecutionOutboxPort.claim_integrity_batch,
+                globalns=operations_namespace,
+            )["return"],
+            expected_claim,
+        )
+        self.assertEqual(
+            get_type_hints(
+                outbox_operations.LifecycleOutboxEvidencePort.snapshot_records,
+                globalns=operations_namespace,
+            )["return"],
+            expected_snapshot,
+        )
+        self.assertEqual(
+            get_type_hints(
+                outbox_module._LifecycleOutboxRepository.snapshot_records,
+                globalns=repository_namespace,
+            )["return"],
+            expected_snapshot,
+        )
+
+    def test_outbox_maintenance_port_matches_repository_contract(self) -> None:
+        from nautical_core.lifecycle.outbox import (
+            OUTBOX_ACK_RETENTION_SECONDS,
+            OutboxMaintenanceResult,
+        )
+        from nautical_core.lifecycle.outbox_operations import LifecycleOutboxOperationsPort
+
+        method = LifecycleOutboxOperationsPort.prune_acknowledged
+        parameters = signature(method).parameters
+        self.assertEqual(
+            set(parameters),
+            {"self", "retention_seconds", "limit", "checkpoint"},
+        )
+        self.assertEqual(parameters["retention_seconds"].default, OUTBOX_ACK_RETENTION_SECONDS)
+        self.assertEqual(parameters["limit"].default, 1000)
+        self.assertEqual(parameters["checkpoint"].default, False)
+        self.assertEqual(get_type_hints(method)["return"], OutboxMaintenanceResult)
+
+    def test_outbox_status_port_defaults_match_repository(self) -> None:
+        from nautical_core.lifecycle.outbox_operations import LifecycleOutboxOperationsPort
+
+        port_parameters = signature(LifecycleOutboxOperationsPort.status).parameters
+        repository_parameters = signature(
+            outbox_module._LifecycleOutboxRepository.status
+        ).parameters
+        for name in ("limit", "stale_after"):
+            with self.subTest(parameter=name):
+                self.assertEqual(
+                    port_parameters[name].default,
+                    repository_parameters[name].default,
+                )
+
+    def test_outbox_execution_port_session_exposes_repository_context(self) -> None:
+        import nautical_core.lifecycle.outbox_operations as outbox_operations
+        from nautical_core.lifecycle.outbox_operations import LifecycleExecutionOutboxPort
+
+        hints = get_type_hints(
+            LifecycleExecutionOutboxPort.session,
+            globalns={**vars(outbox_operations), "LifecycleExecutionOutboxPort": LifecycleExecutionOutboxPort},
+        )
+        self.assertEqual(
+            hints["return"],
+            ContextManager[LifecycleExecutionOutboxPort],
+        )
+
+    def test_connection_scope_does_not_mask_unexpected_operation_errors(self) -> None:
+        for session in (False, True):
+            with self.subTest(session=session), TemporaryDirectory() as directory:
+                repository = _LifecycleOutboxRepository(Path(directory))
+
+                def fail(_connection):
+                    raise RuntimeError("injected repository defect")
+
+                if session:
+                    with repository.session():
+                        with self.assertRaisesRegex(RuntimeError, "injected repository defect"):
+                            repository._with_connection(fail)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "injected repository defect"):
+                        repository._with_connection(fail)
+
+    def test_session_startup_does_not_mask_unexpected_initialization_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch.object(repository, "_initialize", side_effect=RuntimeError("injected schema defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    with repository.session():
+                        self.fail("session must not yield after initialization failure")
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_cached_schema_probe_does_not_mask_unexpected_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            stat_result = repository.path.stat()
+            repository._schema_identity = (
+                int(stat_result.st_dev),
+                int(stat_result.st_ino),
+                int(stat_result.st_mtime_ns),
+            )
+            with patch.object(repository, "_connect", side_effect=RuntimeError("injected probe defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.open()
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_open_does_not_convert_unexpected_initialization_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch.object(repository, "_initialize", side_effect=RuntimeError("injected open defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.open()
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_claim_batch_does_not_convert_unexpected_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch.object(repository, "_connect", side_effect=RuntimeError("injected claim defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.claim_batch(owner="worker", lease_seconds=30, limit=1)
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_claim_intent_does_not_convert_unexpected_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch.object(repository, "_connect", side_effect=RuntimeError("injected exact claim defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.claim_intent(owner="worker", lease_seconds=30, intent_id="intent-1")
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_integrity_claim_quarantines_corruption_but_propagates_defects(self) -> None:
+        from nautical_core.chain_integrity_models import (
+            IntegrityOperation,
+            IntegrityRepairPlan,
+            RepairOperationKind,
+            RepairSafety,
+        )
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+
+        operation = IntegrityOperation(
+            "claim-integrity-op",
+            RepairOperationKind.METADATA_REPAIR,
+            "claim-integrity-chain",
+            "aaaaaaaa-0000-0000-0000-000000000951",
+            (("snapshot_id", "claim-integrity-snapshot"),),
+            ("target remains present",),
+            ("link is 2",),
+            (("link", 2),),
+        )
+        plan = IntegrityRepairPlan(
+            "claim-integrity-plan",
+            "claim-integrity-snapshot",
+            "claim-integrity-chain",
+            RepairSafety.SAFE,
+            "missing_link",
+            "integrity claim boundary test",
+            (operation,),
+            "cfg-claim-integrity",
+        )
+        envelope = IntegrityOutboxEnvelope(plan, "cfg-claim-integrity", "sch-claim-integrity")
+
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.enqueue_integrity(envelope).ok)
+            with patch.object(IntegrityOutboxEnvelope, "from_dict", side_effect=RuntimeError("injected decode defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.claim_integrity_batch(owner="worker", lease_seconds=30, limit=1)
+            self.assertIs(type(raised.exception), RuntimeError)
+
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.enqueue_integrity(envelope).ok)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_outbox SET plan_json='{' WHERE intent_id=?",
+                    (envelope.intent_id,),
+                )
+            claim, records = repository.claim_integrity_batch(owner="worker", lease_seconds=30, limit=1)
+            self.assertTrue(claim.ok)
+            self.assertEqual(records, ())
+            _, status = repository.status(intent_id=envelope.intent_id)
+            self.assertEqual(status["records"][0]["state"], "poison")
+
+    def test_integrity_transition_does_not_convert_unexpected_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            with patch.object(repository, "_connect", side_effect=RuntimeError("injected transition defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.acknowledge_integrity(intent_id="integrity:missing", owner="worker")
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_integrity_enqueue_does_not_convert_unexpected_encoding_errors(self) -> None:
+        from nautical_core.chain_integrity_models import (
+            IntegrityOperation,
+            IntegrityRepairPlan,
+            RepairOperationKind,
+            RepairSafety,
+        )
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+
+        operation = IntegrityOperation(
+            "enqueue-integrity-op",
+            RepairOperationKind.METADATA_REPAIR,
+            "enqueue-integrity-chain",
+            "aaaaaaaa-0000-0000-0000-000000000951",
+            (("snapshot_id", "enqueue-integrity-snapshot"),),
+            ("target remains present",),
+            ("link is 2",),
+            (("link", 2),),
+        )
+        plan = IntegrityRepairPlan(
+            "enqueue-integrity-plan",
+            "enqueue-integrity-snapshot",
+            "enqueue-integrity-chain",
+            RepairSafety.SAFE,
+            "missing_link",
+            "integrity enqueue boundary test",
+            (operation,),
+            "cfg-enqueue-integrity",
+        )
+        envelope = IntegrityOutboxEnvelope(plan, "cfg-enqueue-integrity", "sch-enqueue-integrity")
+        repository = _LifecycleOutboxRepository(Path("/tmp/nautical-integrity-enqueue-test"))
+
+        with patch.object(IntegrityOutboxEnvelope, "to_json", side_effect=RuntimeError("injected encoder defect")):
+            with self.assertRaises(RuntimeError) as raised:
+                repository.enqueue_integrity(envelope)
+        self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_snapshot_does_not_misclassify_internal_decode_errors_as_poison(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            plan = self._plan("snapshot-decode-defect")
+            self.assertTrue(repository.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            with patch.object(repository, "_from_row", side_effect=RuntimeError("injected snapshot decoder defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.snapshot_records()
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_status_does_not_convert_unexpected_schema_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            with patch.object(repository, "_validate_schema", side_effect=RuntimeError("injected status defect")):
+                with self.assertRaises(RuntimeError) as raised:
+                    repository.status()
+            self.assertIs(type(raised.exception), RuntimeError)
+
+    def test_integrity_work_shares_storage_without_lifecycle_claiming(self) -> None:
+        from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
+        from nautical_core.chain_integrity_models import (
+            IntegrityOperation,
+            IntegrityRepairPlan,
+            RepairOperationKind,
+            RepairSafety,
+        )
+        from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            operation = IntegrityOperation(
+                "shared-integrity-op",
+                RepairOperationKind.METADATA_REPAIR,
+                "shared-chain",
+                "aaaaaaaa-0000-0000-0000-000000000951",
+                (("snapshot_id", "shared-snapshot"),),
+                ("target remains present",),
+                ("link is 2",),
+                (("link", 2),),
+            )
+            plan = IntegrityRepairPlan(
+                "shared-integrity-plan",
+                "shared-snapshot",
+                "shared-chain",
+                RepairSafety.SAFE,
+                "missing_link",
+                "shared outbox test",
+                (operation,),
+                "cfg-shared",
+            )
+            envelope = IntegrityOutboxEnvelope(plan, "cfg-shared", "schedule-shared")
+
+            self.assertEqual(
+                repository.enqueue_integrity(envelope).kind, OutboxResultKind.APPLIED
+            )
+            self.assertEqual(
+                repository.enqueue_integrity(envelope).kind,
+                OutboxResultKind.ALREADY_APPLIED,
+            )
+            lifecycle_claim, lifecycle_records = repository.claim_batch(
+                owner="lifecycle-test", lease_seconds=10, limit=10
+            )
+            self.assertTrue(lifecycle_claim.ok)
+            self.assertEqual(lifecycle_records, ())
+            integrity_claim, integrity_records = repository.claim_integrity_batch(
+                owner="integrity-test", lease_seconds=10, limit=10
+            )
+            self.assertTrue(integrity_claim.ok)
+            self.assertEqual(len(integrity_records), 1)
+            self.assertTrue(
+                repository.acknowledge_integrity(
+                    intent_id=envelope.intent_id, owner="integrity-test"
+                ).ok
+            )
+            self.assertEqual(
+                repository.acknowledge_integrity(
+                    intent_id=envelope.intent_id, owner="integrity-test"
+                ).kind,
+                OutboxResultKind.ALREADY_APPLIED,
+            )
+            sink = RepositoryIntegrityOutboxSink(
+                repository,
+                configuration_fingerprint="cfg-shared",
+                schedule_fingerprint="schedule-shared",
+            )
+            self.assertTrue(sink.persist(plan).accepted)
+            with sqlite3.connect(repository.path) as connection:
+                work_kind = connection.execute(
+                    "SELECT work_kind FROM lifecycle_outbox WHERE intent_id=?",
+                    (envelope.intent_id,),
+                ).fetchone()
+            self.assertEqual(work_kind, ("integrity",))
+            snapshot_result, snapshot_records = repository.snapshot_records()
+            self.assertTrue(snapshot_result.ok)
+            self.assertEqual(len(snapshot_records), 1)
+            self.assertEqual(snapshot_records[0].intent_id, envelope.intent_id)
+
+    def test_outbox_state_file_uses_dedicated_state_directory(self) -> None:
+        path = lifecycle_outbox_path(Path("/tmp/taskdata"))
+
+        self.assertEqual(path.parent.name, ".nautical-state")
+        self.assertEqual(path.name, ".nautical_lifecycle_outbox.db")
+
     @staticmethod
-    def _plan(chain: str = "contract") -> LifecyclePlan:
-        from dev_tools.nautical_golden_tests import _task_draft
+    def _plan(chain: str = "contract", *, max_attempts: int = 3) -> LifecyclePlan:
+        from dev_tools.golden_tests.support import task_draft as _task_draft
 
         parent = "00000000-0000-4000-8000-000000001001"
         child = "00000000-0000-4000-8000-000000001002"
@@ -49,6 +461,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             }),
             parent_patch={"nextLink": child[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
+            max_attempts=max_attempts,
         )
 
     def test_schema_versions_and_processing_states_are_explicit(self) -> None:
@@ -63,6 +476,16 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             {"planned", "persisted", "child_present", "parent_linked", "verified", "finalized", "retryable", "manual_review"},
         )
 
+    def test_outbox_database_file_permissions_are_private(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            opened = repository.open()
+
+            self.assertTrue(opened.ok, opened.reason)
+            self.assertTrue(repository.path.is_file())
+            mode = stat.S_IMODE(repository.path.stat().st_mode)
+            self.assertEqual(mode & 0o077, 0)
+
     def test_failure_round_trip_preserves_unicode_and_evidence(self) -> None:
         failure = OutboxFailure("retryable", "échec — réseau", {"attempt": 2, "note": "再試"})
 
@@ -71,6 +494,10 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         self.assertEqual(restored, failure)
         self.assertIn("échec", failure.to_json())
         self.assertEqual(json.loads(failure.to_json())["evidence"]["note"], "再試")
+
+    def test_failure_evidence_rejects_non_json_values_before_persistence(self) -> None:
+        with self.assertRaises(LifecycleOutboxError):
+            OutboxFailure("invalid", "evidence must be JSON", {"opaque": object()})
 
     def test_failure_decoder_rejects_malformed_and_non_object_payloads(self) -> None:
         for payload in ("{bad", "[]", '"text"'):
@@ -92,7 +519,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
     def test_schema_owner_migrates_legacy_v1_table(self) -> None:
         from contextlib import contextmanager
 
-        from nautical_core.lifecycle_outbox_schema import initialize
+        from nautical_core.lifecycle.outbox_schema import initialize
 
         connection = sqlite3.connect(":memory:")
         try:
@@ -140,6 +567,62 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             self.assertEqual(transactions, ["begin"])
         finally:
             connection.close()
+
+    def test_bulk_cleanup_failure_is_silent_or_gated_without_replacing_result(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 100.0)
+
+            def run_with_diagnostics(enabled: bool) -> str:
+                stderr = io.StringIO()
+                with (
+                    patch.dict(os.environ, {"NAUTICAL_DIAG": "1" if enabled else "0"}),
+                    patch.object(
+                        repository,
+                        "_secure_state_files",
+                        side_effect=RuntimeError("private cleanup detail"),
+                    ),
+                    redirect_stderr(stderr),
+                ):
+                    status, rows = repository._with_bulk_connection(
+                        lambda _connection: {
+                            "intent": OutboxResult(OutboxResultKind.APPLIED)
+                        }
+                    )
+
+                self.assertTrue(status.ok)
+                self.assertEqual(rows["intent"].kind, OutboxResultKind.APPLIED)
+                return stderr.getvalue()
+
+        self.assertEqual(run_with_diagnostics(False), "")
+        diagnostic = run_with_diagnostics(True)
+        self.assertEqual(
+            diagnostic,
+            "[nautical] lifecycle outbox state-file cleanup failed (RuntimeError)\n",
+        )
+        self.assertNotIn("private cleanup detail", diagnostic)
+
+    def test_bulk_cleanup_diagnostic_sink_failure_does_not_replace_result(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 100.0)
+            stderr = io.StringIO()
+            with (
+                patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}),
+                patch.object(
+                    repository,
+                    "_secure_state_files",
+                    side_effect=RuntimeError("private cleanup detail"),
+                ),
+                redirect_stderr(stderr),
+                patch.object(stderr, "write", side_effect=RuntimeError("stderr failed")),
+            ):
+                status, rows = repository._with_bulk_connection(
+                    lambda _connection: {
+                        "intent": OutboxResult(OutboxResultKind.APPLIED)
+                    }
+                )
+
+        self.assertTrue(status.ok)
+        self.assertEqual(rows["intent"].kind, OutboxResultKind.APPLIED)
 
     def test_repository_healthy_state_transition_contract(self) -> None:
         with TemporaryDirectory() as directory:
@@ -209,6 +692,11 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             )
             self.assertTrue(staged.ok)
             self.assertEqual(set(staged_rows), set(ids))
+            isolated, isolated_rows = repository.renew_leases(
+                intent_ids=(ids[0], "missing-intent"), owner="wrong-owner", lease_seconds=30
+            )
+            self.assertTrue(isolated.ok)
+            self.assertEqual(isolated_rows[ids[0]].kind, OutboxResultKind.CONFLICT)
             for stage in (ExecutionStage.PARENT_LINKED, ExecutionStage.VERIFIED):
                 staged, _ = repository.advance_stages(
                     stages={intent_id: stage for intent_id in ids}, owner="bulk-owner"
@@ -238,6 +726,104 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertEqual(result.removed, 1)
 
+    def test_retention_prune_preserves_live_evidence_and_recovers_from_interruption(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 1_000.0)
+
+            def acknowledged_plan(chain: str, *, acknowledged_at: float, owner: str) -> str:
+                plan = self._plan(chain)
+                intent_id = plan.identity.idempotency_key
+                self.assertTrue(repository.enqueue(
+                    plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+                ).ok)
+                claimed = repository.claim_intent(owner=owner, lease_seconds=300, intent_id=intent_id)
+                self.assertTrue(claimed.ok)
+                for stage in (ExecutionStage.CHILD_PRESENT, ExecutionStage.PARENT_LINKED, ExecutionStage.VERIFIED):
+                    self.assertTrue(repository.advance_stage(intent_id=intent_id, owner=owner, stage=stage).ok)
+                self.assertTrue(repository.acknowledge(intent_id=intent_id, owner=owner).ok)
+                with sqlite3.connect(repository.path) as connection:
+                    connection.execute(
+                        "UPDATE lifecycle_outbox SET acknowledged_at=?, updated_at=? WHERE intent_id=?",
+                        (acknowledged_at, acknowledged_at, intent_id),
+                    )
+                return intent_id
+
+            acknowledged_plan("retention-old", acknowledged_at=900.0, owner="ack")
+            retry = self._plan("retention-retry")
+            repository.enqueue(retry, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            retry_id = retry.identity.idempotency_key
+            self.assertTrue(repository.claim_intent(owner="retry", lease_seconds=30, intent_id=retry_id).ok)
+            self.assertTrue(repository.release_retry(
+                intent_id=retry_id, owner="retry", failure=OutboxFailure("busy", "retry later")
+            ).ok)
+
+            claimed_plan = self._plan("retention-claimed")
+            repository.enqueue(claimed_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            claimed_id = claimed_plan.identity.idempotency_key
+            self.assertTrue(repository.claim_intent(owner="live", lease_seconds=300, intent_id=claimed_id).ok)
+
+            review_plan = self._plan("retention-review")
+            repository.enqueue(review_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            review_id = review_plan.identity.idempotency_key
+            self.assertTrue(repository.claim_intent(owner="review", lease_seconds=30, intent_id=review_id).ok)
+            self.assertTrue(repository.manual_review(
+                intent_id=review_id, owner="review", failure=OutboxFailure("review", "inspect")
+            ).ok)
+
+            result = repository.prune_acknowledged(retention_seconds=50.0, limit=1)
+            self.assertTrue(result.ok)
+            self.assertEqual(result.removed, 1)
+            status_result, status = repository.status()
+            self.assertTrue(status_result.ok)
+            self.assertEqual(
+                status["states"], {"retry": 1, "claimed": 1, "manual_review": 1}
+            )
+            self.assertEqual(status["states"].get("acknowledged", 0), 0)
+
+            acknowledged_plan("retention-boundary", acknowledged_at=950.0, owner="boundary")
+            boundary_status, boundary_payload = repository.status(retention_seconds=50.0)
+            self.assertTrue(boundary_status.ok)
+            self.assertEqual(boundary_payload["retention"]["eligible"], 1)
+            self.assertEqual(repository.prune_acknowledged(retention_seconds=50.0).removed, 1)
+
+            acknowledged_plan("retention-concurrent", acknowledged_at=900.0, owner="concurrent")
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                status_future = pool.submit(repository.status, retention_seconds=50.0)
+                prune_future = pool.submit(repository.prune_acknowledged, retention_seconds=50.0, limit=10)
+                concurrent_status, concurrent_payload = status_future.result(timeout=5)
+                concurrent_prune = prune_future.result(timeout=5)
+            self.assertTrue(concurrent_status.ok)
+            self.assertIsInstance(concurrent_payload, dict)
+            self.assertTrue(concurrent_prune.ok)
+            self.assertEqual(concurrent_prune.removed, 1)
+
+            interrupted = acknowledged_plan("retention-interrupted", acknowledged_at=900.0, owner="interrupted")
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "CREATE TRIGGER reject_outbox_delete BEFORE DELETE ON lifecycle_outbox "
+                    "BEGIN SELECT RAISE(ABORT, 'simulated interrupted cleanup'); END"
+                )
+            interrupted_result = repository.prune_acknowledged(retention_seconds=50.0, limit=10)
+            self.assertFalse(interrupted_result.ok)
+            retained_status, retained_payload = repository.status(retention_seconds=50.0)
+            self.assertTrue(retained_status.ok)
+            self.assertEqual(retained_payload["retention"]["acknowledged"], 1)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute("DROP TRIGGER reject_outbox_delete")
+            recovered = repository.opportunistic_housekeeping(
+                retention_seconds=50.0, interval_seconds=0.0, limit=1, checkpoint=False
+            )
+            self.assertTrue(recovered.ok)
+            self.assertEqual(recovered.removed, 1)
+            with sqlite3.connect(repository.path) as connection:
+                remaining = {row[0] for row in connection.execute("SELECT intent_id FROM lifecycle_outbox")}
+            self.assertNotIn(interrupted, remaining)
+            cooldown = repository.opportunistic_housekeeping(retention_seconds=50.0, checkpoint=False)
+            self.assertTrue(cooldown.skipped)
+            self.assertEqual(cooldown.reason, "cooldown")
+
     def test_repository_rejects_invalid_claim_and_transition_arguments(self) -> None:
         with TemporaryDirectory() as directory:
             repository = _LifecycleOutboxRepository(Path(directory))
@@ -262,6 +848,69 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                 OutboxResultKind.REJECTED,
             )
 
+    def test_batch_claim_quarantines_exhausted_and_inconsistent_rows(self) -> None:
+        with TemporaryDirectory() as directory:
+            now = [1_000.0]
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: now[0])
+
+            exhausted = self._plan("claim-exhausted", max_attempts=1)
+            self.assertTrue(repository.enqueue(
+                exhausted, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            first, records = repository.claim_batch(owner="crashed", lease_seconds=5, limit=1)
+            self.assertTrue(first.ok)
+            self.assertEqual((len(records), records[0].attempts), (1, 1))
+            now[0] += 6
+            recovered, records = repository.claim_batch(owner="recovery", lease_seconds=5, limit=1)
+            self.assertTrue(recovered.ok)
+            self.assertEqual(records, ())
+            status_result, status = repository.status()
+            self.assertTrue(status_result.ok)
+            self.assertEqual(status["states"].get("quarantined"), 1)
+            exhausted_row = next(row for row in status["records"] if row["intent_id"] == exhausted.identity.idempotency_key)
+            self.assertEqual(exhausted_row["failure"]["code"], "retry_exhausted")
+
+            inconsistent = self._plan("claim-inconsistent")
+            self.assertTrue(repository.enqueue(
+                inconsistent, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_outbox SET processing_state='retry', lifecycle_stage='manual_review' "
+                    "WHERE intent_id=?",
+                    (inconsistent.identity.idempotency_key,),
+                )
+            claimed, records = repository.claim_batch(owner="poison", lease_seconds=5, limit=1)
+            self.assertTrue(claimed.ok)
+            self.assertEqual(records, ())
+            status_result, status = repository.status()
+            self.assertTrue(status_result.ok)
+            self.assertEqual(status["states"].get("quarantined"), 2)
+            inconsistent_row = next(
+                row for row in status["records"] if row["intent_id"] == inconsistent.identity.idempotency_key
+            )
+            self.assertIn("active outbox state", inconsistent_row["failure"]["message"])
+
+    def test_exact_claim_rejects_expired_lease_after_retry_budget_exhaustion(self) -> None:
+        with TemporaryDirectory() as directory:
+            now = [1_000.0]
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: now[0])
+            plan = self._plan("claim-single-exhausted", max_attempts=1)
+            intent_id = plan.identity.idempotency_key
+            self.assertTrue(repository.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            first = repository.claim_intent(owner="first", lease_seconds=5, intent_id=intent_id)
+            self.assertEqual(first.kind, OutboxResultKind.APPLIED)
+            assert first.record is not None
+            self.assertEqual(first.record.attempts, 1)
+            now[0] += 6
+
+            recovered = repository.claim_intent(owner="second", lease_seconds=5, intent_id=intent_id)
+
+            self.assertEqual(recovered.kind, OutboxResultKind.REJECTED)
+            self.assertIn("retry budget exhausted", recovered.reason)
+
     def test_status_on_missing_state_is_non_mutating(self) -> None:
         with TemporaryDirectory() as directory:
             result, payload = _LifecycleOutboxRepository(Path(directory)).status()
@@ -269,10 +918,170 @@ class LifecycleOutboxContractTests(unittest.TestCase):
             self.assertEqual(payload["schema_version"], 2)
             self.assertFalse((Path(directory) / ".nautical-state").exists())
 
+    def test_status_filters_and_orders_records_by_state_then_update_time_and_id(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 100.0)
+            intents = {}
+            for state in ("ready", "retry", "claimed", "quarantined", "manual_review"):
+                plan = self._plan(f"status-{state}")
+                intent_id = plan.identity.idempotency_key
+                intents[state] = intent_id
+                self.assertTrue(repository.enqueue(
+                    plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+                ).ok)
+                with sqlite3.connect(repository.path) as connection:
+                    connection.execute(
+                        "UPDATE lifecycle_outbox SET processing_state=?, lifecycle_stage=?, updated_at=?, "
+                        "lease_owner=?, lease_expires_at=? WHERE intent_id=?",
+                        (state, "finalized" if state == "manual_review" else "planned", 10.0,
+                         "owner" if state == "claimed" else "", 200.0 if state == "claimed" else 0.0, intent_id),
+                    )
+            tied_ready = self._plan("status-ready-tie")
+            tied_ready_id = tied_ready.identity.idempotency_key
+            self.assertTrue(repository.enqueue(
+                tied_ready, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_outbox SET updated_at=10.0 WHERE intent_id=?", (tied_ready_id,)
+                )
+
+            result, payload = repository.status(limit=2)
+            self.assertTrue(result.ok)
+            self.assertEqual(
+                [(row["state"], row["intent_id"]) for row in payload["records"]],
+                [("manual_review", intents["manual_review"]), ("quarantined", intents["quarantined"])],
+            )
+            filtered, filtered_payload = repository.status(intent_id=intents["retry"])
+            self.assertTrue(filtered.ok)
+            self.assertEqual([row["intent_id"] for row in filtered_payload["records"]], [intents["retry"]])
+            all_result, all_payload = repository.status(limit=10)
+            self.assertTrue(all_result.ok)
+            self.assertEqual(
+                [row["intent_id"] for row in all_payload["records"][-2:]],
+                sorted((intents["ready"], tied_ready_id)),
+            )
+
+    def test_snapshot_is_sorted_and_rejects_lifecycle_and_integrity_poison(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            plans = (self._plan("snapshot-z"), self._plan("snapshot-a"))
+            for plan in plans:
+                repository.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            result, records = repository.snapshot_records()
+            self.assertTrue(result.ok)
+            self.assertEqual(
+                [record.intent_id for record in records],
+                sorted(plan.identity.idempotency_key for plan in plans),
+            )
+
+        for poison_kind in ("lifecycle", "integrity"):
+            with self.subTest(poison_kind=poison_kind), TemporaryDirectory() as directory:
+                repository = _LifecycleOutboxRepository(Path(directory))
+                plans = (self._plan(f"snapshot-healthy-{poison_kind}"), self._plan(f"snapshot-poison-{poison_kind}"))
+                for plan in plans:
+                    repository.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+                poison_id = plans[1].identity.idempotency_key
+                with sqlite3.connect(repository.path) as connection:
+                    if poison_kind == "integrity":
+                        connection.execute(
+                            "UPDATE lifecycle_outbox SET work_kind='integrity', plan_json='{' WHERE intent_id=?",
+                            (poison_id,),
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE lifecycle_outbox SET plan_json='{' WHERE intent_id=?", (poison_id,)
+                        )
+                result, records = repository.snapshot_records()
+                self.assertEqual(result.kind, OutboxResultKind.REJECTED)
+                self.assertEqual(records, ())
+
+    def test_status_and_snapshot_reject_newer_schema_and_retry_on_locked_database(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            plan = self._plan("read-errors")
+            repository.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION + 1}")
+            status_result, _ = repository.status()
+            snapshot_result, snapshot = repository.snapshot_records()
+            self.assertEqual(status_result.kind, OutboxResultKind.REJECTED)
+            self.assertEqual(snapshot_result.kind, OutboxResultKind.REJECTED)
+            self.assertEqual(snapshot, ())
+
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION}")
+            from unittest.mock import patch
+
+            with patch("nautical_core.lifecycle.outbox.sqlite3.connect", side_effect=sqlite3.OperationalError("database is locked")):
+                status_result, _ = repository.status()
+                snapshot_result, snapshot = repository.snapshot_records()
+            self.assertEqual((status_result.kind, status_result.lock_busy), (OutboxResultKind.RETRYABLE, True))
+            self.assertEqual((snapshot_result.kind, snapshot_result.lock_busy), (OutboxResultKind.RETRYABLE, True))
+            self.assertEqual(snapshot, ())
+
+    def test_housekeeping_respects_cooldown_bounds_and_preserves_non_acknowledged_rows(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory), clock=lambda: 1_000.0)
+            states = ("ready", "retry", "claimed", "manual_review", "quarantined", "acknowledged")
+            intents = {}
+            for index, state in enumerate(states):
+                plan = self._plan(f"housekeeping-{state}")
+                intent_id = plan.identity.idempotency_key
+                intents[state] = intent_id
+                repository.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+                with sqlite3.connect(repository.path) as connection:
+                    connection.execute(
+                        "UPDATE lifecycle_outbox SET processing_state=?, acknowledged_at=?, updated_at=?, "
+                        "lifecycle_stage=?, lease_owner=?, lease_expires_at=? WHERE intent_id=?",
+                        (state, 1.0 if state == "acknowledged" else 0.0, float(index),
+                         "finalized" if state == "acknowledged" else "planned",
+                         "owner" if state == "claimed" else "", 2_000.0 if state == "claimed" else 0.0,
+                         intent_id),
+                    )
+                if state == "ready":
+                    no_work = repository.opportunistic_housekeeping(
+                        retention_seconds=10.0, interval_seconds=100.0, size_threshold_bytes=2**31
+                    )
+                    self.assertTrue(no_work.skipped)
+                    self.assertEqual(no_work.reason, "no_work")
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "INSERT INTO lifecycle_maintenance(key, value) VALUES('housekeeping_last_attempt', 999.0) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+                )
+
+            cooldown = repository.opportunistic_housekeeping(
+                retention_seconds=10.0, interval_seconds=100.0, size_threshold_bytes=0, limit=1
+            )
+            self.assertTrue(cooldown.skipped)
+            self.assertEqual(cooldown.reason, "cooldown")
+
+            with sqlite3.connect(repository.path) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_maintenance SET value=0 WHERE key='housekeeping_last_attempt'"
+                )
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT processing_state, acknowledged_at FROM lifecycle_outbox WHERE intent_id=?",
+                        (intents["acknowledged"],),
+                    ).fetchone(),
+                    ("acknowledged", 1.0),
+                )
+            result = repository.opportunistic_housekeeping(
+                retention_seconds=10.0, interval_seconds=0.0, size_threshold_bytes=0, limit=1, checkpoint=True
+            )
+            self.assertTrue(result.ok)
+            self.assertEqual(result.removed, 1, result)
+            self.assertIn(result.checkpoint, {"completed", "unavailable"})
+            with sqlite3.connect(repository.path) as connection:
+                remaining = {row[0] for row in connection.execute("SELECT intent_id FROM lifecycle_outbox")}
+            self.assertEqual(remaining, {intents[state] for state in states if state != "acknowledged"})
+
     def test_outbox_transaction_boundary_has_no_taskwarrior_dependency(self) -> None:
         import ast
 
-        source = Path("nautical_core/lifecycle_outbox.py").read_text(encoding="utf-8")
+        source = Path("nautical_core/lifecycle/outbox.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = [
             alias.name
@@ -288,11 +1097,86 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         ]
         self.assertFalse(any("taskwarrior" in name.lower() for name in imports))
 
-    def test_claim_lease_port_exposes_only_cas_operations(self) -> None:
-        from nautical_core.lifecycle_outbox_claims import RepositoryClaimLeasePort
+    def test_lifecycle_mutation_gateway_runs_outside_sqlite_transaction(self) -> None:
+        from nautical_core.integration_models import (
+            MutationOperation,
+            MutationOutcome,
+            MutationOutcomeKind,
+            MutationPostcondition,
+        )
+        from nautical_core.lifecycle.application import (
+            LifecycleApplicationOutcomeKind,
+            LifecycleApplicationService,
+        )
+        from tests.support.lifecycle_execution import LifecycleExecutionFixture
 
         with TemporaryDirectory() as directory:
-            port = RepositoryClaimLeasePort(_LifecycleOutboxRepository(Path(directory)))
+            repository = _LifecycleOutboxRepository(Path(directory))
+
+            class MutationGateway:
+                def __init__(self) -> None:
+                    self.operations: list[MutationOperation] = []
+
+                def apply(self, request):
+                    connection = repository._session_conn
+                    self.assert_transaction_closed(connection)
+                    self.operations.append(request.operation)
+                    postcondition = {
+                        MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
+                        MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
+                    }[request.operation]
+                    return MutationOutcome(
+                        request.operation,
+                        MutationOutcomeKind.APPLIED,
+                        request.guard,
+                        (postcondition,),
+                    )
+
+                @staticmethod
+                def assert_transaction_closed(connection) -> None:
+                    if connection is None or connection.in_transaction:
+                        raise AssertionError("Taskwarrior mutation ran inside an outbox transaction")
+
+                def compensate_imported_child(self, _request):
+                    raise AssertionError("successful lifecycle execution must not compensate")
+
+            gateway = MutationGateway()
+            execution = LifecycleExecutionFixture(gateway)
+            service = LifecycleApplicationService(
+                unit_of_work=SimpleNamespace(mutation_epoch=0),
+                mutations=gateway,
+                execution=execution,
+                outbox=repository,
+                owner="transaction-boundary",
+            )
+            plan = self._plan("transaction-boundary")
+            self.assertTrue(repository.enqueue(
+                plan, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            ).ok)
+
+            result = service.drain(
+                limit=1,
+                configuration_fingerprint="cfg",
+                schedule_fingerprint="sch",
+            )
+
+            self.assertTrue(result.claim.ok)
+            self.assertEqual(len(result.outcomes), 1)
+            self.assertIs(result.outcomes[0].kind, LifecycleApplicationOutcomeKind.APPLIED)
+            self.assertEqual(
+                gateway.operations,
+                [MutationOperation.CHILD_IMPORT, MutationOperation.PARENT_LINK],
+            )
+            self.assertIsNone(repository._session_conn)
+            status, payload = repository.status()
+            self.assertTrue(status.ok)
+            self.assertEqual(payload["states"].get("acknowledged"), 1)
+
+    def test_claim_lease_port_exposes_only_cas_operations(self) -> None:
+        from nautical_core.lifecycle.outbox_claims import LifecycleOutboxClaimPort
+
+        with TemporaryDirectory() as directory:
+            port: LifecycleOutboxClaimPort = _LifecycleOutboxRepository(Path(directory))
             self.assertEqual(
                 port.claim_batch(owner="", lease_seconds=0, limit=0)[0].kind,
                 OutboxResultKind.REJECTED,
@@ -334,7 +1218,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         )
 
     def test_batch_progress_reporter_accounts_action_and_terminal_work(self) -> None:
-        from nautical_core.lifecycle_application import _BatchProgressReporter
+        from nautical_core.lifecycle.application import _BatchProgressReporter
 
         events = []
         reporter = _BatchProgressReporter(
@@ -360,7 +1244,7 @@ class LifecycleOutboxContractTests(unittest.TestCase):
         self.assertEqual(events[-1].completed, 6)
 
     def test_batch_persistence_coordinator_handles_success_and_missing_rows(self) -> None:
-        from nautical_core.lifecycle_application import _BatchPersistenceCoordinator
+        from nautical_core.lifecycle.application import _BatchPersistenceCoordinator
 
         class Outbox:
             def renew_leases(self, **_kwargs):

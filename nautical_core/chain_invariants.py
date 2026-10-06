@@ -17,8 +17,8 @@ from .chain_integrity_models import (
     ReferenceState,
     SnapshotCoverage,
 )
-from .lifecycle_models import ExecutionStage, recurrence_fingerprint
-from .lifecycle_outbox import LifecycleOutboxRecord, OutboxProcessingState
+from .lifecycle.models import ExecutionStage, recurrence_fingerprint
+from .lifecycle.outbox import LifecycleOutboxRecord, OutboxProcessingState
 
 
 InvariantEvaluator = Callable[[ChainGraph], tuple[IntegrityFinding, ...]]

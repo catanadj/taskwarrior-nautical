@@ -112,6 +112,95 @@ class SchedulerRuntimeDependencies:
     intersection_guard_steps: int
 
 
+@dataclass(frozen=True, slots=True)
+class SchedulerMonthlyBinding:
+    """Bind monthly expansion and interval alignment operations."""
+
+    monthly_support: Any
+    with_business_calendar: Callable[..., Any]
+    expand_monthly_cached: SchedulerCallback
+
+    def month_doms_safe(self, spec: Any, year: Any, month: Any, business_calendar: Any = None) -> Any:
+        return self.monthly_support.month_doms_safe(
+            spec,
+            year,
+            month,
+            expand_monthly_cached=self.with_business_calendar(
+                self.expand_monthly_cached, business_calendar
+            ),
+        )
+
+    def month_has_hit(self, spec: Any, year: Any, month: Any, business_calendar: Any = None) -> Any:
+        return self.monthly_support.month_has_hit(
+            spec,
+            year,
+            month,
+            month_doms_safe=self.with_business_calendar(self.month_doms_safe, business_calendar),
+        )
+
+    def first_hit_after_probe_in_month(
+        self, spec: Any, year: Any, month: Any, probe: Any, business_calendar: Any = None
+    ) -> Any:
+        return self.monthly_support.first_hit_after_probe_in_month(
+            spec,
+            year,
+            month,
+            probe,
+            month_doms_safe=self.with_business_calendar(self.month_doms_safe, business_calendar),
+        )
+
+    def next_valid_month_on_or_after(
+        self, spec: Any, year: Any, month: Any, business_calendar: Any = None
+    ) -> Any:
+        return self.monthly_support.next_valid_month_on_or_after(
+            spec,
+            year,
+            month,
+            month_has_hit=self.with_business_calendar(self.month_has_hit, business_calendar),
+        )
+
+    def advance_k_valid_months(
+        self, spec: Any, start_y: Any, start_m: Any, k: Any, business_calendar: Any = None
+    ) -> Any:
+        return self.monthly_support.advance_k_valid_months(
+            spec,
+            start_y,
+            start_m,
+            k,
+            next_valid_month_on_or_after=self.with_business_calendar(
+                self.next_valid_month_on_or_after, business_calendar
+            ),
+        )
+
+    def monthly_align_base_for_interval(
+        self,
+        spec: Any,
+        base: Any,
+        probe: Any,
+        seed: Any,
+        ival: Any,
+        business_calendar: Any = None,
+    ) -> Any:
+        return self.monthly_support.monthly_align_base_for_interval(
+            spec,
+            base,
+            probe,
+            seed,
+            ival,
+            month_has_hit=self.with_business_calendar(self.month_has_hit, business_calendar),
+            next_valid_month_on_or_after=self.with_business_calendar(
+                self.next_valid_month_on_or_after, business_calendar
+            ),
+            first_hit_after_probe_in_month=self.with_business_calendar(
+                self.first_hit_after_probe_in_month, business_calendar
+            ),
+            advance_k_valid_months=self.with_business_calendar(
+                self.advance_k_valid_months, business_calendar
+            ),
+            month_doms_safe=self.with_business_calendar(self.month_doms_safe, business_calendar),
+        )
+
+
 def _apply_day_offset_impl(
     day: Any,
     mods: Any,
@@ -555,6 +644,12 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
+    monthly_binding = SchedulerMonthlyBinding(
+        monthly_support=deps["_monthly_support"],
+        with_business_calendar=deps["_with_business_calendar"],
+        expand_monthly_cached=expand_monthly_cached_impl,
+    )
+
     def roll_apply_impl(dt: Any, mods: Any, business_calendar: Any = None) -> Any:
         business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return deps["_schedule_utils"].roll_apply(
@@ -564,76 +659,12 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             business_calendar=business_calendar,
         )
 
-    def month_doms_safe(spec: Any, year: Any, month: Any, business_calendar: Any = None) -> Any:
-        return deps["_monthly_support"].month_doms_safe(
-            spec,
-            year,
-            month,
-            expand_monthly_cached=deps["_with_business_calendar"](
-                expand_monthly_cached_impl,
-                business_calendar,
-            ),
-        )
-
-    def month_has_hit(spec: Any, year: Any, month: Any, business_calendar: Any = None) -> Any:
-        return deps["_monthly_support"].month_has_hit(
-            spec,
-            year,
-            month,
-            month_doms_safe=deps["_with_business_calendar"](month_doms_safe, business_calendar),
-        )
-
-    def first_hit_after_probe_in_month(spec: Any, year: Any, month: Any, probe: Any, business_calendar: Any = None) -> Any:
-        return deps["_monthly_support"].first_hit_after_probe_in_month(
-            spec,
-            year,
-            month,
-            probe,
-            month_doms_safe=deps["_with_business_calendar"](month_doms_safe, business_calendar),
-        )
-
-    def next_valid_month_on_or_after(spec: Any, year: Any, month: Any, business_calendar: Any = None) -> Any:
-        return deps["_monthly_support"].next_valid_month_on_or_after(
-            spec,
-            year,
-            month,
-            month_has_hit=deps["_with_business_calendar"](month_has_hit, business_calendar),
-        )
-
-    def advance_k_valid_months(spec: Any, start_y: Any, start_m: Any, k: Any, business_calendar: Any = None) -> Any:
-        return deps["_monthly_support"].advance_k_valid_months(
-            spec,
-            start_y,
-            start_m,
-            k,
-            next_valid_month_on_or_after=deps["_with_business_calendar"](
-                next_valid_month_on_or_after,
-                business_calendar,
-            ),
-        )
-
-    def monthly_align_base_for_interval(spec: Any, base: Any, probe: Any, seed: Any, ival: Any, business_calendar: Any = None) -> Any:
-        return deps["_monthly_support"].monthly_align_base_for_interval(
-            spec,
-            base,
-            probe,
-            seed,
-            ival,
-            month_has_hit=deps["_with_business_calendar"](month_has_hit, business_calendar),
-            next_valid_month_on_or_after=deps["_with_business_calendar"](
-                next_valid_month_on_or_after,
-                business_calendar,
-            ),
-            first_hit_after_probe_in_month=deps["_with_business_calendar"](
-                first_hit_after_probe_in_month,
-                business_calendar,
-            ),
-            advance_k_valid_months=deps["_with_business_calendar"](
-                advance_k_valid_months,
-                business_calendar,
-            ),
-            month_doms_safe=deps["_with_business_calendar"](month_doms_safe, business_calendar),
-        )
+    month_doms_safe = monthly_binding.month_doms_safe
+    month_has_hit = monthly_binding.month_has_hit
+    first_hit_after_probe_in_month = monthly_binding.first_hit_after_probe_in_month
+    next_valid_month_on_or_after = monthly_binding.next_valid_month_on_or_after
+    advance_k_valid_months = monthly_binding.advance_k_valid_months
+    monthly_align_base_for_interval = monthly_binding.monthly_align_base_for_interval
 
     @lru_cache(maxsize=32)
     def selection_inner_matcher(business_calendar: Any) -> Any:

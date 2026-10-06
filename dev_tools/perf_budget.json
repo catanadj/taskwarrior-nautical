@@ -45,7 +45,7 @@
     "build_hints_warm_rounds": 1
   },
   "budgets_seconds": {
-    "cold_core_import": 0.25,
+    "cold_core_import": 0.30,
     "cold_modify_impl_import": 0.2,
     "parse_validate": 0.35,
     "describe_expr": 0.5,

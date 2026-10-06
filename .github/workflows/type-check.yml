@@ -120,7 +120,11 @@ jobs:
           NAUTICAL_SUBPROCESS_COVERAGE_DIR: ${{ runner.temp }}/nautical-subprocess-coverage
         run: |
           if [ -d "$NAUTICAL_SUBPROCESS_COVERAGE_DIR" ]; then
-            python3 -m coverage combine --append "$NAUTICAL_SUBPROCESS_COVERAGE_DIR"
+            coverage_prefix="${COVERAGE_FILE##*/}"
+            coverage_files=("$NAUTICAL_SUBPROCESS_COVERAGE_DIR/${coverage_prefix}".*)
+            if [ -e "${coverage_files[0]}" ]; then
+              python3 -m coverage combine --append "${coverage_files[@]}"
+            fi
           fi
 
       - name: Enforce branch-coverage floor and write XML report

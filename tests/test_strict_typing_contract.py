@@ -27,3 +27,12 @@ class StrictTypingContractTests(unittest.TestCase):
         self.assertIsNotNone(match, "CI must enforce a branch-coverage threshold")
         assert match is not None
         self.assertGreaterEqual(int(match.group(1)), 75)
+
+    def test_ci_combines_subprocess_files_with_the_configured_coverage_basename(self) -> None:
+        workflow = (self.root / ".github" / "workflows" / "type-check.yml").read_text(encoding="utf-8")
+        combine = workflow.split("- name: Combine hook subprocess coverage", 1)[1].split(
+            "- name: Enforce branch-coverage floor", 1
+        )[0]
+        self.assertIn('coverage_prefix="${COVERAGE_FILE##*/}"', combine)
+        self.assertIn('"$NAUTICAL_SUBPROCESS_COVERAGE_DIR/${coverage_prefix}".*', combine)
+        self.assertIn('coverage combine --append "${coverage_files[@]}"', combine)

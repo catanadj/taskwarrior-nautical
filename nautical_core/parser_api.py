@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from typing import Any, Callable
 from .api_bindings import ApiBinding, core_namespace
 
 from .core_context import CoreContext, ParserDependencies, parser_dependencies
+from . import cache_facade
 
 
 @dataclass(frozen=True, slots=True)
@@ -631,9 +633,24 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         key = deps["_unwrap_quotes"](s or "").strip()
         if not key:
             return []
-        return deps["_clone_dnf"](
+        result = deps["_clone_dnf"](
             parse_anchor_expr_to_dnf_cached_obj(key, deps["_yearfmt"]())
         )
+        if os.environ.get("NAUTICAL_CLEAR_CACHES") == "1" and module is not None:
+            cache_facade.clear_all(
+                getattr(module, "_CACHE_LOAD_MEM"),
+                (
+                    getattr(module, "_acf_api")._normalize_spec_for_acf_cached,
+                    getattr(module, "_acf_api")._year_pair_cached,
+                    getattr(module, "_parser_support_api")._parse_y_token_cached,
+                    getattr(module, "_scheduler_api").expand_monthly_cached,
+                    getattr(module, "_scheduler_api").expand_weekly_cached,
+                    getattr(module, "_cache_api")._cache_key_for_task_cached,
+                ),
+                position_selection=getattr(module, "_position_selection"),
+                selection_matcher=getattr(module, "_scheduler_api")._selection_inner_matcher,
+            )
+        return result
 
     return ApiBinding.from_kwargs(
         build_acf=lambda expr: deps["_build_acf_impl"](expr),

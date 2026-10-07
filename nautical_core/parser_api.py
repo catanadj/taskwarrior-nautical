@@ -319,6 +319,7 @@ def _build_parser_validation_dependencies(
     context: CoreContext | None,
     position_selection: Any,
     validate_yearly_token_format: Callable[..., Any],
+    parse_cached: Callable[..., Any],
 ) -> ParserValidationDependencies:
     """Assemble the strict-validation collaborators at one owner seam."""
     parse_error = deps.get("ParseError")
@@ -333,7 +334,7 @@ def _build_parser_validation_dependencies(
             context.import_sibling("strict_validation")
             if context is not None else deps["_strict_validation"]
         ),
-        parse_cached=deps["_parse_anchor_expr_to_dnf_cached_impl"],
+        parse_cached=parse_cached,
         parse_error=parse_error,
         is_atom_like=deps["_is_atom_like"],
         validate_weekly_spec=deps["_validate_weekly_spec"],
@@ -358,6 +359,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     parser_atoms = context.import_sibling("parsing.parser_atoms") if context is not None else deps["_parser_atoms"]
     parser_dnf = context.import_sibling("parsing.parser_dnf") if context is not None else deps["_parser_dnf"]
     parser_frontend = context.import_sibling("parsing.parser_frontend") if context is not None else deps["_parser_frontend"]
+    parser_models = context.import_sibling("parsing.parser_models") if context is not None else deps["_import_sibling"]("parsing.parser_models")
+    and_term_unsatisfiable = deps.get("AndTermUnsatisfiable")
+    if and_term_unsatisfiable is None:
+        and_term_unsatisfiable = getattr(parser_models, "AndTermUnsatisfiable", deps.get("ParseError", Exception))
     quarter_binding_state: list[Any | None] = [None]
     expansion_binding_state: list[Any | None] = [None]
     position_selection = context.import_sibling("position_selection") if context is not None else deps["_position_selection"]
@@ -373,6 +378,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                 context=context,
                 position_selection=position_selection,
                 validate_yearly_token_format=validate_yearly_token_format,
+                parse_cached=parse_anchor_expr_to_dnf_cached_bound,
             )
             validation_deps_state[0] = bound
         return bound
@@ -509,20 +515,20 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         deps["_satisfiability"].quick_weekly_and_check(
             term,
             weekday_set_from_weekly_atom=weekday_set_from_weekly_atom,
-            and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
+            and_term_unsatisfiable_cls=and_term_unsatisfiable,
         )
 
     def quick_yearly_and_check(term: list[dict]) -> None:
         deps["_satisfiability"].quick_yearly_and_check(
             term,
             md_pairs_from_yearly_spec=md_pairs_from_yearly_spec,
-            and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
+            and_term_unsatisfiable_cls=and_term_unsatisfiable,
         )
 
     def quick_moon_and_check(term: list[dict]) -> None:
         deps["_satisfiability"].quick_moon_and_check(
             term,
-            and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
+            and_term_unsatisfiable_cls=and_term_unsatisfiable,
         )
 
     def term_has_any_match_within(term: list[dict], start: Any, seed: Any, years: int = 8) -> bool:
@@ -567,7 +573,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                             if scope == "season"
                             else deps["_season_support"].season_boundary_description(scope)
                         )
-                        raise deps["AndTermUnsatisfiable"](
+                        raise and_term_unsatisfiable(
                             f"@in-{scope} candidate expression has no dates within its {mode} "
                             f"{boundary} window."
                         )
@@ -586,7 +592,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             term_has_any_match_within=term_has_any_match_within,
             normalize_spec_for_acf=deps["_normalize_spec_for_acf"],
             month_from_alias=deps["_month_from_alias"],
-            and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
+            and_term_unsatisfiable_cls=and_term_unsatisfiable,
         )
 
     def parse_anchor_expr_to_dnf_bound(s: str) -> Any:
@@ -607,6 +613,27 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             resolve_presets=resolve_anchor_presets_impl,
         )
         return _parse_anchor_expr_to_dnf_impl(s, owner_deps)
+
+    ttl_lru_cache = deps.get("_ttl_lru_cache")
+    if ttl_lru_cache is None:
+        def ttl_lru_cache(*, maxsize: int = 256) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+            del maxsize
+            return lambda fn: fn
+
+    @ttl_lru_cache(maxsize=256)
+    def parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str) -> Any:
+        del fmt
+        return parse_anchor_expr_to_dnf_bound(s)
+
+    def parse_anchor_expr_to_dnf_cached_bound(s: str) -> Any:
+        if not s:
+            return []
+        key = deps["_unwrap_quotes"](s or "").strip()
+        if not key:
+            return []
+        return deps["_clone_dnf"](
+            parse_anchor_expr_to_dnf_cached_obj(key, deps["_yearfmt"]())
+        )
 
     return ApiBinding.from_kwargs(
         build_acf=lambda expr: deps["_build_acf_impl"](expr),
@@ -640,7 +667,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         _validate_and_terms_satisfiable=validate_and_terms_satisfiable,
         resolve_anchor_presets=resolve_anchor_presets_impl,
         parse_anchor_expr_to_dnf=parse_anchor_expr_to_dnf_bound,
-        parse_anchor_expr_to_dnf_cached=lambda s: deps["_parse_anchor_expr_to_dnf_cached_impl"](s),
+        parse_anchor_expr_to_dnf_cached=parse_anchor_expr_to_dnf_cached_bound,
         validate_anchor_expr_strict=lambda expr: _validate_anchor_expr_strict_impl(validation_dependencies(), expr),
         normalize_anchor_input_to_dnf=lambda expr: _normalize_anchor_input_to_dnf(validation_dependencies(), expr),
         assert_dnf_structure_strict=lambda dnf: _assert_dnf_structure_strict(validation_dependencies(), dnf),

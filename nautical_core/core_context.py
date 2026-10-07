@@ -21,6 +21,7 @@ class ParserDependencies(TypedDict, total=False):
     _WEEKDAYS: Any
     _active_mod_keys: Callable[..., Any]
     _build_acf_impl: Callable[..., Any]
+    _clone_dnf: Callable[..., Any]
     _day_offset_re: Any
     _hhmm_re: Any
     _import_sibling: Callable[[str], Any]
@@ -43,6 +44,7 @@ class ParserDependencies(TypedDict, total=False):
     _split_csv_lower: Callable[..., Any]
     _split_csv_tokens: Callable[..., Any]
     _strict_validation: Any
+    _ttl_lru_cache: Callable[..., Any]
     _unwrap_quotes: Callable[..., Any]
     _validate_monthly_spec: Callable[..., Any]
     _validate_weekly_spec: Callable[..., Any]

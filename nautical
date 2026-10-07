@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-NAUTICAL_VERSION = "7.6.1"
+NAUTICAL_VERSION = "7.7.0"
 COMMANDS = {
     "install": ROOT / "nautical_core" / "tools" / "nautical_install.py",
     "runtime-clean": ROOT / "nautical_core" / "tools" / "nautical_runtime_cleanup.py",

@@ -136,6 +136,20 @@ class QueueStatusService:
             record for record in data.get("records", [])
             if record.get("state") in {"manual_review", "quarantined", "poison"}
         ]
+        if (
+            not records
+            and not intent_id
+            and not (resolved / "pending.data").exists()
+            and isinstance(runtime, IntegrationRuntime)
+        ):
+            return {
+                "schema": "nautical.lifecycle_outbox_review",
+                "version": 1,
+                "status": "empty",
+                "taskdata": str(resolved),
+                "intents": [],
+                "failure": None,
+            }
         if not records and task_binary and runtime is not None and (not intent_id or str(intent_id).startswith("integrity:")):
             integrity_records, integrity_failure = self._integrity_review_records(
                 resolved, task_binary, max(0, int(limit)), runtime

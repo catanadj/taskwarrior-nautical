@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import get_type_hints
 
@@ -14,6 +15,21 @@ class AddValidationContractTests(unittest.TestCase):
             get_type_hints(add_validation.safe_parse_duration)["core"],
             add_validation.DurationParserPort,
         )
+
+    def test_average_cp_is_accepted_as_a_bootstrap_duration(self) -> None:
+        import nautical_core.cp_parser as cp_parser
+
+        value, error = safe_parse_duration(
+            "avg(5)",
+            "cp",
+            core=SimpleNamespace(
+                parse_cp_sequence=cp_parser.parse_cp_sequence,
+                cp_sequence_parse_error=cp_parser.cp_sequence_parse_error,
+            ),
+            diag=lambda _message: None,
+        )
+        self.assertEqual(value, timedelta(days=1))
+        self.assertIsNone(error)
 
     def test_duration_parser_does_not_hide_internal_failures(self) -> None:
         def broken_parser(_value: object) -> None:

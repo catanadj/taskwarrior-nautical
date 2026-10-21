@@ -115,6 +115,20 @@ class CpSequenceContractTests(unittest.TestCase):
         self.assertEqual(jittered["base_raw"], "10d")
         self.assertEqual(jittered["spread_raw"], "2d")
 
+    def test_average_token_exposes_positive_history_window(self) -> None:
+        token = (cp_parser.parse_cp_sequence_tokens("avg(5)") or [None])[0]
+        self.assertIsNotNone(token)
+        self.assertEqual(token["kind"], "avg")
+        self.assertEqual(token["window"], 5)
+        self.assertEqual(cp_parser.cp_average_window("avg(5)"), 5)
+        self.assertEqual(cp_parser.parse_cp_sequence("avg(5)"), [timedelta(days=1)])
+
+    def test_average_token_rejects_non_positive_or_non_integer_windows(self) -> None:
+        for value in ("avg(0)", "avg(-1)", "avg(1.5)", "avg(foo)", "avg(1"):
+            with self.subTest(value=value):
+                self.assertIsNone(cp_parser.parse_cp_sequence_tokens(value))
+                self.assertIn("avg", cp_parser.cp_sequence_parse_error(value) or "")
+
     def test_link_selection_cycles_and_clamps_boundary_links(self) -> None:
         cp = "3d,20d,7d"
         expected = {

@@ -19,7 +19,7 @@ class OfflineKitTests(HookSubprocessFixture):
         astronomy = (root / "requirements-astronomy.txt").read_text(encoding="utf-8")
         self.assertNotIn("astral", base)
         self.assertIn("astral>=3.2,<4", astronomy)
-        self.assertIn("rich>=13.3.1,<14", base)
+        self.assertIn("rich>=13.3.1,<16", base)
         self.assertIn("prompt-toolkit>=3.0.36,<4", base)
         self.assertIn("python-dateutil>=2.8.2,<3", base)
 

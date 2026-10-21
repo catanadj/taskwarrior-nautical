@@ -31,6 +31,21 @@ class AddValidationContractTests(unittest.TestCase):
         self.assertEqual(value, timedelta(days=1))
         self.assertIsNone(error)
 
+    def test_median_cp_is_accepted_as_a_bootstrap_duration(self) -> None:
+        import nautical_core.cp_parser as cp_parser
+
+        value, error = safe_parse_duration(
+            "median(5)",
+            "cp",
+            core=SimpleNamespace(
+                parse_cp_sequence=cp_parser.parse_cp_sequence,
+                cp_sequence_parse_error=cp_parser.cp_sequence_parse_error,
+            ),
+            diag=lambda _message: None,
+        )
+        self.assertEqual(value, timedelta(days=1))
+        self.assertIsNone(error)
+
     def test_duration_parser_does_not_hide_internal_failures(self) -> None:
         def broken_parser(_value: object) -> None:
             raise RuntimeError("duration parser invariant failed")

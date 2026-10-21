@@ -32,7 +32,15 @@ class AverageCPSequenceToken(TypedDict):
     window: int
 
 
-CPSequenceToken: TypeAlias = FixedCPSequenceToken | RandomCPSequenceToken | AverageCPSequenceToken
+class MedianCPSequenceToken(TypedDict):
+    kind: Literal["median"]
+    raw: str
+    window: int
+
+
+CPSequenceToken: TypeAlias = (
+    FixedCPSequenceToken | RandomCPSequenceToken | AverageCPSequenceToken | MedianCPSequenceToken
+)
 
 
 def _is_random_cp_sequence_token(
@@ -64,6 +72,7 @@ _CP_RE = re.compile(
 _CP_TOKEN_RE = re.compile(r"(?P<sign>[+-]?)(?P<n>\d+)(?P<u>w|d|h|m|s)", re.I)
 _CP_RAND_RE = re.compile(r"^rand\((?P<lo>.+)\.\.(?P<hi>.+)\)$", re.I)
 _CP_AVG_RE = re.compile(r"^avg\((?P<window>\d+)\)$", re.I)
+_CP_MEDIAN_RE = re.compile(r"^median\((?P<window>\d+)\)$", re.I)
 _CP_JITTER_RE = re.compile(r"^(?P<base>.+)~(?P<spread>.+)$", re.I)
 _CP_REPEAT_RE = re.compile(r"^(?P<base>.+)\*(?P<count>\d+)$", re.I)
 _MAX_CP_SEQUENCE_ITEMS = 1000
@@ -156,6 +165,12 @@ def _cp_rand_granularity_seconds(lo: timedelta, hi: timedelta) -> int:
 
 def _parse_cp_token(part: str) -> CPSequenceToken | None:
     raw = str(part or "").strip()
+    median_match = _CP_MEDIAN_RE.fullmatch(raw)
+    if median_match is not None:
+        window = int(median_match.group("window"))
+        if window < 1:
+            return None
+        return {"kind": "median", "raw": raw, "window": window}
     average_match = _CP_AVG_RE.fullmatch(raw)
     if average_match is not None:
         window = int(average_match.group("window"))
@@ -219,6 +234,13 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     for idx, part in enumerate(parts, start=1):
         if not part:
             return f"empty duration at position {idx}"
+        median_match = _CP_MEDIAN_RE.fullmatch(part)
+        if median_match is not None:
+            if int(median_match.group("window")) < 1:
+                return f"invalid median cp window '{part}' at position {idx}: must be positive"
+            continue
+        if part.lower().startswith("median"):
+            return f"invalid median cp window '{part}' at position {idx}: expected median(<positive integer>)"
         average_match = _CP_AVG_RE.fullmatch(part)
         if average_match is not None:
             if int(average_match.group("window")) < 1:
@@ -291,6 +313,18 @@ def cp_average_window(cp: str) -> int | None:
     return window if isinstance(window, int) and window > 0 else None
 
 
+def cp_median_window(cp: str) -> int | None:
+    """Return the history window for a standalone ``median(x)`` CP value."""
+    tokens = parse_cp_sequence_tokens(cp)
+    if tokens is None or len(tokens) != 1:
+        return None
+    token = tokens[0]
+    if token.get("kind") != "median":
+        return None
+    window = token.get("window")
+    return window if isinstance(window, int) and window > 0 else None
+
+
 def _cp_rand_duration_for_token(
     token: RandomCPSequenceToken,
     *,
@@ -345,6 +379,8 @@ def cp_sequence_interval_for_token(
         # bootstrap period; chain generation replaces this with the rolling
         # history interval once completion data is available.
         return timedelta(days=1)
+    if token.get("kind") == "median":
+        return timedelta(days=1)
     return None
 
 
@@ -391,6 +427,7 @@ __all__ = (
     "cp_sequence_interval_for_token",
     "cp_sequence_parse_error",
     "cp_average_window",
+    "cp_median_window",
     "AverageCPSequenceToken",
     "parse_cp_duration",
     "parse_cp_sequence",

@@ -267,12 +267,14 @@ class ChainGenerationService:
         self,
         parent: NauticalTask,
         window: int,
+        *,
+        mode: str = "avg",
     ) -> tuple[timedelta, dict[str, Any]]:
         """Resolve a history-derived CP interval, failing closed on bad history."""
         link_no = self.core.coerce_int(parent.get("link"), 1)
         if link_no <= 1:
             return timedelta(days=1), {
-                "basis": f"end+cp:avg({window}) (bootstrap)",
+                "basis": f"end+cp:{mode}({window}) (bootstrap)",
                 "sample_count": 0,
                 "window": window,
             }
@@ -322,9 +324,17 @@ class ChainGenerationService:
                 raise ValueError("cp:avg history contains non-increasing completion times")
             intervals.append(interval)
         selected = intervals[-window:]
-        average_seconds = sum(item.total_seconds() for item in selected) / len(selected)
-        return timedelta(seconds=average_seconds), {
-            "basis": f"end+cp:avg({window}) (history)",
+        ordered_seconds = sorted(item.total_seconds() for item in selected)
+        middle = len(ordered_seconds) // 2
+        if mode == "median":
+            if len(ordered_seconds) % 2:
+                period_seconds = ordered_seconds[middle]
+            else:
+                period_seconds = (ordered_seconds[middle - 1] + ordered_seconds[middle]) / 2
+        else:
+            period_seconds = sum(ordered_seconds) / len(ordered_seconds)
+        return timedelta(seconds=period_seconds), {
+            "basis": f"end+cp:{mode}({window}) (history)",
             "sample_count": len(selected),
             "window": window,
         }
@@ -361,9 +371,10 @@ class ChainGenerationService:
         link_no = self.core.coerce_int(parent.get("link"), 1)
         seq_idx = (max(1, link_no) - 1) % len(tokens)
         average_metadata: dict[str, Any] = {}
-        if tokens[seq_idx].get("kind") == "avg":
+        if tokens[seq_idx].get("kind") in {"avg", "median"}:
             window = int(tokens[seq_idx].get("window") or 0)
-            interval, average_metadata = self._average_cp_interval(parent, window)
+            mode = str(tokens[seq_idx].get("kind") or "avg")
+            interval, average_metadata = self._average_cp_interval(parent, window, mode=mode)
         else:
             interval = self.core.cp_sequence_interval_for_token(
                 tokens[seq_idx],

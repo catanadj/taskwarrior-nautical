@@ -303,6 +303,56 @@ class ChainGenerationContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "adjacent"):
             service.compute_cp_child_due(parent)
 
+    def test_cp_median_uses_robust_latest_completion_intervals(self):
+        rows = tuple(
+            {
+                "chainID": "chain-a",
+                "link": link,
+                "status": "completed",
+                "end": end,
+            }
+            for link, end in (
+                (1, "2026-01-01T10:00:00Z"),
+                (2, "2026-01-03T10:00:00Z"),
+                (3, "2026-01-06T10:00:00Z"),
+                (4, "2026-01-16T10:00:00Z"),
+            )
+        )
+
+        class Repository:
+            def chain_snapshot(self, *_args, **_kwargs):
+                return Found(rows, "chainID:chain-a")
+
+        parent = _task(cp="median(5)", link=4, end="2026-01-16T10:00:00Z")
+        service = ChainGenerationService.from_core(_Core(), task_repository=Repository())
+
+        due, metadata = service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 1, 19, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "end+cp:median(5) (history)")
+        self.assertEqual(metadata["sample_count"], 3)
+
+    def test_cp_median_even_sample_count_uses_middle_interval_midpoint(self):
+        rows = tuple(
+            {"chainID": "chain-a", "link": link, "status": "completed", "end": end}
+            for link, end in (
+                (1, "2026-01-01T10:00:00Z"),
+                (2, "2026-01-03T10:00:00Z"),
+                (3, "2026-01-07T10:00:00Z"),
+            )
+        )
+
+        class Repository:
+            def chain_snapshot(self, *_args, **_kwargs):
+                return Found(rows, "chainID:chain-a")
+
+        parent = _task(cp="median(2)", link=3, end="2026-01-07T10:00:00Z")
+        service = ChainGenerationService.from_core(_Core(), task_repository=Repository())
+
+        due, _metadata = service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 1, 10, 9, tzinfo=timezone.utc))
+
     def test_cp_average_fails_closed_when_history_is_unavailable(self):
         class Repository:
             def chain_snapshot(self, *_args, **_kwargs):

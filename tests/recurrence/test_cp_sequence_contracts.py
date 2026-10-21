@@ -129,6 +129,20 @@ class CpSequenceContractTests(unittest.TestCase):
                 self.assertIsNone(cp_parser.parse_cp_sequence_tokens(value))
                 self.assertIn("avg", cp_parser.cp_sequence_parse_error(value) or "")
 
+    def test_median_token_exposes_positive_history_window(self) -> None:
+        token = (cp_parser.parse_cp_sequence_tokens("median(5)") or [None])[0]
+        self.assertIsNotNone(token)
+        self.assertEqual(token["kind"], "median")
+        self.assertEqual(token["window"], 5)
+        self.assertEqual(cp_parser.cp_median_window("median(5)"), 5)
+        self.assertEqual(cp_parser.parse_cp_sequence("median(5)"), [timedelta(days=1)])
+
+    def test_median_token_rejects_non_positive_or_non_integer_windows(self) -> None:
+        for value in ("median(0)", "median(-1)", "median(1.5)", "median(foo)", "median(1"):
+            with self.subTest(value=value):
+                self.assertIsNone(cp_parser.parse_cp_sequence_tokens(value))
+                self.assertIn("median", cp_parser.cp_sequence_parse_error(value) or "")
+
     def test_link_selection_cycles_and_clamps_boundary_links(self) -> None:
         cp = "3d,20d,7d"
         expected = {

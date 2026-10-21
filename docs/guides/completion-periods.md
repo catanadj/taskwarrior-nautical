@@ -36,6 +36,18 @@ completion and reconcile fail safely into their existing manual-review path.
 Both paths use the same resolver, so a repaired successor receives the same
 due as a normal completion.
 
+For a cadence that should ignore unusually long or short gaps, use
+`cp:median(x)`:
+
+```bash
+task add "Review the habit" cp:median(5)
+```
+
+The same bootstrap and history rules apply. The median of an odd number of
+intervals is the middle interval; an even-sized sample uses the midpoint of
+the two middle intervals. For example, intervals of `2d`, `3d`, and `18d`
+produce a median cadence of `3d`, while an average would be `7.67d`.
+
 ## Wall-clock and exact periods
 
 Multiples of 24 hours preserve the seed task's local due time. Thus `cp:2d`

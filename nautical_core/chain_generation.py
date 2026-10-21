@@ -294,7 +294,10 @@ class ChainGenerationService:
             status = str(self._row_value(mapping, "status") or "").strip().lower()
             if status != "completed":
                 continue
-            row_link = self.core.coerce_int(self._row_value(mapping, "link"), 0)
+            raw_link = self._row_value(mapping, "link")
+            row_link = self.core.coerce_int(raw_link, 0)
+            if row_link <= 0:
+                raise ValueError("cp:avg history has an invalid link")
             if row_link < 1 or row_link > link_no:
                 continue
             end_dt, error = self.parse_datetime(self._row_value(mapping, "end"))

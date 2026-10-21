@@ -5,4 +5,3 @@ coverage.xml
 site/
 .venv-docs/
 nautical_core/.nautical-cache/
-docs/superpowers/

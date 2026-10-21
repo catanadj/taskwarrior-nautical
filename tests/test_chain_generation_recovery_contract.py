@@ -13,7 +13,7 @@ import nautical_core.timezone_facade as timezone_facade
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
 from nautical_core.cp_parser import cp_sequence_interval_for_token, parse_cp_sequence_tokens
-from nautical_core.integration_models import MutationOperation
+from nautical_core.integration_models import Absent, Found, MutationOperation
 from nautical_core.occurrence_provider import Occurrence
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
@@ -244,6 +244,75 @@ class ChainGenerationContractTests(unittest.TestCase):
         due2, metadata2 = self.service.compute_cp_child_due(_task(link=2))
         self.assertEqual(due2, datetime(2026, 1, 4, 9, tzinfo=timezone.utc))
         self.assertEqual(metadata2["cp_sequence_step"], 2)
+
+    def test_cp_average_uses_one_day_bootstrap_without_history(self):
+        parent = _task(cp="avg(5)", due=None, end="2026-01-02T10:00:00Z")
+        service = ChainGenerationService.from_core(_Core())
+
+        due, metadata = service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 1, 3, 10, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "end+cp:avg(5) (bootstrap)")
+        self.assertEqual(metadata["sample_count"], 0)
+
+    def test_cp_average_uses_latest_adjacent_completed_intervals(self):
+        rows = tuple(
+            {
+                "chainID": "chain-a",
+                "link": link,
+                "status": "completed",
+                "end": end,
+            }
+            for link, end in (
+                (1, "2026-01-01T10:00:00Z"),
+                (2, "2026-01-04T10:00:00Z"),
+                (3, "2026-01-10T10:00:00Z"),
+            )
+        )
+
+        class Repository:
+            def chain_snapshot(self, *_args, **_kwargs):
+                return Found(rows, "chainID:chain-a")
+
+        parent = _task(cp="avg(5)", link=3, end="2026-01-10T10:00:00Z")
+        service = ChainGenerationService.from_core(_Core(), task_repository=Repository())
+
+        due, metadata = service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 1, 14, 22, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "end+cp:avg(5) (history)")
+        self.assertEqual(metadata["sample_count"], 2)
+        self.assertEqual(metadata["window"], 5)
+
+    def test_cp_average_rejects_non_adjacent_history_instead_of_guessing(self):
+        rows = tuple(
+            {"chainID": "chain-a", "link": link, "status": "completed", "end": end}
+            for link, end in (
+                (1, "2026-01-01T10:00:00Z"),
+                (3, "2026-01-10T10:00:00Z"),
+            )
+        )
+
+        class Repository:
+            def chain_snapshot(self, *_args, **_kwargs):
+                return Found(rows, "chainID:chain-a")
+
+        parent = _task(cp="avg(5)", link=3, end="2026-01-10T10:00:00Z")
+        service = ChainGenerationService.from_core(_Core(), task_repository=Repository())
+
+        with self.assertRaisesRegex(ValueError, "adjacent"):
+            service.compute_cp_child_due(parent)
+
+    def test_cp_average_fails_closed_when_history_is_unavailable(self):
+        class Repository:
+            def chain_snapshot(self, *_args, **_kwargs):
+                return Absent("chainID:chain-a", "history unavailable")
+
+        parent = _task(cp="avg(5)", link=2, end="2026-01-04T10:00:00Z")
+        service = ChainGenerationService.from_core(_Core(), task_repository=Repository())
+
+        with self.assertRaisesRegex(ValueError, "history"):
+            service.compute_cp_child_due(parent)
 
     def test_cp_generation_selects_middle_interval_and_preserves_wall_clock(self):
         parent = _task(

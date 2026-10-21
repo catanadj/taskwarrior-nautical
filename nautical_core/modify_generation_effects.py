@@ -33,6 +33,7 @@ class ChainGenerationServicePort(NativeUntilGenerationService, Protocol):
 
     core: object
     recurrence_update_udas: tuple[str, ...]
+    task_repository: object | None
 
     def parse_datetime(self, value: object) -> tuple[datetime | None, str | None]: ...
 
@@ -127,7 +128,10 @@ def chain_generation_service(ports: GenerationPorts) -> ChainGenerationServicePo
             debug_wait_sched=ports.debug_wait_sched,
             wait_sched_debug=ports.wait_sched_debug,
         )
+        service.task_repository = getattr(ports.state, "task_repository", None)
         ports.state.chain_generation_service = service
+    elif service.task_repository is not getattr(ports.state, "task_repository", None):
+        service.task_repository = getattr(ports.state, "task_repository", None)
     return service
 
 

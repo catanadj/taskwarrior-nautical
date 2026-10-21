@@ -12,6 +12,30 @@ task add "Equipment check" cp:28h due:today+12h
 Accepted period forms include short durations such as `90m`, `12d`, and `2w`,
 plus ISO 8601 durations such as `PT90M`, `P12D`, and `P2W`.
 
+## Rolling-average periods
+
+Use `cp:avg(x)` when the next interval should follow the task's observed
+completion cadence instead of a fixed duration. `x` is the maximum number of
+recent adjacent completion intervals to average:
+
+```bash
+task add "Review the habit" cp:avg(5)
+```
+
+If `due` is omitted, only this average mode is seeded at `now + 1 day`.
+Fixed periods continue to default to `entry + cp period`. The first completed
+link uses the one-day bootstrap. Once a predecessor and the completing link
+both have valid `end` timestamps, Nautical measures the elapsed time between
+adjacent links and averages up to the latest `x` intervals. The average is
+applied from the completing link's `end` timestamp, so it can include
+fractional days.
+
+History is read authoritatively by `chainID` and ordered by numeric `link`.
+Missing, malformed, duplicated, or non-adjacent history is never guessed;
+completion and reconcile fail safely into their existing manual-review path.
+Both paths use the same resolver, so a repaired successor receives the same
+due as a normal completion.
+
 ## Wall-clock and exact periods
 
 Multiples of 24 hours preserve the seed task's local due time. Thus `cp:2d`

@@ -9,8 +9,9 @@ recurrence decisions without importing one another's implementation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from collections import OrderedDict
+from collections.abc import Mapping
 import json
 import os
 import sys
@@ -130,6 +131,7 @@ class ChainGenerationService:
     recurrence_update_udas: tuple[str, ...] = ()
     debug_wait_sched: bool = False
     wait_sched_debug: MutableMapping[str, dict[str, Any]] | None = None
+    task_repository: Any | None = None
     datetime_parser: TaskDatetimeParser | None = None
     _evaluator_cache: OrderedDict[tuple[Any, ...], SchedulerService] = field(
         default_factory=OrderedDict,
@@ -155,6 +157,7 @@ class ChainGenerationService:
         recurrence_update_udas: tuple[str, ...] | list[str] = (),
         debug_wait_sched: bool = False,
         wait_sched_debug: MutableMapping[str, dict[str, Any]] | None = None,
+        task_repository: Any | None = None,
     ) -> "ChainGenerationService":
         return cls(
             core=core,
@@ -164,6 +167,7 @@ class ChainGenerationService:
             ),
             debug_wait_sched=bool(debug_wait_sched),
             wait_sched_debug=wait_sched_debug,
+            task_repository=task_repository,
         )
 
     @classmethod
@@ -259,6 +263,86 @@ class ChainGenerationService:
         due_local = self._local(anchor_dt) if anchor_dt else end_local
         return end_local, due_local, due_dt
 
+    def _average_cp_interval(
+        self,
+        parent: NauticalTask,
+        window: int,
+    ) -> tuple[timedelta, dict[str, Any]]:
+        """Resolve a history-derived CP interval, failing closed on bad history."""
+        link_no = self.core.coerce_int(parent.get("link"), 1)
+        if link_no <= 1:
+            return timedelta(days=1), {
+                "basis": f"end+cp:avg({window}) (bootstrap)",
+                "sample_count": 0,
+                "window": window,
+            }
+        repository = self.task_repository
+        if repository is None or not callable(getattr(repository, "chain_snapshot", None)):
+            raise ValueError("cp:avg history is unavailable")
+        chain_id = self._require_chain_id(parent)
+        read = repository.chain_snapshot(chain_id, complete_history=True, refresh=False)
+        rows = getattr(read, "value", None)
+        if rows is None:
+            raise ValueError(f"cp:avg history is unavailable for chain {chain_id}")
+
+        entries: dict[int, tuple[Mapping[str, Any], datetime]] = {}
+        raw_rows = list(rows)
+        if not any(self.core.coerce_int(self._row_value(row, "link"), 0) == link_no for row in raw_rows):
+            raw_rows.append(parent.observation.to_mapping())
+        for row in raw_rows:
+            mapping = self._row_mapping(row)
+            status = str(self._row_value(mapping, "status") or "").strip().lower()
+            if status != "completed":
+                continue
+            row_link = self.core.coerce_int(self._row_value(mapping, "link"), 0)
+            if row_link < 1 or row_link > link_no:
+                continue
+            end_dt, error = self.parse_datetime(self._row_value(mapping, "end"))
+            if error or end_dt is None:
+                raise ValueError(f"cp:avg history has invalid end for link {row_link}")
+            if row_link in entries:
+                raise ValueError(f"cp:avg history has duplicate link {row_link}")
+            entries[row_link] = (mapping, end_dt)
+        if len(entries) < 2:
+            raise ValueError("cp:avg history needs an adjacent completed predecessor")
+        ordered = sorted(entries.items())
+        if ordered[-1][0] != link_no:
+            raise ValueError("cp:avg history does not contain the completing link")
+        if any(right[0] != left[0] + 1 for left, right in zip(ordered, ordered[1:])):
+            raise ValueError("cp:avg history contains non-adjacent completed links")
+        intervals: list[timedelta] = []
+        for (_left_link, (_left_row, left_end)), (_right_link, (_right_row, right_end)) in zip(
+            ordered, ordered[1:]
+        ):
+            interval = right_end - left_end
+            if interval <= timedelta():
+                raise ValueError("cp:avg history contains non-increasing completion times")
+            intervals.append(interval)
+        selected = intervals[-window:]
+        average_seconds = sum(item.total_seconds() for item in selected) / len(selected)
+        return timedelta(seconds=average_seconds), {
+            "basis": f"end+cp:avg({window}) (history)",
+            "sample_count": len(selected),
+            "window": window,
+        }
+
+    @staticmethod
+    def _row_mapping(row: Any) -> Mapping[str, Any]:
+        if isinstance(row, Mapping):
+            return row
+        to_mapping = getattr(row, "to_mapping", None)
+        if callable(to_mapping):
+            mapped = to_mapping()
+            if isinstance(mapped, Mapping):
+                return mapped
+        raise ValueError("cp:avg history returned a malformed row")
+
+    @staticmethod
+    def _row_value(row: Any, field: str) -> Any:
+        if isinstance(row, Mapping):
+            return row.get(field)
+        return getattr(row, field, None)
+
     def compute_cp_child_due(self, parent: NauticalTask) -> CpChildDueResult:
         self._require_chain_id(parent)
         duration = str(parent.get("cp") or "").strip()
@@ -273,13 +357,18 @@ class ChainGenerationService:
             raise ValueError(f"cp field: {reason} (expected: 3d, 2w, 1h, etc.)")
         link_no = self.core.coerce_int(parent.get("link"), 1)
         seq_idx = (max(1, link_no) - 1) % len(tokens)
-        interval = self.core.cp_sequence_interval_for_token(
-            tokens[seq_idx],
-            cp=duration,
-            link_no=link_no,
-            token_index=seq_idx,
-            chain_id=chain_id,
-        )
+        average_metadata: dict[str, Any] = {}
+        if tokens[seq_idx].get("kind") == "avg":
+            window = int(tokens[seq_idx].get("window") or 0)
+            interval, average_metadata = self._average_cp_interval(parent, window)
+        else:
+            interval = self.core.cp_sequence_interval_for_token(
+                tokens[seq_idx],
+                cp=duration,
+                link_no=link_no,
+                token_index=seq_idx,
+                chain_id=chain_id,
+            )
         if not interval:
             return None, None
         end_dt, error = self.parse_datetime(parent.get("end"))
@@ -313,6 +402,7 @@ class ChainGenerationService:
                 "basis": "end+cp (preserve clock)",
                 "target_field": target_field,
             }
+        meta.update(average_metadata)
         if len(tokens) > 1 or tokens[seq_idx].get("kind") == "rand":
             meta.update({"cp_sequence_len": len(tokens), "cp_sequence_step": seq_idx + 1})
         return candidate, meta

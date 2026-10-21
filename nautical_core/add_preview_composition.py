@@ -222,9 +222,14 @@ def render_cp(host: Any, task: Any, cp_str: str, ch: str, now_utc: Any, user_pro
     add_period = cp_add_period_builder(host, td)
     entry_dt = parse(task.get("entry")) if task.get("entry") else now_utc
     if not user_provided_due:
-        due_dt = add_period(entry_dt)
+        due_dt = add_period(now_utc if tokens[0].get("kind") == "avg" else entry_dt)
         task["due"] = host._fmt_local_for_task(due_dt)
-        rows.append(("[auto-due]", "Due was not set explicitly; assigned to entry+cp."))
+        bootstrap_label = (
+            "now+1d for cp:avg bootstrap"
+            if tokens[0].get("kind") == "avg"
+            else "entry+cp"
+        )
+        rows.append(("[auto-due]", f"Due was not set explicitly; assigned to {bootstrap_label}."))
         first_label = "First due"
     elif recurrence_field == "scheduled":
         due_dt = parse(task.get("scheduled"))

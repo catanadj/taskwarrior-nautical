@@ -663,6 +663,7 @@ def _chain_generation_for_hook(hook: object) -> ChainGenerationService:
     return ChainGenerationService.from_core(
         core,
         datetime_parser=getattr(state, "datetime_parser", None) if state is not None else None,
+        task_repository=getattr(state, "repository", None) if state is not None else None,
         recurrence_update_udas=tuple(getattr(core, "RECURRENCE_UPDATE_UDAS", ()) or ()),
         debug_wait_sched=bool(getattr(core, "DEBUG_WAIT_SCHED", False)),
     )

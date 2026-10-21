@@ -282,7 +282,7 @@ def parse_cp_sequence_tokens(cp: str) -> list[CPSequenceToken] | None:
 def cp_average_window(cp: str) -> int | None:
     """Return the history window for a standalone ``avg(x)`` CP value."""
     tokens = parse_cp_sequence_tokens(cp)
-    if len(tokens or ()) != 1:
+    if tokens is None or len(tokens) != 1:
         return None
     token = tokens[0]
     if token.get("kind") != "avg":

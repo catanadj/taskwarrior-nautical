@@ -76,6 +76,7 @@ _CP_MEDIAN_RE = re.compile(r"^median\((?P<window>\d+)\)$", re.I)
 _CP_JITTER_RE = re.compile(r"^(?P<base>.+)~(?P<spread>.+)$", re.I)
 _CP_REPEAT_RE = re.compile(r"^(?P<base>.+)\*(?P<count>\d+)$", re.I)
 _MAX_CP_SEQUENCE_ITEMS = 1000
+_MAX_CP_ADAPTIVE_WINDOW = _MAX_CP_SEQUENCE_ITEMS
 
 
 def _expanded_cp_parts(cp: str) -> tuple[list[str], str | None]:
@@ -231,20 +232,35 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     parts, expansion_error = _expanded_cp_parts(raw)
     if expansion_error is not None:
         return expansion_error
+    adaptive_positions: list[tuple[int, str]] = []
     for idx, part in enumerate(parts, start=1):
         if not part:
             return f"empty duration at position {idx}"
         median_match = _CP_MEDIAN_RE.fullmatch(part)
         if median_match is not None:
-            if int(median_match.group("window")) < 1:
+            window = int(median_match.group("window"))
+            if window < 1:
                 return f"invalid median cp window '{part}' at position {idx}: must be positive"
+            if window > _MAX_CP_ADAPTIVE_WINDOW:
+                return (
+                    f"invalid median cp window '{part}' at position {idx}: "
+                    f"must be at most {_MAX_CP_ADAPTIVE_WINDOW}"
+                )
+            adaptive_positions.append((idx, "median"))
             continue
         if part.lower().startswith("median"):
             return f"invalid median cp window '{part}' at position {idx}: expected median(<positive integer>)"
         average_match = _CP_AVG_RE.fullmatch(part)
         if average_match is not None:
-            if int(average_match.group("window")) < 1:
+            window = int(average_match.group("window"))
+            if window < 1:
                 return f"invalid average cp window '{part}' at position {idx}: must be positive"
+            if window > _MAX_CP_ADAPTIVE_WINDOW:
+                return (
+                    f"invalid average cp window '{part}' at position {idx}: "
+                    f"must be at most {_MAX_CP_ADAPTIVE_WINDOW}"
+                )
+            adaptive_positions.append((idx, "avg"))
             continue
         if part.lower().startswith("avg"):
             return f"invalid average cp window '{part}' at position {idx}: expected avg(<positive integer>)"
@@ -282,6 +298,12 @@ def cp_sequence_parse_error(cp: str) -> str | None:
             return f"invalid jitter cp range '{part}' at position {idx}: expected <duration>~<duration>"
         if parse_cp_duration(part) is None:
             return f"invalid duration '{part}' at position {idx}"
+    if adaptive_positions and len(parts) != 1:
+        idx, kind = adaptive_positions[0]
+        return (
+            f"adaptive cp mode '{kind}' at position {idx} must be the only sequence item; "
+            "use a standalone avg(<window>) or median(<window>)"
+        )
     return None
 
 

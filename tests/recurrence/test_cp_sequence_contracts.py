@@ -143,6 +143,22 @@ class CpSequenceContractTests(unittest.TestCase):
                 self.assertIsNone(cp_parser.parse_cp_sequence_tokens(value))
                 self.assertIn("median", cp_parser.cp_sequence_parse_error(value) or "")
 
+    def test_adaptive_cp_tokens_cannot_be_mixed_with_fixed_sequence_steps(self) -> None:
+        for value in ("avg(5),3d", "3d,median(5)", "avg(5),median(3)"):
+            with self.subTest(value=value):
+                error = cp_parser.cp_sequence_parse_error(value)
+                self.assertIsNotNone(error)
+                self.assertIn("only sequence item", error or "")
+                self.assertIsNone(cp_parser.parse_cp_sequence_tokens(value))
+
+    def test_adaptive_cp_window_has_the_same_bound_as_sequence_expansion(self) -> None:
+        for value in ("avg(1001)", "median(1001)"):
+            with self.subTest(value=value):
+                error = cp_parser.cp_sequence_parse_error(value)
+                self.assertIsNotNone(error)
+                self.assertIn("at most 1000", error or "")
+                self.assertIsNone(cp_parser.parse_cp_sequence_tokens(value))
+
     def test_link_selection_cycles_and_clamps_boundary_links(self) -> None:
         cp = "3d,20d,7d"
         expected = {

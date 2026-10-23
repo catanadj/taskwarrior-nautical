@@ -22,13 +22,15 @@ recent adjacent completion intervals to average:
 task add "Review the habit" cp:avg(5)
 ```
 
-If `due` is omitted, only this average mode is seeded at `now + 1 day`.
-Fixed periods continue to default to `entry + cp period`. The first completed
-link uses the one-day bootstrap. Once a predecessor and the completing link
-both have valid `end` timestamps, Nautical measures the elapsed time between
-adjacent links and averages up to the latest `x` intervals. The average is
-applied from the completing link's `end` timestamp, so it can include
-fractional days.
+If `due` is omitted, Nautical leaves it unset for this adaptive mode. The
+preview shows a projected `entry + 1 day` bootstrap, but does not write that
+value into the task. On the first completion, the child uses a one-day
+bootstrap from the completed link's `end` timestamp. Once a predecessor and
+the completing link both have valid `end` timestamps, Nautical measures the
+elapsed time between adjacent links and averages up to the latest `x`
+intervals. The average is applied from the completing link's `end` timestamp,
+so it can include fractional days. Fixed periods continue to default to
+`entry + cp period`.
 
 History is read authoritatively by `chainID` and ordered by numeric `link`.
 Missing, malformed, duplicated, or non-adjacent history is never guessed;
@@ -47,6 +49,10 @@ The same bootstrap and history rules apply. The median of an odd number of
 intervals is the middle interval; an even-sized sample uses the midpoint of
 the two middle intervals. For example, intervals of `2d`, `3d`, and `18d`
 produce a median cadence of `3d`, while an average would be `7.67d`.
+
+Adaptive periods are standalone modes: do not combine them with comma-separated
+fixed or random steps. For example, use `cp:median(5)` rather than
+`cp:median(5),3d`. The history window must be between 1 and 1,000 intervals.
 
 ## Wall-clock and exact periods
 

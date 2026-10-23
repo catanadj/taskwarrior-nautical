@@ -212,6 +212,23 @@ class AddPreviewCompositionTests(unittest.TestCase):
             timedelta(),
         )
 
+    def test_adaptive_cp_bootstrap_preview_is_reported_as_preview_only(self):
+        entry = datetime(2026, 1, 1, 9, tzinfo=UTC)
+        add_day = lambda value: value + timedelta(days=1)
+
+        for kind in ("avg", "median"):
+            with self.subTest(kind=kind):
+                due, assigned, label = add_preview_composition.cp_initial_due(
+                    [{"kind": kind, "window": 5}],
+                    entry,
+                    add_day,
+                    user_provided_due=False,
+                )
+
+                self.assertEqual(due, datetime(2026, 1, 2, 9, tzinfo=UTC))
+                self.assertFalse(assigned)
+                self.assertIn(kind, label)
+
     def test_limit_rows_reports_minimum_cap_and_until(self):
         host = _Host()
         rows = []

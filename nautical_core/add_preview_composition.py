@@ -37,6 +37,26 @@ def cp_add_td(host: Any, dt: datetime, td: timedelta) -> datetime:
     return cp_add_period_builder(host, td)(dt)
 
 
+def cp_initial_due(
+    tokens: list[dict],
+    entry_dt: datetime,
+    add_period: Any,
+    *,
+    user_provided_due: bool,
+) -> tuple[datetime | None, bool, str]:
+    """Return the first CP preview due and whether it was assigned to the task."""
+    if user_provided_due:
+        return None, False, "explicit due"
+    adaptive_kind = str(tokens[0].get("kind") or "").lower()
+    if adaptive_kind in {"avg", "median"}:
+        return (
+            add_period(entry_dt),
+            False,
+            f"entry+1d for cp:{adaptive_kind} bootstrap (preview only)",
+        )
+    return add_period(entry_dt), True, "entry+cp"
+
+
 def cp_sequence_period_for_link(
     host: Any,
     tokens: list[dict],
@@ -221,15 +241,18 @@ def render_cp(host: Any, task: Any, cp_str: str, ch: str, now_utc: Any, user_pro
 
     add_period = cp_add_period_builder(host, td)
     entry_dt = parse(task.get("entry")) if task.get("entry") else now_utc
+    assigned_due = False
     if not user_provided_due:
-        due_dt = add_period(now_utc if tokens[0].get("kind") == "avg" else entry_dt)
-        task["due"] = host._fmt_local_for_task(due_dt)
-        bootstrap_label = (
-            "now+1d for cp:avg bootstrap"
-            if tokens[0].get("kind") == "avg"
-            else "entry+cp"
+        due_dt, assigned_due, bootstrap_label = cp_initial_due(
+            tokens, entry_dt, add_period, user_provided_due=False
         )
-        rows.append(("[auto-due]", f"Due was not set explicitly; assigned to {bootstrap_label}."))
+        if due_dt is None:
+            raise ValueError("CP preview did not produce an initial due")
+        if assigned_due:
+            task["due"] = host._fmt_local_for_task(due_dt)
+            rows.append(("[auto-due]", f"Due was not set explicitly; assigned to {bootstrap_label}."))
+        else:
+            rows.append(("[projected-due]", f"No due set; first completion will bootstrap from {bootstrap_label}."))
         first_label = "First due"
     elif recurrence_field == "scheduled":
         due_dt = parse(task.get("scheduled"))
@@ -247,7 +270,9 @@ def render_cp(host: Any, task: Any, cp_str: str, ch: str, now_utc: Any, user_pro
         rows.append(("Step", f"[bold white]1/{len(tokens)}[/] [dim]({step_token})[/]"))
     rows.append((first_label, f"[bold bright_green]{fmt(due_dt)}[/]"))
     host._append_first_expiration_row(rows, task, due_dt, recurrence_field)
-    host._append_wait_sched_rows(rows, task, due_dt, auto_due=not user_provided_due, anchor_field=recurrence_field)
+    host._append_wait_sched_rows(
+        rows, task, due_dt, auto_due=(not user_provided_due and assigned_due), anchor_field=recurrence_field
+    )
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
     if is_dynamic:
@@ -395,6 +420,7 @@ def render_anchor(host: Any, *, task: Any, anchor_str: Any, anchor_file_str: Any
 __all__ = (
     "cp_add_period_builder",
     "cp_add_td",
+    "cp_initial_due",
     "cp_sequence_period_for_link",
     "cp_until_summary",
     "cp_preview_lines",

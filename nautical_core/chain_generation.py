@@ -263,7 +263,7 @@ class ChainGenerationService:
         due_local = self._local(anchor_dt) if anchor_dt else end_local
         return end_local, due_local, due_dt
 
-    def _average_cp_interval(
+    def _adaptive_cp_interval(
         self,
         parent: NauticalTask,
         window: int,
@@ -271,6 +271,7 @@ class ChainGenerationService:
         mode: str = "avg",
     ) -> tuple[timedelta, dict[str, Any]]:
         """Resolve a history-derived CP interval, failing closed on bad history."""
+        history_label = f"cp:{mode} history"
         link_no = self.core.coerce_int(parent.get("link"), 1)
         if link_no <= 1:
             return timedelta(days=1), {
@@ -280,48 +281,48 @@ class ChainGenerationService:
             }
         repository = self.task_repository
         if repository is None or not callable(getattr(repository, "chain_snapshot", None)):
-            raise ValueError("cp:avg history is unavailable")
+            raise ValueError(f"{history_label} is unavailable")
         chain_id = self._require_chain_id(parent)
         read = repository.chain_snapshot(chain_id, complete_history=True, refresh=False)
         rows = getattr(read, "value", None)
         if rows is None:
-            raise ValueError(f"cp:avg history is unavailable for chain {chain_id}")
+            raise ValueError(f"{history_label} is unavailable for chain {chain_id}")
 
         entries: dict[int, tuple[Mapping[str, Any], datetime]] = {}
         raw_rows = list(rows)
         if not any(self.core.coerce_int(self._row_value(row, "link"), 0) == link_no for row in raw_rows):
             raw_rows.append(parent.observation.to_mapping())
         for row in raw_rows:
-            mapping = self._row_mapping(row)
+            mapping = self._row_mapping(row, mode=mode)
             status = str(self._row_value(mapping, "status") or "").strip().lower()
             if status != "completed":
                 continue
             raw_link = self._row_value(mapping, "link")
             row_link = self.core.coerce_int(raw_link, 0)
             if row_link <= 0:
-                raise ValueError("cp:avg history has an invalid link")
+                raise ValueError(f"{history_label} has an invalid link")
             if row_link < 1 or row_link > link_no:
                 continue
             end_dt, error = self.parse_datetime(self._row_value(mapping, "end"))
             if error or end_dt is None:
-                raise ValueError(f"cp:avg history has invalid end for link {row_link}")
+                raise ValueError(f"{history_label} has invalid end for link {row_link}")
             if row_link in entries:
-                raise ValueError(f"cp:avg history has duplicate link {row_link}")
+                raise ValueError(f"{history_label} has duplicate link {row_link}")
             entries[row_link] = (mapping, end_dt)
         if len(entries) < 2:
-            raise ValueError("cp:avg history needs an adjacent completed predecessor")
+            raise ValueError(f"{history_label} needs an adjacent completed predecessor")
         ordered = sorted(entries.items())
         if ordered[-1][0] != link_no:
-            raise ValueError("cp:avg history does not contain the completing link")
+            raise ValueError(f"{history_label} does not contain the completing link")
         if any(right[0] != left[0] + 1 for left, right in zip(ordered, ordered[1:])):
-            raise ValueError("cp:avg history contains non-adjacent completed links")
+            raise ValueError(f"{history_label} contains non-adjacent completed links")
         intervals: list[timedelta] = []
         for (_left_link, (_left_row, left_end)), (_right_link, (_right_row, right_end)) in zip(
             ordered, ordered[1:]
         ):
             interval = right_end - left_end
             if interval <= timedelta():
-                raise ValueError("cp:avg history contains non-increasing completion times")
+                raise ValueError(f"{history_label} contains non-increasing completion times")
             intervals.append(interval)
         selected = intervals[-window:]
         ordered_seconds = sorted(item.total_seconds() for item in selected)
@@ -340,7 +341,7 @@ class ChainGenerationService:
         }
 
     @staticmethod
-    def _row_mapping(row: Any) -> Mapping[str, Any]:
+    def _row_mapping(row: Any, *, mode: str = "adaptive") -> Mapping[str, Any]:
         if isinstance(row, Mapping):
             return row
         to_mapping = getattr(row, "to_mapping", None)
@@ -348,7 +349,7 @@ class ChainGenerationService:
             mapped = to_mapping()
             if isinstance(mapped, Mapping):
                 return mapped
-        raise ValueError("cp:avg history returned a malformed row")
+        raise ValueError(f"cp:{mode} history returned a malformed row")
 
     @staticmethod
     def _row_value(row: Any, field: str) -> Any:
@@ -370,11 +371,11 @@ class ChainGenerationService:
             raise ValueError(f"cp field: {reason} (expected: 3d, 2w, 1h, etc.)")
         link_no = self.core.coerce_int(parent.get("link"), 1)
         seq_idx = (max(1, link_no) - 1) % len(tokens)
-        average_metadata: dict[str, Any] = {}
+        adaptive_metadata: dict[str, Any] = {}
         if tokens[seq_idx].get("kind") in {"avg", "median"}:
             window = int(tokens[seq_idx].get("window") or 0)
             mode = str(tokens[seq_idx].get("kind") or "avg")
-            interval, average_metadata = self._average_cp_interval(parent, window, mode=mode)
+            interval, adaptive_metadata = self._adaptive_cp_interval(parent, window, mode=mode)
         else:
             interval = self.core.cp_sequence_interval_for_token(
                 tokens[seq_idx],
@@ -416,7 +417,7 @@ class ChainGenerationService:
                 "basis": "end+cp (preserve clock)",
                 "target_field": target_field,
             }
-        meta.update(average_metadata)
+        meta.update(adaptive_metadata)
         if len(tokens) > 1 or tokens[seq_idx].get("kind") == "rand":
             meta.update({"cp_sequence_len": len(tokens), "cp_sequence_step": seq_idx + 1})
         return candidate, meta

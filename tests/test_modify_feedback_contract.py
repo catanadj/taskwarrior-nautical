@@ -269,6 +269,19 @@ class ModifyFeedbackContractTests(unittest.TestCase):
         self.assertEqual(result, "Preserve wall clock (period is multiple of 24h)")
         self.assertEqual(calls, [("P1D, P2D", 2, "chain-1")])
 
+    def test_cp_feedback_basis_explains_adaptive_statistics(self) -> None:
+        from nautical_core.modify_feedback import _pretty_basis_cp
+
+        interval = lambda *_args: timedelta(days=1)
+        self.assertEqual(
+            _pretty_basis_cp({"cp": "avg(5)", "link": 2}, cp_sequence_interval_for_link=interval),
+            "Average of the latest 5 completion intervals",
+        )
+        self.assertEqual(
+            _pretty_basis_cp({"cp": "median(7)", "link": 2}, cp_sequence_interval_for_link=interval),
+            "Median of the latest 7 completion intervals",
+        )
+
     def test_next_expiration_row_has_explicit_effect_ports(self) -> None:
         from nautical_core.modify_feedback import _AddValidationOwner, _NextExpirationCore
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
+import re
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from .modify_carry_workflow import TemporalCarryDecision
@@ -596,8 +597,13 @@ def _pretty_basis_cp(
     *,
     cp_sequence_interval_for_link: Callable[[str, int, str | None], timedelta | None],
 ) -> str:
+    cp_value = str(task.get("cp") or "").strip()
+    adaptive = re.fullmatch(r"(?P<mode>avg|median)\((?P<window>\d+)\)", cp_value, re.IGNORECASE)
+    if adaptive is not None:
+        mode = "Average" if adaptive.group("mode").lower() == "avg" else "Median"
+        return f"{mode} of the latest {adaptive.group('window')} completion intervals"
     td = cp_sequence_interval_for_link(
-        str(task.get("cp") or ""),
+        cp_value,
         int(task.get("link") or 1),
         str(task.get("chainID") or "").strip(),
     )

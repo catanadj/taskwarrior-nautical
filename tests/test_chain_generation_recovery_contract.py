@@ -364,6 +364,17 @@ class ChainGenerationContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "history"):
             service.compute_cp_child_due(parent)
 
+    def test_cp_median_history_errors_identify_the_adaptive_mode(self):
+        class Repository:
+            def chain_snapshot(self, *_args, **_kwargs):
+                return Absent("chainID:chain-a", "history unavailable")
+
+        parent = _task(cp="median(5)", link=2, end="2026-01-04T10:00:00Z")
+        service = ChainGenerationService.from_core(_Core(), task_repository=Repository())
+
+        with self.assertRaisesRegex(ValueError, r"cp:median history is unavailable"):
+            service.compute_cp_child_due(parent)
+
     def test_cp_generation_selects_middle_interval_and_preserves_wall_clock(self):
         parent = _task(
             cp="3d,20d,7d",

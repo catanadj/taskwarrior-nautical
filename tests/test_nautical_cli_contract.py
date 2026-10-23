@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 LAUNCHER = ROOT / "nautical"
-EXPECTED_VERSION = "7.7.0"
+EXPECTED_VERSION = "7.7.1"
 EXPECTED_COMMAND_DESCRIPTIONS = {
     "install": "Install hooks, runtime files, and configuration.",
     "runtime-clean": "Remove obsolete managed runtime files safely.",

@@ -616,22 +616,29 @@ class LifecycleApplicationService:
     ) -> DrainResult:
         """Drain one bounded batch inside one invocation-scoped outbox session."""
         self._require_execution_deps()
+        result: DrainResult | None = None
         try:
             with self._outbox.session():
-                return self._drain_open(
+                result = self._drain_open(
                     limit=limit,
                     configuration_fingerprint=configuration_fingerprint,
                     schedule_fingerprint=schedule_fingerprint,
                     progress=progress,
                 )
         except LifecycleOutboxError as exc:
+            reason = f"outbox session failed: {str(exc).strip() or type(exc).__name__}"
+            if "database disk image is malformed" in reason.lower() or "file is not a database" in reason.lower():
+                recovered = self._outbox.recover_corrupt_state(reason)
+                return DrainResult(claim=recovered, outcomes=())
             return DrainResult(
-                claim=OutboxResult(
-                    OutboxResultKind.RETRYABLE,
-                    reason=f"outbox session failed: {str(exc).strip() or type(exc).__name__}",
-                ),
+                claim=OutboxResult(OutboxResultKind.RETRYABLE, reason=reason),
                 outcomes=(),
             )
+        assert result is not None
+        if result.claim.integrity_failure:
+            recovered = self._outbox.recover_corrupt_state(result.claim.reason)
+            return DrainResult(claim=recovered, outcomes=())
+        return result
 
     def drain_claimed(
         self,

@@ -89,6 +89,28 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "claim implementation defect"):
                 service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
 
+    def test_drain_quarantines_malformed_outbox_without_interrupting_hook(self) -> None:
+        with TemporaryDirectory() as directory:
+            outbox = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(outbox.open().ok)
+            outbox.path.write_bytes(b"not a sqlite database")
+            execution = LifecycleExecutionFixture(object())
+            service = LifecycleApplicationService(
+                unit_of_work=type("UnitOfWork", (), {"mutation_epoch": 0})(),
+                mutations=execution,
+                execution=execution,
+                outbox=outbox,
+                owner="recovery-test",
+            )
+
+            result = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+
+            self.assertTrue(result.claim.ok, result.claim.reason)
+            self.assertIn("fresh database initialized", result.claim.reason)
+            self.assertEqual(result.outcomes, ())
+            self.assertTrue(outbox.path.is_file())
+            self.assertEqual(len(list((Path(directory) / ".nautical-state").glob("quarantine-*"))), 1)
+
     def test_budget_retry_does_not_hide_unexpected_outbox_release_defect(self) -> None:
         with TemporaryDirectory() as directory:
             outbox = _LifecycleOutboxRepository(Path(directory))

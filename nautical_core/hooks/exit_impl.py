@@ -523,6 +523,8 @@ def _drain_outbox_result(runtime: Any) -> Any:
     if not result.claim.ok:
         outbox_lock_failures = 1
         _diag(f"lifecycle outbox claim failed: {result.claim.reason or 'unknown error'}")
+    elif result.claim.reason:
+        _diag(f"lifecycle outbox recovery: {result.claim.reason}")
 
     suppressed_diagnostics = _module("exit_diagnostics").emit_outcome_diagnostics(
         outcomes,

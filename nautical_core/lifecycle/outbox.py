@@ -193,6 +193,7 @@ class OutboxResult:
     record: LifecycleOutboxRecord | None = None
     reason: str = ""
     lock_busy: bool = False
+    integrity_failure: bool = False
 
     def __post_init__(self) -> None:
         try:
@@ -201,6 +202,7 @@ class OutboxResult:
             raise LifecycleOutboxError("invalid outbox result") from exc
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "reason", str(self.reason or "").strip())
+        object.__setattr__(self, "integrity_failure", bool(self.integrity_failure))
 
     @property
     def ok(self) -> bool:
@@ -640,7 +642,54 @@ class _LifecycleOutboxRepository:
 
     @staticmethod
     def _integrity_failure(result: OutboxResult) -> bool:
-        return result.kind is OutboxResultKind.REJECTED and "outbox integrity check failed" in result.reason.lower()
+        return result.integrity_failure or (
+            result.kind is OutboxResultKind.REJECTED
+            and "outbox integrity check failed" in result.reason.lower()
+        )
+
+    @staticmethod
+    def _database_integrity_error(exc: BaseException) -> bool:
+        message = str(exc).lower()
+        return any(
+            marker in message
+            for marker in (
+                "database disk image is malformed",
+                "file is not a database",
+                "file is encrypted or is not a database",
+            )
+        )
+
+    def recover_corrupt_state(self, reason: str) -> OutboxResult:
+        """Preserve a corrupt store and initialize a fresh outbox database.
+
+        Recovery is deliberately explicit and must happen outside an active
+        session so the damaged connection is fully closed before its files are
+        moved. The quarantined copy remains available for forensic recovery;
+        callers can continue safely with an empty, durable store.
+        """
+        self._metric("outbox_integrity_recoveries")
+        try:
+            quarantine = self._quarantine_corrupt_state(reason)
+        except LifecycleOutboxError as exc:
+            self._metric("outbox_quarantine_failures")
+            return OutboxResult(
+                OutboxResultKind.REJECTED,
+                reason=f"{reason}; {exc}",
+                integrity_failure=True,
+            )
+        self._metric("outbox_quarantines")
+        opened = self.open()
+        if not opened.ok:
+            return OutboxResult(
+                opened.kind,
+                reason=f"outbox quarantined at {quarantine}; fresh database initialization failed: {opened.reason}",
+                lock_busy=opened.lock_busy,
+                integrity_failure=True,
+            )
+        return replace(
+            opened,
+            reason=f"outbox quarantined at {quarantine}; fresh database initialized",
+        )
 
     def _with_connection(self, operation: Callable[[sqlite3.Connection], OutboxResult]) -> OutboxResult:
         if self._session_conn is not None:
@@ -1029,9 +1078,18 @@ class _LifecycleOutboxRepository:
                         ))
                 return OutboxResult(OutboxResultKind.APPLIED), tuple(records)
         except sqlite3.OperationalError as exc:
-            return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()
+            return OutboxResult(
+                OutboxResultKind.RETRYABLE,
+                reason=str(exc),
+                lock_busy=_busy(exc),
+                integrity_failure=self._database_integrity_error(exc),
+            ), ()
         except (LifecycleOutboxError, sqlite3.Error, OSError) as exc:
-            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), ()
+            return OutboxResult(
+                OutboxResultKind.REJECTED,
+                reason=f"{type(exc).__name__}: {exc}",
+                integrity_failure=self._database_integrity_error(exc),
+            ), ()
         finally:
             if conn is not None:
                 conn.close()

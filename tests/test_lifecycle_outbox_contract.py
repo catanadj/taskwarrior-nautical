@@ -231,6 +231,23 @@ class LifecycleOutboxContractTests(unittest.TestCase):
                     repository.claim_batch(owner="worker", lease_seconds=30, limit=1)
             self.assertIs(type(raised.exception), RuntimeError)
 
+    def test_claim_batch_marks_corrupt_database_for_quarantine_recovery(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = _LifecycleOutboxRepository(Path(directory))
+            self.assertTrue(repository.open().ok)
+            repository.path.write_bytes(b"not a sqlite database")
+
+            claim, records = repository.claim_batch(owner="worker", lease_seconds=30, limit=1)
+
+            self.assertFalse(claim.ok)
+            self.assertTrue(claim.integrity_failure)
+            self.assertEqual(records, ())
+            recovered = repository.recover_corrupt_state(claim.reason)
+            self.assertTrue(recovered.ok, recovered.reason)
+            self.assertIn("outbox quarantined at", recovered.reason)
+            self.assertTrue(repository.path.is_file())
+            self.assertEqual(len(list((Path(directory) / ".nautical-state").glob("quarantine-*"))), 1)
+
     def test_claim_intent_does_not_convert_unexpected_errors(self) -> None:
         with TemporaryDirectory() as directory:
             repository = _LifecycleOutboxRepository(Path(directory))

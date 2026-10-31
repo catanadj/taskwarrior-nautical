@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import nautical_core as core
 import nautical_core.anchor_inclusion as anchor_inclusion
@@ -283,6 +284,41 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual(metadata["basis"], "end+cp:avg(5) (history)")
         self.assertEqual(metadata["sample_count"], 2)
         self.assertEqual(metadata["window"], 5)
+
+    def test_cp_average_whole_day_preserves_wall_clock_across_dst(self):
+        class DstCore(_Core):
+            @staticmethod
+            def to_local(value):
+                return value.astimezone(ZoneInfo("Europe/Sofia"))
+
+        rows = tuple(
+            {
+                "chainID": "chain-a",
+                "link": link,
+                "status": "completed",
+                "end": end,
+            }
+            for link, end in (
+                (1, "2026-03-27T08:00:00Z"),
+                (2, "2026-03-28T08:00:00Z"),
+            )
+        )
+
+        class Repository:
+            def chain_snapshot(self, *_args, **_kwargs):
+                return Found(rows, "chainID:chain-a")
+
+        parent = _task(
+            cp="avg(5)",
+            link=2,
+            due="2026-03-28T08:00:00Z",
+            end="2026-03-28T08:00:00Z",
+        )
+        service = ChainGenerationService.from_core(DstCore(), task_repository=Repository())
+
+        due, _metadata = service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 3, 29, 7, tzinfo=timezone.utc))
 
     def test_cp_average_rejects_non_adjacent_history_instead_of_guessing(self):
         rows = tuple(

@@ -29,8 +29,11 @@ bootstrap from the completed link's `end` timestamp. Once a predecessor and
 the completing link both have valid `end` timestamps, Nautical measures the
 elapsed time between adjacent links and averages up to the latest `x`
 intervals. The average is applied from the completing link's `end` timestamp,
-so it can include fractional days. Fixed periods continue to default to
-`entry + cp period`.
+so it can include fractional days. Adaptive periods use the same time policy
+as fixed periods: a selected interval that is a whole multiple of 24 hours
+preserves the local wall-clock time across daylight-saving changes; fractional
+or other non-whole-day intervals are added as exact elapsed time. Fixed
+periods continue to default to `entry + cp period`.
 
 History is read authoritatively by `chainID` and ordered by numeric `link`.
 Missing, malformed, duplicated, or non-adjacent history is never guessed;
@@ -45,7 +48,7 @@ For a cadence that should ignore unusually long or short gaps, use
 task add "Review the habit" cp:median(5)
 ```
 
-The same bootstrap and history rules apply. The median of an odd number of
+The same bootstrap, history, and wall-clock rules apply. The median of an odd number of
 intervals is the middle interval; an even-sized sample uses the midpoint of
 the two middle intervals. For example, intervals of `2d`, `3d`, and `18d`
 produce a median cadence of `3d`, while an average would be `7.67d`.

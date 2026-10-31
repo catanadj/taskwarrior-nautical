@@ -507,7 +507,7 @@ def format_next_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | Non
 def format_next_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
     """Arrange CP next-link rows into compact presentation sections."""
     groups = (
-        {"Period", "Basis"},
+        {"Period", "Current value", "Basis"},
         {
             "Next", "Next Due", "Expiration", "Next expires", "Scheduled", "Wait",
             "Link status", "Links left", "Chain cap", "Chain end point",
@@ -622,6 +622,20 @@ def _pretty_basis_cp(
         rem_s = " ".join(hint) if hint else f"{rem}s"
         return f"Exact end + cp (remainder {rem_s} vs 24h)"
     return "Preserve wall clock (period is multiple of 24h)"
+
+
+def _adaptive_cp_current_value(task: TaskPayload, child_due: datetime | None) -> str | None:
+    """Return the interval selected for the next adaptive CP child."""
+    cp_value = str(task.get("cp") or "").strip()
+    if not re.fullmatch(r"(?:avg|median)\(\d+\)", cp_value, re.IGNORECASE):
+        return None
+    end_value = _timestamp(task, "end")
+    if end_value is None or child_due is None:
+        return None
+    interval = child_due - end_value.value
+    if interval.total_seconds() <= 0:
+        return None
+    return format_timedelta_short(interval)
 
 
 def _pretty_basis_anchor(
@@ -1328,6 +1342,9 @@ def render_cp_completion_feedback(
     _append_lifecycle_result_row(fb, feedback.lifecycle_result)
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
     fb.append(("Period", new.get("cp")))
+    current_value = _adaptive_cp_current_value(new, feedback.child_due)
+    if current_value:
+        fb.append(("Current value", current_value))
     if feedback.meta.get("cp_sequence_len"):
         step = int(feedback.meta.get("cp_sequence_step") or 1)
         cp_tokens = [p.strip() for p in str(new.get("cp") or "").split(",")]

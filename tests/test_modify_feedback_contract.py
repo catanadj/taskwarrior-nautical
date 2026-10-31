@@ -773,6 +773,16 @@ class ModifyFeedbackContractTests(unittest.TestCase):
     def test_cp_jitter_feedback_shows_the_selected_interval(self) -> None:
         _title, rows, _text = _render_cp_completion_feedback("15d~0d")
         self.assertIn(("Step", "1/1 (15d)"), rows)
+        self.assertFalse(any(label == "Current value" for label, _value in rows))
+
+    def test_adaptive_cp_feedback_shows_current_value(self) -> None:
+        _title, rows, _text = _render_cp_completion_feedback(
+            "avg(5)",
+            task_values={"end": "20261001T090000Z"},
+            child_due=datetime(2026, 10, 4, 9, tzinfo=timezone.utc),
+        )
+
+        self.assertIn(("Current value", "3d"), rows)
 
     def test_cp_random_step_does_not_hide_parser_or_interval_failures(self) -> None:
         for function_name in ("parse_cp_sequence_tokens", "cp_sequence_interval_for_token"):

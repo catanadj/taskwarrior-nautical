@@ -370,6 +370,17 @@ def _timeline_no_text(no: object) -> str:
     return f"{str(no):>2}"
 
 
+def _timeline_deleted_disposition(obj: TaskPayload) -> tuple[str, str] | None:
+    """Return a display marker for deleted links, if applicable."""
+    if str(obj.get("status") or "").strip().lower() != "deleted":
+        return None
+    is_expired = (
+        str(obj.get("chain") or "").strip().lower() == "on"
+        and bool(str(obj.get("until") or "").strip())
+    )
+    return ("⌛", "expired") if is_expired else ("×", "deleted")
+
+
 def _timeline_base_line(
     no: object,
     dt: datetime | None,
@@ -392,16 +403,24 @@ def _timeline_base_line(
     if item_type == "prev":
         end_dt = dtparse(obj.get("end"))
         due_dt = dtparse(obj.get("due"))
-        delta = fmt_on_time_delta(due_dt, end_dt)
+        disposition = _timeline_deleted_disposition(obj)
+        delta = "" if disposition else fmt_on_time_delta(due_dt, end_dt)
         end_s = fmtlocal(end_dt) if end_dt else "(no end)"
         short_id = short(obj.get("uuid"))
+        if disposition:
+            marker, label = disposition
+            return f"[dim red]{no_text} {marker:<2}{end_s} {short_id} [italic]({label})[/][/]"
         return f"[{prev_style}]{no_text} {'✓':<2}{end_s} {short_id} {delta}[/]"
 
     if item_type == "current":
         cur_end = dtparse(task.get("end"))
         cur_due = dtparse(task.get("due"))
-        cur_delta = fmt_on_time_delta(cur_due, cur_end)
+        disposition = _timeline_deleted_disposition(task)
+        cur_delta = "" if disposition else fmt_on_time_delta(cur_due, cur_end)
         cur_end_s = fmtlocal(cur_end) if cur_end else "(no end)"
+        if disposition:
+            marker, label = disposition
+            return f"[dim red]{no_text} {marker:<2}{cur_end_s} {short(task.get('uuid'))} [italic]({label})[/][/]"
         return f"[{cur_style}]{no_text} {'✓':<2}{cur_end_s} {short(task.get('uuid'))} {cur_delta}[/]"
 
     if item_type == "next":

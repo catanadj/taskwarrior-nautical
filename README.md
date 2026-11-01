@@ -1,3 +1,8 @@
+> **Development notice:** The 7.7.x series is the final planned development
+> line for Nautical as a Taskwarrior hook system. Future development will port
+> Nautical to a new task manager where it serves as the native recurrence
+> engine. The 7.7.x hook releases remain available for Taskwarrior users.
+
 ![Nautical Banner](./nautical-banner.svg)
 
 ![Nautical demo](https://github.com/user-attachments/assets/8420c1a8-907b-483e-86ec-4385eec892e3)

@@ -293,9 +293,21 @@ class ChainGenerationService:
         # TaskObservation rows expose values through ``to_mapping()`` rather
         # than as attributes, so probing them directly would miss the parent
         # link and append it a second time.
-        raw_rows = [self._row_mapping(row, mode=mode) for row in rows]
-        if not any(self.core.coerce_int(self._row_value(row, "link"), 0) == link_no for row in raw_rows):
-            raw_rows.append(parent.observation.to_mapping())
+        parent_mapping = parent.observation.to_mapping()
+        raw_rows = []
+        parent_seen = False
+        for row in rows:
+            mapping = self._row_mapping(row, mode=mode)
+            if self.core.coerce_int(self._row_value(mapping, "link"), 0) == link_no:
+                # The hook may read the current task before Taskwarrior has
+                # persisted its completed status.  Use the completing parent
+                # as the authoritative row for this link.
+                raw_rows.append(parent_mapping)
+                parent_seen = True
+            else:
+                raw_rows.append(mapping)
+        if not parent_seen:
+            raw_rows.append(parent_mapping)
         for row in raw_rows:
             mapping = self._row_mapping(row, mode=mode)
             status = str(self._row_value(mapping, "status") or "").strip().lower()

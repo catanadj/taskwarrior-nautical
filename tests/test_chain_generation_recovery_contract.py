@@ -389,6 +389,40 @@ class ChainGenerationContractTests(unittest.TestCase):
 
         self.assertEqual(due, datetime(2026, 1, 10, 9, tzinfo=timezone.utc))
 
+    def test_cp_median_accepts_typed_snapshot_containing_parent_link(self):
+        rows = tuple(
+            _observation(
+                uuid=f"00000000-0000-4000-8000-00000000000{link}",
+                status="completed",
+                chainID="chain-a",
+                link=link,
+                cp="median(3)",
+                end=end,
+            )
+            for link, end in (
+                (1, "2026-01-01T10:00:00Z"),
+                (2, "2026-01-03T10:00:00Z"),
+                (3, "2026-01-06T10:00:00Z"),
+            )
+        )
+
+        class Repository:
+            def chain_snapshot(self, *_args, **_kwargs):
+                return Found(rows, "chainID:chain-a")
+
+        parent = _task(
+            uuid="00000000-0000-4000-8000-000000000003",
+            cp="median(3)",
+            link=3,
+            end="2026-01-06T10:00:00Z",
+        )
+        service = ChainGenerationService.from_core(_Core(), task_repository=Repository())
+
+        due, metadata = service.compute_cp_child_due(parent)
+
+        self.assertEqual(due, datetime(2026, 1, 8, 22, tzinfo=timezone.utc))
+        self.assertEqual(metadata["sample_count"], 2)
+
     def test_cp_average_fails_closed_when_history_is_unavailable(self):
         class Repository:
             def chain_snapshot(self, *_args, **_kwargs):

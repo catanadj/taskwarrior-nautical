@@ -289,7 +289,11 @@ class ChainGenerationService:
             raise ValueError(f"{history_label} is unavailable for chain {chain_id}")
 
         entries: dict[int, tuple[Mapping[str, Any], datetime]] = {}
-        raw_rows = list(rows)
+        # Normalize repository observations before probing their fields.  Typed
+        # TaskObservation rows expose values through ``to_mapping()`` rather
+        # than as attributes, so probing them directly would miss the parent
+        # link and append it a second time.
+        raw_rows = [self._row_mapping(row, mode=mode) for row in rows]
         if not any(self.core.coerce_int(self._row_value(row, "link"), 0) == link_no for row in raw_rows):
             raw_rows.append(parent.observation.to_mapping())
         for row in raw_rows:

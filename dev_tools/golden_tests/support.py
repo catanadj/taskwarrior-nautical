@@ -502,7 +502,7 @@ if len(args) >= 2 and args[-2] == "_get":
             "cp": "string", "chain": "string", "anchor": "string", "bc": "string",
             "anchor_file": "string", "anchor_mode": "string",
             "omit": "string", "omit_file": "string",
-            "chainMax": "numeric", "chainUntil": "date",
+            "chainMax": "numeric", "chainUntil": "string",
             "prevLink": "string", "nextLink": "string",
             "link": "numeric", "chainID": "string",
         }

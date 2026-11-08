@@ -103,7 +103,7 @@ def test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review():
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     with tempfile.TemporaryDirectory(prefix="nautical-duplicate-slot-") as td:
         base = Path(td); data_dir = base / "data"; data_dir.mkdir(); taskrc = base / "taskrc"
-        taskrc.write_text("\n".join([f"data.location={data_dir}", "hooks=off", "confirmation=off", "verbose=nothing", "uda.cp.type=string", "uda.chain.type=string", "uda.chainID.type=string", "uda.link.type=numeric", "uda.prevLink.type=string", "uda.nextLink.type=string", "uda.chainMax.type=numeric", "uda.chainUntil.type=date"]) + "\n", encoding="utf-8")
+        taskrc.write_text("\n".join([f"data.location={data_dir}", "hooks=off", "confirmation=off", "verbose=nothing", "uda.cp.type=string", "uda.chain.type=string", "uda.chainID.type=string", "uda.link.type=numeric", "uda.prevLink.type=string", "uda.nextLink.type=string", "uda.chainMax.type=numeric", "uda.chainUntil.type=string"]) + "\n", encoding="utf-8")
         env = os.environ.copy(); env.update({"TASKRC": str(taskrc), "TASKDATA": str(data_dir), "NAUTICAL_CONFIG": str(Path(root) / "config-nautical.toml"), "NAUTICAL_CORE_PATH": root, "NO_COLOR": "1"})
         rows = [{"uuid": uuid, "status": "deleted", "description": "duplicate slot", "entry": "20260820T080000Z", "modified": "20260820T100000Z", "end": "20260820T100000Z", "due": "20260820T090000Z", "until": "20260820T100000Z", "cp": "1d", "chain": "on", "chainID": "duplicate-slot", "link": 1} for uuid in ("11111111-0000-0000-0000-000000000001", "22222222-0000-0000-0000-000000000002")]
         imported = subprocess.run([task_bin, "rc.hooks=off", "import"], input="".join(json.dumps(row) + "\n" for row in rows), text=True, capture_output=True, env=env, timeout=15.0)
@@ -173,7 +173,7 @@ def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
                 f"data.location={data_dir}", "hooks=off", "confirmation=off", "verbose=nothing",
                 "uda.anchor.type=string", "uda.anchor_mode.type=string", "uda.chain.type=string",
                 "uda.chainID.type=string", "uda.link.type=numeric", "uda.prevLink.type=string",
-                "uda.nextLink.type=string", "uda.chainMax.type=numeric", "uda.chainUntil.type=date",
+                "uda.nextLink.type=string", "uda.chainMax.type=numeric", "uda.chainUntil.type=string",
             ]) + "\n", encoding="utf-8",
         )
         config = root / "config-nautical.toml"
@@ -638,7 +638,7 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
                     "uda.prevLink.type=string",
                     "uda.nextLink.type=string",
                     "uda.chainMax.type=numeric",
-                    "uda.chainUntil.type=date",
+                    "uda.chainUntil.type=string",
                 ]
             )
             + "\n",

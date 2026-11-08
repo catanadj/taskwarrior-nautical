@@ -81,7 +81,7 @@ REQUIRED_UDAS = {
     "omit": "string",
     "omit_file": "string",
     "chainMax": "numeric",
-    "chainUntil": "date",
+    "chainUntil": "string",
     "prevLink": "string",
     "nextLink": "string",
     "link": "numeric",

@@ -12,7 +12,12 @@
 | Missed-match policy | `anchor_mode` | `skip`, `all`, `flex` |
 | Named business calendar | `bc` | `bc:work` |
 | Link limit | `chainMax` | `chainMax:12` |
-| Date/time limit | `chainUntil` | `chainUntil:2027-12-31` |
+| Date/time limit | `chainUntil` | `chainUntil:2027-12-31` or `chainUntil:christmas` |
+
+`chainUntil` accepts concrete dates/times and named boundaries. Named markers
+are resolved at add/modify time to `23:59:59` on the marker's local date. See
+the [limits and expiration guide](../guides/limits-and-expiration.md) for the
+complete marker registry and season-mode behavior.
 
 ## Completion periods
 
@@ -108,3 +113,7 @@ Fixed and random windows may cross midnight.
 Selection happens before modifiers. See
 [Grammar and composition](../advanced/grammar-and-composition.md) for the
 validation rules.
+`chainUntil` accepts concrete dates/times and named boundaries. Named markers
+are resolved at add/modify time to `23:59:59` on the marker's local date. See
+the [limits and expiration guide](../guides/limits-and-expiration.md) for the
+complete marker registry and season-mode behavior.

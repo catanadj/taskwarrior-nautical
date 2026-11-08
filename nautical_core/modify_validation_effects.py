@@ -158,6 +158,10 @@ class _ModifyChainValidationAPI(Protocol):
     validate_chain_limits_on_modify: ChainLimitsValidationOperation
 
 
+class _ChainUntilMarkerAPI(Protocol):
+    resolve_chain_until: Callable[..., str | None]
+
+
 class _ChainLimitCore(Protocol):
     parse_cp_sequence: Callable[[str], list[timedelta] | None]
     cp_sequence_parse_error: Callable[[str], str | None]
@@ -177,6 +181,12 @@ class _ChainLimitCore(Protocol):
         self,
         name: Literal["hook_validation_pipeline"],
     ) -> RecurrenceLimitsPipeline: ...
+
+    @overload
+    def _import_sibling(
+        self,
+        name: Literal["chain_until_markers"],
+    ) -> _ChainUntilMarkerAPI: ...
 
 
 class ChainLimitHost(Protocol):

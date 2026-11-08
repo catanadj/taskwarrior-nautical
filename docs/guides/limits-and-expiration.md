@@ -25,6 +25,38 @@ its recurrence target is at or before that boundary. Nautical rejects a root
 whose first target is already beyond the limit. If both `chainMax` and
 `chainUntil` exist, the earlier limit wins.
 
+### Named chain boundaries
+
+For common calendar boundaries, `chainUntil` also accepts a marker. Nautical
+resolves the marker once when the task is added or modified, then stores the
+result as the ordinary concrete `chainUntil` timestamp. The boundary is the
+end of the resolved local date (`23:59:59` in the configured timezone).
+
+Examples:
+
+```text
+task add "Holiday cleanup" cp:1d chainUntil:christmas
+task add "Easter preparation" anchor:"w:mon" chainUntil:easter
+task add "Summer project" cp:2d chainUntil:summer-end
+```
+
+Supported holiday markers are `christmas`, `christmas-eve`, `new-year`,
+`new-years-eve`, `halloween`, `valentines-day`, `easter`, `good-friday`, and
+`easter-monday`.
+
+Season markers are `spring-start`, `spring-end`, `summer-start`, `summer-end`,
+`autumn-start`, `autumn-end`, `winter-start`, and `winter-end`. They follow
+`season_mode`: fixed mode uses the configured calendar seasons, while
+astronomical mode uses the corresponding equinox and solstice boundaries.
+
+Calendar markers include `month-start`, `month-end`, `quarter-start`,
+`quarter-end`, `year-start`, and `year-end`. Explicit astronomical markers are
+`spring-equinox`, `summer-solstice`, `autumn-equinox`, and `winter-solstice`.
+
+Markers are intentionally resolved once rather than recalculated on every
+hook, so a task remains portable and deterministic if the timezone or season
+configuration changes later.
+
 ## Expire one occurrence
 
 Taskwarrior's native `until` expires the current task; it does not end the

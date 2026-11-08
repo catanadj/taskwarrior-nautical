@@ -44,6 +44,8 @@ class ModifyIsolationTests(unittest.TestCase):
                 "validate_until_not_past",
                 "now_utc",
                 "fail",
+                "resolve_chain_until",
+                "to_local",
             },
         )
         for field_name, annotation in annotations.items():

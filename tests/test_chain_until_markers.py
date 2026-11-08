@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import unittest
+import importlib
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from nautical_core.chain_until_markers import resolve_chain_until
-from nautical_core import season_support
+
+
+season_support = importlib.import_module("nautical_core.season_support")
 
 
 class ChainUntilMarkerTests(unittest.TestCase):

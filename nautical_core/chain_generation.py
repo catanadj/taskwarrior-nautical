@@ -294,7 +294,7 @@ class ChainGenerationService:
         # than as attributes, so probing them directly would miss the parent
         # link and append it a second time.
         parent_mapping = parent.observation.to_mapping()
-        raw_rows = []
+        raw_rows: list[Mapping[str, Any]] = []
         parent_seen = False
         for row in rows:
             mapping = self._row_mapping(row, mode=mode)

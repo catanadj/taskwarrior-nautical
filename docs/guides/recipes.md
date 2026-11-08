@@ -19,6 +19,11 @@ task add "3d, random 10-20d, then 7d" cp:"3d,rand(10d..20d),7d" due:today
 task add "Finite 1d, 3d, 7d, 14d, 30d follow-up" cp:"1d,3d,7d,14d,30d" chainMax:5 due:today
 task add "Every 2 days, stop after 6 links" cp:2d chainMax:6 due:today+09:00
 task add "Daily until 2030-12-20 at noon" cp:1d chainUntil:2030-12-20T12:00 due:today+12h
+
+# Named boundaries resolve once to local end-of-day
+task add "Holiday cleanup" cp:1d chainUntil:christmas
+task add "Summer project" cp:2d chainUntil:summer-end
+task add "Easter preparation" anchor:"w:mon" chainUntil:easter
 ```
 
 Whole-day periods preserve the seed wall-clock time. Other periods add exact

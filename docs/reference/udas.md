@@ -13,7 +13,7 @@ These are the supported recurrence and lineage fields.
 | `omit` | string | user | Date exclusion expression |
 | `omit_file` | string | user | File-backed exclusions |
 | `chainMax` | numeric | user | Maximum link count |
-| `chainUntil` | date | user | Final eligible recurrence target |
+| `chainUntil` | date or marker | user | Final eligible recurrence target; named markers resolve once to local end-of-day |
 | `chain` | string | user/lifecycle | `on` or `off`; default `off` |
 | `chainID` | string | lifecycle | Stable recurrence identity |
 | `link` | numeric | lifecycle | One-based chain position |

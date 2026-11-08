@@ -204,6 +204,17 @@ def kind_and_defaults(host: AddCompositionHost, task: TaskPayload, cp_str: str, 
 def validate_chain_limits(host: AddCompositionHost, task: TaskPayload, now_utc: datetime) -> datetime | None:
     add_validation = host._module("add_validation")
     pipeline = host.core._import_sibling("hook_validation_pipeline")
+    marker_resolver = host.core._import_sibling("chain_until_markers")
+    raw_chain_until = str(task.get("chainUntil") or "").strip()
+    if raw_chain_until:
+        try:
+            task["chainUntil"] = marker_resolver.resolve_chain_until(
+                raw_chain_until,
+                reference=now_utc,
+                local_tz=host.core.to_local(now_utc).tzinfo,
+            )
+        except (TypeError, ValueError) as exc:
+            host._error_and_exit([("Invalid chainUntil", str(exc))])
     cpmax, until_dt, findings = pipeline.validate_recurrence_limits(
         task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
         parse_cp_sequence=host.core.parse_cp_sequence,

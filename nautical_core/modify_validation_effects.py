@@ -164,6 +164,8 @@ class _ChainLimitCore(Protocol):
     humanize_delta: HumanizeUntilDelta
     now_utc: Callable[[], datetime]
 
+    def to_local(self, value: datetime) -> datetime: ...
+
     @overload
     def _import_sibling(
         self,
@@ -432,6 +434,8 @@ class ChainLimitPorts:
     validate_until_not_past: Callable[[datetime, datetime], tuple[bool, str | None]]
     now_utc: Callable[[], datetime]
     fail: Callable[[str, str], object]
+    resolve_chain_until: Callable[..., str | None]
+    to_local: Callable[[datetime], datetime]
 
 
 @dataclass(frozen=True, slots=True)
@@ -612,6 +616,18 @@ def validate_cp(
 
 
 def validate_chain_limits(ports: ChainLimitPorts, task: TaskPayload) -> None:
+    raw_chain_until = str(task.get("chainUntil") or "").strip()
+    if raw_chain_until:
+        now = ports.now_utc()
+        try:
+            task["chainUntil"] = ports.resolve_chain_until(
+                raw_chain_until,
+                reference=now,
+                local_tz=ports.to_local(now).tzinfo,
+            )
+        except (TypeError, ValueError) as exc:
+            ports.fail("Invalid chainUntil", str(exc))
+            return
     cpmax, _until_dt, findings = ports.pipeline.validate_recurrence_limits(
         task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
         parse_cp_sequence=ports.parse_cp_sequence,
@@ -637,6 +653,7 @@ def validate_chain_limits(ports: ChainLimitPorts, task: TaskPayload) -> None:
 
 def chain_limit_ports_for(host: ChainLimitHost) -> ChainLimitPorts:
     add_validation = host.core._import_sibling("add_validation")
+    marker_resolver = host.core._import_sibling("chain_until_markers")
     return ChainLimitPorts(
         pipeline=host.core._import_sibling("hook_validation_pipeline"),
         validate_limits=host._module("modify_validation").validate_chain_limits_on_modify,
@@ -649,6 +666,8 @@ def chain_limit_ports_for(host: ChainLimitHost) -> ChainLimitPorts:
         ),
         now_utc=host.core.now_utc,
         fail=host._fail_and_exit,
+        resolve_chain_until=marker_resolver.resolve_chain_until,
+        to_local=host.core.to_local,
     )
 
 

@@ -7,6 +7,7 @@ import nautical_core.modify_ordinary as modify_ordinary
 
 from nautical_core.modify_validation_effects import AnchorValidationPorts, validate_anchor
 from nautical_core.modify_validation_effects import OmitValidationPorts, validate_omit
+from nautical_core.modify_validation_effects import ChainLimitPorts, validate_chain_limits
 from nautical_core.parsing.parser_models import ParseError
 from nautical_core.modify_validation import validate_native_until_anchor_slots_or_fail
 from nautical_core.modify_datetime_effects import (
@@ -18,6 +19,31 @@ from nautical_core.modify_datetime_effects import (
 
 
 class ModifyValidationEffectsTests(unittest.TestCase):
+    def test_chain_until_marker_is_resolved_before_modify_validation(self) -> None:
+        class Pipeline:
+            @staticmethod
+            def validate_recurrence_limits(*_args, **_kwargs):
+                return None, None, ()
+
+        task = {"cp": "1d", "chainUntil": "christmas"}
+        ports = ChainLimitPorts(
+            pipeline=Pipeline(),
+            validate_limits=lambda *_args, **_kwargs: None,
+            parse_cp_sequence=lambda _value: [timedelta(days=1)],
+            cp_sequence_error=lambda _value: None,
+            parse_chain_max=lambda _value: (None, None),
+            parse_datetime=lambda _value: datetime(2026, 12, 25, 23, 59, 59, tzinfo=timezone.utc),
+            validate_until_not_past=lambda _until, _now: (True, None),
+            now_utc=lambda: datetime(2026, 11, 8, tzinfo=timezone.utc),
+            fail=lambda _title, message: (_ for _ in ()).throw(ValueError(message)),
+            resolve_chain_until=lambda value, **_kwargs: "2026-12-25T23:59:59Z" if value == "christmas" else value,
+            to_local=lambda value: value,
+        )
+
+        validate_chain_limits(ports, task)
+
+        self.assertEqual(task["chainUntil"], "2026-12-25T23:59:59Z")
+
     def _completion_validation_services(self, parse_cp_sequence, fail):
         from nautical_core.modify_validation import CompletionValidationServices
 

@@ -664,6 +664,19 @@ class OnAddHookRouteTests(HookSubprocessFixture):
             ("Invalid chainUntil",),
         )
 
+    def test_chain_until_marker_is_resolved_to_local_end_of_day(self) -> None:
+        result = self._assert_valid(
+            self._task(
+                cp="1d",
+                chain="on",
+                chainID="marker-chain",
+                link=1,
+                chainUntil="christmas",
+            )
+        )
+
+        self.assertEqual(result["chainUntil"], "2026-12-25T23:59:59Z")
+
     def test_timed_omit_preset_is_rejected(self) -> None:
         task = self._task(
             entry="20260301T000000Z",

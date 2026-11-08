@@ -178,7 +178,10 @@ def resolve_chain_until(
         resolved = _event_date(marker, local.date(), local_tz)
     else:
         families = ", ".join(("holiday", "season", "calendar period", "astronomical event"))
-        raise ValueError(f"Unknown chainUntil marker '{text}'. Expected a {families} marker.")
+        raise ValueError(
+            f"Unrecognized datetime format: Unknown chainUntil marker '{text}'. "
+            f"Use a {families} marker."
+        )
     local_end = datetime(resolved.year, resolved.month, resolved.day, 23, 59, 59)
     return fmt_isoz(local_naive_to_utc(local_end, local_tz or timezone.utc))
 

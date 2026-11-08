@@ -90,13 +90,43 @@ class ChainUntilMarkerTests(unittest.TestCase):
         self.assertTrue(value.endswith("T23:59:59Z"))
 
     def test_end_of_day_uses_configured_timezone_across_dst(self) -> None:
+        season_support.configure_mode("fixed")
         value = resolve_chain_until(
-            "christmas",
-            reference=datetime(2026, 11, 8, tzinfo=timezone.utc),
+            "summer-start",
+            reference=datetime(2026, 1, 10, tzinfo=timezone.utc),
             local_tz=ZoneInfo("America/New_York"),
         )
 
-        self.assertEqual(value, "2026-12-26T04:59:59Z")
+        self.assertEqual(value, "2026-06-02T03:59:59Z")
+
+    def test_marker_registry_covers_all_documented_families(self) -> None:
+        reference = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        markers = (
+            "christmas", "christmas-eve", "new-year", "new-years-eve", "halloween",
+            "valentines-day", "easter", "good-friday", "easter-monday",
+            "spring-start", "spring-end", "summer-start", "summer-end",
+            "autumn-start", "autumn-end", "winter-start", "winter-end",
+            "month-start", "month-end", "quarter-start", "quarter-end",
+            "year-start", "year-end", "spring-equinox", "summer-solstice",
+            "autumn-equinox", "winter-solstice",
+        )
+
+        for marker in markers:
+            with self.subTest(marker=marker):
+                value = resolve_chain_until(marker, reference=reference)
+                self.assertRegex(value or "", r"T23:59:59Z$")
+
+    def test_fixed_season_marker_honors_southern_hemisphere(self) -> None:
+        season_support.configure_mode("fixed")
+        season_support.configure_hemisphere("south")
+
+        self.assertEqual(
+            resolve_chain_until(
+                "summer-start",
+                reference=datetime(2026, 1, 10, tzinfo=timezone.utc),
+            ),
+            "2026-12-01T23:59:59Z",
+        )
 
     def test_unknown_marker_is_actionable(self) -> None:
         with self.assertRaisesRegex(ValueError, r"Unknown chainUntil marker 'not-a-holiday'.*holiday"):

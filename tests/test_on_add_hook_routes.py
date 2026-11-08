@@ -675,7 +675,9 @@ class OnAddHookRouteTests(HookSubprocessFixture):
             )
         )
 
-        self.assertEqual(result["chainUntil"], "2026-12-25T23:59:59Z")
+        today = datetime.now(timezone.utc).date()
+        year = today.year if date(today.year, 12, 25) >= today else today.year + 1
+        self.assertEqual(result["chainUntil"], f"{year}-12-25T23:59:59Z")
 
     def test_timed_omit_preset_is_rejected(self) -> None:
         task = self._task(

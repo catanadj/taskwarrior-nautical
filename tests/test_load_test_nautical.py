@@ -144,6 +144,11 @@ class LoadTestSupportTests(unittest.TestCase):
         self.assertEqual((stdout, stderr), ("", "timeout"))
         self.assertGreaterEqual(elapsed, 0.0)
 
+    def test_chain_until_uda_accepts_symbolic_markers(self) -> None:
+        uda_text = (loadtest.REPO_ROOT / "uda.conf").read_text(encoding="utf-8")
+
+        self.assertIn("uda.chainUntil.type=string", uda_text)
+
     def test_queue_metrics_fails_closed_for_missing_database(self) -> None:
         with TemporaryDirectory() as directory:
             result = loadtest._queue_metrics(Path(directory))

@@ -405,7 +405,12 @@ def _timeline_base_line(
         due_dt = dtparse(obj.get("due"))
         disposition = _timeline_deleted_disposition(obj)
         delta = "" if disposition else fmt_on_time_delta(due_dt, end_dt)
-        end_s = fmtlocal(end_dt) if end_dt else "(no end)"
+        display_dt = (
+            due_dt
+            if disposition and disposition[1] == "expired" and due_dt is not None
+            else end_dt
+        )
+        end_s = fmtlocal(display_dt) if display_dt else "(no end)"
         short_id = short(obj.get("uuid"))
         if disposition:
             marker, label = disposition
@@ -417,7 +422,12 @@ def _timeline_base_line(
         cur_due = dtparse(task.get("due"))
         disposition = _timeline_deleted_disposition(task)
         cur_delta = "" if disposition else fmt_on_time_delta(cur_due, cur_end)
-        cur_end_s = fmtlocal(cur_end) if cur_end else "(no end)"
+        display_dt = (
+            cur_due
+            if disposition and disposition[1] == "expired" and cur_due is not None
+            else cur_end
+        )
+        cur_end_s = fmtlocal(display_dt) if display_dt else "(no end)"
         if disposition:
             marker, label = disposition
             return f"[dim red]{no_text} {marker:<2}{cur_end_s} {short(task.get('uuid'))} [italic]({label})[/][/]"

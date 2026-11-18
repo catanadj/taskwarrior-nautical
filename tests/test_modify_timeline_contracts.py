@@ -94,39 +94,44 @@ class ModifyTimelineContractTests(unittest.TestCase):
         self.assertIn("(date unavailable)", line)
         self.assertIn("child-uuid", line)
 
-    def test_timeline_marks_expired_previous_link_distinct_from_completion(self) -> None:
-        line = _timeline_base_line(
-            1,
-            datetime(2026, 10, 1, 9, tzinfo=timezone.utc),
-            {
-                "uuid": "expired-link",
-                "status": "deleted",
-                "chain": "on",
-                "until": "20261001T090000Z",
-                "end": "20261001T090000Z",
-                "due": "20261001T090000Z",
-            },
-            "prev",
-            task={},
-            cap_no=None,
-            prev_style="dim green",
-            cur_style="green",
-            next_style="yellow",
-            future_style="yellow",
-            fmt_dt_local=lambda value: value.isoformat(),
-            dtparse=lambda value: (
-                datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-                if value
-                else None
-            ),
-            fmt_on_time_delta=lambda _due, _end: "[green](on time)[/]",
-            fmtlocal=lambda value: value.isoformat(),
-            short=lambda value: str(value or "–"),
-        )
+    def test_timeline_renders_expired_links_at_due_time_not_deletion_time(self) -> None:
+        expired = {
+            "uuid": "expired-link",
+            "status": "deleted",
+            "chain": "on",
+            "until": "20261001T090000Z",
+            "end": "20261001T040000Z",
+            "due": "20261001T090000Z",
+        }
+        for item_type, task in (("prev", {}), ("current", expired)):
+            with self.subTest(item_type=item_type):
+                line = _timeline_base_line(
+                    1,
+                    datetime(2026, 10, 1, 9, tzinfo=timezone.utc),
+                    expired,
+                    item_type,
+                    task=task,
+                    cap_no=None,
+                    prev_style="dim green",
+                    cur_style="green",
+                    next_style="yellow",
+                    future_style="yellow",
+                    fmt_dt_local=lambda value: value.isoformat(),
+                    dtparse=lambda value: (
+                        datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                        if value
+                        else None
+                    ),
+                    fmt_on_time_delta=lambda _due, _end: "[green](on time)[/]",
+                    fmtlocal=lambda value: value.isoformat(),
+                    short=lambda value: str(value or "–"),
+                )
 
-        self.assertIn("expired", line)
-        self.assertIn("⌛", line)
-        self.assertNotIn("✓", line)
+                self.assertIn("expired", line)
+                self.assertIn("⌛", line)
+                self.assertIn("2026-10-01T09:00:00+00:00", line)
+                self.assertNotIn("2026-10-01T04:00:00+00:00", line)
+                self.assertNotIn("✓", line)
 
     def test_timeline_gap_formatter_uses_datetime_values(self) -> None:
         from nautical_core.modify_timeline import format_gap
